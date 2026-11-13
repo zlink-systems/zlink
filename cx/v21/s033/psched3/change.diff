@@ -1,0 +1,436 @@
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
+index 325535d26f..8e11e7abee 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
+@@ -165,8 +165,8 @@ class channel_host_service_t::server_loop_t
+         _source->start (*_router);
+         _source->mailbox ().bind_application_dispatch ({}, [this] (const std::string &owner) {
+             try {
+-                if (_handler_executor->try_submit_drain (
+-                      std::make_shared<owner_drain_t> (*this, owner)))
++                const auto create = [&] { return std::make_shared<owner_drain_t> (*this, owner); };
++                if (_handler_executor->try_submit_drain (this, owner, std::ref (create)))
+                     return;
+             }
+             catch (...) {
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+index 1ca4bb2e45..ac8e08d333 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+@@ -101,38 +101,46 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
+ #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+         ++_submitted_items;
+ #endif
+-        notifications = reserve_workers_locked (true);
++        reserve_workers_locked (true, notifications);
+     }
+     notify_workers (notifications);
+     return true;
+ }
+ 
+ bool offload_executor_t::try_submit_drain (std::shared_ptr<drain_source_t> source)
++{
++    const auto create = [&] { return source; };
++    return try_submit_drain (source->group, source->owner, std::ref (create));
++}
++
++bool offload_executor_t::try_submit_drain (const void *group,
++                                           const std::string &owner,
++                                           const drain_factory_t &create)
+ {
+     notifications_t notifications;
+     {
+         std::lock_guard lock (_mutex);
+         if (_stopping && _active == _role_active && _queue.empty ())
+             return false;
+-        const auto found = find_drain_locked (*source);
++        const auto found = find_drain_locked (group, owner);
+         if (found == _queue.end ()) {
+-            _queue.push_back (work_item_t{std::move (source), std::nullopt});
++            _queue.push_back (work_item_t{create (), std::nullopt});
+ #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+             ++_submitted_items;
+ #endif
+         }
+-        notifications = reserve_workers_locked (true);
++        reserve_workers_locked (true, notifications);
+     }
+     notify_workers (notifications);
+     return true;
+ }
+ 
+ std::deque<offload_executor_t::work_item_t>::iterator
+-offload_executor_t::find_drain_locked (const drain_source_t &source)
++offload_executor_t::find_drain_locked (const void *group, const std::string &owner)
+ {
+     return std::find_if (_queue.begin (), _queue.end (), [&] (const auto &entry) {
+         const auto existing = std::get_if<std::shared_ptr<drain_source_t>> (&entry.work);
+-        return existing && (*existing)->group == source.group && (*existing)->owner == source.owner;
++        return existing && (*existing)->group == group && (*existing)->owner == owner;
+     });
+ }
+ 
+@@ -163,7 +171,7 @@ offload_executor_t::try_take_drain (const std::shared_ptr<drain_source_t> &sourc
+     drain_source_t::record_t record;
+     {
+         std::lock_guard lock (_mutex);
+-        const auto found = find_drain_locked (*source);
++        const auto found = find_drain_locked (source->group, source->owner);
+         if (found != _queue.end ()) {
+             selected = std::get<std::shared_ptr<drain_source_t>> (found->work);
+             record = take_drain_locked (found);
+@@ -174,8 +182,9 @@ offload_executor_t::try_take_drain (const std::shared_ptr<drain_source_t> &sourc
+ 
+ // Only publication can grow the existing elastic pool. A take never wakes or
+ // starts another worker. The worker phase is the sole wake-reservation state.
+-offload_executor_t::notifications_t offload_executor_t::reserve_workers_locked (bool grow,
+-                                                                                worker_t *current)
++void offload_executor_t::reserve_workers_locked (bool grow,
++                                                 notifications_t &notifications,
++                                                 worker_t *current)
+ {
+     std::size_t demand = std::min (_max_worker_count, _roles.size ());
+     for (const auto &entry : _queue) {
+@@ -204,34 +213,30 @@ offload_executor_t::notifications_t offload_executor_t::reserve_workers_locked (
+         current->phase = worker_phase_t::reserved;
+         --demand;
+     }
+-    notifications_t notifications;
+     for (const auto &worker : _workers) {
+         if (demand == 0)
+             break;
+         if (worker->phase == worker_phase_t::idle) {
+-            notifications.push_back (worker);
++            notifications.workers.push_back (worker);
+             worker->phase = worker_phase_t::reserved;
+             --demand;
+         }
+     }
+-    return notifications;
+ }
+ 
+-offload_executor_t::notifications_t offload_executor_t::stop_workers_locked ()
++void offload_executor_t::stop_workers_locked (notifications_t &notifications)
+ {
+-    notifications_t notifications;
+     for (const auto &worker : _workers) {
+         if (worker->phase == worker_phase_t::idle || worker->phase == worker_phase_t::reserved) {
+-            notifications.push_back (worker);
++            notifications.workers.push_back (worker);
+             worker->phase = worker_phase_t::reserved;
+         }
+     }
+-    return notifications;
+ }
+ 
+ void offload_executor_t::notify_workers (const notifications_t &notifications)
+ {
+-    for (const auto &worker : notifications)
++    for (const auto &worker : notifications.workers)
+         worker->ready.notify_one ();
+ }
+ 
+@@ -291,7 +296,7 @@ bool offload_executor_t::try_submit_application (work_t work)
+ #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+         ++_submitted_items;
+ #endif
+-        notifications = reserve_workers_locked (true);
++        reserve_workers_locked (true, notifications);
+     }
+     notify_workers (notifications);
+     return true;
+@@ -305,7 +310,7 @@ bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
+         if (_stopping)
+             return false;
+         _roles.push (std::move (role));
+-        notifications = reserve_workers_locked (false);
++        reserve_workers_locked (false, notifications);
+     }
+     notify_workers (notifications);
+     return true;
+@@ -317,7 +322,7 @@ void offload_executor_t::drain_application ()
+     {
+         std::lock_guard lock (_mutex);
+         _stopping = true;
+-        notifications = stop_workers_locked ();
++        stop_workers_locked (notifications);
+     }
+     request_stop ();
+     notify_workers (notifications);
+@@ -360,7 +365,7 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
+     {
+         std::unique_lock lock (_mutex);
+         _stopping = true;
+-        notifications = stop_workers_locked ();
++        stop_workers_locked (notifications);
+     }
+     request_stop ();
+     notify_workers (notifications);
+@@ -471,7 +476,7 @@ void offload_executor_t::worker_loop (const std::shared_ptr<worker_t> &worker)
+         {
+             std::unique_lock lock (_mutex);
+             worker->phase = worker_phase_t::idle;
+-            notifications = reserve_workers_locked (false, worker.get ());
++            reserve_workers_locked (false, notifications, worker.get ());
+             const auto reserved = [&] {
+                 return _stopping || worker->phase == worker_phase_t::reserved;
+             };
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
+index daec4c7501..de8dd3cd60 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
+@@ -7,6 +7,7 @@
+ #include <functional>
+ #include <exception>
+ #include <memory>
++#include <memory_resource>
+ #include <mutex>
+ #include <optional>
+ #include <deque>
+@@ -56,6 +57,10 @@ class offload_executor_t
+         const std::string owner;
+     };
+     virtual bool try_submit_drain (std::shared_ptr<drain_source_t> source);
++    using drain_factory_t = std::function<std::shared_ptr<drain_source_t> ()>;
++    // Constructs an absent ready source synchronously; the factory is never retained.
++    virtual bool
++    try_submit_drain (const void *group, const std::string &owner, const drain_factory_t &create);
+     // The running owner's existing W5 loop uses the same take/membership step.
+     virtual drain_source_t::record_t try_take_drain (const std::shared_ptr<drain_source_t> &source);
+ 
+@@ -139,7 +144,8 @@ class offload_executor_t
+     };
+ 
+     bool try_submit_application (work_t work);
+-    std::deque<work_item_t>::iterator find_drain_locked (const drain_source_t &source);
++    std::deque<work_item_t>::iterator find_drain_locked (const void *group,
++                                                         const std::string &owner);
+     drain_source_t::record_t take_drain_locked (std::deque<work_item_t>::iterator entry);
+     enum class worker_phase_t
+     {
+@@ -153,9 +159,17 @@ class offload_executor_t
+         std::condition_variable ready;
+         worker_phase_t phase = worker_phase_t::reserved;
+     };
+-    using notifications_t = std::vector<std::shared_ptr<worker_t>>;
+-    notifications_t reserve_workers_locked (bool grow, worker_t *current = nullptr);
+-    notifications_t stop_workers_locked ();
++    struct notifications_t
++    {
++        // A single ready turn reserves at most one idle worker. Keep that
++        // notification in this call's storage, including its shared ownership.
++        alignas (std::shared_ptr<worker_t>) std::byte storage[sizeof (std::shared_ptr<worker_t>)];
++        std::pmr::monotonic_buffer_resource memory{storage, sizeof (storage)};
++        std::pmr::vector<std::shared_ptr<worker_t>> workers{&memory};
++    };
++    void
++    reserve_workers_locked (bool grow, notifications_t &notifications, worker_t *current = nullptr);
++    void stop_workers_locked (notifications_t &notifications);
+     static void notify_workers (const notifications_t &notifications);
+     void worker_loop (const std::shared_ptr<worker_t> &worker);
+     void complete_work_locked ();
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index 93678e6648..5bb3aa5050 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -3412,14 +3412,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+             mesh::service_mailbox_t::application_ready_t submit_owner =
+               [this, executor = _application_dispatch, node,
+                registration] (const std::string &owner) {
+-                  auto start = make_application_owner_work (node, registration, owner);
+                   if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
+-                      auto source =
+-                        std::make_shared<application_owner_drain_t> (node, owner, start);
+-                      if (!executor->try_submit_drain (std::move (source)))
++                      const auto create = [&] {
++                          return std::make_shared<application_owner_drain_t> (
++                            node, owner, make_application_owner_work (node, registration, owner));
++                      };
++                      if (!executor->try_submit_drain (node.get (), owner, std::ref (create)))
++                          make_application_owner_work (node, registration, owner) (true);
++                  } else {
++                      auto start = make_application_owner_work (node, registration, owner);
++                      if (!executor->try_submit_internal ([start] { start (false); }))
+                           start (true);
+-                  } else if (!executor->try_submit_internal ([start] { start (false); }))
+-                      start (true);
++                  }
+               };
+             auto role =
+               std::make_shared<node_receive_role_t> (*this, node, registration, receive_permit);
+@@ -3960,10 +3964,15 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+             owned_node->application_work_finished ();
+         };
+         while (true) {
+-            if (owned_source && !prepared_claim) {
+-                auto record = executor->try_take_drain (owned_source);
+-                prepared_claim = std::static_pointer_cast<mesh::service_mailbox_claim_t> (
+-                  std::move (record.value));
++            if (concurrent && !prepared_claim) {
++                if (owned_source) {
++                    auto record = executor->try_take_drain (owned_source);
++                    prepared_claim = std::static_pointer_cast<mesh::service_mailbox_claim_t> (
++                      std::move (record.value));
++                } else {
++                    bool more;
++                    prepared_claim = mailbox.try_claim_application_record (owner, more);
++                }
+                 if (!prepared_claim)
+                     break;
+             }
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+index 5a3f8df25f..400c945d2a 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+@@ -256,11 +256,11 @@ std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_applicatio
+     auto claim = std::make_shared<service_mailbox_claim_t> ();
+     claim->owner = owner;
+     claim->domain = service_mailbox_domain_t::application;
+-    claim->records.push_back (&queue.records.front ());
++    claim->_record = &queue.records.front ();
++    claim->records = {&claim->_record, 1};
+     claim->claimed_messages = 1;
+     claim->claimed_bytes = retained_bytes (queue.records.front ());
+-    claim->record_bytes.push_back (claim->claimed_bytes);
+-    claim->_settled = std::make_unique<std::atomic_bool[]> (1);
++    claim->record_bytes = {&claim->claimed_bytes, 1};
+     claim->_remaining.store (1, std::memory_order_relaxed);
+     claim->_mailbox = _state;
+     // No new payload storage: splice the existing node. Later head claims cannot
+@@ -311,14 +311,14 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
+     claim->owner = owner;
+     claim->domain = domain_value;
+     const auto limit = std::min (message_budget, queue.records.size ());
+-    claim->records.reserve (limit);
+-    claim->record_bytes.reserve (limit);
++    claim->_records.reserve (limit);
++    claim->_record_bytes.reserve (limit);
+     // The claim stays the front prefix of the FIFO; list references survive push_back.
+     for (auto &slot : queue.records) {
+-        if (claim->records.size () == limit)
++        if (claim->_records.size () == limit)
+             break;
+         const auto next_bytes = retained_bytes (slot);
+-        if (!claim->records.empty ()
++        if (!claim->_records.empty ()
+             && (claim->claimed_bytes >= byte_budget
+                 || next_bytes > byte_budget - claim->claimed_bytes)) {
+             break;
+@@ -327,12 +327,15 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
+             break;
+         }
+         claim->claimed_bytes += next_bytes;
+-        claim->record_bytes.push_back (next_bytes);
+-        claim->records.push_back (&slot);
++        claim->_record_bytes.push_back (next_bytes);
++        claim->_records.push_back (&slot);
+     }
++    claim->records = claim->_records;
++    claim->record_bytes = claim->_record_bytes;
+     claim->claimed_messages = claim->records.size ();
+     claim->_mailbox = _state;
+-    claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
++    claim->_settled_storage = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
++    claim->_settled = {claim->_settled_storage.get (), claim->claimed_messages};
+     claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
+     // Each slot holds its own credit; whichever take moves the original out holds it.
+     for (std::size_t index = 0; index != claim->claimed_messages; ++index)
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+index 0e6bd1d284..017af063c2 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+@@ -507,8 +507,8 @@ struct service_mailbox_claim_t
+ {
+     std::string owner;
+     service_mailbox_domain_t domain = service_mailbox_domain_t::application;
+-    std::vector<service_mailbox_record_t *> records;
+-    std::vector<std::size_t> record_bytes;
++    std::span<service_mailbox_record_t *> records;
++    std::span<std::size_t> record_bytes;
+     std::size_t claimed_messages = 0;
+     std::size_t claimed_bytes = 0;
+ 
+@@ -522,7 +522,13 @@ struct service_mailbox_claim_t
+     friend class service_mailbox_t;
+     std::weak_ptr<service_mailbox_t::state_t> _mailbox;
+     std::list<service_mailbox_record_t> _detached_records;
+-    std::unique_ptr<std::atomic_bool[]> _settled;
++    // A scheduler claim has one slot; its views use the ownership block itself.
++    service_mailbox_record_t *_record = nullptr;
++    std::atomic_bool _record_settled{false};
++    std::span<std::atomic_bool> _settled{&_record_settled, 1};
++    std::vector<service_mailbox_record_t *> _records;
++    std::vector<std::size_t> _record_bytes;
++    std::unique_ptr<std::atomic_bool[]> _settled_storage;
+     std::atomic_size_t _remaining{0};
+ };
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index 894f60620f..60adddd0d3 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -8554,10 +8554,6 @@ public_host_runtime_t::dispatch_application_owner (
+             claim = prepared;
+             transfer (claim);
+             prepared.reset ();
+-        } else if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
+-            bool more;
+-            claim = _transport->mailbox ().try_claim_application_record (owner, more,
+-                                                                         std::ref (transfer));
+         } else {
+             claim = _transport->mailbox ().try_claim_owner (
+               mesh::service_mailbox_domain_t::application, owner,
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+index b864c831f3..b2b66cd63f 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+@@ -1463,9 +1463,8 @@ void verify_local_node_submit_bridge ()
+         assert (capacity_while_handlers_are_pending.permits_in_use == 1);
+     }
+ 
+-    // A different node owns a different gate and must enter while the first
+-    // handler is blocked. The same-node successor retains its permit until
+-    // that node's first handler reaches terminal completion (02 §2).
++    // S02 §2: Node handlers have no execution gate. Both a different Node and
++    // the same Node must progress while the first handler is blocked.
+     auto independent = encode ("independent-owner", "independent-mesh");
+     assert (
+       service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
+@@ -1480,15 +1479,15 @@ void verify_local_node_submit_bridge ()
+             == zlink::submit_result_t::ok);
+     {
+         std::unique_lock lock (probe->mutex);
+-        assert (!probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
++        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
+         assert (probe->completed == 0);
+-        assert (node->pending_application_callbacks () == 1);
+-        assert (node->active_application_callbacks () == 1);
++        assert (node->pending_application_callbacks () == 0);
++        assert (node->active_application_callbacks () == 2);
+         assert (independent_node->active_application_callbacks () == 1);
+         const auto queued = application_jobs->snapshot ();
+         assert (queued.effective_max_queued_application_jobs == 1);
+-        assert (queued.queued_application_jobs == 1);
+-        assert (queued.permits_in_use == 1);
++        assert (queued.queued_application_jobs == 0);
++        assert (queued.permits_in_use == queued.reserved_supply_permits);
+     }
+ 
+     {
+diff --git a/framework/languages/cpp/tests/support/manual_internal_scheduler.hpp b/framework/languages/cpp/tests/support/manual_internal_scheduler.hpp
+index a03c59622c..a42465cf79 100644
+--- a/framework/languages/cpp/tests/support/manual_internal_scheduler.hpp
++++ b/framework/languages/cpp/tests/support/manual_internal_scheduler.hpp
+@@ -51,6 +51,12 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
+         return true;
+     }
+ 
++    bool
++    try_submit_drain (const void *, const std::string &, const drain_factory_t &create) override
++    {
++        return try_submit_drain (create ());
++    }
++
+     drain_source_t::record_t try_take_drain (const std::shared_ptr<drain_source_t> &source) override
+     {
+         std::shared_ptr<drain_source_t> selected;

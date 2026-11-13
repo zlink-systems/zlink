@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="/root/worktree/zlink-cstage/scripts/local-package"
+repo_root="/root/worktree/zlink-cstage"
+artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+release_version="${ZLINK_CORE_RELEASE_VERSION:-$core_version}"
+language_args=()
+version_action="build"
+internal_build=1
+prepare_core_only=0
+
+usage() {
+  cat <<'EOF'
+Usage: build-wsl.sh [options] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
+
+With no language arguments, builds all first-party binding packages at their
+language-owned VERSION into .artifacts/wsl. By default the exact matching Core
+release is downloaded and verified — a published core/vVERSION GitHub release
+is a prerequisite. There is no local-core bypass.
+
+Options:
+  --core-version VERSION       Core release version (default: VERSION)
+  --sync-versions              Sync managed Core/binding/Framework/template values and exit
+  --verify-versions            Verify managed Core/binding/Framework/template values and exit
+  --cache-key                  Print working-tree cache key and tool version id
+
+Clean inputs use one immutable cache entry per requested binding under a key that
+covers all eight bindings. Dirty inputs build only requested bindings in
+.artifacts/wsl-private. Custom configurations or compiler flags also stay private.
+Binding files are linked into the worktree-local output directory.
+ZLINK_PACKAGE_BUILD_CMD may name an executable test builder (receives languages
+and ZLINK_LOCAL_PACKAGE_ROOT).
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --core-version) release_version="${2:-}"; shift 2 ;;
+    --prepare-core) internal_build=1; prepare_core_only=1; shift ;;
+    --build-packages) internal_build=1; shift ;;
+    --cache-key) version_action="key"; shift ;;
+    --sync-versions) version_action="sync"; shift ;;
+    --verify-versions) version_action="verify"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    c|cpp|dotnet|go|java|node|python|rust|core)
+      language_args+=("$1"); shift ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+case "$version_action" in
+  sync)
+    python3 "$script_dir/sync-version.py" --write
+    python3 "$script_dir/sync-version.py" --check
+    exit 0
+    ;;
+  verify)
+    python3 "$script_dir/sync-version.py" --check
+    exit 0
+    ;;
+  key)
+    exec python3 "$script_dir/package-cache.py" key
+    ;;
+  build)
+    if ((prepare_core_only == 0)); then
+      python3 "$script_dir/sync-version.py" --check
+    fi
+    ;;
+esac
+
+if [[ "${#language_args[@]}" -eq 0 ]]; then
+  language_args=(c cpp dotnet go java node python rust)
+fi
+
+[[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo "--core-version must be MAJOR.MINOR.PATCH: $release_version" >&2
+  exit 2
+}
+[[ "$release_version" = "$core_version" ]] || {
+  echo "Requested Core release $release_version must match repository Core $core_version" >&2
+  exit 1
+}
+
+# Both misses and hits pass the same version checks before cache preparation.
+if ((internal_build == 0)); then
+  bash "$script_dir/build-wsl.sh" --verify-versions
+  exec python3 "$script_dir/package-cache.py" prepare "${language_args[@]}"
+fi
+
+# The cache coordinator calls this build boundary with a staging/private root.
+mkdir -p "$artifact_root"
+artifact_root="$(readlink -f "$artifact_root")"
+core_prefix="$artifact_root/install/zlink-core/$core_version"
+export ZLINK_LOCAL_PACKAGE_ROOT="$artifact_root"
+export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
+export ZLINK_CORE_VERSION="$release_version"
+core_manifest="$core_prefix/share/zlink/core-package-provenance.json"
+[[ -f "$core_manifest" ]] || {
+  echo "Core package provenance is missing: $core_manifest" >&2
+  exit 1
+}
+manifest_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$core_manifest" | head -n1)"
+[[ "$manifest_version" = "$release_version" ]] || {
+  echo "Core package version $manifest_version does not match $release_version" >&2
+  exit 1
+}
+
+if ((prepare_core_only)); then
+  exit 0
+fi
+
+: # Measurement package consumes the local installed Core directly.
+
+for lang in "${language_args[@]}"; do
+  case "$lang" in
+    c|cpp|dotnet|go|java|node|python|rust)
+      if [[ "$lang" == c ]]; then
+        binding_version="$core_version"
+      else
+        binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/$lang/VERSION")"
+      fi
+      echo "-- building local $lang package at $binding_version using Core $release_version (release)"
+      bash "/root/jobs/fx/cx/v21/s033/cstage/tools/build-binding.sh" --core-prefix "$core_prefix"
+      ;;
+    core)
+      ;;
+    *)
+      echo "Unknown language: $lang" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+echo "-- local packages are under $artifact_root"

@@ -1,0 +1,3804 @@
+[
+  {
+    "cell": "zlink-framework-node-send-saturation-4096",
+    "role": "source",
+    "messages": 475902,
+    "main_us": 16.967559938810933,
+    "stages_us": {
+      "Promise/microtask": 1.5728038061494254,
+      "handoff/event loop": 0.2535794407432567,
+      "other": 2.088093616523026,
+      "benchmark": 1.3061438008680792,
+      "Framework bookkeeping": 1.600935743154528,
+      "encode/serialize": 1.4157896461465211,
+      "Buffer copy": 0.7973738108232763,
+      "allocation": 2.1267472985912885,
+      "binding call": 5.612247123366453,
+      "GC": 0.1938456524450792
+    },
+    "methods": [
+      {
+        "name": ":0:",
+        "self_us": 4.582641060197253,
+        "inclusive_us": 4.582641060197253,
+        "samples": 1994
+      },
+      {
+        "name": "node:internal/buffer:1082:createUnsafeBuffer",
+        "self_us": 1.797717145552746,
+        "inclusive_us": 2.220516832127551,
+        "samples": 784
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer_buffer.js:30:writeBytesBuffer_set",
+        "self_us": 0.7585822798944125,
+        "inclusive_us": 0.7585822798944125,
+        "samples": 330
+      },
+      {
+        "name": "node:internal/async_hooks:328:promiseInitHook",
+        "self_us": 0.5525046949593267,
+        "inclusive_us": 0.7533892548489105,
+        "samples": 239
+      },
+      {
+        "name": ":0:runMicrotasks",
+        "self_us": 0.4930035266134157,
+        "inclusive_us": 13.267405745305085,
+        "samples": 214
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:194:writeMultipartPayload",
+        "self_us": 0.49085609983184564,
+        "inclusive_us": 0.5342203359335009,
+        "samples": 211
+      },
+      {
+        "name": "node:buffer:1043:_fill",
+        "self_us": 0.4613585975514019,
+        "inclusive_us": 0.4613585975514019,
+        "samples": 199
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:391:",
+        "self_us": 0.397844735028896,
+        "inclusive_us": 14.593072391055962,
+        "samples": 171
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:216:submitSend",
+        "self_us": 0.3562423796768137,
+        "inclusive_us": 4.418962769339606,
+        "samples": 156
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:442:sendToNode",
+        "self_us": 0.337953712874094,
+        "inclusive_us": 6.647408064840236,
+        "samples": 148
+      },
+      {
+        "name": "node:internal/buffer:956:FastBuffer",
+        "self_us": 0.3082322061951718,
+        "inclusive_us": 0.3082322061951718,
+        "samples": 133
+      },
+      {
+        "name": ":0:createUnsafeArrayBuffer",
+        "self_us": 0.29252605164029805,
+        "inclusive_us": 0.29252605164029805,
+        "samples": 126
+      },
+      {
+        "name": ":0:(program)",
+        "self_us": 0.24365647666833865,
+        "inclusive_us": 0.24365647666833865,
+        "samples": 106
+      },
+      {
+        "name": "node:internal/buffer:580:writeBigU_Int64LE",
+        "self_us": 0.2327879555652267,
+        "inclusive_us": 0.28073351239346134,
+        "samples": 102
+      },
+      {
+        "name": "node:internal/timers:436:processImmediate",
+        "self_us": 0.23075683875978978,
+        "inclusive_us": 13.82628379617882,
+        "samples": 102
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/diagnostics/index.js:6:get",
+        "self_us": 0.22949035235300624,
+        "inclusive_us": 0.22949035235300624,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/framework-transport.js:61:send",
+        "self_us": 0.21668763942456834,
+        "inclusive_us": 10.852599559712392,
+        "samples": 95
+      },
+      {
+        "name": ":0:hrtimeBigInt",
+        "self_us": 0.20091471432784053,
+        "inclusive_us": 0.20091471432784053,
+        "samples": 88
+      },
+      {
+        "name": ":0:(garbage collector)",
+        "self_us": 0.1938456524450792,
+        "inclusive_us": 0.1938456524450792,
+        "samples": 84
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/@grpc/proto-loader/build/src/index.js:83:serialize",
+        "self_us": 0.1736551021437373,
+        "inclusive_us": 1.9261405903113564,
+        "samples": 75
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:332:preparedChannelHeader",
+        "self_us": 0.16898547199083463,
+        "inclusive_us": 0.16898547199083463,
+        "samples": 72
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-backend-adapter-support.js:88:submitBindingSend",
+        "self_us": 0.15311562191399578,
+        "inclusive_us": 4.6177559035472395,
+        "samples": 67
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-transports.js:72:submitNode",
+        "self_us": 0.15079588405667282,
+        "inclusive_us": 9.987899503815575,
+        "samples": 65
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:254:submitSend",
+        "self_us": 0.14147170096999592,
+        "inclusive_us": 5.0969745441004255,
+        "samples": 62
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:32:createPayloadBytes",
+        "self_us": 0.13910673145528785,
+        "inclusive_us": 2.34523128098058,
+        "samples": 61
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:149:sleepImmediate",
+        "self_us": 0.1322229039789609,
+        "inclusive_us": 0.4473798615309509,
+        "samples": 58
+      },
+      {
+        "name": "node:internal/async_local_storage/async_hooks:64:_propagate",
+        "self_us": 0.12327995914738724,
+        "inclusive_us": 0.12327995914738724,
+        "samples": 54
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:241:encodePayload",
+        "self_us": 0.12326057415136502,
+        "inclusive_us": 2.435365050818457,
+        "samples": 54
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:63:encodeChannelEnvelopeParts",
+        "self_us": 0.12101191461279014,
+        "inclusive_us": 2.745768376568115,
+        "samples": 53
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-clients.js:269:submit",
+        "self_us": 0.11873094674751157,
+        "inclusive_us": 10.224738923549442,
+        "samples": 50
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:150:",
+        "self_us": 0.09827762205564651,
+        "inclusive_us": 0.22155973509148064,
+        "samples": 43
+      },
+      {
+        "name": "node:internal/async_hooks:177:lookupPublicResource",
+        "self_us": 0.09591480642938534,
+        "inclusive_us": 0.09591480642938534,
+        "samples": 42
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-binary-primitives.js:22:canonicalServiceWireTextLength",
+        "self_us": 0.09577049590344232,
+        "inclusive_us": 0.13231552118217807,
+        "samples": 42
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:28:nowNs",
+        "self_us": 0.08444104267269147,
+        "inclusive_us": 0.3195918138641793,
+        "samples": 37
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/mesh-router-resolver.js:18:classifyManualNodeTarget",
+        "self_us": 0.0799092613803911,
+        "inclusive_us": 0.0799092613803911,
+        "samples": 35
+      },
+      {
+        "name": "node:internal/async_hooks:346:promiseBeforeHook",
+        "self_us": 0.07772952627211736,
+        "inclusive_us": 0.1074014935167607,
+        "samples": 34
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/router_socket.js:37:send",
+        "self_us": 0.0773978274512931,
+        "inclusive_us": 0.3331677727450582,
+        "samples": 33
+      },
+      {
+        "name": "node:internal/buffer:816:writeUInt32BE",
+        "self_us": 0.0753860956418784,
+        "inclusive_us": 0.0753860956418784,
+        "samples": 32
+      },
+      {
+        "name": "node:buffer:1114:write",
+        "self_us": 0.0753085556577896,
+        "inclusive_us": 0.1370045363311029,
+        "samples": 33
+      },
+      {
+        "name": "node:internal/process/task_queues:62:runNextTicks",
+        "self_us": 0.07523963122748847,
+        "inclusive_us": 13.549226971364236,
+        "samples": 33
+      },
+      {
+        "name": "node:internal/buffer:602:writeBigUInt64LE",
+        "self_us": 0.07521378456612554,
+        "inclusive_us": 0.20531726231332623,
+        "samples": 33
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/messaging/packet-name.js:55:tryConstructorPacketName",
+        "self_us": 0.068392419854759,
+        "inclusive_us": 0.08662077778096519,
+        "samples": 29
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/send_operation_base.js:14:PartOperationBase",
+        "self_us": 0.06625576251542348,
+        "inclusive_us": 0.06625576251542348,
+        "samples": 29
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/index.js:2521:flowCreationEnabled",
+        "self_us": 0.06329631978936802,
+        "inclusive_us": 0.29278667214237425,
+        "samples": 28
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-clients.js:91:sendToNode",
+        "self_us": 0.06168951900797255,
+        "inclusive_us": 0.06168951900797255,
+        "samples": 27
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/framework-protobuf.js:17:encode",
+        "self_us": 0.05264103364250024,
+        "inclusive_us": 2.0039239637946467,
+        "samples": 23
+      },
+      {
+        "name": "node:internal/async_hooks:353:promiseAfterHook",
+        "self_us": 0.052505338670344855,
+        "inclusive_us": 0.052505338670344855,
+        "samples": 23
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:42:stamp",
+        "self_us": 0.05020498580904411,
+        "inclusive_us": 0.5227293410692319,
+        "samples": 22
+      },
+      {
+        "name": "node:internal/buffer:60:checkInt",
+        "self_us": 0.04794555682823467,
+        "inclusive_us": 0.04794555682823467,
+        "samples": 21
+      },
+      {
+        "name": "node:internal/async_hooks:561:popAsyncContext",
+        "self_us": 0.045606433974889525,
+        "inclusive_us": 0.0462999860547948,
+        "samples": 20
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/payload-slab.js:11:allocatePayloadBytes",
+        "self_us": 0.04342023720127505,
+        "inclusive_us": 0.246497455529814,
+        "samples": 19
+      },
+      {
+        "name": "node:internal/async_hooks:503:emitInitScript",
+        "self_us": 0.043413775535934326,
+        "inclusive_us": 0.2626085411127069,
+        "samples": 19
+      },
+      {
+        "name": "node:internal/bootstrap/node:475:get",
+        "self_us": 0.043347004994080084,
+        "inclusive_us": 0.043347004994080084,
+        "samples": 19
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:620:receiveBatch",
+        "self_us": 0.04330177333669496,
+        "inclusive_us": 0.2781079223766771,
+        "samples": 19
+      },
+      {
+        "name": "node:internal/async_hooks:118:callbackTrampoline",
+        "self_us": 0.04320915613347779,
+        "inclusive_us": 14.706336768925215,
+        "samples": 19
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:209:allocateApplicationPayload",
+        "self_us": 0.0411974243240631,
+        "inclusive_us": 0.5684973166776396,
+        "samples": 17
+      },
+      {
+        "name": ":0:now",
+        "self_us": 0.04104234435588552,
+        "inclusive_us": 0.04104234435588552,
+        "samples": 18
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework-codec-protobuf/dist/server/framework.cjs:335:serialize",
+        "self_us": 0.0388066081479921,
+        "inclusive_us": 2.058697346999588,
+        "samples": 17
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/messaging/packet-name.js:40:tryDecoratorPacketName",
+        "self_us": 0.03880230037109827,
+        "inclusive_us": 0.05936116559686196,
+        "samples": 16
+      },
+      {
+        "name": "node:internal/buffer:706:writeUInt32LE",
+        "self_us": 0.03658379527078013,
+        "inclusive_us": 0.03658379527078013,
+        "samples": 16
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1320:applicationFrame",
+        "self_us": 0.03428775018637321,
+        "inclusive_us": 0.03657087194009867,
+        "samples": 15
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:26:routedReceivedPrefersManagedBuffer",
+        "self_us": 0.034251134082775726,
+        "inclusive_us": 0.03653210194805427,
+        "samples": 15
+      },
+      {
+        "name": "node:internal/bootstrap/node:437:get",
+        "self_us": 0.03423605686364735,
+        "inclusive_us": 0.03423605686364735,
+        "samples": 15
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/router_socket.js:39:",
+        "self_us": 0.03198739732507246,
+        "inclusive_us": 4.450943704999338,
+        "samples": 14
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:895:pump",
+        "self_us": 0.03194647344458116,
+        "inclusive_us": 0.3807428607604242,
+        "samples": 14
+      },
+      {
+        "name": "node:buffer:526:fromArrayLike",
+        "self_us": 0.03193355011389969,
+        "inclusive_us": 0.14152124040427486,
+        "samples": 14
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-topology-registry.js:128:admittedPeer",
+        "self_us": 0.02972796834426302,
+        "inclusive_us": 0.02972796834426302,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer.js:176:writeVarint32",
+        "self_us": 0.029682736686877896,
+        "inclusive_us": 0.029682736686877896,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/messaging/payload-codec.js:163:select",
+        "self_us": 0.029674121133090252,
+        "inclusive_us": 0.029674121133090252,
+        "samples": 13
+      },
+      {
+        "name": "node:internal/async_hooks:547:pushAsyncContext",
+        "self_us": 0.029671967244643337,
+        "inclusive_us": 0.029671967244643337,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:671:receiveOne",
+        "self_us": 0.029671967244643337,
+        "inclusive_us": 0.16871192815807695,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-transports.js:375:encodeMessage",
+        "self_us": 0.029667659467749522,
+        "inclusive_us": 2.9888583805749165,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:539:writeText8",
+        "self_us": 0.02965258224862114,
+        "inclusive_us": 0.15520273981905233,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-transports.js:445:mapMeshSubmitResult",
+        "self_us": 0.02964612058328041,
+        "inclusive_us": 0.02964612058328041,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/messaging/payload-codec.js:134:selectSerializerWithContentType",
+        "self_us": 0.027427615482962277,
+        "inclusive_us": 0.06850657594244527,
+        "samples": 12
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operation_builders.js:24:RuntimeSendOperation",
+        "self_us": 0.025148801506130636,
+        "inclusive_us": 0.09140456402155411,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:178:multipartPayloadLength",
+        "self_us": 0.025133724287002262,
+        "inclusive_us": 0.025133724287002262,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer_buffer.js:47:write_bytes_buffer",
+        "self_us": 0.025127262621661525,
+        "inclusive_us": 0.03426405741345719,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-topology-registry.js:125:routeAdmission",
+        "self_us": 0.025099262071851685,
+        "inclusive_us": 0.025099262071851685,
+        "samples": 11
+      },
+      {
+        "name": "node:internal/timers:163:initAsyncResource",
+        "self_us": 0.02505187652601965,
+        "inclusive_us": 0.10045951105236717,
+        "samples": 11
+      },
+      {
+        "name": "node:buffer:1181:subarray",
+        "self_us": 0.022857064198617532,
+        "inclusive_us": 0.10036043218380927,
+        "samples": 10
+      },
+      {
+        "name": ":3:BenchPayload$fromObject",
+        "self_us": 0.02284844864482989,
+        "inclusive_us": 0.034248980194328815,
+        "samples": 10
+      },
+      {
+        "name": "node:timers:225:setImmediate",
+        "self_us": 0.02282260198346696,
+        "inclusive_us": 0.12328211303583411,
+        "samples": 10
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/type.js:155:get",
+        "self_us": 0.020537326341294588,
+        "inclusive_us": 0.020537326341294588,
+        "samples": 9
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-topology-registry.js:186:knownPeerDescriptor",
+        "self_us": 0.01832959068321101,
+        "inclusive_us": 0.01832959068321101,
+        "samples": 8
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operations.js:22:get",
+        "self_us": 0.01826497402980368,
+        "inclusive_us": 0.01826497402980368,
+        "samples": 8
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/stream-wire/dist/internal/packet-json-contract.js:26:normalizePacketName",
+        "self_us": 0.018228357926206196,
+        "inclusive_us": 0.018228357926206196,
+        "samples": 8
+      },
+      {
+        "name": "node:internal/buffer:632:writeBigInt64LE",
+        "self_us": 0.01600339116054733,
+        "inclusive_us": 0.1529799269418404,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/encoded-payload-storage.js:5:borrowEncodedPayload",
+        "self_us": 0.015996929495206598,
+        "inclusive_us": 0.025140185952342995,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/eventing/poller.js:99:wait",
+        "self_us": 0.015971082833843665,
+        "inclusive_us": 0.41957100779288536,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:604:notifyReadable",
+        "self_us": 0.015968928945396758,
+        "inclusive_us": 0.8254389772865242,
+        "samples": 7
+      },
+      {
+        "name": "node:internal/async_hooks:429:getOrSetAsyncId",
+        "self_us": 0.015964621168502936,
+        "inclusive_us": 0.015964621168502936,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/spots/spot-node-runtime-manager.js:468:meshNode",
+        "self_us": 0.01595385172626838,
+        "inclusive_us": 0.01595385172626838,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:632:drain",
+        "self_us": 0.013726731072162601,
+        "inclusive_us": 0.21894060674003707,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:410:drain",
+        "self_us": 0.013709499964587315,
+        "inclusive_us": 0.020537326341294588,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Handlers/Attributes.js:20:get",
+        "self_us": 0.013707346076140405,
+        "inclusive_us": 0.013707346076140405,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:71:complete",
+        "self_us": 0.013703038299246583,
+        "inclusive_us": 0.12338119190439202,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/ZLinkEncodedPayload.js:6:ZLinkEncodedPayload",
+        "self_us": 0.013685807191671296,
+        "inclusive_us": 0.015966775056949847,
+        "samples": 6
+      },
+      {
+        "name": "node:buffer:411:allocUnsafe",
+        "self_us": 0.013647037199626903,
+        "inclusive_us": 2.2295976258197268,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/application-job-queue.js:133:reserve",
+        "self_us": 0.013597497765347955,
+        "inclusive_us": 0.013597497765347955,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/errors/errors.js:15:get",
+        "self_us": 0.011445763206884053,
+        "inclusive_us": 0.011445763206884053,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:909:runPump",
+        "self_us": 0.01143930154154332,
+        "inclusive_us": 0.33053141328603936,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/ZLinkEncodedPayload.js:26:view",
+        "self_us": 0.011424224322414946,
+        "inclusive_us": 0.011424224322414946,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:72:encodeChannelEnvelopePartsAtDeadline",
+        "self_us": 0.01141130099173348,
+        "inclusive_us": 2.6247564619553247,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operations.js:156:recv",
+        "self_us": 0.01141130099173348,
+        "inclusive_us": 0.13903996091343362,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/messaging/payload-codec.js:137:serializerSelectionPlanOf",
+        "self_us": 0.011404839326392746,
+        "inclusive_us": 0.011404839326392746,
+        "samples": 5
+      },
+      {
+        "name": ":3:BenchPayload$encode",
+        "self_us": 0.011402685437945837,
+        "inclusive_us": 0.04566674285140303,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:294:encodeChannelHeader",
+        "self_us": 0.011394069884158193,
+        "inclusive_us": 0.17351079161779426,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:77:onReadable",
+        "self_us": 0.009149718122477129,
+        "inclusive_us": 0.3898925788829013,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer.js:207:write_uint32",
+        "self_us": 0.009136794791795664,
+        "inclusive_us": 0.009136794791795664,
+        "samples": 4
+      },
+      {
+        "name": "node:buffer:1039:fill",
+        "self_us": 0.009134640903348753,
+        "inclusive_us": 0.4499645276672438,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1473:send",
+        "self_us": 0.00912817923800802,
+        "inclusive_us": 5.158707140877336,
+        "samples": 4
+      },
+      {
+        "name": "node:buffer:775:byteLength",
+        "self_us": 0.009126025349561109,
+        "inclusive_us": 0.02969566001755936,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1051:tickLiveness",
+        "self_us": 0.009126025349561109,
+        "inclusive_us": 0.022820448095020048,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/stream-wire/dist/internal/json.js:6:get",
+        "self_us": 0.009104486465092,
+        "inclusive_us": 0.009104486465092,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer.js:450:finish",
+        "self_us": 0.006866596368751667,
+        "inclusive_us": 1.672569765121887,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/stream-wire/dist/internal/packet-json-contract.js:8:readZLinkDecoratorMetadata",
+        "self_us": 0.0068515191496232915,
+        "inclusive_us": 0.0068515191496232915,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:358:isPeerRouteReady",
+        "self_us": 0.006851519149623291,
+        "inclusive_us": 0.061678749565738,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:956:finishPump",
+        "self_us": 0.00684721137272947,
+        "inclusive_us": 0.027300536064594535,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:197:preparedRoutingId",
+        "self_us": 0.006845057484282559,
+        "inclusive_us": 0.006845057484282559,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/handles/native_handle.js:7:getNativeHandle",
+        "self_us": 0.006836441930494917,
+        "inclusive_us": 0.006836441930494917,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:184:readableReady",
+        "self_us": 0.006836441930494916,
+        "inclusive_us": 0.836837354947576,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/buffers/message_conversion.js:10:normalizeBufferLike",
+        "self_us": 0.006814903046025808,
+        "inclusive_us": 0.011381146553476728,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:642:completionOwnerOf",
+        "self_us": 0.0045813207265792966,
+        "inclusive_us": 0.0045813207265792966,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1184:nodeSendResult",
+        "self_us": 0.0045791668381323855,
+        "inclusive_us": 0.0045791668381323855,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:903:",
+        "self_us": 0.004577012949685475,
+        "inclusive_us": 0.004577012949685475,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:27:snapshotRetryPart",
+        "self_us": 0.00456839739589783,
+        "inclusive_us": 0.00456839739589783,
+        "samples": 2
+      },
+      {
+        "name": "node:buffer:155:createPool",
+        "self_us": 0.00456624350745092,
+        "inclusive_us": 0.00913248701490184,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/util:647:get",
+        "self_us": 0.00456624350745092,
+        "inclusive_us": 0.00456624350745092,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/buffer:735:writeU_Int8",
+        "self_us": 0.004561935730557099,
+        "inclusive_us": 0.004561935730557099,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-clients.js:167:requireMesh",
+        "self_us": 0.004559781842110188,
+        "inclusive_us": 0.004559781842110188,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:870:scheduleMaintenance",
+        "self_us": 0.004559781842110188,
+        "inclusive_us": 0.020453324691865067,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-backend-adapter-support.js:218:toNativeMessageLike",
+        "self_us": 0.004557627953663277,
+        "inclusive_us": 0.01369657663390585,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:592:pumpBatch",
+        "self_us": 0.004551166288322544,
+        "inclusive_us": 0.29179157567990144,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/native/native.js:36:requireNative",
+        "self_us": 0.004529627403853436,
+        "inclusive_us": 0.004529627403853436,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/validators:545:",
+        "self_us": 0.004505934630937418,
+        "inclusive_us": 0.004505934630937418,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/buffer:1054:utf8Write",
+        "self_us": 0.002291737307513104,
+        "inclusive_us": 0.06169598067331329,
+        "samples": 1
+      },
+      {
+        "name": "node:buffer:301:from",
+        "self_us": 0.002291737307513104,
+        "inclusive_us": 0.14837922121923888,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1030:nextMaintenanceDeadlineMs",
+        "self_us": 0.0022852756421723706,
+        "inclusive_us": 0.0022852756421723706,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-event-loop-poller.js:44:onReady",
+        "self_us": 0.0022809678652785494,
+        "inclusive_us": 0.8094700483411273,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:323:hasObservedManagedReceiveData",
+        "self_us": 0.0022809678652785494,
+        "inclusive_us": 0.0022809678652785494,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/application-job-queue.js:99:releaseAfterInternalProcessing",
+        "self_us": 0.0022809678652785494,
+        "inclusive_us": 0.0022809678652785494,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1396:submitControl",
+        "self_us": 0.0022809678652785494,
+        "inclusive_us": 0.0022809678652785494,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-liveness-registry.js:130:tick",
+        "self_us": 0.002274506199937817,
+        "inclusive_us": 0.002274506199937817,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-clients.js:101:submit",
+        "self_us": 0.0,
+        "inclusive_us": 10.10144819495982,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-transports.js:60:submit",
+        "self_us": 0.0,
+        "inclusive_us": 10.10144819495982,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/index.js:212:",
+        "self_us": 0.0,
+        "inclusive_us": 0.3703998884383584,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/messaging/packet-name.js:21:resolveFrameworkPacketName",
+        "self_us": 0.0,
+        "inclusive_us": 0.15508642984291915,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:436:allocate",
+        "self_us": 0.0,
+        "inclusive_us": 2.2159505886200996,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/ZLinkEncodedPayload.js:18:fromOwned",
+        "self_us": 0.0,
+        "inclusive_us": 0.015966775056949847,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1790:encodeMultipartApplicationFrame",
+        "self_us": 0.0,
+        "inclusive_us": 1.1118759862874052,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:163:encodeMultipartApplicationPayload",
+        "self_us": 0.0,
+        "inclusive_us": 1.1118759862874052,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:412:sendToNode",
+        "self_us": 0.0,
+        "inclusive_us": 5.195278012817436,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operation_builders.js:29:submit",
+        "self_us": 0.0,
+        "inclusive_us": 4.450943704999338,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:190:get handle",
+        "self_us": 0.0,
+        "inclusive_us": 0.006836441930494917,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/buffers/message_conversion.js:35:normalizeOperationPayload",
+        "self_us": 0.0,
+        "inclusive_us": 0.011381146553476728,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/buffers/message_conversion.js:20:toMessageParts",
+        "self_us": 0.0,
+        "inclusive_us": 0.011381146553476728,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:30:snapshotRetryPayload",
+        "self_us": 0.0,
+        "inclusive_us": 0.00456839739589783,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:72:CompletionEntry",
+        "self_us": 0.0,
+        "inclusive_us": 0.0022895834190661928,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:314:trackPromise",
+        "self_us": 0.0,
+        "inclusive_us": 0.015964621168502936,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:541:fromObject",
+        "self_us": 0.0,
+        "inclusive_us": 0.14152124040427486,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-topology-registry.js:136:readyPeer",
+        "self_us": 0.0,
+        "inclusive_us": 0.05482723041611471,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-topology-registry.js:131:hasRemoteAdmit",
+        "self_us": 0.0,
+        "inclusive_us": 0.025099262071851685,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-transports.js:343:meshNode",
+        "self_us": 0.0,
+        "inclusive_us": 0.01595385172626838,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:419:isObjectClientNodeDirectTarget",
+        "self_us": 0.0,
+        "inclusive_us": 0.01832959068321101,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:409:isObjectClientNodeDirectTarget",
+        "self_us": 0.0,
+        "inclusive_us": 0.01832959068321101,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-topology-registry.js:180:isObjectClientNodeDirectTarget",
+        "self_us": 0.0,
+        "inclusive_us": 0.01832959068321101,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-clients.js:98:validate",
+        "self_us": 0.0,
+        "inclusive_us": 0.004559781842110188,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:192:emitInitNative",
+        "self_us": 0.0,
+        "inclusive_us": 0.2191947655767726,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_local_storage/async_hooks:20:init",
+        "self_us": 0.0,
+        "inclusive_us": 0.1575440165608444,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:142:executionAsyncResource",
+        "self_us": 0.0,
+        "inclusive_us": 0.0342640574134572,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/process/per_thread:103:hrtimeBigInt",
+        "self_us": 0.0,
+        "inclusive_us": 0.20091471432784053,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/buffer:749:writeUInt8",
+        "self_us": 0.0,
+        "inclusive_us": 0.0022766600883847277,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/timers:632:Immediate",
+        "self_us": 0.0,
+        "inclusive_us": 0.10045951105236717,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:63:begin",
+        "self_us": 0.0,
+        "inclusive_us": 0.05242779868625607,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:517:emitBeforeScript",
+        "self_us": 0.0,
+        "inclusive_us": 0.029671967244643337,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:525:emitAfterScript",
+        "self_us": 0.0,
+        "inclusive_us": 0.0462999860547948,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:948:pumpReceiveBatch",
+        "self_us": 0.0,
+        "inclusive_us": 0.29179157567990144,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:286:receive",
+        "self_us": 0.0,
+        "inclusive_us": 0.13903996091343362,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:416:receiveRecord",
+        "self_us": 0.0,
+        "inclusive_us": 0.13903996091343362,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/perf/performance:137:now",
+        "self_us": 0.0,
+        "inclusive_us": 0.045548278986822927,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/errors:535:wrappedFn",
+        "self_us": 0.0,
+        "inclusive_us": 0.004505934630937418,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:528:attemptRetry",
+        "self_us": 0.0,
+        "inclusive_us": 0.004564089619004009,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/errors/native_errors.js:65:configCall",
+        "self_us": 0.0,
+        "inclusive_us": 0.3830625986177471,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/errors/native_errors.js:51:nativeCall",
+        "self_us": 0.0,
+        "inclusive_us": 0.3830625986177471,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/eventing/poller.js:102:",
+        "self_us": 0.0,
+        "inclusive_us": 0.3830625986177471,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1408:startControlSend",
+        "self_us": 0.0,
+        "inclusive_us": 0.0022809678652785494,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1068:",
+        "self_us": 0.0,
+        "inclusive_us": 0.0022809678652785494,
+        "samples": 0
+      }
+    ],
+    "unknown": [
+      [
+        "node:buffer:1043:_fill",
+        0.4613585975514019
+      ],
+      [
+        "node:internal/buffer:956:FastBuffer",
+        0.3082322061951718
+      ],
+      [
+        ":0:(program)",
+        0.24365647666833865
+      ],
+      [
+        "node:internal/buffer:580:writeBigU_Int64LE",
+        0.2327879555652267
+      ],
+      [
+        ":0:hrtimeBigInt",
+        0.20091471432784053
+      ],
+      [
+        "node:internal/buffer:816:writeUInt32BE",
+        0.0753860956418784
+      ],
+      [
+        "node:buffer:1114:write",
+        0.0753085556577896
+      ],
+      [
+        "node:internal/process/task_queues:62:runNextTicks",
+        0.07523963122748847
+      ],
+      [
+        "node:internal/buffer:602:writeBigUInt64LE",
+        0.07521378456612554
+      ],
+      [
+        "node:internal/buffer:60:checkInt",
+        0.04794555682823467
+      ],
+      [
+        "node:internal/bootstrap/node:475:get",
+        0.043347004994080084
+      ],
+      [
+        ":0:now",
+        0.04104234435588552
+      ],
+      [
+        "node:internal/buffer:706:writeUInt32LE",
+        0.03658379527078013
+      ],
+      [
+        "node:internal/bootstrap/node:437:get",
+        0.03423605686364735
+      ],
+      [
+        "node:internal/timers:163:initAsyncResource",
+        0.02505187652601965
+      ],
+      [
+        ":3:BenchPayload$fromObject",
+        0.02284844864482989
+      ],
+      [
+        "file:///root/worktree/zlink-nsend/framework/languages/node/packages/stream-wire/dist/internal/packet-json-contract.js:26:normalizePacketName",
+        0.018228357926206196
+      ],
+      [
+        "node:internal/buffer:632:writeBigInt64LE",
+        0.01600339116054733
+      ],
+      [
+        "node:buffer:1039:fill",
+        0.009134640903348753
+      ],
+      [
+        "node:buffer:775:byteLength",
+        0.009126025349561109
+      ],
+      [
+        "file:///root/worktree/zlink-nsend/framework/languages/node/packages/stream-wire/dist/internal/json.js:6:get",
+        0.009104486465092
+      ],
+      [
+        "file:///root/worktree/zlink-nsend/framework/languages/node/packages/stream-wire/dist/internal/packet-json-contract.js:8:readZLinkDecoratorMetadata",
+        0.0068515191496232915
+      ],
+      [
+        "node:buffer:155:createPool",
+        0.00456624350745092
+      ],
+      [
+        "node:internal/util:647:get",
+        0.00456624350745092
+      ],
+      [
+        "node:internal/buffer:735:writeU_Int8",
+        0.004561935730557099
+      ],
+      [
+        "node:internal/validators:545:",
+        0.004505934630937418
+      ],
+      [
+        "node:internal/buffer:1054:utf8Write",
+        0.002291737307513104
+      ],
+      [
+        "node:internal/process/per_thread:103:hrtimeBigInt",
+        0.0
+      ],
+      [
+        "node:internal/buffer:749:writeUInt8",
+        0.0
+      ],
+      [
+        "node:internal/timers:632:Immediate",
+        0.0
+      ]
+    ],
+    "sample_count": 7498,
+    "profile_wall_us": 8099026,
+    "nonidle_us": 7877641
+  },
+  {
+    "cell": "zlink-framework-node-send-saturation-4096",
+    "role": "target",
+    "messages": 476017,
+    "main_us": 17.398411762605118,
+    "stages_us": {
+      "Framework bookkeeping": 3.329418171669199,
+      "binding call": 2.8118740204107375,
+      "other": 2.148797397928791,
+      "encode/serialize": 1.8446243409708791,
+      "allocation": 3.1734876119009416,
+      "Buffer copy": 1.7910374934023514,
+      "Promise/microtask": 1.5151727282667986,
+      "benchmark": 0.18896154925612083,
+      "GC": 0.5832263403719463,
+      "handoff/event loop": 0.011812108427354171
+    },
+    "methods": [
+      {
+        "name": ":0:",
+        "self_us": 2.821918067558502,
+        "inclusive_us": 3.8126782414649405,
+        "samples": 1233
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/ZLinkEncodedPayload.js:22:data",
+        "self_us": 1.4247934695804076,
+        "inclusive_us": 1.4247934695804076,
+        "samples": 617
+      },
+      {
+        "name": ":0:createUnsafeArrayBuffer",
+        "self_us": 0.8175051884447284,
+        "inclusive_us": 2.3009171848420094,
+        "samples": 356
+      },
+      {
+        "name": "node:internal/buffer:1082:createUnsafeBuffer",
+        "self_us": 0.7678042134215123,
+        "inclusive_us": 0.9225074296801513,
+        "samples": 337
+      },
+      {
+        "name": ":0:(program)",
+        "self_us": 0.6547148083963168,
+        "inclusive_us": 0.6547148083963168,
+        "samples": 285
+      },
+      {
+        "name": "node:internal/async_hooks:328:promiseInitHook",
+        "self_us": 0.5911225363778797,
+        "inclusive_us": 1.1328423507882022,
+        "samples": 258
+      },
+      {
+        "name": ":0:(garbage collector)",
+        "self_us": 0.5832263403719463,
+        "inclusive_us": 0.5832263403719463,
+        "samples": 256
+      },
+      {
+        "name": "node:internal/buffer:956:FastBuffer",
+        "self_us": 0.4578077119092254,
+        "inclusive_us": 0.4578077119092254,
+        "samples": 201
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:139:materializeRoutedReceivedInto",
+        "self_us": 0.4014722156766761,
+        "inclusive_us": 1.1137584466369057,
+        "samples": 63
+      },
+      {
+        "name": "node:internal/async_local_storage/async_hooks:64:_propagate",
+        "self_us": 0.31835831559791794,
+        "inclusive_us": 0.31835831559791794,
+        "samples": 139
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:653:consume",
+        "self_us": 0.3072993497787384,
+        "inclusive_us": 0.3072993497787384,
+        "samples": 133
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:448:observeRecordTerminal",
+        "self_us": 0.30678652617944,
+        "inclusive_us": 0.46391438958120546,
+        "samples": 135
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operations.js:156:recv",
+        "self_us": 0.2821388078315713,
+        "inclusive_us": 6.110106509267371,
+        "samples": 123
+      },
+      {
+        "name": ":0:latin1Slice",
+        "self_us": 0.22532911069757874,
+        "inclusive_us": 0.22532911069757874,
+        "samples": 97
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:579:tryParseCanonicalChannelHeader",
+        "self_us": 0.19769886179312102,
+        "inclusive_us": 1.0419009172774754,
+        "samples": 86
+      },
+      {
+        "name": "node:internal/async_hooks:177:lookupPublicResource",
+        "self_us": 0.18218970289885836,
+        "inclusive_us": 0.18218970289885836,
+        "samples": 80
+      },
+      {
+        "name": ":0:utf8Slice",
+        "self_us": 0.18198586088240085,
+        "inclusive_us": 0.18198586088240085,
+        "samples": 79
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:31:normalizeMessageProperties",
+        "self_us": 0.17305328915068868,
+        "inclusive_us": 0.17305328915068868,
+        "samples": 76
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js:494:dispatchMesh",
+        "self_us": 0.16857091049405964,
+        "inclusive_us": 5.874432952660934,
+        "samples": 74
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-mailbox.js:28:tryEnqueue",
+        "self_us": 0.16855803626144128,
+        "inclusive_us": 0.3326916279130362,
+        "samples": 74
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-mailbox.js:15:receivedAtClock",
+        "self_us": 0.16413359165159488,
+        "inclusive_us": 0.16413359165159488,
+        "samples": 72
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:403:dispatchClaimRecords",
+        "self_us": 0.15693689561792626,
+        "inclusive_us": 6.894788841651567,
+        "samples": 69
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatch-pipeline.js:27:dispatchOneWay",
+        "self_us": 0.15470536196407553,
+        "inclusive_us": 7.921324362299018,
+        "samples": 65
+      },
+      {
+        "name": ":0:compareOffset",
+        "self_us": 0.15467746779340238,
+        "inclusive_us": 0.15467746779340238,
+        "samples": 68
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework-codec-protobuf/dist/server/framework.cjs:339:deserialize",
+        "self_us": 0.15248455683740675,
+        "inclusive_us": 2.2080725106092003,
+        "samples": 67
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:387:NodeRawReceivedRecord",
+        "self_us": 0.15029164588141114,
+        "inclusive_us": 0.5780272960995614,
+        "samples": 66
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:26:routedReceivedPrefersManagedBuffer",
+        "self_us": 0.15004918116709848,
+        "inclusive_us": 0.17277863885483014,
+        "samples": 65
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js:358:ZLinkRoutePacketDispatcher.receivedAtClock",
+        "self_us": 0.1455517825724147,
+        "inclusive_us": 0.1455517825724147,
+        "samples": 62
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:672:readString",
+        "self_us": 0.14551315987455957,
+        "inclusive_us": 0.5119159658987967,
+        "samples": 63
+      },
+      {
+        "name": "node:buffer:667:slice",
+        "self_us": 0.13647973998733684,
+        "inclusive_us": 0.3618088506849156,
+        "samples": 60
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatch-pipeline.js:191:invoke",
+        "self_us": 0.13403363578984662,
+        "inclusive_us": 3.4622480667092277,
+        "samples": 58
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/ZLinkMessageMetadata.js:45:zlinkMessageMetadata",
+        "self_us": 0.12534996588875627,
+        "inclusive_us": 0.12534996588875627,
+        "samples": 55
+      },
+      {
+        "name": "node:internal/async_hooks:353:promiseAfterHook",
+        "self_us": 0.12064014245586938,
+        "inclusive_us": 0.1478755815600304,
+        "samples": 50
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_snapshot.js:21:messageFromOwnedRoutedBuffer",
+        "self_us": 0.11846225143792852,
+        "inclusive_us": 0.518752183419151,
+        "samples": 52
+      },
+      {
+        "name": "node:buffer:301:from",
+        "self_us": 0.1161663466209859,
+        "inclusive_us": 0.4509264345747068,
+        "samples": 51
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:786:processReceived",
+        "self_us": 0.11391121020733483,
+        "inclusive_us": 0.6287238784452648,
+        "samples": 49
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_parts_state.js:13:closeMessageParts",
+        "self_us": 0.11382323628444264,
+        "inclusive_us": 0.11382323628444264,
+        "samples": 50
+      },
+      {
+        "name": "node:internal/buffer:134:readBigInt64LE",
+        "self_us": 0.10702564146194345,
+        "inclusive_us": 0.11158311980884632,
+        "samples": 47
+      },
+      {
+        "name": "node:internal/async_hooks:314:trackPromise",
+        "self_us": 0.10695268747710601,
+        "inclusive_us": 0.14573416753450824,
+        "samples": 46
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:146:invokeRecord",
+        "self_us": 0.1044980004578702,
+        "inclusive_us": 6.1084714817248384,
+        "samples": 46
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:205:decodeChannelPayload",
+        "self_us": 0.10241452047913072,
+        "inclusive_us": 2.4902713981929905,
+        "samples": 45
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-framework-server/main.js:44:handle",
+        "self_us": 0.10023662946118986,
+        "inclusive_us": 0.7150735023221065,
+        "samples": 42
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:632:drain",
+        "self_us": 0.0980029501019027,
+        "inclusive_us": 7.727047900676947,
+        "samples": 43
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:927:processApplicationReceived",
+        "self_us": 0.09344332604956346,
+        "inclusive_us": 0.42613495396259965,
+        "samples": 39
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js:588:createRouteContext",
+        "self_us": 0.09101867890643717,
+        "inclusive_us": 0.2255050585433631,
+        "samples": 40
+      },
+      {
+        "name": ":0:isUtf8",
+        "self_us": 0.09094572492159975,
+        "inclusive_us": 0.09094572492159975,
+        "samples": 40
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:620:receiveBatch",
+        "self_us": 0.08889657622984255,
+        "inclusive_us": 7.8250572878951585,
+        "samples": 40
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js:563:dispatchMeshCommand",
+        "self_us": 0.08189084798001307,
+        "inclusive_us": 4.404678371366306,
+        "samples": 36
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:52:decode",
+        "self_us": 0.07976445389254566,
+        "inclusive_us": 0.22560590669887368,
+        "samples": 35
+      },
+      {
+        "name": "node:internal/async_hooks:346:promiseBeforeHook",
+        "self_us": 0.07964429438810755,
+        "inclusive_us": 0.10924215517773943,
+        "samples": 34
+      },
+      {
+        "name": "node:buffer:839:toString",
+        "self_us": 0.07943830666621365,
+        "inclusive_us": 0.6550409556226486,
+        "samples": 35
+      },
+      {
+        "name": "node:buffer:1181:subarray",
+        "self_us": 0.07744280061036635,
+        "inclusive_us": 0.18449848194841934,
+        "samples": 34
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/framework-protobuf.js:26:toBuffer",
+        "self_us": 0.07517478996409689,
+        "inclusive_us": 0.17536635961112246,
+        "samples": 33
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1463:decodeMultipartRecord",
+        "self_us": 0.07417489123073684,
+        "inclusive_us": 0.4635496196570183,
+        "samples": 33
+      },
+      {
+        "name": ":0:now",
+        "self_us": 0.07287030232540873,
+        "inclusive_us": 0.07287030232540873,
+        "samples": 32
+      },
+      {
+        "name": "node:internal/bootstrap/node:475:get",
+        "self_us": 0.07286386520909953,
+        "inclusive_us": 0.07286386520909953,
+        "samples": 32
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/index.js:2192:dispatchMeshRecord",
+        "self_us": 0.07267075171982398,
+        "inclusive_us": 5.972075424249522,
+        "samples": 32
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:416:receiveRecord",
+        "self_us": 0.07062589443893962,
+        "inclusive_us": 6.781504177431659,
+        "samples": 31
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Configuration/CodecContentType.js:38:isCanonicalCodecContentType",
+        "self_us": 0.07044780088771882,
+        "inclusive_us": 0.07044780088771882,
+        "samples": 31
+      },
+      {
+        "name": ":3:BenchPayload$decode",
+        "self_us": 0.06841581783945282,
+        "inclusive_us": 0.18679438676536192,
+        "samples": 30
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:286:receive",
+        "self_us": 0.06827420128065075,
+        "inclusive_us": 6.84977837871231,
+        "samples": 30
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:313:decodeMultipartParts",
+        "self_us": 0.06611347590620104,
+        "inclusive_us": 0.16865888441695184,
+        "samples": 29
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-topology-registry.js:128:admittedPeer",
+        "self_us": 0.06602121057243605,
+        "inclusive_us": 0.06602121057243605,
+        "samples": 29
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_parts_state.js:10:freezeOwnedMessageParts",
+        "self_us": 0.06377465698053054,
+        "inclusive_us": 0.06377465698053054,
+        "samples": 28
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/core/routing_id.js:50:tryPrintableUtf8",
+        "self_us": 0.05913135041617189,
+        "inclusive_us": 0.21147858210564938,
+        "samples": 25
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/admission.js:85:run",
+        "self_us": 0.05460176623994216,
+        "inclusive_us": 4.022161317514743,
+        "samples": 24
+      },
+      {
+        "name": "node:buffer:526:fromArrayLike",
+        "self_us": 0.05223290743816214,
+        "inclusive_us": 0.26422216743767346,
+        "samples": 23
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/messaging/payload-codec.js:245:encodedPayloadFromOwned",
+        "self_us": 0.05015801028116823,
+        "inclusive_us": 0.10479839921896549,
+        "samples": 21
+      },
+      {
+        "name": "node:buffer:640:slice",
+        "self_us": 0.04769688614562323,
+        "inclusive_us": 0.07501815346724006,
+        "samples": 21
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/core/routing_id.js:88:toBytes",
+        "self_us": 0.04553186936030073,
+        "inclusive_us": 0.2162570681125009,
+        "samples": 19
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:456:continuePendingClaim",
+        "self_us": 0.043313209939068356,
+        "inclusive_us": 0.13140085521939002,
+        "samples": 19
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/index.js:2245:admitMeshDispatch",
+        "self_us": 0.04324025595423092,
+        "inclusive_us": 4.0790396772227,
+        "samples": 19
+      },
+      {
+        "name": ":3:BenchPayload$toObject",
+        "self_us": 0.04311365933348362,
+        "inclusive_us": 0.24358262684499052,
+        "samples": 19
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-mailbox.js:67:tryClaim",
+        "self_us": 0.03871710889431038,
+        "inclusive_us": 0.043257421597722084,
+        "samples": 17
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:718:readNullableString",
+        "self_us": 0.03869779754538283,
+        "inclusive_us": 0.054674720224779594,
+        "samples": 17
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-stateful-runtime.js:4317:acceptsStatefulIngress",
+        "self_us": 0.03632464733273002,
+        "inclusive_us": 0.03632464733273002,
+        "samples": 16
+      },
+      {
+        "name": "node:internal/async_hooks:429:getOrSetAsyncId",
+        "self_us": 0.03421541888875379,
+        "inclusive_us": 0.03421541888875379,
+        "samples": 15
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1384:recvBatch",
+        "self_us": 0.03408023944626091,
+        "inclusive_us": 0.4976448790413339,
+        "samples": 15
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/application-jobs/application-ingress-record-owner.js:103:releaseAfterInternalProcessing",
+        "self_us": 0.03404590815927859,
+        "inclusive_us": 0.03404590815927859,
+        "samples": 15
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/application-job-queue.js:357:releasePermit",
+        "self_us": 0.03187874566851969,
+        "inclusive_us": 0.03187874566851969,
+        "samples": 14
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:585:asBuffer",
+        "self_us": 0.0318765999630833,
+        "inclusive_us": 0.04098726524601623,
+        "samples": 14
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-server-metrics.js:33:record",
+        "self_us": 0.03180150027280948,
+        "inclusive_us": 0.314354429253605,
+        "samples": 14
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:758:readOptionalNullableString",
+        "self_us": 0.03175429475320878,
+        "inclusive_us": 0.12052427436230405,
+        "samples": 14
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-framework-server/main.js:51:toBuffer",
+        "self_us": 0.029602152200504658,
+        "inclusive_us": 0.034144610609352755,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/received_state.js:13:replaceReceived",
+        "self_us": 0.029600006495068262,
+        "inclusive_us": 0.20034451659619598,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatch-services.js:113:invokeScopeFreeHandler",
+        "self_us": 0.029520615393921652,
+        "inclusive_us": 0.749151596062931,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:451:",
+        "self_us": 0.029436932881902245,
+        "inclusive_us": 0.029436932881902245,
+        "samples": 13
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/ZLinkEncodedPayload.js:6:ZLinkEncodedPayload",
+        "self_us": 0.025068276613402142,
+        "inclusive_us": 0.038725691716055964,
+        "samples": 11
+      },
+      {
+        "name": "node:buffer:411:allocUnsafe",
+        "self_us": 0.02505111096991098,
+        "inclusive_us": 0.9907601739064381,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:1247:validateChannelHeader",
+        "self_us": 0.025048965264474584,
+        "inclusive_us": 0.025048965264474584,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/diagnostics/message-flow.js:97:begin",
+        "self_us": 0.025031799620983425,
+        "inclusive_us": 0.025031799620983425,
+        "samples": 10
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/reader.js:59:create_buffer",
+        "self_us": 0.025029653915547033,
+        "inclusive_us": 0.025029653915547033,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:449:",
+        "self_us": 0.025029653915547033,
+        "inclusive_us": 0.045420292677608186,
+        "samples": 11
+      },
+      {
+        "name": "node:internal/buffer:217:readUInt32LE",
+        "self_us": 0.022845325781296978,
+        "inclusive_us": 0.02741567836081821,
+        "samples": 10
+      },
+      {
+        "name": ":0:hrtimeBigInt",
+        "self_us": 0.022826014432369424,
+        "inclusive_us": 0.022826014432369424,
+        "samples": 10
+      },
+      {
+        "name": "node:internal/async_hooks:142:executionAsyncResource",
+        "self_us": 0.022765934680150365,
+        "inclusive_us": 0.13661062801895696,
+        "samples": 10
+      },
+      {
+        "name": "node:internal/async_local_storage/async_hooks:109:getStore",
+        "self_us": 0.02276378897471397,
+        "inclusive_us": 0.05915066176509944,
+        "samples": 10
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:323:hasObservedManagedReceiveData",
+        "self_us": 0.02272945768773165,
+        "inclusive_us": 0.02272945768773165,
+        "samples": 10
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatch-pipeline.js:264:trace",
+        "self_us": 0.022727311982295252,
+        "inclusive_us": 0.0318744542576469,
+        "samples": 10
+      },
+      {
+        "name": "node:internal/async_hooks:441:getDefaultTriggerAsyncId",
+        "self_us": 0.02054727525891799,
+        "inclusive_us": 0.02054727525891799,
+        "samples": 9
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-runtime-lifecycle.js:202:dispatchMeshRoute",
+        "self_us": 0.020452864219716614,
+        "inclusive_us": 5.899404672529697,
+        "samples": 9
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:457:",
+        "self_us": 0.020439989987098242,
+        "inclusive_us": 0.03409525938431567,
+        "samples": 9
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:550:parseChannelHeaderBytes",
+        "self_us": 0.020375618824006396,
+        "inclusive_us": 1.1192214126779672,
+        "samples": 9
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:671:receiveOne",
+        "self_us": 0.018577517668307432,
+        "inclusive_us": 7.5243602737442075,
+        "samples": 8
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:28:nowNs",
+        "self_us": 0.018197727806065524,
+        "inclusive_us": 0.04782777417724332,
+        "samples": 8
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:297:runApplicationWorker",
+        "self_us": 0.018156959402774023,
+        "inclusive_us": 7.543349766856303,
+        "samples": 8
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/index.js:6:get",
+        "self_us": 0.01596404844677839,
+        "inclusive_us": 0.01596404844677839,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:264:decodeMultipartApplicationParts",
+        "self_us": 0.01594259139241444,
+        "inclusive_us": 0.38937472842628146,
+        "samples": 7
+      },
+      {
+        "name": "node:internal/errors:535:wrappedFn",
+        "self_us": 0.015931862865232467,
+        "inclusive_us": 0.038644154909472955,
+        "samples": 7
+      },
+      {
+        "name": "node:internal/validators:545:",
+        "self_us": 0.015871783113013405,
+        "inclusive_us": 0.015871783113013405,
+        "samples": 7
+      },
+      {
+        "name": "node:internal/validators:186:",
+        "self_us": 0.013711057738563697,
+        "inclusive_us": 0.013711057738563697,
+        "samples": 6
+      },
+      {
+        "name": "node:buffer:725:getEncodingOps",
+        "self_us": 0.013687454978763353,
+        "inclusive_us": 0.013687454978763353,
+        "samples": 6
+      },
+      {
+        "name": "node:internal/buffer:306:readUInt32BE",
+        "self_us": 0.013661706513526614,
+        "inclusive_us": 0.013661706513526614,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/application-jobs/application-ingress-record-owner.js:16:create",
+        "self_us": 0.013661706513526613,
+        "inclusive_us": 0.013661706513526613,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/admission.js:187:requireState",
+        "self_us": 0.01363810375372627,
+        "inclusive_us": 0.01363810375372627,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/util/minimal.js:157:newBuffer",
+        "self_us": 0.01359089823412558,
+        "inclusive_us": 0.2004689675115069,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:663:readSingleDigit",
+        "self_us": 0.01144304709229424,
+        "inclusive_us": 0.01144304709229424,
+        "samples": 5
+      },
+      {
+        "name": "node:timers/promises:94:setImmediate",
+        "self_us": 0.011393695867257157,
+        "inclusive_us": 0.027331995848798807,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/handles/native_handle.js:7:getNativeHandle",
+        "self_us": 0.011387258750947971,
+        "inclusive_us": 0.011387258750947971,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/handlers/handler-instance-scope.js:284:handlerInstanceCleanup",
+        "self_us": 0.011385113045511576,
+        "inclusive_us": 0.011385113045511576,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:274:expectText8At",
+        "self_us": 0.011385113045511576,
+        "inclusive_us": 0.1683348828960562,
+        "samples": 5
+      },
+      {
+        "name": "node:internal/timers:367:insert",
+        "self_us": 0.011378675929202393,
+        "inclusive_us": 0.01897018176316771,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Common/ZLinkEncodedPayload.js:18:fromOwned",
+        "self_us": 0.011374384518329603,
+        "inclusive_us": 0.05010007623438556,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:749:finishReceive",
+        "self_us": 0.011363655991147626,
+        "inclusive_us": 0.011363655991147626,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:642:completionOwnerOf",
+        "self_us": 0.011337907525910887,
+        "inclusive_us": 0.011337907525910887,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:129:dispatchRecord",
+        "self_us": 0.011297139122619385,
+        "inclusive_us": 6.142536701233046,
+        "samples": 5
+      },
+      {
+        "name": "node:internal/timers:526:listOnTimeout",
+        "self_us": 0.009533369253902739,
+        "inclusive_us": 0.009533369253902739,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/@grpc/proto-loader/build/src/index.js:78:deserialize",
+        "self_us": 0.009123539515551305,
+        "inclusive_us": 0.45542812458026344,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1051:tickLiveness",
+        "self_us": 0.00911281098836933,
+        "inclusive_us": 0.00911281098836933,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/reader.js:102:read_uint32",
+        "self_us": 0.009106373872060146,
+        "inclusive_us": 0.009106373872060146,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:927:resumePump",
+        "self_us": 0.00909564534487817,
+        "inclusive_us": 7.884225115303749,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1050:drainMailbox",
+        "self_us": 0.009093499639441775,
+        "inclusive_us": 0.05690410817319393,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:467:finishClaim",
+        "self_us": 0.009080625406823405,
+        "inclusive_us": 0.009080625406823405,
+        "samples": 4
+      },
+      {
+        "name": "node:timers:133:setTimeout",
+        "self_us": 0.0068619659855910335,
+        "inclusive_us": 0.02583214774875874,
+        "samples": 3
+      },
+      {
+        "name": "node:internal/abort_controller:495:get signal",
+        "self_us": 0.006836217520354294,
+        "inclusive_us": 0.006836217520354294,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/index.js:2217:",
+        "self_us": 0.006831926109481504,
+        "inclusive_us": 4.083607884096785,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:112:waitForApplicationReady",
+        "self_us": 0.006816906171426739,
+        "inclusive_us": 0.011376530223765998,
+        "samples": 3
+      },
+      {
+        "name": "node:internal/bootstrap/node:437:get",
+        "self_us": 0.00680403193880837,
+        "inclusive_us": 0.00680403193880837,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1341:reset",
+        "self_us": 0.0045789354012668124,
+        "inclusive_us": 0.0045789354012668124,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/priority_queue:71:percolateUp",
+        "self_us": 0.0045682068740848375,
+        "inclusive_us": 0.0045682068740848375,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatch-pipeline.js:110:invokeInFlow",
+        "self_us": 0.004566061168648442,
+        "inclusive_us": 3.5100372181886157,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/abort_controller:200:get aborted",
+        "self_us": 0.004559624052339258,
+        "inclusive_us": 0.004559624052339258,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:518:",
+        "self_us": 0.004559624052339258,
+        "inclusive_us": 0.006831926109481504,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/admission.js:108:",
+        "self_us": 0.0045574783469028626,
+        "inclusive_us": 0.0045574783469028626,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/perf/performance:137:now",
+        "self_us": 0.004553186936030073,
+        "inclusive_us": 0.0932952723744522,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1329:push",
+        "self_us": 0.004553186936030073,
+        "inclusive_us": 0.004553186936030073,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:525:nowMs",
+        "self_us": 0.004548895525157283,
+        "inclusive_us": 0.006821197582299529,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/util:647:get",
+        "self_us": 0.004548895525157282,
+        "inclusive_us": 0.004548895525157282,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:611:drainReady",
+        "self_us": 0.004546749819720888,
+        "inclusive_us": 0.061450857992914824,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-mailbox.js:266:moveBackToFront",
+        "self_us": 0.0045403127034117025,
+        "inclusive_us": 0.0045403127034117025,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:391:receiveClaim",
+        "self_us": 0.0045360212925389136,
+        "inclusive_us": 7.399239898337146,
+        "samples": 2
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:564:yieldToTimers",
+        "self_us": 0.004533875587102518,
+        "inclusive_us": 0.030366023335861258,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/timers:632:Immediate",
+        "self_us": 0.004525292765356939,
+        "inclusive_us": 0.006797594822499185,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/timers:506:processTimers",
+        "self_us": 0.002416064321380708,
+        "inclusive_us": 0.011949433575283447,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/async_hooks:118:callbackTrampoline",
+        "self_us": 0.002298050522378986,
+        "inclusive_us": 0.004576789695830417,
+        "samples": 1
+      },
+      {
+        "name": "node:internal/timers:277:append",
+        "self_us": 0.0022916134060698007,
+        "inclusive_us": 0.0022916134060698007,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:268:multipartApplicationPayloadOffset",
+        "self_us": 0.0022851762897606164,
+        "inclusive_us": 0.17515822618379212,
+        "samples": 1
+      },
+      {
+        "name": "node:internal/buffer:94:readBigUInt64LE",
+        "self_us": 0.002283030584324221,
+        "inclusive_us": 0.011432318565112266,
+        "samples": 1
+      },
+      {
+        "name": "node:buffer:155:createPool",
+        "self_us": 0.002280884878887826,
+        "inclusive_us": 0.006855528869281848,
+        "samples": 1
+      },
+      {
+        "name": ":0:getLibuvNow",
+        "self_us": 0.002280884878887826,
+        "inclusive_us": 0.002280884878887826,
+        "samples": 1
+      },
+      {
+        "name": "node:internal/async_hooks:547:pushAsyncContext",
+        "self_us": 0.002280884878887826,
+        "inclusive_us": 0.002280884878887826,
+        "samples": 1
+      },
+      {
+        "name": "node:internal/timers:436:processImmediate",
+        "self_us": 0.0022787391734514313,
+        "inclusive_us": 0.0022787391734514313,
+        "samples": 1
+      },
+      {
+        "name": "node:buffer:1189:slice",
+        "self_us": 0.0022765934680150364,
+        "inclusive_us": 0.09106159301516506,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1408:startControlSend",
+        "self_us": 0.002274447762578641,
+        "inclusive_us": 0.002274447762578641,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-mailbox.js:238:push",
+        "self_us": 0.0022723020571422466,
+        "inclusive_us": 0.0022723020571422466,
+        "samples": 1
+      },
+      {
+        "name": "node:internal/timers:648:ref",
+        "self_us": 0.0022723020571422466,
+        "inclusive_us": 0.0022723020571422466,
+        "samples": 1
+      },
+      {
+        "name": "node:buffer:497:fromArrayBuffer",
+        "self_us": 0.0022723020571422466,
+        "inclusive_us": 0.05914637035422665,
+        "samples": 1
+      },
+      {
+        "name": "node:buffer:929:compare",
+        "self_us": 0.0022723020571422466,
+        "inclusive_us": 0.15694976985054465,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:65:materializeReceivedParts",
+        "self_us": 0.0022680106462694568,
+        "inclusive_us": 0.5119417143640335,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:592:pumpBatch",
+        "self_us": 0.0022615735299602716,
+        "inclusive_us": 7.8432507242903515,
+        "samples": 1
+      },
+      {
+        "name": "node:internal/linkedlist:30:append",
+        "self_us": 0.0007424140809926509,
+        "inclusive_us": 0.0007424140809926509,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:948:pumpReceiveBatch",
+        "self_us": 0.0,
+        "inclusive_us": 7.8432507242903515,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_snapshot.js:11:messageFromSnapshot",
+        "self_us": 0.0,
+        "inclusive_us": 0.17305328915068868,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:264:acquireMessageWrapper",
+        "self_us": 0.0,
+        "inclusive_us": 0.17305328915068868,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:436:allocate",
+        "self_us": 0.0,
+        "inclusive_us": 0.9657090629365273,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_base.js:28:receiveHandle",
+        "self_us": 0.0,
+        "inclusive_us": 0.02272516627685886,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/core/routing_id.js:107:toString",
+        "self_us": 0.0,
+        "inclusive_us": 0.21147858210564938,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:1319:isUtf8",
+        "self_us": 0.0,
+        "inclusive_us": 0.09094572492159975,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:541:fromObject",
+        "self_us": 0.0,
+        "inclusive_us": 0.26422216743767346,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:988:enqueueOrdinaryRecord",
+        "self_us": 0.0,
+        "inclusive_us": 0.33269162791303614,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:503:emitInitScript",
+        "self_us": 0.0,
+        "inclusive_us": 0.45053806189071927,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:192:emitInitNative",
+        "self_us": 0.0,
+        "inclusive_us": 0.45053806189071927,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_local_storage/async_hooks:20:init",
+        "self_us": 0.0,
+        "inclusive_us": 0.39356958255443353,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:368:dispatchClaim",
+        "self_us": 0.0,
+        "inclusive_us": 7.408320523743969,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:361:receive",
+        "self_us": 0.0,
+        "inclusive_us": 7.399239898337146,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/spots/spot-node-runtime-manager.js:256:dispatch",
+        "self_us": 0.0,
+        "inclusive_us": 5.978941681645985,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/spots/spot-node-runtime-manager.js:664:dispatchMeshRecord",
+        "self_us": 0.0,
+        "inclusive_us": 5.978941681645985,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/spots/spot-node-runtime-manager.js:682:dispatchFrameworkRecord",
+        "self_us": 0.0,
+        "inclusive_us": 5.978941681645985,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/index.js:2158:meshRecordDispatcher",
+        "self_us": 0.0,
+        "inclusive_us": 5.978941681645985,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/index.js:2162:dispatchMeshNodeRecord",
+        "self_us": 0.0,
+        "inclusive_us": 5.899404672529697,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/index.js:2169:dispatchMeshNodePayload",
+        "self_us": 0.0,
+        "inclusive_us": 5.899404672529697,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-runtime-manager.js:137:dispatchMeshRoute",
+        "self_us": 0.0,
+        "inclusive_us": 5.899404672529697,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/framework-protobuf.js:20:decode",
+        "self_us": 0.0,
+        "inclusive_us": 0.6307944841913858,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/reader.js:323:read_bytes",
+        "self_us": 0.0,
+        "inclusive_us": 0.09334891501036208,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatch-services.js:104:handle",
+        "self_us": 0.0,
+        "inclusive_us": 0.749151596062931,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/process/per_thread:103:hrtimeBigInt",
+        "self_us": 0.0,
+        "inclusive_us": 0.022826014432369424,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/application-jobs/application-job-queue-scope.js:67:releaseApplicationJobPermitBeforeHandler",
+        "self_us": 0.0,
+        "inclusive_us": 0.07964429438810755,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/application-jobs/application-ingress-record-owner.js:100:releaseBeforeHandler",
+        "self_us": 0.0,
+        "inclusive_us": 0.03187874566851969,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/application-job-queue.js:94:releaseBeforeHandler",
+        "self_us": 0.0,
+        "inclusive_us": 0.03187874566851969,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/admission.js:51:accepts",
+        "self_us": 0.0,
+        "inclusive_us": 0.01363810375372627,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:189:decodeChannelEnvelope",
+        "self_us": 0.0,
+        "inclusive_us": 1.155631888228153,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:520:decodeChannelHeader",
+        "self_us": 0.0,
+        "inclusive_us": 1.155631888228153,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:723:readMetadata",
+        "self_us": 0.0,
+        "inclusive_us": 0.029494866928684912,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:767:readOptionalString",
+        "self_us": 0.0,
+        "inclusive_us": 0.004555332641466467,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:815:readOptionalSingleDigit",
+        "self_us": 0.0,
+        "inclusive_us": 0.002280884878887826,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/application-jobs/application-job-queue-scope.js:31:enterApplicationJobPermitScope",
+        "self_us": 0.0,
+        "inclusive_us": 0.020478612684953355,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_local_storage/async_hooks:71:enterWith",
+        "self_us": 0.0,
+        "inclusive_us": 0.013646686575471849,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/application-jobs/application-job-queue-scope.js:36:leaveApplicationJobPermitScope",
+        "self_us": 0.0,
+        "inclusive_us": 0.004553186936030073,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:297:applicationPayloadDataOffset",
+        "self_us": 0.0,
+        "inclusive_us": 0.006827634698608714,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:363:finish",
+        "self_us": 0.0,
+        "inclusive_us": 0.009080625406823405,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-mailbox.js:241:peek",
+        "self_us": 0.0,
+        "inclusive_us": 0.0022658649408330614,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-mailbox.js:245:shift",
+        "self_us": 0.0,
+        "inclusive_us": 0.002274447762578641,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:510:yieldIfNeeded",
+        "self_us": 0.0,
+        "inclusive_us": 0.03718722091816079,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:565:",
+        "self_us": 0.0,
+        "inclusive_us": 0.02583214774875874,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/priority_queue:22:insert",
+        "self_us": 0.0,
+        "inclusive_us": 0.0045682068740848375,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:462:releaseRecord",
+        "self_us": 0.0,
+        "inclusive_us": 0.02039063876206116,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1568:releaseRecordApplicationJob",
+        "self_us": 0.0,
+        "inclusive_us": 0.02039063876206116,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/application-jobs/application-ingress-record-owner.js:108:close",
+        "self_us": 0.0,
+        "inclusive_us": 0.02039063876206116,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:517:emitBeforeScript",
+        "self_us": 0.0,
+        "inclusive_us": 0.002280884878887826,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:171:finishRecord",
+        "self_us": 0.0,
+        "inclusive_us": 0.013655269397217428,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/application-jobs/application-job-queue-scope.js:20:releaseApplicationJobPermitTurn",
+        "self_us": 0.0,
+        "inclusive_us": 0.013655269397217428,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:905:processLiveness",
+        "self_us": 0.0,
+        "inclusive_us": 0.002274447762578641,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:1393:sendControl",
+        "self_us": 0.0,
+        "inclusive_us": 0.002274447762578641,
+        "samples": 0
+      }
+    ],
+    "unknown": [
+      [
+        ":0:(program)",
+        0.6547148083963168
+      ],
+      [
+        "node:internal/buffer:956:FastBuffer",
+        0.4578077119092254
+      ],
+      [
+        ":0:latin1Slice",
+        0.22532911069757874
+      ],
+      [
+        ":0:compareOffset",
+        0.15467746779340238
+      ],
+      [
+        "node:internal/buffer:134:readBigInt64LE",
+        0.10702564146194345
+      ],
+      [
+        ":0:isUtf8",
+        0.09094572492159975
+      ],
+      [
+        "node:buffer:839:toString",
+        0.07943830666621365
+      ],
+      [
+        ":0:now",
+        0.07287030232540873
+      ],
+      [
+        "node:internal/bootstrap/node:475:get",
+        0.07286386520909953
+      ],
+      [
+        ":3:BenchPayload$toObject",
+        0.04311365933348362
+      ],
+      [
+        "node:internal/buffer:217:readUInt32LE",
+        0.022845325781296978
+      ],
+      [
+        ":0:hrtimeBigInt",
+        0.022826014432369424
+      ],
+      [
+        "node:internal/errors:535:wrappedFn",
+        0.015931862865232467
+      ],
+      [
+        "node:internal/validators:545:",
+        0.015871783113013405
+      ],
+      [
+        "node:internal/validators:186:",
+        0.013711057738563697
+      ],
+      [
+        "node:buffer:725:getEncodingOps",
+        0.013687454978763353
+      ],
+      [
+        "node:internal/buffer:306:readUInt32BE",
+        0.013661706513526614
+      ],
+      [
+        "node:internal/timers:367:insert",
+        0.011378675929202393
+      ],
+      [
+        "node:timers:133:setTimeout",
+        0.0068619659855910335
+      ],
+      [
+        "node:internal/abort_controller:495:get signal",
+        0.006836217520354294
+      ],
+      [
+        "node:internal/bootstrap/node:437:get",
+        0.00680403193880837
+      ],
+      [
+        "node:internal/priority_queue:71:percolateUp",
+        0.0045682068740848375
+      ],
+      [
+        "node:internal/abort_controller:200:get aborted",
+        0.004559624052339258
+      ],
+      [
+        "node:internal/perf/performance:137:now",
+        0.004553186936030073
+      ],
+      [
+        "node:internal/util:647:get",
+        0.004548895525157282
+      ],
+      [
+        "node:internal/timers:632:Immediate",
+        0.004525292765356939
+      ],
+      [
+        "node:internal/timers:506:processTimers",
+        0.002416064321380708
+      ],
+      [
+        "node:internal/timers:277:append",
+        0.0022916134060698007
+      ],
+      [
+        "node:internal/buffer:94:readBigUInt64LE",
+        0.002283030584324221
+      ],
+      [
+        "node:buffer:155:createPool",
+        0.002280884878887826
+      ]
+    ],
+    "sample_count": 7492,
+    "profile_wall_us": 8121176,
+    "nonidle_us": 8108481
+  },
+  {
+    "cell": "zlink-node-send-saturation-4096",
+    "role": "source",
+    "messages": 732443,
+    "main_us": 11.06203050203224,
+    "stages_us": {
+      "handoff/event loop": 0.2267518494971763,
+      "other": 1.650316325469324,
+      "Promise/microtask": 0.2155459841371972,
+      "benchmark": 0.7627543587247673,
+      "encode/serialize": 0.11683567817855059,
+      "Buffer copy": 0.8252320414340125,
+      "allocation": 1.7574557728425484,
+      "binding call": 4.583109720217142,
+      "GC": 0.924028771531522
+    },
+    "methods": [
+      {
+        "name": ":0:",
+        "self_us": 3.1511662845884656,
+        "inclusive_us": 3.1511662845884656,
+        "samples": 2119
+      },
+      {
+        "name": "node:internal/buffer:1082:createUnsafeBuffer",
+        "self_us": 1.4840418580480343,
+        "inclusive_us": 1.8299168375281802,
+        "samples": 996
+      },
+      {
+        "name": ":0:(garbage collector)",
+        "self_us": 0.924028771531522,
+        "inclusive_us": 0.924028771531522,
+        "samples": 625
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer_buffer.js:30:writeBytesBuffer_set",
+        "self_us": 0.7881979039935442,
+        "inclusive_us": 0.7881979039935442,
+        "samples": 531
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:216:submitSend",
+        "self_us": 0.48032445473404134,
+        "inclusive_us": 2.4998056711693346,
+        "samples": 323
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/index.js:54:fromBuffer",
+        "self_us": 0.418111620192279,
+        "inclusive_us": 1.623648902879231,
+        "samples": 283
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:391:",
+        "self_us": 0.3798982114376494,
+        "inclusive_us": 9.236709477178753,
+        "samples": 254
+      },
+      {
+        "name": ":0:(program)",
+        "self_us": 0.36301204985402125,
+        "inclusive_us": 0.36301204985402125,
+        "samples": 244
+      },
+      {
+        "name": "node:buffer:1043:_fill",
+        "self_us": 0.3591787211141354,
+        "inclusive_us": 0.3591787211141354,
+        "samples": 242
+      },
+      {
+        "name": "node:internal/buffer:580:writeBigU_Int64LE",
+        "self_us": 0.24385407142796167,
+        "inclusive_us": 0.2616337470924141,
+        "samples": 165
+      },
+      {
+        "name": ":0:createUnsafeArrayBuffer",
+        "self_us": 0.23942413734237714,
+        "inclusive_us": 0.23942413734237714,
+        "samples": 162
+      },
+      {
+        "name": ":0:runMicrotasks",
+        "self_us": 0.19931079147048783,
+        "inclusive_us": 8.340376854277336,
+        "samples": 134
+      },
+      {
+        "name": "node:internal/timers:436:processImmediate",
+        "self_us": 0.19429400960326992,
+        "inclusive_us": 8.605413203353045,
+        "samples": 90
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/router_socket.js:37:send",
+        "self_us": 0.17737857532744622,
+        "inclusive_us": 0.3283336671664283,
+        "samples": 120
+      },
+      {
+        "name": ":0:hrtimeBigInt",
+        "self_us": 0.17572118337409195,
+        "inclusive_us": 0.17572118337409195,
+        "samples": 119
+      },
+      {
+        "name": "node:internal/buffer:956:FastBuffer",
+        "self_us": 0.15978847519340267,
+        "inclusive_us": 0.15978847519340267,
+        "samples": 107
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/@grpc/proto-loader/build/src/index.js:83:serialize",
+        "self_us": 0.1301282683107512,
+        "inclusive_us": 1.8830467738629986,
+        "samples": 86
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:28:nowNs",
+        "self_us": 0.08423705057456113,
+        "inclusive_us": 0.2673614371986654,
+        "samples": 57
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:42:stamp",
+        "self_us": 0.08420220213147127,
+        "inclusive_us": 0.4744573708554305,
+        "samples": 57
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operation_builders.js:29:submit",
+        "self_us": 0.07971790447466659,
+        "inclusive_us": 2.619500315618978,
+        "samples": 54
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:73:from",
+        "self_us": 0.07533675820940794,
+        "inclusive_us": 1.7181620623521332,
+        "samples": 50
+      },
+      {
+        "name": ":3:BenchPayload$fromObject",
+        "self_us": 0.06501464936618798,
+        "inclusive_us": 0.06501464936618798,
+        "samples": 44
+      },
+      {
+        "name": "node:internal/process/task_queues:62:runNextTicks",
+        "self_us": 0.054507146805729906,
+        "inclusive_us": 8.394884001083065,
+        "samples": 35
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/raw-wire.js:38:encodeBenchPayloadMessage",
+        "self_us": 0.04887842627785385,
+        "inclusive_us": 3.6500705352403022,
+        "samples": 32
+      },
+      {
+        "name": "node:internal/buffer:706:writeUInt32LE",
+        "self_us": 0.042905403132249866,
+        "inclusive_us": 0.042905403132249866,
+        "samples": 29
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/buffers/message_conversion.js:20:toMessageParts",
+        "self_us": 0.04287055468916,
+        "inclusive_us": 0.05026957612600153,
+        "samples": 29
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/router_socket.js:39:",
+        "self_us": 0.03995861878457033,
+        "inclusive_us": 2.5397824111443112,
+        "samples": 27
+      },
+      {
+        "name": "node:buffer:526:fromArrayLike",
+        "self_us": 0.03555656345345775,
+        "inclusive_us": 0.09771921623717066,
+        "samples": 24
+      },
+      {
+        "name": "node:internal/timers:163:initAsyncResource",
+        "self_us": 0.03553007863670945,
+        "inclusive_us": 0.03553007863670945,
+        "samples": 24
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:71:complete",
+        "self_us": 0.035488260505001604,
+        "inclusive_us": 0.10782944654640418,
+        "samples": 24
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:32:createPayloadBytes",
+        "self_us": 0.0325331125309805,
+        "inclusive_us": 1.902883901607477,
+        "samples": 22
+      },
+      {
+        "name": "node:timers:225:setImmediate",
+        "self_us": 0.03245783989390637,
+        "inclusive_us": 0.11077901876953089,
+        "samples": 22
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/send_operation_base.js:14:PartOperationBase",
+        "self_us": 0.02957657061923579,
+        "inclusive_us": 0.02957657061923579,
+        "samples": 20
+      },
+      {
+        "name": "node:internal/errors:535:wrappedFn",
+        "self_us": 0.026539180319522584,
+        "inclusive_us": 0.03250941558967938,
+        "samples": 18
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/errors/errors.js:15:get",
+        "self_us": 0.02217615524467067,
+        "inclusive_us": 0.02217615524467067,
+        "samples": 15
+      },
+      {
+        "name": ":3:BenchPayload$encode",
+        "self_us": 0.022100882607596548,
+        "inclusive_us": 0.042818978993386984,
+        "samples": 15
+      },
+      {
+        "name": "node:buffer:1039:fill",
+        "self_us": 0.02073621757619717,
+        "inclusive_us": 0.37991493869033255,
+        "samples": 14
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer_buffer.js:47:write_bytes_buffer",
+        "self_us": 0.020718096385790443,
+        "inclusive_us": 0.020718096385790443,
+        "samples": 13
+      },
+      {
+        "name": "node:internal/timers:632:Immediate",
+        "self_us": 0.020679066129529786,
+        "inclusive_us": 0.056209144766239234,
+        "samples": 14
+      },
+      {
+        "name": "node:buffer:411:allocUnsafe",
+        "self_us": 0.01920428001796642,
+        "inclusive_us": 1.8536611727118955,
+        "samples": 13
+      },
+      {
+        "name": "node:internal/buffer:60:checkInt",
+        "self_us": 0.01777967566445247,
+        "inclusive_us": 0.01777967566445247,
+        "samples": 12
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer.js:176:writeVarint32",
+        "self_us": 0.017735069657297434,
+        "inclusive_us": 0.017735069657297434,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/main.js:251:submitSend",
+        "self_us": 0.016267253234352044,
+        "inclusive_us": 6.60828935406649,
+        "samples": 11
+      },
+      {
+        "name": "node:internal/buffer:602:writeBigUInt64LE",
+        "self_us": 0.016267253234352044,
+        "inclusive_us": 0.1552832684707441,
+        "samples": 11
+      },
+      {
+        "name": "node:buffer:436:allocate",
+        "self_us": 0.014785497434170706,
+        "inclusive_us": 1.843263791231601,
+        "samples": 10
+      },
+      {
+        "name": "node:internal/async_hooks:561:popAsyncContext",
+        "self_us": 0.014742285364739266,
+        "inclusive_us": 0.014742285364739266,
+        "samples": 10
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operation_builders.js:24:RuntimeSendOperation",
+        "self_us": 0.013339984014802833,
+        "inclusive_us": 0.04291655463403862,
+        "samples": 9
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/send_operation_base.js:17:message",
+        "self_us": 0.013310711322607341,
+        "inclusive_us": 0.013310711322607341,
+        "samples": 9
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:37:normalizeBufferLike",
+        "self_us": 0.013307923447160152,
+        "inclusive_us": 0.019176401263494524,
+        "samples": 9
+      },
+      {
+        "name": "node:internal/buffer:632:writeBigInt64LE",
+        "self_us": 0.011813622207466458,
+        "inclusive_us": 0.12259821672789174,
+        "samples": 8
+      },
+      {
+        "name": "node:internal/bootstrap/node:437:get",
+        "self_us": 0.010356957286309828,
+        "inclusive_us": 0.010356957286309828,
+        "samples": 7
+      },
+      {
+        "name": "node:internal/bootstrap/node:475:get",
+        "self_us": 0.010298411901918844,
+        "inclusive_us": 0.010298411901918844,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/handles/native_handle.js:7:getNativeHandle",
+        "self_us": 0.010273321022894136,
+        "inclusive_us": 0.010273321022894136,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operations.js:22:get",
+        "self_us": 0.008841746980762212,
+        "inclusive_us": 0.008841746980762212,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/writer.js:450:finish",
+        "self_us": 0.007403203250012315,
+        "inclusive_us": 1.6480428130421407,
+        "samples": 5
+      },
+      {
+        "name": "node:internal/validators:186:",
+        "self_us": 0.005978598896498365,
+        "inclusive_us": 0.005978598896498365,
+        "samples": 4
+      },
+      {
+        "name": "node:internal/validators:469:",
+        "self_us": 0.005922841387554571,
+        "inclusive_us": 0.005922841387554571,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/buffers/message_conversion.js:10:normalizeBufferLike",
+        "self_us": 0.005920053512107381,
+        "inclusive_us": 0.0073990214368415295,
+        "samples": 4
+      },
+      {
+        "name": "node:buffer:155:createPool",
+        "self_us": 0.004432721961031663,
+        "inclusive_us": 0.0058712656917815605,
+        "samples": 3
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:642:completionOwnerOf",
+        "self_us": 0.002976057039875031,
+        "inclusive_us": 0.002976057039875031,
+        "samples": 2
+      },
+      {
+        "name": "node:internal/async_hooks:525:emitAfterScript",
+        "self_us": 0.0014929073019700977,
+        "inclusive_us": 0.016235192666709364,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/main.js:273:sendSubmission",
+        "self_us": 0.0,
+        "inclusive_us": 6.60828935406649,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:43:consumeSubmittedMessages",
+        "self_us": 0.0,
+        "inclusive_us": 0.09158170844018247,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:331:consumeSubmittedMessage",
+        "self_us": 0.0,
+        "inclusive_us": 0.09158170844018247,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/index.js:50:close",
+        "self_us": 0.0,
+        "inclusive_us": 0.09158170844018247,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/buffers/message_conversion.js:35:normalizeOperationPayload",
+        "self_us": 0.0,
+        "inclusive_us": 0.05026957612600153,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:190:get handle",
+        "self_us": 0.0,
+        "inclusive_us": 0.010273321022894136,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:301:from",
+        "self_us": 0.0,
+        "inclusive_us": 0.0991967902241812,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:541:fromObject",
+        "self_us": 0.0,
+        "inclusive_us": 0.09771921623717066,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/process/per_thread:103:hrtimeBigInt",
+        "self_us": 0.0,
+        "inclusive_us": 0.17276742933779446,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:149:sleepImmediate",
+        "self_us": 0.0,
+        "inclusive_us": 0.11077901876953089,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:150:",
+        "self_us": 0.0,
+        "inclusive_us": 0.11077901876953089,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:63:begin",
+        "self_us": 0.0,
+        "inclusive_us": 0.05317175446652603,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/main.js:266:awaitSendCompletion",
+        "self_us": 0.0,
+        "inclusive_us": 0.007389263872776365,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/main.js:213:awaitCompletion",
+        "self_us": 0.0,
+        "inclusive_us": 0.007389263872776365,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/client/main.js:201:poll",
+        "self_us": 0.0,
+        "inclusive_us": 0.007389263872776365,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/eventing/poller.js:99:wait",
+        "self_us": 0.0,
+        "inclusive_us": 0.007389263872776365,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/errors/native_errors.js:65:configCall",
+        "self_us": 0.0,
+        "inclusive_us": 0.007389263872776365,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/errors/native_errors.js:51:nativeCall",
+        "self_us": 0.0,
+        "inclusive_us": 0.007389263872776365,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/eventing/poller.js:102:",
+        "self_us": 0.0,
+        "inclusive_us": 0.007389263872776365,
+        "samples": 0
+      }
+    ],
+    "unknown": [
+      [
+        ":0:(program)",
+        0.36301204985402125
+      ],
+      [
+        "node:buffer:1043:_fill",
+        0.3591787211141354
+      ],
+      [
+        "node:internal/buffer:580:writeBigU_Int64LE",
+        0.24385407142796167
+      ],
+      [
+        ":0:hrtimeBigInt",
+        0.17572118337409195
+      ],
+      [
+        "node:internal/buffer:956:FastBuffer",
+        0.15978847519340267
+      ],
+      [
+        ":3:BenchPayload$fromObject",
+        0.06501464936618798
+      ],
+      [
+        "node:internal/process/task_queues:62:runNextTicks",
+        0.054507146805729906
+      ],
+      [
+        "node:internal/buffer:706:writeUInt32LE",
+        0.042905403132249866
+      ],
+      [
+        "node:internal/timers:163:initAsyncResource",
+        0.03553007863670945
+      ],
+      [
+        "node:internal/errors:535:wrappedFn",
+        0.026539180319522584
+      ],
+      [
+        "node:buffer:1039:fill",
+        0.02073621757619717
+      ],
+      [
+        "node:internal/timers:632:Immediate",
+        0.020679066129529786
+      ],
+      [
+        "node:internal/buffer:60:checkInt",
+        0.01777967566445247
+      ],
+      [
+        "node:internal/buffer:602:writeBigUInt64LE",
+        0.016267253234352044
+      ],
+      [
+        "node:internal/buffer:632:writeBigInt64LE",
+        0.011813622207466458
+      ],
+      [
+        "node:internal/bootstrap/node:437:get",
+        0.010356957286309828
+      ],
+      [
+        "node:internal/bootstrap/node:475:get",
+        0.010298411901918844
+      ],
+      [
+        "node:internal/validators:186:",
+        0.005978598896498365
+      ],
+      [
+        "node:internal/validators:469:",
+        0.005922841387554571
+      ],
+      [
+        "node:buffer:155:createPool",
+        0.004432721961031663
+      ],
+      [
+        "node:internal/process/per_thread:103:hrtimeBigInt",
+        0.0
+      ]
+    ],
+    "sample_count": 7512,
+    "profile_wall_us": 8054351,
+    "nonidle_us": 7935814
+  },
+  {
+    "cell": "zlink-node-send-saturation-4096",
+    "role": "target",
+    "messages": 732330,
+    "main_us": 11.236723451176381,
+    "stages_us": {
+      "handoff/event loop": 0.10840376674960489,
+      "benchmark": 0.12209307291065083,
+      "binding call": 5.921077388303204,
+      "encode/serialize": 0.2959220837667786,
+      "other": 0.9951499741121389,
+      "Buffer copy": 2.2658542435179165,
+      "allocation": 0.010672335586194312,
+      "Promise/microtask": 0.012198804723017195,
+      "GC": 1.505351781506876
+    },
+    "methods": [
+      {
+        "name": ":0:",
+        "self_us": 3.711744225378337,
+        "inclusive_us": 3.711744225378337,
+        "samples": 2430
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_operations.js:156:recv",
+        "self_us": 2.452153974899945,
+        "inclusive_us": 5.788198321878171,
+        "samples": 1606
+      },
+      {
+        "name": ":0:(garbage collector)",
+        "self_us": 1.505351781506876,
+        "inclusive_us": 1.505351781506876,
+        "samples": 985
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/index.js:53:copyData",
+        "self_us": 1.171696704289151,
+        "inclusive_us": 2.261271958691544,
+        "samples": 766
+      },
+      {
+        "name": ":0:(program)",
+        "self_us": 0.5880042560102957,
+        "inclusive_us": 0.5880042560102957,
+        "samples": 386
+      },
+      {
+        "name": "node:internal/buffer:956:FastBuffer",
+        "self_us": 0.1832079479936851,
+        "inclusive_us": 0.1832079479936851,
+        "samples": 120
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_parts_state.js:13:closeMessageParts",
+        "self_us": 0.16946684834637557,
+        "inclusive_us": 0.3413464099278614,
+        "samples": 111
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:139:materializeRoutedReceivedInto",
+        "self_us": 0.15841469386091528,
+        "inclusive_us": 0.7576005880723301,
+        "samples": 69
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:26:routedReceivedPrefersManagedBuffer",
+        "self_us": 0.15429279557910794,
+        "inclusive_us": 0.1711084141193397,
+        "samples": 99
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:31:normalizeMessageProperties",
+        "self_us": 0.10533500268848968,
+        "inclusive_us": 0.10533500268848968,
+        "samples": 69
+      },
+      {
+        "name": "node:internal/buffer:134:readBigInt64LE",
+        "self_us": 0.10181592303847198,
+        "inclusive_us": 0.10181592303847198,
+        "samples": 67
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/raw-wire.js:43:decodeBenchPayloadBody",
+        "self_us": 0.09738038642317985,
+        "inclusive_us": 0.4685123670764364,
+        "samples": 64
+      },
+      {
+        "name": "node:internal/timers:436:processImmediate",
+        "self_us": 0.0916514513592508,
+        "inclusive_us": 9.059438946585034,
+        "samples": 60
+      },
+      {
+        "name": ":3:BenchPayload$decode",
+        "self_us": 0.08550529098930983,
+        "inclusive_us": 0.19093668711056777,
+        "samples": 55
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:52:decode",
+        "self_us": 0.06565255996290173,
+        "inclusive_us": 0.19798060124241024,
+        "samples": 43
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:55:materializeParts",
+        "self_us": 0.05025982358696577,
+        "inclusive_us": 0.18001545504871808,
+        "samples": 33
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_parts_state.js:10:freezeOwnedMessageParts",
+        "self_us": 0.04574947415818184,
+        "inclusive_us": 0.04574947415818184,
+        "samples": 30
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-server-metrics.js:33:record",
+        "self_us": 0.039678126601732665,
+        "inclusive_us": 0.25595621557469284,
+        "samples": 25
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:89:data",
+        "self_us": 0.03961338474390323,
+        "inclusive_us": 2.410939308205727,
+        "samples": 26
+      },
+      {
+        "name": ":3:BenchPayload$toObject",
+        "self_us": 0.033628359664559966,
+        "inclusive_us": 0.15725365654384074,
+        "samples": 22
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:65:materializeReceivedParts",
+        "self_us": 0.027492270250281354,
+        "inclusive_us": 0.20448931601619602,
+        "samples": 18
+      },
+      {
+        "name": "node:internal/buffer:217:readUInt32LE",
+        "self_us": 0.02746349609124605,
+        "inclusive_us": 0.03964647502679383,
+        "samples": 18
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:264:acquireMessageWrapper",
+        "self_us": 0.024420628773262638,
+        "inclusive_us": 0.1297556314617523,
+        "samples": 16
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-raw-server/main.js:95:pumpCommands",
+        "self_us": 0.02441343523350381,
+        "inclusive_us": 8.801589391345818,
+        "samples": 16
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/handles/native_handle.js:7:getNativeHandle",
+        "self_us": 0.021372006623472162,
+        "inclusive_us": 0.021372006623472162,
+        "samples": 14
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-raw-server/main.js:47:tryRecv",
+        "self_us": 0.018275907111273436,
+        "inclusive_us": 5.804962146932138,
+        "samples": 12
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:323:hasObservedManagedReceiveData",
+        "self_us": 0.01681561854023175,
+        "inclusive_us": 0.01681561854023175,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-raw-server/main.js:56:bodyPart",
+        "self_us": 0.016804108876617624,
+        "inclusive_us": 0.016804108876617624,
+        "samples": 11
+      },
+      {
+        "name": "node:buffer:1164:adjustOffset",
+        "self_us": 0.016799792752762333,
+        "inclusive_us": 0.016799792752762333,
+        "samples": 11
+      },
+      {
+        "name": "node:timers:225:setImmediate",
+        "self_us": 0.01675231539035408,
+        "inclusive_us": 0.02437746753470968,
+        "samples": 11
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-raw-server/main.js:64:pumpRequests",
+        "self_us": 0.015271884907987681,
+        "inclusive_us": 0.13878064644317548,
+        "samples": 10
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/received_state.js:13:replaceReceived",
+        "self_us": 0.01523303979329002,
+        "inclusive_us": 0.39469657819521886,
+        "samples": 9
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:36:envelopeOf",
+        "self_us": 0.013718080320081254,
+        "inclusive_us": 0.013718080320081254,
+        "samples": 9
+      },
+      {
+        "name": "node:internal/validators:186:",
+        "self_us": 0.013660532002010648,
+        "inclusive_us": 0.013660532002010648,
+        "samples": 9
+      },
+      {
+        "name": "node:internal/async_hooks:561:popAsyncContext",
+        "self_us": 0.012198804723017195,
+        "inclusive_us": 0.012198804723017195,
+        "samples": 8
+      },
+      {
+        "name": "node:internal/errors:535:wrappedFn",
+        "self_us": 0.010711180700891974,
+        "inclusive_us": 0.021323090553112146,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/reader.js:59:create_buffer",
+        "self_us": 0.010711180700891972,
+        "inclusive_us": 0.010711180700891972,
+        "samples": 7
+      },
+      {
+        "name": "node:internal/bootstrap/node:475:get",
+        "self_us": 0.01069679362137432,
+        "inclusive_us": 0.01069679362137432,
+        "samples": 7
+      },
+      {
+        "name": "node:buffer:1181:subarray",
+        "self_us": 0.010672335586194312,
+        "inclusive_us": 0.08400471859561871,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:25:requireMessageNativeOperations",
+        "self_us": 0.010669458170290781,
+        "inclusive_us": 0.010669458170290781,
+        "samples": 7
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/reader.js:102:read_uint32",
+        "self_us": 0.009194782519731444,
+        "inclusive_us": 0.009194782519731444,
+        "samples": 6
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/type.js:155:get",
+        "self_us": 0.007659681135197966,
+        "inclusive_us": 0.007659681135197966,
+        "samples": 5
+      },
+      {
+        "name": ":0:toggleImmediateRef",
+        "self_us": 0.007625152144355601,
+        "inclusive_us": 0.007625152144355601,
+        "samples": 5
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/@grpc/proto-loader/build/src/index.js:78:deserialize",
+        "self_us": 0.006115947502953898,
+        "inclusive_us": 0.37113198065325653,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:642:completionOwnerOf",
+        "self_us": 0.006105876547291542,
+        "inclusive_us": 0.006105876547291542,
+        "samples": 4
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/util/minimal.js:157:newBuffer",
+        "self_us": 0.006100121715484481,
+        "inclusive_us": 0.12362529687928078,
+        "samples": 4
+      },
+      {
+        "name": "node:buffer:301:from",
+        "self_us": 0.004582284826372187,
+        "inclusive_us": 0.11752517516379629,
+        "samples": 3
+      },
+      {
+        "name": "node:internal/bootstrap/node:437:get",
+        "self_us": 0.001536540092485242,
+        "inclusive_us": 0.001536540092485242,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:28:nowNs",
+        "self_us": 0.0015336626765817115,
+        "inclusive_us": 0.003070202769066953,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/index.js:50:close",
+        "self_us": 0.0015135207652569986,
+        "inclusive_us": 0.27126406818147464,
+        "samples": 1
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-raw-server/main.js:132:pump",
+        "self_us": 0.0,
+        "inclusive_us": 8.960160904373476,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_snapshot.js:11:messageFromSnapshot",
+        "self_us": 0.0,
+        "inclusive_us": 0.1297556314617523,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:213:close",
+        "self_us": 0.0,
+        "inclusive_us": 0.17187956158148585,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/socket_base.js:28:receiveHandle",
+        "self_us": 0.0,
+        "inclusive_us": 0.027477883170763703,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/buffer:94:readBigUInt64LE",
+        "self_us": 0.0,
+        "inclusive_us": 0.0045563880832404135,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/contracts/messaging/message.js:226:ensureBuffer",
+        "self_us": 0.0,
+        "inclusive_us": 2.371325923461824,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:541:fromObject",
+        "self_us": 0.0,
+        "inclusive_us": 0.1129428903374241,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:526:fromArrayLike",
+        "self_us": 0.0,
+        "inclusive_us": 0.1129428903374241,
+        "samples": 0
+      },
+      {
+        "name": "file:///root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/protobufjs/src/reader.js:323:read_bytes",
+        "self_us": 0.0,
+        "inclusive_us": 0.08706053428516802,
+        "samples": 0
+      },
+      {
+        "name": "node:buffer:1189:slice",
+        "self_us": 0.0,
+        "inclusive_us": 0.08400471859561871,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/timers:632:Immediate",
+        "self_us": 0.0,
+        "inclusive_us": 0.007625152144355601,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/timers:648:ref",
+        "self_us": 0.0,
+        "inclusive_us": 0.007625152144355601,
+        "samples": 0
+      },
+      {
+        "name": "node:internal/async_hooks:525:emitAfterScript",
+        "self_us": 0.0,
+        "inclusive_us": 0.007626590852307366,
+        "samples": 0
+      }
+    ],
+    "unknown": [
+      [
+        ":0:(program)",
+        0.5880042560102957
+      ],
+      [
+        "node:internal/buffer:956:FastBuffer",
+        0.1832079479936851
+      ],
+      [
+        "node:internal/buffer:134:readBigInt64LE",
+        0.10181592303847198
+      ],
+      [
+        ":3:BenchPayload$toObject",
+        0.033628359664559966
+      ],
+      [
+        "node:internal/buffer:217:readUInt32LE",
+        0.02746349609124605
+      ],
+      [
+        "node:buffer:1164:adjustOffset",
+        0.016799792752762333
+      ],
+      [
+        "node:internal/validators:186:",
+        0.013660532002010648
+      ],
+      [
+        "node:internal/errors:535:wrappedFn",
+        0.010711180700891974
+      ],
+      [
+        "node:internal/bootstrap/node:475:get",
+        0.01069679362137432
+      ],
+      [
+        ":0:toggleImmediateRef",
+        0.007625152144355601
+      ],
+      [
+        "node:internal/bootstrap/node:437:get",
+        0.001536540092485242
+      ],
+      [
+        "node:internal/buffer:94:readBigUInt64LE",
+        0.0
+      ],
+      [
+        "node:internal/timers:632:Immediate",
+        0.0
+      ],
+      [
+        "node:internal/timers:648:ref",
+        0.0
+      ]
+    ],
+    "sample_count": 7537,
+    "profile_wall_us": 8045424,
+    "nonidle_us": 7810288
+  }
+]

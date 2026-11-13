@@ -1,0 +1,198 @@
+diff --git a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
+index 2ebc4da40e..984cdc5fa0 100644
+--- a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
++++ b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
+@@ -6,6 +6,7 @@ import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
+ import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+ import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
+ import systems.zlink.contracts.sockets.SubmitResult;
++import systems.zlink.framework.runtime.internal.service.ZLinkRequestSerialStamp;
+ 
+ import java.time.Duration;
+ import java.util.ArrayList;
+@@ -479,6 +480,7 @@ public final class BenchDrivers {
+                                             long value = sequence.getAndIncrement();
+                                             long started = source.begin();
+                                             try {
++                                                if ("request-serial".equals(trigger.pattern()) && phase == BenchMetricHeader.PHASE_ACTIVE) ZLinkRequestSerialStamp.begin();
+                                                 if (!operation.await(
+                                                         operation.invoke(
+                                                                 trigger.payloadBytes(),
+@@ -488,6 +490,8 @@ public final class BenchDrivers {
+                                                                 options.requestTimeoutMs))) {
+                                                     throw new TimeoutException("request timed out");
+                                                 }
++                                                ZLinkRequestSerialStamp.mark(11);
++                                                ZLinkRequestSerialStamp.end();
+                                                 source.complete(started, null);
+                                             } catch (Exception error) {
+                                                 source.complete(started, error);
+diff --git a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/FrameworkStack.java b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/FrameworkStack.java
+index 4a3be9224f..6e6fcced4e 100644
+--- a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/FrameworkStack.java
++++ b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/FrameworkStack.java
+@@ -18,6 +18,7 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
+ import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
+ import systems.zlink.framework.spring.EnableZLinkFramework;
+ import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
++import systems.zlink.framework.runtime.internal.service.ZLinkRequestSerialStamp;
+ 
+ import java.time.Duration;
+ 
+@@ -72,6 +73,7 @@ public final class FrameworkStack implements AutoCloseable {
+                     route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
+                             .timeout(timeout)
+                             .submit(BenchPayload.class);
++            ZLinkRequestSerialStamp.mark(1);
+             var replyCompletion =
+                     submitted
+                             .toCompletableFuture()
+diff --git a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/RawStack.java b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/RawStack.java
+index 121a27817e..d7d2f0dc5d 100644
+--- a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/RawStack.java
++++ b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/RawStack.java
+@@ -18,6 +18,7 @@ import systems.zlink.contracts.eventing.Poller;
+ import systems.zlink.contracts.messaging.Message;
+ import systems.zlink.contracts.sockets.SubmitResult;
+ import systems.zlink.contracts.sockets.RouterSocket;
++import systems.zlink.framework.runtime.internal.service.ZLinkRequestSerialStamp;
+ 
+ /** Raw binding client: ROUTER&lt;-&gt;ROUTER with an explicit target routing ID. */
+ public final class RawStack implements AutoCloseable {
+@@ -75,6 +76,7 @@ public final class RawStack implements AutoCloseable {
+                         .message(body)
+                         .timeout(timeout)
+                         .submit();
++                    ZLinkRequestSerialStamp.mark(1);
+                     var admitted = submission.result() == SubmitResult.BACKPRESSURED
+                         ? submission.admitted().toCompletableFuture()
+                         : java.util.concurrent.CompletableFuture.<Void>completedFuture(
+diff --git a/framework/bench/grpc/java/zlink-framework-server/src/main/java/systems/zlink/bench/withgrpc/frameworkserver/BenchEchoHandler.java b/framework/bench/grpc/java/zlink-framework-server/src/main/java/systems/zlink/bench/withgrpc/frameworkserver/BenchEchoHandler.java
+index cb16c9429c..581d56497b 100644
+--- a/framework/bench/grpc/java/zlink-framework-server/src/main/java/systems/zlink/bench/withgrpc/frameworkserver/BenchEchoHandler.java
++++ b/framework/bench/grpc/java/zlink-framework-server/src/main/java/systems/zlink/bench/withgrpc/frameworkserver/BenchEchoHandler.java
+@@ -6,10 +6,12 @@ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.CompletionStage;
+ import systems.zlink.bench.withgrpc.proto.BenchPayload;
+ import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
++import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+ import systems.zlink.framework.ZLinkMessageContext;
+ import systems.zlink.framework.channels.ZLinkRequestHandler;
+ import systems.zlink.framework.channels.ZLinkRouteMessageContext;
+ import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
++import systems.zlink.framework.runtime.internal.service.ZLinkRequestSerialStamp;
+ 
+ /**
+  * Request patterns echo the payload back
+@@ -33,7 +35,11 @@ public final class BenchEchoHandler
+     @Override
+     public CompletionStage<BenchPayload> handle(
+         BenchPayload request, ZLinkMessageContext context) {
++        var header = BenchMetricHeader.decode(request.getBody().asReadOnlyByteBuffer());
++        boolean active = header != null && header.phase() == BenchMetricHeader.PHASE_ACTIVE;
++        if (active) ZLinkRequestSerialStamp.begin();
+         metrics.record(request.getBody().asReadOnlyByteBuffer());
++        if (active) ZLinkRequestSerialStamp.mark(8);
+         return CompletableFuture.completedFuture(request);
+     }
+ }
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkMeshApplicationDispatcher.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkMeshApplicationDispatcher.java
+index 6f16ae0b73..23ff5bf8e0 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkMeshApplicationDispatcher.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkMeshApplicationDispatcher.java
+@@ -686,6 +686,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
+                                                                         ? route.envelopeNames()
+                                                                         : channel.envelopeNames(),
+                                                                 framework.codecs()));
++                                                systems.zlink.framework.runtime.internal.service.ZLinkRequestSerialStamp.mark(9);
++                                                systems.zlink.framework.runtime.internal.service.ZLinkRequestSerialStamp.end();
+                                                 traceFlow(
+                                                         ZLinkMessageFlowOutcome.REPLIED,
+                                                         record,
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java
+index ec429fea46..7bd89f20b6 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java
+@@ -405,8 +405,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
+     }
+ 
+     private <T> boolean complete(Entry<T> entry, T value) {
++        if (entry != null && entry.completion instanceof Operation<?>) ZLinkRequestSerialStamp.mark(2);
+         if (entry == null || take(entry) == null) return false;
++        if (entry.completion instanceof Operation<?>) ZLinkRequestSerialStamp.mark(3);
+         entry.completeWithValue(value);
++        if (entry.completion instanceof Operation<?>) ZLinkRequestSerialStamp.mark(4);
+         completions.post(entry);
+         return true;
+     }
+@@ -856,6 +859,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
+                 completeExceptionally(failure);
+                 return;
+             }
++            ZLinkRequestSerialStamp.mark(6);
+             if (!complete(decoded) && discard != null) discard.accept(decoded);
+         }
+ 
+@@ -957,6 +961,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
+         @SuppressWarnings("unchecked")
+         @Override
+         void dispatch() {
++            if (completion instanceof Operation<?>) ZLinkRequestSerialStamp.mark(5);
+             ZLinkFlowContext.State flow =
+                     completion instanceof Operation<?> operation
+                             ? operation.flow
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkRequestSerialStamp.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkRequestSerialStamp.java
+new file mode 100644
+index 0000000000..820359b000
+--- /dev/null
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkRequestSerialStamp.java
+@@ -0,0 +1,49 @@
++package systems.zlink.framework.runtime.internal.service;
++
++import java.io.BufferedWriter;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.StandardOpenOption;
++import java.util.concurrent.atomic.AtomicInteger;
++
++/** Temporary request-serial wall-clock probe; enabled only by ZLINK_STAGE_FILE. */
++public final class ZLinkRequestSerialStamp {
++    private static final int CAPACITY = 1_000_000;
++    private static final int STAGES = 12;
++    private static final String FILE = System.getenv("ZLINK_STAGE_FILE");
++    private static final AtomicInteger NEXT = new AtomicInteger();
++    private static final long[][] TIMES = FILE == null ? null : new long[STAGES][CAPACITY];
++    private static volatile int active = -1;
++
++    static {
++        if (FILE != null) Runtime.getRuntime().addShutdownHook(new Thread(ZLinkRequestSerialStamp::dump));
++    }
++
++    private ZLinkRequestSerialStamp() {}
++
++    public static boolean enabled() { return TIMES != null; }
++    public static int begin() {
++        if (TIMES == null) return -1;
++        active = NEXT.getAndIncrement();
++        mark(0);
++        return active;
++    }
++    public static void mark(int stage) {
++        if (TIMES == null) return;
++        int index = active;
++        if (index >= 0 && index < CAPACITY) TIMES[stage][index] = System.nanoTime();
++    }
++    public static void end() { active = -1; }
++    public static void dump() {
++        if (TIMES == null) return;
++        try (BufferedWriter out = Files.newBufferedWriter(Path.of(FILE), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
++            out.write("index,0,1,2,3,4,5,6,7,8,9,10,11\n");
++            int count = Math.min(NEXT.get(), CAPACITY);
++            for (int i = 0; i < count; i++) {
++                out.write(Integer.toString(i));
++                for (int stage = 0; stage < STAGES; stage++) { out.write(','); out.write(Long.toString(TIMES[stage][i])); }
++                out.write('\n');
++            }
++        } catch (Exception ignored) { }
++    }
++}

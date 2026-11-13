@@ -1,0 +1,859 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index 5ec74ff600..36d194e840 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -2339,7 +2339,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+       "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
+       "LINKER:--wrap=zlink_router_recv")
+     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
+-      "_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
++      "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
+     target_compile_definitions(test_cpp_framework_receive_role_completion PRIVATE
+       ZLINK_TEST_RECEIVE_WAIT_WRAP=1
+       ZLINK_TEST_RECEIVE_WAIT_SYMBOL="${ZLINK_TEST_RECEIVE_WAIT_SYMBOL}")
+@@ -3071,8 +3071,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+     target_include_directories(test_cpp_framework_idle_receive_cost PRIVATE
+       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+     target_link_options(test_cpp_framework_idle_receive_cost PRIVATE
+-      "-Wl,--wrap=_ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_23application_job_queue_t8permit_tEEEbS3_IFbvEESt8optionalINS_17poll_event_flag_tEE"
+-      "-Wl,--wrap=_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE"
++      "-Wl,--wrap=_ZN5zlink9framework6detail19mesh_node_runtime_t21dispatch_hosted_readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_23application_job_queue_t8permit_tEEEbS3_IFbvEESt8optionalINS_17poll_event_flag_tEE"
++      "-Wl,--wrap=_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE"
+     )
+   endif()
+   add_zlink_framework_test(
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_handoff_id.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_handoff_id.cpp
+index 7efb0de2bf..5cdb8d477f 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_handoff_id.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_handoff_id.cpp
+@@ -16,8 +16,8 @@ int main ()
+       zlink::framework::detail::canonical_actor_join_application_payload (
+         "ZeroByteJoin", "application/x-test", zlink::message_t{});
+     if (!zero_byte_payload || !zero_byte_payload->payload_bytes ().empty ()
+-        || zero_byte_payload->packet_name != "ZeroByteJoin"
+-        || zero_byte_payload->content_type != "application/x-test") {
++        || zero_byte_payload->packet_name () != "ZeroByteJoin"
++        || zero_byte_payload->content_type () != "application/x-test") {
+         std::cerr << "typed zero-byte actor Join payload was omitted\n";
+         return 2;
+     }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+index 56eb800c6d..82789a4753 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+@@ -511,3 +511,73 @@ TEST (EnvelopeDeadline, IntegerUtcMatchesCalendarBoundaries)
+         }
+     }
+ }
++
++TEST (EnvelopeAllocations, CsitesHeaderViewsRetainWireAcrossCopiesAndSuspension)
++{
++    namespace msg = zlink::framework::runtime::messaging;
++    msg::envelope_codec_t codec;
++    const std::string packet (128, 'p');
++    std::optional<msg::envelope_header_t> short_retained;
++    auto short_wire = codec.encode_header (
++      msg::envelope_header_t{.channel_name = "c", .message_name = "m", .content_type = "x/y"});
++    const auto container_allocations = zlink::framework::tests::count_allocations ([&] {
++        auto decoded = codec.decode_header_view (short_wire, false);
++        ASSERT_TRUE (decoded);
++        decoded.value ().retained_header.message = std::move (short_wire);
++        short_retained.emplace (std::move (decoded.value ()));
++    });
++    std::optional<msg::envelope_header_t> retained;
++    {
++        msg::envelope_header_t header{.channel_name = "mesh",
++                                      .message_name = packet,
++                                      .content_type = "application/json",
++                                      .correlation_id = std::string (48, 'c')};
++        auto wire = codec.encode_header (header);
++        auto warm = codec.decode_header (wire, false);
++        ASSERT_TRUE (warm);
++        const auto start = reinterpret_cast<std::uintptr_t> (wire.data ());
++        const auto allocations = zlink::framework::tests::count_allocations ([&] {
++            auto decoded = codec.decode_header_view (wire, false);
++            ASSERT_TRUE (decoded);
++            decoded.value ().retained_header.message = std::move (wire);
++            retained.emplace (std::move (decoded.value ()));
++        });
++        EXPECT_EQ (allocations, container_allocations);
++        std::printf ("csites header views=%zu container=%zu\n", allocations, container_allocations);
++        const auto text = reinterpret_cast<std::uintptr_t> (retained->message_name.data ());
++        EXPECT_GE (text, start);
++        EXPECT_LT (text, start + retained->retained_header.message->size ());
++    }
++    *retained = *retained;
++    EXPECT_TRUE (retained->retained_header.message.has_value ());
++    EXPECT_EQ (retained->message_name, packet);
++    auto moved = std::move (*retained);
++    retained.reset ();
++    EXPECT_EQ (moved.message_name, packet);
++    auto copied = moved;
++    moved = {};
++    EXPECT_EQ (copied.message_name, packet);
++    auto reply = zlink::framework::detail::channel_reply_writer_t{}.create_reply_header (
++      msg::message_kind_t::response, "mesh", copied);
++    EXPECT_EQ (reply.message_name.data (), copied.message_name.data ());
++    const auto wire = codec.encode_header (reply);
++    EXPECT_EQ (codec.decode_header (wire).value ().message_name, packet);
++}
++
++TEST (EnvelopeDeadline, CsitesInlineDeadlineSurvivesHeaderMoveAndCopy)
++{
++    namespace msg = zlink::framework::runtime::messaging;
++    msg::client_call_codec_t calls;
++    auto first = calls.create_envelope (msg::message_kind_t::request, "mesh", "packet",
++                                        std::chrono::seconds (30));
++    ASSERT_TRUE (first.deadline);
++    const std::string expected (*first.deadline);
++    auto moved = std::move (first);
++    first = {};
++    auto copied = moved;
++    moved = {};
++    EXPECT_EQ (std::string (*copied.deadline), expected);
++    const auto wire = msg::envelope_codec_t{}.encode_header (copied);
++    EXPECT_EQ (std::string (*msg::envelope_codec_t{}.decode_header (wire).value ().deadline),
++               expected);
++}
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
+index 120af1711f..1422522388 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
+@@ -5436,9 +5436,9 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
+         return replied && settled.load (std::memory_order_acquire) && first.application_reply
+                && wire_outcome.application_reply
+                && first.application_reply == wire_outcome.application_reply
+-               && wire_outcome.application_reply->packet_name
++               && wire_outcome.application_reply->packet_name ()
+                     == runtime::protocol::framework_multipart_packet_name
+-               && wire_outcome.application_reply->content_type
++               && wire_outcome.application_reply->content_type ()
+                     == runtime::protocol::framework_multipart_content_type
+                && wire_outcome.application_reply->payload_bytes () == expected_payload
+                && unwrapped_reply == encoded_reply
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_idle_receive_cost.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_idle_receive_cost.cpp
+index ddc77afb34..00bd66c897 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_idle_receive_cost.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_idle_receive_cost.cpp
+@@ -40,7 +40,7 @@ extern "C" fw::task_t<std::size_t> real_dispatch (
+   bool accept,
+   std::function<bool ()> next,
+   std::optional<zlink::poll_event_flag_t>
+-    readiness) __asm__ ("__real__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
++    readiness) __asm__ ("__real__ZN5zlink9framework6detail19mesh_node_runtime_t21dispatch_hosted_"
+                         "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
+                         "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
+                         "23application_job_queue_t8permit_tEEEbS3_IFbvEESt8optionalINS_17poll_"
+@@ -51,7 +51,7 @@ extern "C" fw::task_t<std::size_t> wrap_dispatch (
+   bool accept,
+   std::function<bool ()> next,
+   std::optional<zlink::poll_event_flag_t>
+-    readiness) __asm__ ("__wrap__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
++    readiness) __asm__ ("__wrap__ZN5zlink9framework6detail19mesh_node_runtime_t21dispatch_hosted_"
+                         "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
+                         "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
+                         "23application_job_queue_t8permit_tEEEbS3_IFbvEESt8optionalINS_17poll_"
+@@ -61,16 +61,18 @@ extern "C" std::optional<zlink::poll_event_flag_t> real_wait (
+   std::chrono::milliseconds timeout,
+   bool accept,
+   deadline_t
+-    next) __asm__ ("__real__ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_"
+-                   "dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
++    next) __asm__ ("__real__ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_"
++                   "hosted_dispatch_"
++                   "activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
+                    "10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE");
+ extern "C" std::optional<zlink::poll_event_flag_t> wrap_wait (
+   fw::runtime::host::public_host_runtime_t *self,
+   std::chrono::milliseconds timeout,
+   bool accept,
+   deadline_t
+-    next) __asm__ ("__wrap__ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_"
+-                   "dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
++    next) __asm__ ("__wrap__ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_"
++                   "hosted_dispatch_"
++                   "activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
+                    "10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE");
+ 
+ extern "C" fw::task_t<std::size_t> wrap_dispatch (fw::detail::mesh_node_runtime_t *self,
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
+index 4a6df06d5c..91eafea9d8 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
+@@ -3290,7 +3290,7 @@ void verify_raw_owner_node_send_and_liveness (
+         for (const auto &record : claim.records) {
+             const auto payload = protocol::decode_application_payload (
+               protocol::message_bytes (record->parts.back ()), false);
+-            assert (payload.packet_name == "SaturatedControl");
++            assert (payload.packet_name () == "SaturatedControl");
+             const auto &body = payload.payload_bytes ();
+             assert (body.size () == 512u * 1024u);
+             assert (
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+index 470e9474a5..c58639e397 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+@@ -8077,7 +8077,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
+             assert (metadata
+                     == std::optional<std::vector<std::uint8_t>> (
+                       {{1, 1, 5, 't', 'r', 'a', 'c', 'e', 0, 3, 'a', 'b', 'c'}}));
+-            assert (application.packet_name == "quest.start");
++            assert (application.packet_name () == "quest.start");
+             if (activation.target.spot_id == "instance-recover" && fail_recovery_dispatch_once) {
+                 fail_recovery_dispatch_once = false;
+                 throw std::runtime_error ("simulated process failure after Ready publication");
+@@ -8165,7 +8165,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
+     assert (instance_reply_header);
+     assert (instance_reply_header->terminal_result == 0);
+     assert (instance_reply_payload);
+-    assert (instance_reply_payload->packet_name == "quest.reply");
++    assert (instance_reply_payload->packet_name () == "quest.reply");
+     assert (instance_prepare_count == 1);
+     assert (instance_activation_count == 1);
+ 
+@@ -8478,7 +8478,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
+         std::this_thread::sleep_for (1ms);
+     }
+     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
+-    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
++    assert (instance_reply_payload && instance_reply_payload->packet_name () == "quest.reply");
+     assert (instance_prepare_count == 2);
+     assert (instance_activation_count == 2);
+ 
+@@ -8504,7 +8504,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
+         std::this_thread::sleep_for (1ms);
+     }
+     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
+-    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
++    assert (instance_reply_payload && instance_reply_payload->packet_name () == "quest.reply");
+     assert (instance_prepare_count == 3);
+     assert (instance_activation_count == 3);
+ 
+@@ -8616,7 +8616,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
+         std::this_thread::sleep_for (1ms);
+     }
+     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
+-    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
++    assert (instance_reply_payload && instance_reply_payload->packet_name () == "quest.reply");
+     assert (instance_prepare_count == 7);
+     assert (instance_activation_count == 7);
+ 
+@@ -8665,7 +8665,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
+         std::this_thread::sleep_for (1ms);
+     }
+     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
+-    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
++    assert (instance_reply_payload && instance_reply_payload->packet_name () == "quest.reply");
+     assert (std::holds_alternative<authority_missing_t> (
+       store->read_authority (zlink::framework::runtime::spot_authority_key ("instance-1"))
+         .result ()
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
+index b3fde04195..8cdb9e046a 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
+@@ -123,7 +123,8 @@ int main ()
+         const auto header = msg::client_call_codec_t{}.create_envelope (
+           msg::message_kind_t::request, "channel", "message", timeout);
+         const auto after = format (std::chrono::system_clock::now ());
+-        if (!header.deadline || *header.deadline < before || *header.deadline > after)
++        if (!header.deadline || std::string_view (*header.deadline) < before
++            || std::string_view (*header.deadline) > after)
+             return 174;
+         const auto no_deadline = msg::client_call_codec_t{}.create_envelope (
+           msg::message_kind_t::command, "channel", "message", std::chrono::milliseconds (0));
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_completion.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_completion.cpp
+index a12e217f7e..feb9f965ec 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_completion.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_completion.cpp
+@@ -65,20 +65,21 @@ extern "C" int __wrap_zlink_poller_wait (void *poller,
+ 
+ using receive_wait_host_t = zlink::framework::runtime::host::public_host_runtime_t;
+ using receive_wait_deadline_t = std::optional<std::chrono::steady_clock::time_point>;
+-extern "C" bool real_receive_wait (receive_wait_host_t *,
+-                                   std::chrono::milliseconds,
+-                                   bool,
+-                                   receive_wait_deadline_t) noexcept
++using receive_wait_result_t = std::optional<zlink::poll_event_flag_t>;
++extern "C" receive_wait_result_t real_receive_wait (receive_wait_host_t *,
++                                                    std::chrono::milliseconds,
++                                                    bool,
++                                                    receive_wait_deadline_t) noexcept
+   __asm__ ("__real_" ZLINK_TEST_RECEIVE_WAIT_SYMBOL);
+-extern "C" bool wrapped_receive_wait (receive_wait_host_t *,
+-                                      std::chrono::milliseconds,
+-                                      bool,
+-                                      receive_wait_deadline_t) noexcept
++extern "C" receive_wait_result_t wrapped_receive_wait (receive_wait_host_t *,
++                                                       std::chrono::milliseconds,
++                                                       bool,
++                                                       receive_wait_deadline_t) noexcept
+   __asm__ ("__wrap_" ZLINK_TEST_RECEIVE_WAIT_SYMBOL);
+-extern "C" bool wrapped_receive_wait (receive_wait_host_t *host,
+-                                      std::chrono::milliseconds timeout,
+-                                      bool accept_receive,
+-                                      receive_wait_deadline_t deadline) noexcept
++extern "C" receive_wait_result_t wrapped_receive_wait (receive_wait_host_t *host,
++                                                       std::chrono::milliseconds timeout,
++                                                       bool accept_receive,
++                                                       receive_wait_deadline_t deadline) noexcept
+ {
+     {
+         std::unique_lock lock (observation_mutex);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_envelope_golden.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_envelope_golden.cpp
+index 5a6b84d931..2f8dc82aad 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_envelope_golden.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_envelope_golden.cpp
+@@ -188,9 +188,9 @@ int main ()
+         const auto &payload = body.at ("payload");
+         require (actual.record.application.has_value (), "record payload must decode");
+         if (actual.record.application) {
+-            require (actual.record.application->packet_name
++            require (actual.record.application->packet_name ()
+                          == payload.at ("packetName").get<std::string> ()
+-                       && actual.record.application->content_type
++                       && actual.record.application->content_type ()
+                             == payload.at ("contentType").get<std::string> ()
+                        && actual.record.application->payload_bytes ()
+                             == fixture_bytes (payload.at ("payloadUtf8Fixture")),
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
+index b2ee7d1a6c..3af07d115c 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
+@@ -551,7 +551,7 @@ void verify_record_payload_is_exclusive ()
+     bool rejected = false;
+     try {
+         (void) protocol::decode_application_header (
+-          {flat.packet_name, flat.content_type, std::move (truncated)});
++          {flat.packet_name (), flat.content_type (), std::move (truncated)});
+     }
+     catch (const protocol::service_wire_error_t &) {
+         rejected = true;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+index 29789cb4f5..830aac2319 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+@@ -18,6 +18,7 @@
+ #include <array>
+ #include <cstdio>
+ #include <functional>
++#include <future>
+ #include <memory>
+ #include <latch>
+ #include <optional>
+@@ -1489,3 +1490,121 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
+     EXPECT_EQ (actual.total, baseline.total + target_bytes.total);
+ }
+ } // namespace
++
++TEST (RequestCallAllocations, CsitesRequestCompletionKeepsStorageUntilEveryTerminalTurn)
++{
++    namespace foundation = fw::runtime::foundation;
++    using terminal_t = foundation::operation_terminal_t;
++    for (int mode = 0; mode != 5; ++mode) {
++        fw::completion_owner_t owner;
++        std::atomic_int deliveries{0};
++        std::weak_ptr<int> lifetime;
++        std::optional<fw::request_task_t<int>> pending;
++        std::stop_source cancel;
++        std::promise<void> capture_released;
++        auto capture_release = capture_released.get_future ();
++        {
++            foundation::operation_registry_t registry;
++            auto marker = std::shared_ptr<int> (new int (42), [&] (int *value) {
++                delete value;
++                capture_released.set_value ();
++            });
++            lifetime = marker;
++            auto wire = fw::runtime::protocol::encode_application_payload_message (
++              fw::runtime::protocol::application_payload_t::from_parts (
++                std::vector<zlink::message_t>{zlink::message_t::from ("header"),
++                                              zlink::message_t::from (std::string (1024, 'x'))}));
++            pending.emplace (
++              fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
++                  auto callback =
++                    receiver.complete.template capture<terminal_t, fw::result_t<zlink::message_t>> (
++                      [complete = receiver.complete.borrow (), marker, wire, &deliveries,
++                       mode] (terminal_t terminal, auto) {
++                          EXPECT_EQ (*marker, 42);
++                          EXPECT_EQ (terminal, mode == 1   ? terminal_t::timed_out
++                                               : mode == 2 ? terminal_t::cancelled
++                                               : mode == 3 ? terminal_t::shutdown
++                                                           : terminal_t::completed);
++                          auto descriptors = fw::runtime::protocol::decode_application_part_views (
++                            fw::runtime::protocol::message_bytes (wire), false,
++                            complete.resource ());
++                          EXPECT_EQ (descriptors.size (), 2u);
++                          EXPECT_EQ (descriptors.at (1).size (), 1024u);
++                          ++deliveries;
++                          complete (fw::result_t<int>::success (42));
++                          if (mode == 4)
++                              throw std::runtime_error ("completion consumer failure");
++                      });
++                  ASSERT_TRUE (callback.completion_storage ());
++                  if (mode == 0 || mode == 4)
++                      receiver.admitted->complete (fw::result_t<void>::success ());
++                  ASSERT_TRUE (registry.register_operation (
++                    {3867, 1}, std::chrono::steady_clock::now () + std::chrono::seconds (30),
++                    std::move (foundation::completion_sink_t (std::move (callback)))
++                      .with_admission (receiver.admitted),
++                    {}, {}, {}, cancel.get_token ()));
++              }));
++            marker.reset ();
++            EXPECT_FALSE (lifetime.expired ());
++            EXPECT_EQ (deliveries.load (), 0);
++            if (mode == 1)
++                registry.expire (std::chrono::steady_clock::now () + std::chrono::seconds (31))
++                  .result ()
++                  .value ();
++            else if (mode == 2)
++                cancel.request_stop ();
++            else if (mode == 3)
++                EXPECT_EQ (registry.shutdown (), 1u);
++            else
++                EXPECT_TRUE (registry.complete ({3867, 1}, zlink::message_t::from ("reply")));
++            EXPECT_FALSE (registry.complete ({3867, 1}, zlink::message_t::from ("late reply")));
++            EXPECT_FALSE (registry.cancel ({3867, 1}));
++            ASSERT_EQ (capture_release.wait_for (std::chrono::seconds (1)),
++                       std::future_status::ready);
++            EXPECT_TRUE (lifetime.expired ());
++            EXPECT_EQ (deliveries.load (), 1);
++            if (mode == 0 || mode == 2 || mode == 4)
++                EXPECT_GT (registry.index_size (), 0u);
++        }
++        cancel.request_stop ();
++        EXPECT_EQ (deliveries.load (), 1);
++        ASSERT_TRUE (pending->await_ready ());
++        EXPECT_EQ (static_cast<bool> (pending->result ()), mode == 0 || mode == 4);
++        auto physical = fw::detail::request_task_access_t::physical_reply (*pending);
++        EXPECT_EQ (physical.result ().value (), 42);
++        EXPECT_TRUE (lifetime.expired ());
++    }
++}
++
++TEST (RequestCallAllocations, CsitesReplyDescriptorsUseRequestStorageUntilProjectionReturns)
++{
++    namespace protocol = fw::runtime::protocol;
++    std::vector<zlink::message_t> parts;
++    parts.push_back (zlink::message_t::from ("header"));
++    parts.push_back (zlink::message_t::from (std::string (1024, 'x')));
++    auto encoded = protocol::encode_application_payload_message (
++      protocol::application_payload_t::from_parts (std::move (parts)));
++    auto pending = fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
++        const auto before = sample_allocations ([&] {
++            auto descriptors = protocol::decode_application_part_views (
++              protocol::message_bytes (encoded), false, receiver.complete.resource ());
++            ASSERT_EQ (descriptors.size (), 2u);
++            EXPECT_EQ (descriptors[1].size (), 1024u);
++            EXPECT_EQ (static_cast<char> (descriptors[1].front ()), 'x');
++            auto projected = receiver.template project<int> ([&] (const auto &value) {
++                EXPECT_EQ (descriptors[1].size (), 1024u);
++                return value;
++            });
++            projected.complete (fw::result_t<int>::success (7));
++        });
++        EXPECT_EQ (before.total, 0u) << before.diagnostics;
++        const auto ordinary = fw::tests::count_allocations ([&] {
++            auto descriptors =
++              protocol::decode_application_part_views (protocol::message_bytes (encoded), false);
++            EXPECT_EQ (descriptors.size (), 2u);
++        });
++        EXPECT_EQ (ordinary, 1u);
++        std::printf ("csites descriptors request=%zu ordinary=%zu\n", before.total, ordinary);
++    });
++    EXPECT_EQ (pending.result ().value (), 7);
++}
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
+index a51e521c23..d4010493b7 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
+@@ -227,8 +227,8 @@ measurement_t verify_pending_reply_after_submission_task_destruction (std::size_
+                       else {
+                           const auto decoded = protocol::decode_application_payload (
+                             protocol::message_bytes (reply.value ()), false);
+-                          if (decoded.packet_name != "Reply"
+-                              || decoded.content_type != "application/json"
++                          if (decoded.packet_name () != "Reply"
++                              || decoded.content_type () != "application/json"
+                               || decoded.payload_bytes () != payload.payload_bytes ())
+                               callback_failed.store (true, std::memory_order_release);
+                       }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
+index b7c45b8244..f76ec3165a 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
+@@ -14,6 +14,7 @@
+ #include "runtime/backend/raw_binding_adapter.hpp"
+ #include "runtime/mesh/mesh_node_runtime.hpp"
+ #include "runtime/channels/channel_runtime.hpp"
++#include "runtime/codecs/serializer_test_access.hpp"
+ #include "runtime/locations/in_memory_location_store.hpp"
+ #include "runtime/locations/in_memory_store_providers.hpp"
+ #include "runtime/spots/spot_route_packets.hpp"
+@@ -2107,3 +2108,317 @@ TEST_P (ActorSendRelayAdmission, CompletesWithoutRemoteReply)
+ INSTANTIATE_TEST_SUITE_P (All,
+                           ActorSendRelayAdmission,
+                           ::testing::Combine (::testing::Bool (), ::testing::Bool ()));
++
++TEST (RoutePayloadOwnership, CsitesAcceptedBodyRetainsNativeStorageAfterRecordRelease)
++{
++    using namespace zlink::framework;
++    namespace protocol = zlink::framework::runtime::protocol;
++    auto marker = std::make_shared<std::array<std::uint8_t, 1024>> ();
++    marker->fill ('b');
++    std::weak_ptr<std::array<std::uint8_t, 1024>> lifetime = marker;
++    auto native = zlink::advanced::external_message_t::from (
++      std::span<std::uint8_t> (*marker),
++      [] (void *, void *hint) {
++          delete static_cast<std::shared_ptr<std::array<std::uint8_t, 1024>> *> (hint);
++      },
++      new std::shared_ptr (marker));
++    const auto *address = native.data ();
++    zlink::message_t retained;
++    {
++        std::vector<zlink::message_t> parts;
++        parts.push_back (zlink::message_t::from ("header"));
++        parts.push_back (std::move (native));
++        auto accepted = protocol::application_payload_t::from_parts (std::move (parts));
++        const auto allocations = tests::count_allocations ([&] {
++            auto body = runtime::messaging::envelope_codec_t{}.decode_body (
++              runtime::messaging::message_parts_t::borrow (*accepted.parts ()));
++            ASSERT_TRUE (body);
++            retained = std::move (body.value ());
++        });
++        EXPECT_EQ (allocations, 0u);
++        EXPECT_EQ (retained.data (), address);
++        EXPECT_EQ (accepted.parts ()->at (1).data (), address);
++        marker.reset ();
++        EXPECT_FALSE (lifetime.expired ());
++    }
++    EXPECT_FALSE (lifetime.expired ());
++    EXPECT_EQ (retained.size (), 1024u);
++    retained = {};
++    EXPECT_TRUE (lifetime.expired ());
++}
++
++TEST (RouteHandlerBoundary, CsitesLocalTerminalAndInvocationSurviveAllRequestOutcomes)
++{
++    using namespace zlink::framework;
++    namespace msg = runtime::messaging;
++    namespace host = runtime::host;
++    for (int mode = 0; mode != 5; ++mode) {
++        SCOPED_TRACE (mode);
++        completion_owner_t completion;
++        suspended_route_state_t state;
++        state.fail_handler = mode == 4;
++        service_collection_t services;
++        services.add_factory<suspended_route_handler_t> ([&] (service_provider_t &) {
++            return std::make_unique<suspended_route_handler_t> (state);
++        });
++        auto provider = services.build_provider ();
++        serializer_registry_t serializers;
++        handler_registry_t filters;
++        detail::route_handler_registry_t handlers;
++        const std::string packet (80, 'p');
++        handlers.on_request<suspended_route_handler_t, int, int> (
++          "mesh", packet, &suspended_route_handler_t::request);
++        auto node = std::make_shared<detail::spot_node_builder_state_t> ("mesh");
++        detail::spot_node_runtime_t spots (node);
++        host::host_options_t options;
++        options.mesh = test::runtime_failure_options (options.mesh);
++        options.mesh.descriptor = {"mesh", zlink::routing_id_t::from ("reply").to_bytes (), 1, 1,
++                                   "tcp://127.0.0.1:0"};
++        auto reply_host = std::make_shared<host::public_host_runtime_t> (std::move (options));
++        int replies = 0;
++        std::atomic_int settlements{0};
++        std::weak_ptr<int> lifetime;
++        std::weak_ptr<std::array<std::uint8_t, 1024>> body_lifetime;
++        std::promise<void> released;
++        auto release = released.get_future ();
++        std::optional<task_t<std::optional<detail::route_dispatch_reply_t>>> pending;
++        {
++            auto retained = std::shared_ptr<int> (new int (42), [&] (int *value) {
++                delete value;
++                released.set_value ();
++            });
++            lifetime = retained;
++            runtime::application_dispatch_terminal_owner_t terminal ({}, [&, retained] {
++                EXPECT_EQ (*retained, 42);
++                ++settlements;
++            });
++            retained.reset ();
++            host::receive_record_t record;
++            record.kind = host::record_kind_t::channel_request;
++            record.channel_name = "mesh";
++            record.source_node_rid = zlink::routing_id_t::from ("source");
++            record.reply_token.host = reply_host;
++            record.reply_token.request =
++              std::make_shared<runtime::mesh::service_mailbox_record_t> ();
++            record.reply_token.local_reply = [&] (const auto &) {
++                ++replies;
++                return true;
++            };
++            msg::envelope_header_t header{.kind = msg::message_kind_t::request,
++                                          .channel_name = "mesh",
++                                          .message_name = packet,
++                                          .correlation_id = std::string (48, 'c')};
++            header.metadata["value"] = "1";
++            auto body_owner = std::make_shared<std::array<std::uint8_t, 1024>> ();
++            body_owner->fill (' ');
++            body_owner->back () = '1';
++            body_lifetime = body_owner;
++            auto native_body = zlink::advanced::external_message_t::from (
++              std::span<std::uint8_t> (*body_owner),
++              [] (void *, void *hint) {
++                  delete static_cast<std::shared_ptr<std::array<std::uint8_t, 1024>> *> (hint);
++              },
++              new std::shared_ptr (body_owner));
++            body_owner.reset ();
++            auto accepted = runtime::protocol::application_payload_t::from_parts (
++              msg::envelope_codec_t{}
++                .encode_raw_body_parts (header, std::move (native_body))
++                .take_items ());
++            auto parts =
++              msg::envelope_codec_t{}
++                .encode_raw_body_parts (
++                  header, msg::envelope_codec_t{}
++                            .decode_body (msg::message_parts_t::borrow (*accepted.parts ()))
++                            .value ())
++                .take_items ();
++
++            auto decoded = runtime::decode_mesh_record_header (record, parts, false);
++            ASSERT_TRUE (decoded);
++            ASSERT_TRUE (decoded.value ());
++            host::ready_record_t ready;
++            ready.owner_kind = host::owner_kind_t::channel;
++            bool deferred = false;
++            EXPECT_FALSE (spots.dispatch_mesh_record (ready, record, parts, decoded.value (),
++                                                      provider, serializers, {}, &deferred, {}, {},
++                                                      &terminal));
++            EXPECT_FALSE (deferred);
++            EXPECT_EQ (settlements.load (), 0);
++            detail::mesh_record_dispatcher_t dispatcher (provider, serializers, handlers, filters);
++            pending.emplace (dispatcher.dispatch (
++              record, std::move (parts), std::move (*decoded.value ()), std::move (terminal)));
++            ASSERT_FALSE (pending->await_ready ());
++        }
++        EXPECT_FALSE (lifetime.expired ());
++        EXPECT_FALSE (body_lifetime.expired ());
++        EXPECT_EQ (settlements.load (), 0);
++        if (mode == 1)
++            state.handler_release.complete (
++              result_t<void>::failure (framework_error_kind_t::deadline_exceeded, "timeout"));
++        else if (mode == 2)
++            state.handler_release.complete (detail::result_access_t::failure<void> (
++              detail::make_cancellation_exception ("cancelled")));
++        else if (mode == 3)
++            state.handler_release.complete (
++              result_t<void>::failure (framework_error_kind_t::shutting_down, "shutdown"));
++        else
++            state.handler_release.complete (result_t<void>::success ());
++        ASSERT_TRUE (pending->result ());
++        ASSERT_EQ (release.wait_for (std::chrono::seconds (1)), std::future_status::ready);
++        EXPECT_EQ (replies, 1);
++        EXPECT_EQ (settlements.load (), 1);
++        EXPECT_TRUE (lifetime.expired ());
++        EXPECT_EQ (state.created.load (), state.destroyed.load ());
++        pending.reset ();
++        EXPECT_TRUE (body_lifetime.expired ());
++    }
++}
++
++TEST (RouteHandlerBoundary, CsitesCodecPlansRetainTheirFrozenRegistryAndCheckWireType)
++{
++    using namespace zlink::framework;
++    for (int offset : {10, 20}) {
++        service_collection_t services;
++        services.add_singleton<route_boundary_handler_t> ();
++        auto provider = services.build_provider ();
++        serializer_registry_t serializers;
++        serializers.add<int> (
++          [] (const int &value) { return encoded_payload_t::from_string (std::to_string (value)); },
++          [offset] (const encoded_payload_t &value) {
++              return std::stoi (value.to_string ()) + offset;
++          },
++          "application/x-csites");
++        detail::route_handler_registry_t handlers;
++        handlers.on_request<route_boundary_handler_t, int, int> (
++          "mesh", "packet", &route_boundary_handler_t::request);
++        detail::serializer_registry_access_t::freeze (serializers);
++        handlers.bind_codecs (serializers);
++        route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
++        context.content_type = "application/x-csites";
++        auto *entry =
++          handlers.resolve ("mesh", runtime::messaging::message_kind_t::request, "packet");
++        ASSERT_NE (entry, nullptr);
++        auto result =
++          entry->invoker (provider, serializers, zlink::message_t::from ("1"), context, {})
++            .result ();
++        ASSERT_TRUE (result);
++        EXPECT_EQ (result.value ().to_string (), std::to_string (offset + 1));
++        context.content_type = "application/unknown";
++        auto rejected =
++          entry->invoker (provider, serializers, zlink::message_t::from ("1"), context, {})
++            .result ();
++        ASSERT_FALSE (rejected);
++        EXPECT_EQ (rejected.error_kind (), framework_error_kind_t::protocol_error);
++    }
++}
++
++TEST (RouteHandlerBoundary, CsitesInternalRequestKeepsTerminalThroughSynchronousRejection)
++{
++    using namespace zlink::framework;
++    namespace msg = runtime::messaging;
++    namespace host = runtime::host;
++    service_collection_t services;
++    services.add_singleton<detail::actor_gateway_runtime_t> ();
++    auto provider = services.build_provider ();
++    serializer_registry_t serializers;
++    auto state = std::make_shared<detail::spot_node_builder_state_t> ("mesh");
++    detail::spot_node_runtime_t spots (state);
++    spots.set_route_client (route_client_t{});
++    host::host_options_t options;
++    options.mesh = test::runtime_failure_options (options.mesh);
++    options.mesh.descriptor = {"mesh", zlink::routing_id_t::from ("reply").to_bytes (), 1, 1,
++                               "tcp://127.0.0.1:0"};
++    auto reply_host = std::make_shared<host::public_host_runtime_t> (std::move (options));
++    int settlements = 0;
++    int replies = 0;
++    runtime::application_dispatch_terminal_owner_t terminal ({}, [&] { ++settlements; });
++    host::receive_record_t record;
++    record.kind = host::record_kind_t::node_request;
++    record.channel_name = "mesh";
++    record.source_node_rid = zlink::routing_id_t::from ("source");
++    record.reply_token.host = reply_host;
++    record.reply_token.request = std::make_shared<runtime::mesh::service_mailbox_record_t> ();
++    record.reply_token.local_reply = [&] (const auto &parts) {
++        EXPECT_EQ (settlements, 0);
++        ++replies;
++        auto reply = msg::envelope_codec_t{}.decode_header (msg::message_parts_t::borrow (parts));
++        EXPECT_TRUE (reply);
++        if (reply)
++            EXPECT_EQ (reply.value ().kind, msg::message_kind_t::error);
++        return true;
++    };
++    msg::envelope_header_t header{.kind = msg::message_kind_t::request,
++                                  .channel_name = "mesh",
++                                  .message_name =
++                                    detail::spot_actor_packet_route_request_t::packet_name,
++                                  .correlation_id = "internal-rejection"};
++    std::vector<zlink::message_t> parts;
++    parts.push_back (msg::envelope_codec_t{}.encode_header (header));
++    auto decoded = runtime::decode_mesh_record_header_view (record, parts, false);
++    ASSERT_TRUE (decoded);
++    ASSERT_TRUE (decoded.value ());
++    host::ready_record_t ready;
++    ready.owner_kind = host::owner_kind_t::node;
++    bool deferred = false;
++    EXPECT_TRUE (spots.dispatch_mesh_record (ready, record, parts, decoded.value (), provider,
++                                             serializers, {}, &deferred, {}, {}, &terminal));
++    EXPECT_FALSE (deferred);
++    EXPECT_EQ (replies, 1);
++    terminal.settle ();
++    EXPECT_EQ (settlements, 1);
++}
++
++namespace
++{
++struct csites_public_send_codec_handler_t
++{
++    void handle (const int &) {}
++};
++struct csites_public_codec_handler_t
++{
++    int handle (const int &value) { return value + 1; }
++};
++}
++TEST (RouteHandlerBoundary, CsitesPublicMeshRegistrationBindsWithoutLazyCache)
++{
++    using namespace zlink::framework;
++    auto builder = test::runtime_failure_builder ();
++    builder.add_route_mesh ("mesh")
++      .add_route_request_handler<csites_public_codec_handler_t, int, int> ("packet")
++      .add_route_send_handler<csites_public_send_codec_handler_t, int> ("packet");
++    auto registrations = detail::mesh_node_runtime_t::registrations (builder);
++    ASSERT_EQ (registrations.size (), 1u);
++    auto &handlers = registrations.front ()->handlers;
++    auto *entry = handlers.resolve ("mesh", runtime::messaging::message_kind_t::request, "packet");
++    ASSERT_NE (entry, nullptr);
++    ASSERT_TRUE (entry->bind_codecs);
++    auto *send_entry =
++      handlers.resolve ("mesh", runtime::messaging::message_kind_t::command, "packet");
++    ASSERT_NE (send_entry, nullptr);
++    ASSERT_TRUE (send_entry->bind_codecs);
++    serializer_registry_t serializers;
++    detail::serializer_registry_access_t::freeze (serializers);
++    handlers.bind_codecs (serializers);
++    EXPECT_FALSE (
++      detail::serializer_registry_test_access_t::has_resolved_serializer<int> (serializers));
++    service_collection_t services;
++    services.add_singleton<csites_public_codec_handler_t> ();
++    services.add_singleton<csites_public_send_codec_handler_t> ();
++    auto provider = services.build_provider ();
++    route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
++    context.content_type = "application/json";
++    auto result =
++      entry->invoker (provider, serializers, zlink::message_t::from ("1"), context, {}).result ();
++    ASSERT_TRUE (result);
++    EXPECT_EQ (result.value ().to_string (), "2");
++    EXPECT_FALSE (
++      detail::serializer_registry_test_access_t::has_resolved_serializer<int> (serializers));
++    auto sent =
++      send_entry->invoker (provider, serializers, zlink::message_t::from ("1"), context, {})
++        .result ();
++    ASSERT_TRUE (sent);
++    EXPECT_FALSE (
++      detail::serializer_registry_test_access_t::has_resolved_serializer<int> (serializers));
++    serializer_registry_t dynamic;
++    (void) dynamic.get<int> ();
++    EXPECT_TRUE (detail::serializer_registry_test_access_t::has_resolved_serializer<int> (dynamic));
++}
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp
+index f595c93572..459b6ffb5f 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp
+@@ -490,8 +490,8 @@ static void test_application_payload_wire_bytes ()
+                     payload.flow_origin = zlink::framework::flow_origin_t::application;
+                 }
+                 std::vector<std::uint8_t> body;
+-                put_text8 (body, payload.packet_name);
+-                put_text8 (body, payload.content_type);
++                put_text8 (body, payload.packet_name ());
++                put_text8 (body, payload.content_type ());
+                 put_u32 (body, static_cast<std::uint32_t> (bytes.size ()));
+                 body.insert (body.end (), bytes.begin (), bytes.end ());
+                 if (traced) {
+@@ -548,8 +548,9 @@ static void test_application_payload_wire_bytes ()
+                     mismatched_parts.flow_id = native.flow_id;
+                     mismatched_parts.flow_origin = native.flow_origin;
+                     assert (!(native == mismatched_parts));
+-                    auto changed_metadata = native;
+-                    changed_metadata.packet_name += "!";
++                    auto changed_metadata = protocol::application_payload_t{
++                      native.packet_name () + "!", native.content_type (), payload.payload_bytes (),
++                      native.flow_id, native.flow_origin};
+                     assert (!(native == changed_metadata));
+                     for (const auto length : {std::size_t{0}, std::size_t{3}, std::size_t{7},
+                                               payload.payload_bytes ().size () - 1}) {
+@@ -952,9 +953,10 @@ static void test_native_service_wire_length_boundaries_and_goldens ()
+     payload_parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0x10, 0x20}));
+     payload_parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0x30}));
+     const auto traced_multipart = protocol::application_payload_t::from_parts (payload_parts);
+-    auto traced_multipart_with_flow = traced_multipart;
+-    traced_multipart_with_flow.packet_name = "p";
+-    traced_multipart_with_flow.content_type = "c";
++    auto traced_multipart_with_flow = protocol::application_payload_t{
++      "p", "c",
++      protocol::decode_application_payload (protocol::encode_application_payload (traced_multipart))
++        .payload_bytes ()};
+     traced_multipart_with_flow.flow_id = flow_id;
+     traced_multipart_with_flow.flow_origin = zlink::framework::flow_origin_t::application;
+     std::vector<std::uint8_t> multipart_golden{2};
+@@ -1444,7 +1446,7 @@ int main (int argc, char **argv)
+     {
+         const auto stripped = protocol::decode_application_payload (traced_application_wire, false);
+         assert (!stripped.flow_id && !stripped.flow_origin);
+-        assert (stripped.packet_name == traced_application.packet_name
++        assert (stripped.packet_name () == traced_application.packet_name ()
+                 && stripped.payload_bytes () == traced_application.payload_bytes ());
+         auto corrupted_wire = traced_application_wire;
+         /* Corrupt the first flow-id byte (after the 1-byte text8 length). */

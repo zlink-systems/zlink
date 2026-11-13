@@ -1,0 +1,53 @@
+diff --git a/core/src/api/socket/socket_request_reply_runtime_io.cpp b/core/src/api/socket/socket_request_reply_runtime_io.cpp
+index 061f5903e0..c3056da875 100644
+--- a/core/src/api/socket/socket_request_reply_runtime_io.cpp
++++ b/core/src/api/socket/socket_request_reply_runtime_io.cpp
+@@ -1458,11 +1458,11 @@ int send_completion_staged_frames_on_pipe (
+                 written = i + 1 < total_part_count
+                             ? completion_->write (
+                                 msg, i == 0 ? &admission : NULL,
+-                                zlink::pipe_write_complete_record)
++                                zlink::pipe_write_incremental)
+                           : total_part_count > 1
+                             ? completion_->write_and_flush (
+                                 msg, i == 0 ? &admission : NULL,
+-                                zlink::pipe_write_complete_record)
++                                zlink::pipe_write_incremental)
+                             : completion_->write_and_flush_if_transport_connection (
+                                 msg, transport_connection_id,
+                                 i == 0 ? &admission : NULL);
+diff --git a/core/src/runtime/sockets/common/socket_runtime.hpp b/core/src/runtime/sockets/common/socket_runtime.hpp
+index a4c83598a9..a688dd3d04 100644
+--- a/core/src/runtime/sockets/common/socket_runtime.hpp
++++ b/core/src/runtime/sockets/common/socket_runtime.hpp
+@@ -842,8 +842,7 @@ class socket_public_send_scope_t
+     bool acquired () const { return _entered; }
+     pipe_write_mode_t write_mode () const
+     {
+-        return _admission_mode == socket_send_admission_complete
+-                 ? pipe_write_complete_record : pipe_write_incremental;
++        return pipe_write_incremental;
+     }
+     bool multipart_active () const { return _multipart_active; }
+     bool sync_locked () const { return _sync_locked; }
+diff --git a/core/src/runtime/sockets/common/socket_send_complete.cpp b/core/src/runtime/sockets/common/socket_send_complete.cpp
+index 6350a68496..ee33d3d13d 100644
+--- a/core/src/runtime/sockets/common/socket_send_complete.cpp
++++ b/core/src/runtime/sockets/common/socket_send_complete.cpp
+@@ -385,14 +385,14 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
+                              selected_pipe, msg, flags, request_admission_,
+                              NULL, observe_commit ? observer_ : NULL,
+                              observe_commit ? observer_userdata_ : NULL,
+-                             pipe_write_complete_record)
++                             pipe_write_incremental)
+                        : configured_endpoint_start
+                          ? xsend_configured_endpoint (
+                              target_.logical_endpoint, msg, flags,
+                              request_admission_, attempted_pipe_out_, NULL,
+                              observe_commit ? observer_ : NULL,
+                              observe_commit ? observer_userdata_ : NULL,
+-                             pipe_write_complete_record)
++                             pipe_write_incremental)
+                        : routed_start
+                          ? send_direct_with_retry (
+                              &rid, msg, flags, scope, false,

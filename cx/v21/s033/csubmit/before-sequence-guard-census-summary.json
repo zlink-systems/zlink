@@ -1,0 +1,20 @@
+[
+  {
+    "variant": "main",
+    "tid": "56090",
+    "completed_messages": 377628,
+    "seconds": 8.039271770976484,
+    "submitter_heap_calls": 9163300,
+    "submitter_heap_calls_per_completed": 24.265414640863494,
+    "process_heap_calls_per_completed": 41.896217971125026
+  },
+  {
+    "variant": "branch",
+    "tid": "61116",
+    "completed_messages": 395536,
+    "seconds": 8.037016941932961,
+    "submitter_heap_calls": 9213087,
+    "submitter_heap_calls_per_completed": 23.292663626066908,
+    "process_heap_calls_per_completed": 40.49004894624004
+  }
+]

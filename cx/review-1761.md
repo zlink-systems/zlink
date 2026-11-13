@@ -1,0 +1,12 @@
+# #1761 Java 감독자 메모
+- zlink 참고(2026-10-16 15:35): route 교체 직후 직전에 제출한 REQUEST의 NOT_CONNECTED(109)는 Core ROUTER §10.1대로 정상 terminal. durable 요청이면 Actor model §8.1 replay로 이어져야 한다 — #1761 Java 결과 리뷰 때 대조.
+- 2026-10-16 감독자 리뷰(origin/main...a411a6790f, 19파일 +1082/-433, main 소스·시험 전부): 승인 조건부(최신 main merge 뒤 재검증).
+  - 수신 gate(MeshNode §7.1): 현재 route(connectionId==routeGeneration)가 아닌 source는 HELLO/ADMIT/REJECT만 통과, liveness 수신 기록도 현재 route에서만. 구 hasCurrentInfrastructureControlSource 삭제(판정 하나로). UPDATE는 이제 admission 뒤에만 — §7.1과 일치.
+  - HELLO 재전송(#1824): helloExchanges(route generation당 submission 또는 받은 ADMIT)로 ADMIT 받을 때까지 liveness 주기(tickLiveness)마다, 진행 중 submission은 중복 안 보냄, route 종료 시 해당 generation만 제거. 옛 '한 번만' 시험 삭제는 스펙 변경 결과로 정당, re-handshake 경우는 HelloRetryTest가 포괄.
+  - durable replay(§8.1): 제출 route generation 기록, 관찰 route가 바뀌면 이전 attempt 취소 후 ready일 때 재제출, 이미 받은 terminal 우선, stale completion 무시(submitted != pending). deadline 도달 시 진행 중 attempt가 있어도 exhaust(admission 관찰 여부로 DeadlineExceeded/Unavailable). zlink 참고(route 교체 직후 109는 정상 terminal → replay)와 일치.
+  - PREPARE: 1초 slice 재전송·전용 retry 분류 삭제 → durable owner 하나. batch가 첫 boundary 제출 route를 보존, settlement는 관찰 route ≠ 제출 route일 때만 batch·cutover 재전송(relocation §4.4).
+  - automatic intent: 선택 inbound route나 manual intent가 있는 상대는 connect=false(reconciler가 다음 회차 재판단) — channel-topology §8.
+  - classifyChannelTarget hasReadyChannel: main에서도 실패하던 기존 결함, 02-channel-messaging.ko.md:117(ready target 중 선택).
+  - targetLifecycleEnded: '!ready' → 'topology에 없음'.
+  - 로그 원문: 게이트 isolated-false 30/30(로그 30개 성공, summary exit 0), 최종 label test 3000·contract 91·integration 86·fakeBackend 3 실패 0(core 모듈 실행, 무변경 모듈만 up-to-date).
+- 2026-10-16 main(315b8747ea, #1847·#1849·#1850 포함) merge 뒤 재검증: core test 2574·contract 25·integration 78 실패 0(결과 전부 새로 생성), 게이트 postmerge 30/30(로그 30개 성공). 승인.

@@ -1,0 +1,199 @@
+{
+  "requests": 241991,
+  "counts": {
+    "source": {
+      "0": {
+        "total": {
+          "malloc": 484766,
+          "calloc": 3,
+          "realloc": 0,
+          "aligned": 56632,
+          "mutex_lock": 2263090,
+          "cond_signal": 399,
+          "rotation_start": 0,
+          "rotation_end": 0,
+          "completion_post": 4,
+          "completion_run": 0,
+          "cond_wait": 741,
+          "role_mark": 0,
+          "wait_return": 411,
+          "trylock_ok": 0,
+          "cond_broadcast": 375,
+          "unused": 0
+        },
+        "per_request": {
+          "malloc": 2.00324,
+          "calloc": 1.2e-05,
+          "realloc": 0.0,
+          "aligned": 0.234025,
+          "mutex_lock": 9.351959,
+          "cond_signal": 0.001649,
+          "rotation_start": 0.0,
+          "rotation_end": 0.0,
+          "completion_post": 1.7e-05,
+          "completion_run": 0.0,
+          "cond_wait": 0.003062,
+          "role_mark": 0.0,
+          "wait_return": 0.001698,
+          "trylock_ok": 0.0,
+          "cond_broadcast": 0.00155,
+          "unused": 0.0
+        }
+      },
+      "3": {
+        "total": {
+          "malloc": 1694523,
+          "calloc": 0,
+          "realloc": 0,
+          "aligned": 0,
+          "mutex_lock": 1452548,
+          "cond_signal": 290946,
+          "rotation_start": 0,
+          "rotation_end": 0,
+          "completion_post": 0,
+          "completion_run": 242016,
+          "cond_wait": 290604,
+          "role_mark": 0,
+          "wait_return": 290604,
+          "trylock_ok": 0,
+          "cond_broadcast": 484079,
+          "unused": 0
+        },
+        "per_request": {
+          "malloc": 7.002422,
+          "calloc": 0.0,
+          "realloc": 0.0,
+          "aligned": 0.0,
+          "mutex_lock": 6.002488,
+          "cond_signal": 1.202301,
+          "rotation_start": 0.0,
+          "rotation_end": 0.0,
+          "completion_post": 0.0,
+          "completion_run": 1.000103,
+          "cond_wait": 1.200888,
+          "role_mark": 0.0,
+          "wait_return": 1.200888,
+          "trylock_ok": 0.0,
+          "cond_broadcast": 2.000401,
+          "unused": 0.0
+        }
+      },
+      "2": {
+        "total": {
+          "malloc": 1977505,
+          "calloc": 0,
+          "realloc": 0,
+          "aligned": 242504,
+          "mutex_lock": 10525279,
+          "cond_signal": 242246,
+          "rotation_start": 195683,
+          "rotation_end": 195683,
+          "completion_post": 241991,
+          "completion_run": 0,
+          "cond_wait": 0,
+          "role_mark": 0,
+          "wait_return": 0,
+          "trylock_ok": 195683,
+          "cond_broadcast": 1173054,
+          "unused": 0
+        },
+        "per_request": {
+          "malloc": 8.171812,
+          "calloc": 0.0,
+          "realloc": 0.0,
+          "aligned": 1.00212,
+          "mutex_lock": 43.494506,
+          "cond_signal": 1.001054,
+          "rotation_start": 0.808638,
+          "rotation_end": 0.808638,
+          "completion_post": 1.0,
+          "completion_run": 0.0,
+          "cond_wait": 0.0,
+          "role_mark": 0.0,
+          "wait_return": 0.0,
+          "trylock_ok": 0.808638,
+          "cond_broadcast": 4.847511,
+          "unused": 0.0
+        }
+      },
+      "1": {
+        "total": {
+          "malloc": 4157756,
+          "calloc": 8,
+          "realloc": 0,
+          "aligned": 176639,
+          "mutex_lock": 8844817,
+          "cond_signal": 241772,
+          "rotation_start": 0,
+          "rotation_end": 0,
+          "completion_post": 21,
+          "completion_run": 0,
+          "cond_wait": 0,
+          "role_mark": 1,
+          "wait_return": 0,
+          "trylock_ok": 0,
+          "cond_broadcast": 483726,
+          "unused": 0
+        },
+        "per_request": {
+          "malloc": 17.181449,
+          "calloc": 3.3e-05,
+          "realloc": 0.0,
+          "aligned": 0.72994,
+          "mutex_lock": 36.55019,
+          "cond_signal": 0.999095,
+          "rotation_start": 0.0,
+          "rotation_end": 0.0,
+          "completion_post": 8.7e-05,
+          "completion_run": 0.0,
+          "cond_wait": 0.0,
+          "role_mark": 4e-06,
+          "wait_return": 0.0,
+          "trylock_ok": 0.0,
+          "cond_broadcast": 1.998942,
+          "unused": 0.0
+        }
+      }
+    },
+    "target": {
+      "0": {
+        "total": {
+          "malloc": 10111469,
+          "calloc": 63,
+          "realloc": 0,
+          "aligned": 271612,
+          "mutex_lock": 14257361,
+          "cond_signal": 748,
+          "rotation_start": 0,
+          "rotation_end": 0,
+          "completion_post": 0,
+          "completion_run": 0,
+          "cond_wait": 170,
+          "role_mark": 0,
+          "wait_return": 8,
+          "trylock_ok": 181374,
+          "cond_broadcast": 918270,
+          "unused": 0
+        },
+        "per_request": {
+          "malloc": 41.784484,
+          "calloc": 0.00026,
+          "realloc": 0.0,
+          "aligned": 1.122405,
+          "mutex_lock": 58.916906,
+          "cond_signal": 0.003091,
+          "rotation_start": 0.0,
+          "rotation_end": 0.0,
+          "completion_post": 0.0,
+          "completion_run": 0.0,
+          "cond_wait": 0.000703,
+          "role_mark": 0.0,
+          "wait_return": 3.3e-05,
+          "trylock_ok": 0.749507,
+          "cond_broadcast": 3.794645,
+          "unused": 0.0
+        }
+      }
+    }
+  }
+}

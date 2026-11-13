@@ -1,0 +1,12 @@
+# #1648 리뷰 기록 (감독자, 2026-10-15)
+- G1 반려: Java 기본 executor commonPool — 02-handler-turn-and-execution-gate §10 표(Java = virtual thread per task) 위반. → 되돌림(e7a0f2c5ba).
+- G2: Java worker 제출 경로는 #1673 B1이 소유 → 이 브랜치의 ZLinkSerialExecutionQueue·ZLinkActorDispatchSerials 변경 되돌림(e7a0f2c5ba).
+- 통과: Java pump 100ms 고정 대기 제거(I0, §7(a)), 관리 회전당 1회, .NET 회전당 permit 예약(I1).
+- permit 재생성 wake 누락(B) → one-shot zlink timer로 수신 poller 깨움(.NET·C++와 같은 방식), 9f1623f484.
+- 감독자 리뷰 실패(supervisor-guide §6 대상): c7228797d7의 종료 순서 변경(port.close 먼저, pump 대기 나중)을 "Core polling §5 POLLERR 깨움" 근거로 승인했으나, Core socket 계약상 동시 socket 호출 중 close는 EBUSY(core/doc/spec/core/socket/README.en.md:62,:697). 결과: CanonicalDirectJoin 20회 중 1회 실패, M6A ctxTerm 26분 정지 의심. → main 순서로 복구 지시.
+- 2026-10-15 감독자: crossNode close hang은 브랜치 결함(main 0/30, 브랜치 10/30), 9f1623f484 timer 등록이 원인. Core 05-polling.en.md:307·:386(대기 안 하는 조건은 events≠0 source가 없거나 모두 닫힌 socket) — 시작 안 한 timer 등록 시 socket close로 wait가 끝나지 않는 것은 Core 계약대로. Framework close 경로가 'socket close가 pump를 깨운다'에 기댄 것을 한 규칙으로 고치게 지시(단독 재현으로 가설 확인 먼저).
+- 단독 재현: socket close는 진행 중 wait를 POLLERR로 깨움(가설 일부 틀림). timer 등록 시 그 다음 무한 wait가 안 끝남(Core :307 계약대로) → :158 설명, :160(socket close 전 Actor close 단계 정지)은 미설명. 수정 전 :160 계측(stack·await 대상·permit/timer 상태) 지시.
+- 2026-10-16 :160 진단: pump wake·permit 무관(정지 시 pump 정상 대기, permit 사용 0). main Actor lifecycle lane 대기 순환 — deferred Join barrier(ZLinkActorDispatchSerials.java:447) 뒤에 teardown cleanup(:552)이 줄서고, ACTOR_LEFT 처리(dispatchActorLeft :5273 → completeRelocationSource :4678/:4708)가 teardown을 기다림. 브랜치+#1847 13/30, main 0/30 — 브랜치가 창을 넓힘. 지시: 최신 main merge 후 재측정, 고리 계측, main에서 결정적 재현 → main 결함이면 별도 이슈 분리. watcher 사고(다른 job JVM kill) 재발 방지 조치 확인.
+- 2026-10-16 :160 진단 확인(로그 원문 r1-base 0/30·r1-br 16/30, dg7 diag4 정지 run: SOURCE_LEASE_EXPIRED → teardown created=false 대기, barrier run 4/done 3; main 코드 :398·:307-310 대조). main 결함 #1873 등록. #1648은 #1873 수정 뒤 30회 재측정.
+- 2026-10-16 #1873 c232396453 감독자 리뷰 반려: handle 경로가 setup.created와 무관하게 정산 cleanup을 실행 → host close가 먼저 teardown을 등록한 경우 cleanup 두 번(정산 cleanup in-turn + host-close cleanup(releaseActor 포함) barrier 뒤, clearAfterDestroy된 context에서). 수정 전은 정확히 하나. 실제 runtime 경로 시험 요구. barrier complete 순서 이동 확인 요청. 그 외: runInActiveTurn 검증·cleanupFailure future 제거·전달 경로 인자 방식은 승인 방향. 로그: unit 2581·contract 25·integration 78, crossNode 30/30.
+- 2026-10-16 #1873 fb83f55b10 승인 → PR. Channel 427/178 시험 결함(main도 실패) 판정·수정 확인.

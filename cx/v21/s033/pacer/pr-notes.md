@@ -1,0 +1,4 @@
+- 측정 해석: 두 driver 모두 pacer sleep_until이 driver thread를 재워 그동안 완료 처리도 멈춘다(대칭). paced 셀의 지연 수치는 'paced 조건 값'으로 보고한다(PM 리뷰).
+- 셀 JSON metadata에 targetRate·sourceCpus·targetCpus를 기록한다.
+- PM 빌드: 4b40d0f10f + main, bench build.sh rc 0. --target-rate -1·nan은 측정 전에 거부. 8cab98383e는 runner·README만(bash -n 통과).
+- PR 본문 필수(PM): 빌드 결과, 22k binding·Framework 비교(gate 뒤), paced 셀 지연은 pacer sleep이 섞인 조건 값, 이전 xio pacer와 burst 모양이 달라 1:1 비교 아님.

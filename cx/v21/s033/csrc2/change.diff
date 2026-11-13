@@ -1,0 +1,815 @@
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+index 9abb5f987c..59c9cc0dd0 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+@@ -133,24 +133,33 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
+     _wake_timer.attach (*_poller);
+ }
+ 
+-raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_routing_id,
+-                                                     raw_message_t parts,
+-                                                     raw_send_stage_trace_t trace)
++raw_send_submission_t
++raw_route_port_t::submit_send (std::span<const std::uint8_t> target_routing_id,
++                               raw_message_t parts,
++                               raw_send_stage_trace_t trace)
+ {
+     return submit_send_impl (target_routing_id, std::move (parts), std::move (trace));
+ }
+ 
+-raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_routing_id,
+-                                                     std::vector<zlink::message_t> parts,
+-                                                     raw_send_stage_trace_t trace)
++raw_send_submission_t
++raw_route_port_t::submit_send (std::span<const std::uint8_t> target_routing_id,
++                               std::vector<zlink::message_t> parts,
++                               raw_send_stage_trace_t trace)
+ {
+-    return submit_send_impl (target_routing_id, std::move (parts), std::move (trace));
++    return submit_send (target_routing_id, std::span<zlink::message_t> (parts), std::move (trace));
++}
++
++raw_send_submission_t
++raw_route_port_t::submit_send (std::span<const std::uint8_t> target_routing_id,
++                               std::span<zlink::message_t> parts,
++                               raw_send_stage_trace_t trace)
++{
++    return submit_send_impl (target_routing_id, parts, std::move (trace));
+ }
+ 
+ template <typename Parts>
+-raw_send_submission_t raw_route_port_t::submit_send_impl (const raw_bytes_t &target_routing_id,
+-                                                          Parts parts,
+-                                                          raw_send_stage_trace_t trace)
++raw_send_submission_t raw_route_port_t::submit_send_impl (
++  std::span<const std::uint8_t> target_routing_id, Parts parts, raw_send_stage_trace_t trace)
+ {
+     // The binding owns DONTWAIT backpressure retry and its payload snapshot.
+     // Submit under the socket lock. Its terminal observer deliberately has no
+@@ -189,12 +198,17 @@ raw_send_submission_t raw_route_port_t::submit_send_impl (const raw_bytes_t &tar
+                   result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated),
+                   {}};
+             }
+-            auto operation =
+-              std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
+-                .message (materialize_binding_part (std::move (parts[0])));
++            const auto take_part = [] (auto &part) -> decltype (auto) {
++                if constexpr (std::is_same_v<std::decay_t<decltype (part)>, zlink::message_t>)
++                    return std::move (part);
++                else
++                    return materialize_binding_part (std::move (part));
++            };
++            auto operation = std::move (_socket->send (zlink::routing_id_t::from (
++                                          target_routing_id.data (), target_routing_id.size ())))
++                               .message (take_part (parts[0]));
+             for (std::size_t index = 1; index < parts.size (); ++index) {
+-                operation = std::move (operation).message (
+-                  materialize_binding_part (std::move (parts[index])));
++                std::move (operation).message (take_part (parts[index]));
+             }
+             auto submission = std::move (operation).async ();
+             pending = take_submission_admission (submission);
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
+index 7c833d6083..e23b323d0c 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
+@@ -221,12 +221,15 @@ class raw_route_port_t
+       zlink::poller_t *shared_poller = nullptr,
+       std::uintptr_t poller_slot = 1);
+ 
+-    raw_send_submission_t submit_send (const raw_bytes_t &target_routing_id,
++    raw_send_submission_t submit_send (std::span<const std::uint8_t> target_routing_id,
+                                        raw_message_t parts,
+                                        raw_send_stage_trace_t trace = {});
+-    raw_send_submission_t submit_send (const raw_bytes_t &target_routing_id,
++    raw_send_submission_t submit_send (std::span<const std::uint8_t> target_routing_id,
+                                        std::vector<zlink::message_t> parts,
+                                        raw_send_stage_trace_t trace = {});
++    raw_send_submission_t submit_send (std::span<const std::uint8_t> target_routing_id,
++                                       std::span<zlink::message_t> parts,
++                                       raw_send_stage_trace_t trace = {});
+     task_t<zlink::submit_result_t> send_result (const raw_bytes_t &target_routing_id,
+                                                 raw_message_t parts,
+                                                 raw_send_stage_trace_t trace = {});
+@@ -266,7 +269,7 @@ class raw_route_port_t
+ 
+   private:
+     template <typename Parts>
+-    raw_send_submission_t submit_send_impl (const raw_bytes_t &target_routing_id,
++    raw_send_submission_t submit_send_impl (std::span<const std::uint8_t> target_routing_id,
+                                             Parts parts,
+                                             raw_send_stage_trace_t trace);
+     template <typename Parts>
+diff --git a/framework/languages/cpp/framework/src/runtime/host/app.cpp b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+index 9632b6ec9a..fd5bffe658 100644
+--- a/framework/languages/cpp/framework/src/runtime/host/app.cpp
++++ b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+@@ -2600,22 +2600,56 @@ void app_t::_apply_zlink_framework ()
+         }
+         struct send_mesh_node_t
+         {
++            static task_t<result_t<void>>
++            submit (std::decay_t<decltype (mesh)> mesh,
++                    std::decay_t<decltype (mesh_node_service)> mesh_node_service,
++                    zlink::routing_id_t target,
++                    runtime::messaging::message_parts_t parts,
++                    const std::optional<zlink::routing_id_t> &local_rid)
++            {
++                auto submitted = local_rid && *local_rid == target
++                                   ? mesh_node_service->submit_local_node_send (
++                                       mesh, std::move (parts).take_items ())
++                                   : mesh->send_to_node (target, std::move (parts).take_items ());
++                return detail::project_task_terminal<result_t<void>> (
++                  submitted,
++                  [mesh = std::move (mesh), mesh_node_service = std::move (mesh_node_service)] (
++                    const result_t<zlink::submit_result_t> &result) {
++                      return result_t<result_t<void>>::success (
++                        one_way_native_submit_result (result.value (), "MeshNode send"));
++                  });
++            }
++
++            static task_t<result_t<void>>
++            resume (std::decay_t<decltype (mesh)> mesh,
++                    std::decay_t<decltype (mesh_node_service)> mesh_node_service,
++                    zlink::routing_id_t target,
++                    runtime::messaging::message_parts_t parts,
++                    task_t<std::optional<zlink::routing_id_t>> identity)
++            {
++                const auto local_rid = co_await identity;
++                co_return co_await submit (std::move (mesh), mesh_node_service, target,
++                                           std::move (parts), local_rid);
++            }
++
+             static task_t<result_t<void>>
+             run (std::decay_t<decltype (mesh)> mesh,
+                  std::decay_t<decltype (mesh_node_service)> mesh_node_service,
+                  zlink::routing_id_t target,
+                  runtime::messaging::message_parts_t parts)
+             {
+-                const auto local_rid = co_await mesh->routing_id_async ();
+-                if (local_rid && *local_rid == target) {
+-                    co_return one_way_native_submit_result (
+-                      co_await mesh_node_service->submit_local_node_send (
+-                        mesh, std::move (parts).take_items ()),
+-                      "MeshNode send");
++                try {
++                    auto identity = mesh->routing_id_async ();
++                    if (!identity.await_ready ())
++                        return resume (std::move (mesh), mesh_node_service, target,
++                                       std::move (parts), std::move (identity));
++                    return submit (std::move (mesh), mesh_node_service, target, std::move (parts),
++                                   identity.await_resume ());
++                }
++                catch (...) {
++                    return task_t<result_t<void>> (
++                      detail::current_exception_result<result_t<void>> ());
+                 }
+-                co_return one_way_native_submit_result (
+-                  co_await mesh->send_to_node (target, std::move (parts).take_items ()),
+-                  "MeshNode send");
+             }
+         };
+         channel_runtime.bind_mesh_node_transport (
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+index fb52ea551a..82ae94c969 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -1274,7 +1274,7 @@ raw_mesh_node_owner_t::send_to_node (const std::vector<std::uint8_t> &target_rou
+ }
+ 
+ task_t<zlink::submit_result_t>
+-raw_mesh_node_owner_t::send_to_node_result (const std::vector<std::uint8_t> &target_routing_id,
++raw_mesh_node_owner_t::send_to_node_result (std::span<const std::uint8_t> target_routing_id,
+                                             protocol::application_payload_t application_payload)
+ {
+     try {
+@@ -1313,7 +1313,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
+         if (!metadata.empty ())
+             parts.push_back (zlink::message_t::from (metadata));
+         parts.push_back (protocol::encode_application_payload_message (application_payload));
+-        return submit_owned_send_result (target_routing_id, std::move (parts), {});
++        return submit_owned_send_result (target_routing_id, parts, {});
+     }
+     catch (...) {
+         return task_t<zlink::submit_result_t> (
+@@ -1649,21 +1649,22 @@ struct raw_mesh_node_owner_t::send_completion_state_t
+ };
+ 
+ raw_mesh_node_owner_t::send_start_result_t
+-raw_mesh_node_owner_t::start_send (const std::vector<std::uint8_t> &target_routing_id,
+-                                   std::vector<zlink::message_t> parts,
++raw_mesh_node_owner_t::start_send (std::span<const std::uint8_t> target_routing_id,
++                                   std::span<zlink::message_t> parts,
+                                    bool needs_public_completion,
+                                    detail::backend::raw_send_stage_trace_t trace)
+ {
+-    return _lane.run_sync ([this, parts = std::move (parts), trace = std::move (trace),
+-                            needs_public_completion, &target_routing_id] () mutable {
+-        return start_send_on_lane (target_routing_id, std::move (parts), needs_public_completion,
++    // run_sync returns only after the binding has consumed or snapshotted the parts.
++    return _lane.run_sync ([this, parts, trace = std::move (trace), needs_public_completion,
++                            &target_routing_id] () mutable {
++        return start_send_on_lane (target_routing_id, parts, needs_public_completion,
+                                    std::move (trace));
+     });
+ }
+ 
+ raw_mesh_node_owner_t::send_start_result_t
+-raw_mesh_node_owner_t::start_send_on_lane (const std::vector<std::uint8_t> &target_routing_id,
+-                                           std::vector<zlink::message_t> parts,
++raw_mesh_node_owner_t::start_send_on_lane (std::span<const std::uint8_t> target_routing_id,
++                                           std::span<zlink::message_t> parts,
+                                            bool needs_public_completion,
+                                            detail::backend::raw_send_stage_trace_t trace)
+ {
+@@ -1681,7 +1682,7 @@ raw_mesh_node_owner_t::start_send_on_lane (const std::vector<std::uint8_t> &targ
+     }
+     // The owner turn keeps the port in place until submission returns.
+     // raw_route_port_t serializes native submission versus close with its socket gate.
+-    auto submission = port->submit_send (target_routing_id, std::move (parts), std::move (trace));
++    auto submission = port->submit_send (target_routing_id, parts, std::move (trace));
+     if (submission.state == detail::backend::raw_send_submission_state_t::immediate) {
+         return send_start_result_t{
+           send_start_state_t::started, std::move (submission.immediate_result), {}};
+@@ -1752,7 +1753,7 @@ raw_mesh_node_owner_t::start_send_on_lane (const std::vector<std::uint8_t> &targ
+ }
+ 
+ task_t<zlink::submit_result_t>
+-raw_mesh_node_owner_t::send_with_header_result (const std::vector<std::uint8_t> &target_routing_id,
++raw_mesh_node_owner_t::send_with_header_result (std::span<const std::uint8_t> target_routing_id,
+                                                 zlink::message_t header,
+                                                 protocol::application_payload_t application_payload,
+                                                 detail::backend::raw_send_stage_trace_t trace,
+@@ -1769,13 +1770,17 @@ raw_mesh_node_owner_t::send_with_header_result (const std::vector<std::uint8_t>
+                   zlink::submit_result_t::not_connected));
+             }
+         }
+-        std::vector<zlink::message_t> parts;
+-        parts.reserve (metadata ? 3 : 2);
+-        parts.push_back (std::move (header));
+-        if (metadata)
+-            parts.push_back (detail::backend::materialize_binding_part (std::move (*metadata)));
+-        parts.push_back (protocol::encode_application_payload_message (application_payload));
+-        return submit_owned_send_result (target_routing_id, std::move (parts), std::move (trace));
++        const auto submit = [&] (auto &&...messages) {
++            std::array parts{std::move (messages)...};
++            return submit_owned_send_result (target_routing_id, parts, std::move (trace));
++        };
++        if (metadata) {
++            auto metadata_part = detail::backend::materialize_binding_part (std::move (*metadata));
++            return submit (std::move (header), std::move (metadata_part),
++                           protocol::encode_application_payload_message (application_payload));
++        }
++        return submit (std::move (header),
++                       protocol::encode_application_payload_message (application_payload));
+     }
+     catch (...) {
+         return task_t<zlink::submit_result_t> (
+@@ -1784,11 +1789,11 @@ raw_mesh_node_owner_t::send_with_header_result (const std::vector<std::uint8_t>
+ }
+ 
+ task_t<zlink::submit_result_t>
+-raw_mesh_node_owner_t::submit_owned_send_result (const std::vector<std::uint8_t> &target_routing_id,
+-                                                 std::vector<zlink::message_t> parts,
++raw_mesh_node_owner_t::submit_owned_send_result (std::span<const std::uint8_t> target_routing_id,
++                                                 std::span<zlink::message_t> parts,
+                                                  detail::backend::raw_send_stage_trace_t trace)
+ {
+-    auto started = start_send (target_routing_id, std::move (parts), true, std::move (trace));
++    auto started = start_send (target_routing_id, parts, true, std::move (trace));
+     if (started.state == send_start_state_t::terminated)
+         return task_t<zlink::submit_result_t> (
+           result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated));
+@@ -1801,8 +1806,8 @@ task_t<bool>
+ raw_mesh_node_owner_t::send_header_only (const std::vector<std::uint8_t> &target_routing_id,
+                                          std::vector<std::uint8_t> header)
+ {
+-    auto started = start_send (
+-      target_routing_id, detail::backend::materialize_binding_parts ({std::move (header)}), true);
++    std::array parts{detail::backend::materialize_binding_part (std::move (header))};
++    auto started = start_send (target_routing_id, parts, true);
+     if (started.state == send_start_state_t::terminated)
+         co_return false;
+     if (started.immediate_result)
+@@ -1822,9 +1827,8 @@ raw_mesh_node_owner_t::submit_header_only (const std::vector<std::uint8_t> &targ
+ raw_mesh_node_owner_t::send_start_state_t raw_mesh_node_owner_t::submit_header_only_on_lane (
+   const std::vector<std::uint8_t> &target_routing_id, std::vector<std::uint8_t> header)
+ {
+-    auto started = start_send_on_lane (
+-      target_routing_id, detail::backend::materialize_binding_parts ({std::move (header)}), false,
+-      {});
++    std::array parts{detail::backend::materialize_binding_part (std::move (header))};
++    auto started = start_send_on_lane (target_routing_id, parts, false, {});
+     if (started.state != send_start_state_t::started && mesh_trace_enabled ())
+         trace_mesh_enabled ("control-send start=terminated");
+     return started.state;
+@@ -1848,8 +1852,8 @@ task_t<bool> raw_mesh_node_owner_t::send_control (std::vector<std::uint8_t> targ
+         co_return accepted;
+     }
+     // The owner borrows the target id during its synchronous submission.
+-    co_return co_await submit_owned_send_result (
+-      target_routing_id, detail::backend::materialize_binding_parts (std::move (parts)), {})
++    auto wire = detail::backend::materialize_binding_parts (std::move (parts));
++    co_return co_await submit_owned_send_result (target_routing_id, wire, {})
+       == zlink::submit_result_t::ok;
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+index 2fd02ad246..3439467135 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+@@ -222,7 +222,7 @@ class raw_mesh_node_owner_t
+     task_t<bool> send_to_node (const std::vector<std::uint8_t> &target_routing_id,
+                                protocol::application_payload_t application_payload);
+     task_t<zlink::submit_result_t>
+-    send_to_node_result (const std::vector<std::uint8_t> &target_routing_id,
++    send_to_node_result (std::span<const std::uint8_t> target_routing_id,
+                          protocol::application_payload_t application_payload);
+     task_t<zlink::submit_result_t>
+     send_logical_multicast (const std::vector<std::uint8_t> &target_routing_id,
+@@ -581,20 +581,20 @@ class raw_mesh_node_owner_t
+         std::shared_ptr<task_t<zlink::submit_result_t>> pending_completion;
+     };
+     struct send_completion_state_t;
+-    send_start_result_t start_send (const std::vector<std::uint8_t> &target_routing_id,
+-                                    std::vector<zlink::message_t> parts,
++    send_start_result_t start_send (std::span<const std::uint8_t> target_routing_id,
++                                    std::span<zlink::message_t> parts,
+                                     bool needs_public_completion,
+                                     detail::backend::raw_send_stage_trace_t trace = {});
+-    send_start_result_t start_send_on_lane (const std::vector<std::uint8_t> &target_routing_id,
+-                                            std::vector<zlink::message_t> parts,
++    send_start_result_t start_send_on_lane (std::span<const std::uint8_t> target_routing_id,
++                                            std::span<zlink::message_t> parts,
+                                             bool needs_public_completion,
+                                             detail::backend::raw_send_stage_trace_t trace);
+     task_t<zlink::submit_result_t>
+-    submit_owned_send_result (const std::vector<std::uint8_t> &target_routing_id,
+-                              std::vector<zlink::message_t> parts,
++    submit_owned_send_result (std::span<const std::uint8_t> target_routing_id,
++                              std::span<zlink::message_t> parts,
+                               detail::backend::raw_send_stage_trace_t trace);
+     task_t<zlink::submit_result_t>
+-    send_with_header_result (const std::vector<std::uint8_t> &target_routing_id,
++    send_with_header_result (std::span<const std::uint8_t> target_routing_id,
+                              zlink::message_t header,
+                              protocol::application_payload_t application_payload,
+                              detail::backend::raw_send_stage_trace_t trace = {},
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+index efe82c7560..4f6e06f2a9 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+@@ -374,44 +374,50 @@ void write_type_fragments (header_writer_t &prefix,
+ 
+ struct header_plan_t
+ {
+-    std::optional<message_kind_t> kind;
+-    std::string channel_name;
+-    std::string message_name;
+-    std::string content_type;
++    std::optional<envelope_header_t> header;
+     std::string prefix;
+     std::string middle;
++    std::string encoded;
+ 
+-    bool matches (const envelope_header_t &header,
+-                  std::string_view selected_content_type) const noexcept
++    bool matches_type (const envelope_header_t &value, std::string_view content_type) const noexcept
+     {
+-        return kind && *kind == header.kind
+-               && std::string_view (channel_name) == std::string_view (header.channel_name)
+-               && std::string_view (message_name) == std::string_view (header.message_name)
+-               && std::string_view (content_type) == selected_content_type;
++        return header && header->kind == value.kind && header->channel_name == value.channel_name
++               && header->message_name == value.message_name
++               && header->content_type == content_type;
+     }
+ 
+-    void rebuild (const envelope_header_t &header, std::string_view selected_content_type)
++    bool matches (const envelope_header_t &value,
++                  const std::string *flow_id,
++                  std::optional<flow_origin_t> flow_origin) const noexcept
+     {
+-        // Keep the one-entry backing storage on this thread.  `kind` is the
+-        // validity marker and is published only after every escaped segment
+-        // and key has been rebuilt successfully.
+-        kind.reset ();
+-        channel_name.clear ();
+-        message_name.clear ();
+-        content_type.clear ();
+-        prefix.clear ();
+-        middle.clear ();
+-
+-        channel_name.assign (header.channel_name.data (), header.channel_name.size ());
+-        message_name.assign (header.message_name.data (), header.message_name.size ());
+-        content_type = selected_content_type;
+-
+-        header_writer_t prefix_writer (prefix);
+-        header_writer_t middle_writer (middle);
+-        write_channel_fragment (prefix_writer, channel_name);
+-        write_type_fragments (prefix_writer, middle_writer, message_name, content_type,
+-                              header.kind);
+-        kind = header.kind;
++        return header->correlation_id == value.correlation_id && header->deadline == value.deadline
++               && header->topic == value.topic && header->error_code == value.error_code
++               && header->error_message == value.error_message && header->source == value.source
++               && header->metadata == value.metadata
++               && header->flow_id.has_value () == (flow_id != nullptr)
++               && (!flow_id || *header->flow_id == *flow_id) && header->flow_origin == flow_origin;
++    }
++
++    void replace (const envelope_header_t &value,
++                  std::string_view selected_content_type,
++                  const std::string *flow_id,
++                  std::optional<flow_origin_t> flow_origin,
++                  const zlink::message_t &message,
++                  std::string next_prefix,
++                  std::string next_middle)
++    {
++        // The key owns any text borrowed by a decoded header. Publish it only
++        // after encoding and every key allocation have succeeded.
++        auto key = value;
++        key.content_type.assign (selected_content_type);
++        key.flow_id = flow_id ? std::optional<std::string> (*flow_id) : std::nullopt;
++        key.flow_origin = flow_origin;
++        std::string bytes (reinterpret_cast<const char *> (message.data ()), message.size ());
++        header.reset ();
++        prefix = std::move (next_prefix);
++        middle = std::move (next_middle);
++        encoded = std::move (bytes);
++        header = std::move (key);
+     }
+ };
+ 
+@@ -460,6 +466,23 @@ void write_header (header_writer_t &writer,
+     writer.append ("}");
+ }
+ 
++zlink::message_t encode_header_bytes (const envelope_header_t &header,
++                                      const std::string *flow_id,
++                                      std::optional<flow_origin_t> flow_origin,
++                                      std::string_view prefix,
++                                      std::string_view middle,
++                                      std::string_view content = {})
++{
++    header_writer_t measure;
++    write_header (measure, header, flow_id, flow_origin, prefix, middle, content);
++    auto message = zlink::message_t::allocate (measure.size ());
++    if (!message.valid ())
++        throw std::bad_alloc ();
++    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
++    write_header (writer, header, flow_id, flow_origin, prefix, middle, content);
++    return message;
++}
++
+ std::pair<const std::string *, std::optional<flow_origin_t>>
+ validate_outgoing_header (const envelope_header_t &header)
+ {
+@@ -498,15 +521,27 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
+ {
+     const auto [flow_id, flow_origin] = validate_outgoing_header (header);
+     auto &plan = header_plan ();
+-    if (!plan.matches (header, content_type))
+-        plan.rebuild (header, content_type);
+-    header_writer_t measure;
+-    write_header (measure, header, flow_id, flow_origin, plan.prefix, plan.middle);
+-    auto message = zlink::message_t::allocate (measure.size ());
+-    if (!message.valid ())
+-        throw std::bad_alloc ();
+-    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
+-    write_header (writer, header, flow_id, flow_origin, plan.prefix, plan.middle);
++    if (plan.matches_type (header, content_type)) {
++        if (plan.matches (header, flow_id, flow_origin)) {
++            auto message = zlink::message_t::from (plan.encoded);
++            if (!message.valid ())
++                throw std::bad_alloc ();
++            return message;
++        }
++        // Changing correlation, metadata or flow still reuses the type fragments;
++        // it does not copy a new cache key on every request or reply.
++        return encode_header_bytes (header, flow_id, flow_origin, plan.prefix, plan.middle);
++    }
++    std::string prefix;
++    std::string middle;
++    header_writer_t prefix_writer (prefix);
++    header_writer_t middle_writer (middle);
++    write_channel_fragment (prefix_writer, header.channel_name);
++    write_type_fragments (prefix_writer, middle_writer, header.message_name, content_type,
++                          header.kind);
++    auto message = encode_header_bytes (header, flow_id, flow_origin, prefix, middle);
++    plan.replace (header, content_type, flow_id, flow_origin, message, std::move (prefix),
++                  std::move (middle));
+     return message;
+ }
+ 
+@@ -516,14 +551,7 @@ envelope_codec_t::encode_header (const envelope_header_t &header,
+                                  const detail::prepared_header_fragment_t &channel) const
+ {
+     const auto [flow_id, origin] = validate_request_header (header, type, channel);
+-    header_writer_t measure;
+-    write_header (measure, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
+-    auto message = zlink::message_t::allocate (measure.size ());
+-    if (!message.valid ())
+-        throw std::bad_alloc ();
+-    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
+-    write_header (writer, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
+-    return message;
++    return encode_header_bytes (header, flow_id, origin, channel.bytes, type.middle, type.prefix);
+ }
+ 
+ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_payload (
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+index c39387f304..4fecfdd249 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+@@ -59,33 +59,34 @@ bool valid_flow_origin (std::uint8_t value) noexcept
+ class native_wire_writer_t
+ {
+   public:
+-    explicit native_wire_writer_t (std::size_t size) :
+-        _message (zlink::message_t::allocate (size)),
+-        _data (reinterpret_cast<std::uint8_t *> (_message.data ()))
++    explicit native_wire_writer_t (std::size_t size) : _message (zlink::message_t::allocate (size))
+     {
+         if (!_message.valid ())
+             throw std::bad_alloc ();
++        _remaining = {reinterpret_cast<std::uint8_t *> (_message.data ()), size};
+     }
+     native_wire_writer_t (native_wire_writer_t &&other) noexcept :
+         _message (std::move (other._message)),
+-        _data (reinterpret_cast<std::uint8_t *> (_message.data ())),
+-        _size (other._size)
++        _remaining (reinterpret_cast<std::uint8_t *> (_message.data ())
++                      + (_message.size () - other._remaining.size ()),
++                    other._remaining.size ())
+     {
+     }
+     void push_back (std::uint8_t value)
+     {
+-        if (_size >= _message.size ())
++        if (_remaining.empty ())
+             throw service_wire_error_t ("native wire writer exceeded allocated size");
+-        _data[_size++] = value;
++        _remaining.front () = value;
++        _remaining = _remaining.subspan (1);
+     }
+-    std::uint8_t *end () { return _data + _size; }
++    std::uint8_t *end () { return _remaining.data (); }
+     template <typename Iterator> void insert (std::uint8_t *, Iterator first, Iterator last)
+     {
+         const auto count = static_cast<std::size_t> (std::distance (first, last));
+-        if (count > _message.size () - _size)
++        if (count > _remaining.size ())
+             throw service_wire_error_t ("native wire writer exceeded allocated size");
+         std::copy (first, last, end ());
+-        _size += count;
++        _remaining = _remaining.subspan (count);
+     }
+     void insert (std::uint8_t *position, std::initializer_list<std::uint8_t> bytes)
+     {
+@@ -93,22 +94,21 @@ class native_wire_writer_t
+     }
+     void generate (std::size_t size, const std::function<void (std::span<std::byte>)> &write)
+     {
+-        if (size > _message.size () - _size)
++        if (size > _remaining.size ())
+             throw service_wire_error_t ("native wire writer exceeded allocated size");
+         write ({reinterpret_cast<std::byte *> (end ()), size});
+-        _size += size;
++        _remaining = _remaining.subspan (size);
+     }
+     zlink::message_t take () &&
+     {
+-        if (_size != _message.size ())
++        if (!_remaining.empty ())
+             throw service_wire_error_t ("native wire writer size mismatch");
+         return std::move (_message);
+     }
+ 
+   private:
+     zlink::message_t _message;
+-    std::uint8_t *_data = nullptr;
+-    std::size_t _size = 0;
++    std::span<std::uint8_t> _remaining;
+ };
+ 
+ template <typename Buffer> Buffer allocate_wire_buffer (std::size_t size)
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index f34ce16f21..57d7d742cb 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -3366,7 +3366,9 @@ public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
+                                      const std::vector<zlink::message_t> &parts)
+ {
+     try {
+-        return _transport->send_to_node_result (target.to_bytes (), encode_application (parts));
++        return _transport->send_to_node_result (
++          std::span<const std::uint8_t> (target.data (), target.size ()),
++          encode_application (parts));
+     }
+     catch (...) {
+         return task_t<zlink::submit_result_t> (
+@@ -3379,8 +3381,9 @@ public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
+                                      std::vector<zlink::message_t> &&parts)
+ {
+     try {
+-        return _transport->send_to_node_result (target.to_bytes (),
+-                                                encode_application (std::move (parts)));
++        return _transport->send_to_node_result (
++          std::span<const std::uint8_t> (target.data (), target.size ()),
++          encode_application (std::move (parts)));
+     }
+     catch (...) {
+         return task_t<zlink::submit_result_t> (
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp b/framework/languages/cpp/tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
+index 18203c53c8..fe8deb3dfb 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
+@@ -18,6 +18,7 @@
+ #include <zlink/framework/contracts/errors/result.hpp>
+ 
+ #include <algorithm>
++#include <array>
+ #include <cassert>
+ #include <cstdio>
+ #include <atomic>
+@@ -1018,6 +1019,86 @@ void verify_pending_send_route_removal_and_shutdown ()
+     }
+ }
+ 
++void verify_stack_parts_survive_backpressured_submission (std::size_t hwm_bytes)
++{
++    zlink::context_t context;
++    context.options ().auto_hwm_enabled (false);
++    zlink::router_socket_t source (context), target (context);
++    const auto rid = zlink::routing_id_t::from ("stack-parts-target");
++    target.set_routing_id (rid);
++    source.options ().linger (0ms);
++    target.options ().linger (0ms);
++    source.options ().send_hwm (zlink::byte_count_t::bytes (hwm_bytes));
++    target.options ().recv_hwm (zlink::byte_count_t::bytes (hwm_bytes));
++    target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
++    target.bind ("inproc://framework-stack-parts");
++    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
++    source.connect ("inproc://framework-stack-parts");
++    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
++    backend::raw_route_port_t source_port (source), target_port (target);
++    const auto paused_by = std::chrono::steady_clock::now () + 2s;
++    while (monitor.status ().flow_paused_connections == 0
++           && std::chrono::steady_clock::now () < paused_by) {
++        (void) target_port.poll (10ms);
++        (void) source_port.poll (10ms);
++    }
++    assert (monitor.status ().flow_paused_connections == 1);
++    const auto target_bytes = rid.to_bytes ();
++    const std::string body (1024, 's');
++    std::shared_ptr<zlink::framework::task_t<zlink::submit_result_t>> pending;
++    std::size_t submitted = 0;
++    while (!pending && submitted < raw_route_backpressure_attempt_limit) {
++        // Every array and message wrapper is gone before completion is driven.
++        std::array parts{zlink::message_t::from (std::string ("header")),
++                         zlink::message_t::from (body)};
++        auto borrowed_target = target_bytes;
++        auto submission = source_port.submit_send (
++          std::span (borrowed_target), std::span (parts), [] (auto stage, auto result) {
++              std::fprintf (stderr, "stack parts %.*s %.*s\n", static_cast<int> (stage.size ()),
++                            stage.data (), static_cast<int> (result.size ()), result.data ());
++          });
++        std::fill (borrowed_target.begin (), borrowed_target.end (), 0);
++        ++submitted;
++        if (submission.state == backend::raw_send_submission_state_t::pending_backpressure)
++            pending = std::move (submission.pending_completion);
++        else
++            assert (submission.immediate_result->value () == zlink::submit_result_t::ok);
++    }
++    assert (pending && !pending->await_ready ());
++    target.set_receive_flow_state (zlink::receive_flow_state_t::running);
++    std::size_t received = 0;
++    const auto deadline = std::chrono::steady_clock::now () + 2s;
++    while ((received != submitted || !pending->await_ready ())
++           && std::chrono::steady_clock::now () < deadline) {
++        (void) source_port.poll (0ms);
++        auto message = target_port.receive_if_ready (
++          target_port.poll (10ms).value_or (zlink::poll_event_flag_t::none));
++        if (message) {
++            assert (message->parts.size () == 2);
++            assert (message->parts[0].to_string () == "header");
++            assert (message->parts[1].to_string () == body);
++            ++received;
++        }
++    }
++    if (received != submitted) {
++        std::fprintf (
++          stderr, "stack parts hwm=%zu submitted=%zu received=%zu pending_ready=%d paused=%llu\n",
++          hwm_bytes, submitted, received, pending->await_ready (),
++          static_cast<unsigned long long> (monitor.status ().flow_paused_connections));
++        if (pending->await_ready ())
++            std::fprintf (stderr, "pending success=%d result=%d\n",
++                          static_cast<bool> (pending->result ()),
++                          pending->result () ? static_cast<int> (pending->result ().value ()) : -1);
++    }
++    assert (received == submitted);
++    assert (pending->await_ready () && pending->result ().value () == zlink::submit_result_t::ok);
++    std::fprintf (stderr, "stack parts hwm=%zu submitted=%zu received=%zu terminal=ok\n", hwm_bytes,
++                  submitted, received);
++    source_port.close ();
++    target_port.close ();
++    monitor.close ();
++}
++
+ }
+ 
+ static void verify_request_deadline_preserves_timeout_boundary ()
+@@ -1135,5 +1216,7 @@ int main ()
+     verify_handover_request_completion_is_replayable ();
+     verify_missing_rid_is_initial_not_connected_without_wait_token ();
+     verify_disconnect_rid_ends_issued_wait_token_with_enoent ();
++    // #4118: the HWM-16 multipart case remains backpressured in Core/binding.
++    verify_stack_parts_survive_backpressured_submission (2048);
+     return 0;
+ }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+index 82789a4753..3ded57c854 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+@@ -186,6 +186,14 @@ TEST (EnvelopeAllocations, TypedAndErasedEncodingDoNotCloneTheHeader)
+     EXPECT_EQ (decoded.value ().content_type, content_type);
+     EXPECT_EQ ((*parts)[1].to_string (), "7");
+     parts.reset ();
++    header.correlation_id = std::string (32, 'b');
++    EXPECT_EQ (
++      count_allocations ([&] { parts.emplace (codec.encode_parts (header, value, serializers)); }),
++      1u);
++    decoded = codec.decode_header (*parts);
++    ASSERT_TRUE (decoded);
++    EXPECT_EQ (decoded.value ().correlation_id, header.correlation_id);
++    parts.reset ();
+     // The erased registry additionally returns an owning content-type string.
+     EXPECT_EQ (count_allocations ([&] {
+                    parts.emplace (
+@@ -204,6 +212,65 @@ TEST (EnvelopeAllocations, TypedAndErasedEncodingDoNotCloneTheHeader)
+     EXPECT_EQ (empty[1].size (), 0u);
+ }
+ 
++TEST (EnvelopeEncoding, RepeatedHeaderKeepsIndependentWritableBytes)
++{
++    msg::envelope_codec_t codec;
++    msg::envelope_header_t header{.kind = msg::message_kind_t::command,
++                                  .channel_name = "cached-channel",
++                                  .message_name = "cached-message"};
++    auto first = codec.encode_header (header);
++    const auto expected = first.to_string ();
++    auto second = codec.encode_header (header);
++    ASSERT_EQ (second.to_string (), expected);
++    first.bytes ()[0] = std::byte{};
++    second.bytes ()[1] = std::byte{};
++    EXPECT_EQ (codec.encode_header (header).to_string (), expected);
++}
++
++TEST (EnvelopeEncoding, ChangedValuesAndInvalidHeadersCannotReusePreviousBytes)
++{
++    msg::envelope_codec_t codec;
++    const msg::envelope_header_t original{.kind = msg::message_kind_t::command,
++                                          .channel_name = "cache-values",
++                                          .message_name = "message"};
++    using mutation_t = std::function<void (msg::envelope_header_t &)>;
++    const mutation_t mutations[] = {[] (auto &h) { h.kind = msg::message_kind_t::publish; },
++                                    [] (auto &h) { h.channel_name = "other-channel"; },
++                                    [] (auto &h) { h.message_name = "other-message"; },
++                                    [] (auto &h) { h.content_type = "other/type"; },
++                                    [] (auto &h) { h.correlation_id = "correlation"; },
++                                    [] (auto &h) { h.deadline = "2026-11-09T00:00:00Z"; },
++                                    [] (auto &h) { h.topic = "topic"; },
++                                    [] (auto &h) { h.error_code = "unavailable"; },
++                                    [] (auto &h) { h.error_message = "error"; },
++                                    [] (auto &h) { h.source = "source"; },
++                                    [] (auto &h) { h.metadata = {{"k", "v"}}; },
++                                    [] (auto &h) {
++                                        h.flow_id = "019a55d5-0000-7000-8000-000000000001";
++                                        h.flow_origin = fw::flow_origin_t::application;
++                                    }};
++    for (const auto &mutate : mutations) {
++        const auto previous = codec.encode_header (original).to_string ();
++        auto changed = original;
++        mutate (changed);
++        const auto bytes = codec.encode_header (changed).to_string ();
++        EXPECT_NE (bytes, previous);
++        EXPECT_EQ (codec.encode_header (changed).to_string (), bytes);
++        EXPECT_EQ (codec.encode_header (original).to_string (), previous);
++    }
++    auto invalid = original;
++    invalid.correlation_id = std::string (65, 'x');
++    EXPECT_THROW (codec.encode_header (invalid), fw::framework_exception_t);
++    invalid = original;
++    invalid.metadata = {{"", "value"}};
++    EXPECT_THROW (codec.encode_header (invalid), fw::framework_exception_t);
++    invalid = original;
++    invalid.flow_origin = fw::flow_origin_t::application;
++    EXPECT_THROW (codec.encode_header (invalid), fw::framework_exception_t);
++    const auto recovered = codec.encode_header (original).to_string ();
++    EXPECT_EQ (nlohmann::json::parse (recovered).at ("channelName"), "cache-values");
++}
++
+ // Container members (std::map metadata) may allocate even when empty, and how
+ // many allocations that costs differs by standard library (MSVC allocates a
+ // sentinel node). Measure a header whose strings fit inline as the baseline.

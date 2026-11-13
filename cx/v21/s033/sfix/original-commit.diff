@@ -1,0 +1,1825 @@
+commit 317d4037cc983b85a7ca009bcb0316e51185e825
+Author: ulala-x <ulalax@kairoscode.dev>
+Date:   Thu Nov 5 19:06:10 2026 +0900
+
+    perf(cpp): cut request submit heap allocations (#3867)
+    
+    Share request callable ownership, combine observer storage, borrow routing
+    and serializer media data, reuse node wire-vector capacity, and reserve the
+    complete node request header once. Keep public and physical replies separate
+    with the same completion identity, ordering, and capture lifetime boundaries.
+    
+    The source submitter measures 49.466 -> 29.262 heap calls/message against
+    the requested reference. Audited decision locations decrease 10 -> 9 by
+    sharing the existing byte comparator; eight contract locations stay unchanged.
+    Allocation references use borrowed inputs while retaining exact assertions.
+    
+    Spec: framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md:38
+    Spec: framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md:329
+    Spec: framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md:375
+    Spec: framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md:490
+    
+    Validation: all affected C++ targets compiled with --parallel 3 and -k 0;
+    296 unit/contract CTest entries and the Debug send allocation target passed;
+    C++ format and diff checks passed. Allocation census and four-round
+    Framework throughput comparisons are recorded in the job report.
+
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/call.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/call.hpp
+index 8ea777cdac..405ea42275 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/call.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/call.hpp
+@@ -276,10 +276,10 @@ class channel_request_call_t
+     friend class route_client_t;
+     friend class spot_request_call_t;
+     using receiver_submit_fn_t =
+-      std::function<void (const std::string &,
+-                          std::chrono::milliseconds,
+-                          const metadata_map_t &,
+-                          detail::request_receiver_t<encoded_payload_t>)>;
++      detail::request_callback_t<const std::string &,
++                                 std::chrono::milliseconds,
++                                 const metadata_map_t &,
++                                 detail::request_receiver_t<encoded_payload_t>>;
+ 
+     channel_request_call_t (detail::request_projection_t,
+                             std::string packet_name,
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+index b7af135ad3..e9fb2fd447 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+@@ -880,23 +880,25 @@ class route_client_t
+                                             TRequest request)
+     {
+         auto state = _state;
+-        auto request_value = std::make_shared<TRequest> (std::move (request));
+         return channel_request_call_t (
+           detail::request_projection_t{}, detail::message_name<TRequest> (), _serializers,
+           [state, router_channel_id = std::move (router_channel_id),
+-           target_node_rid = std::move (target_node_rid),
+-           request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
+-                           const channel_request_call_t::metadata_map_t &metadata,
+-                           detail::request_receiver_t<encoded_payload_t> receiver) {
+-              auto encode_payload = [request_value] (serializer_registry_t &serializers) {
+-                  return serializers.template get<TRequest> ().serialize_with_content_type (
+-                    *request_value);
++           target_node_rid = std::move (target_node_rid), request_value = std::move (request)] (
++            const std::string &packet_name, std::chrono::milliseconds timeout,
++            const channel_request_call_t::metadata_map_t &metadata,
++            detail::request_receiver_t<encoded_payload_t> receiver) {
++              std::optional<serializer_t<TRequest>> selected_serializer;
++              // Keep this selection alive while the erased submit consumes its media type.
++              auto encode_payload = [&request_value,
++                                     &selected_serializer] (serializer_registry_t &serializers) {
++                  selected_serializer.emplace (serializers.template get<TRequest> ());
++                  return std::pair{selected_serializer->serialize (request_value),
++                                   std::cref (selected_serializer->content_type ())};
+               };
+               // Erased submit consumes this encoder before its first suspension.
+               submit_request_reply_message_erased (state, router_channel_id, target_node_rid,
+-                                                   packet_name, std::type_index (typeid (TRequest)),
+-                                                   std::ref (encode_payload), timeout, metadata,
+-                                                   std::move (receiver));
++                                                   packet_name, std::ref (encode_payload), timeout,
++                                                   metadata, std::move (receiver));
+           });
+     }
+ 
+@@ -989,13 +991,16 @@ class route_client_t
+                              payload_encoder_t encode_payload,
+                              const route_send_call_t::metadata_map_t &metadata);
+ 
++    using node_payload_encoder_t =
++      std::function<std::pair<encoded_payload_t, std::reference_wrapper<const std::string>> (
++        serializer_registry_t &)>;
++
+     static void
+     submit_request_reply_message_erased (const std::shared_ptr<detail::route_client_state_t> &state,
+                                          std::string router_channel_id,
+                                          zlink::routing_id_t target_node_rid,
+                                          std::string packet_name,
+-                                         std::type_index request_type,
+-                                         payload_encoder_t encode_payload,
++                                         node_payload_encoder_t encode_payload,
+                                          std::chrono::milliseconds timeout,
+                                          std::map<std::string, std::string> metadata,
+                                          detail::request_receiver_t<encoded_payload_t> receiver);
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
+index c171596f5e..d7c1f6fe8f 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
+@@ -26,30 +26,89 @@ struct public_request_projection_t
+ {
+ };
+ 
++// Copies retain the same operation's callable without cloning its captures.
++template <typename... TArgs> class request_callback_t
++{
++  public:
++    request_callback_t () = default;
++    template <typename TCallback>
++        requires (!std::is_same_v<std::decay_t<TCallback>, request_callback_t>)
++    request_callback_t (TCallback &&callback) :
++        request_callback_t (from_shared (
++          std::make_shared<std::decay_t<TCallback>> (std::forward<TCallback> (callback))))
++    {
++    }
++
++    template <typename TOwner, typename TInvoke>
++        requires (std::is_empty_v<TInvoke> && std::is_default_constructible_v<TInvoke>)
++    request_callback_t (std::shared_ptr<TOwner> owner, TInvoke) :
++        _owner (std::move (owner)), _invoke ([] (void *owner, TArgs... arguments) {
++            TInvoke{}(*static_cast<TOwner *> (owner), std::forward<TArgs> (arguments)...);
++        })
++    {
++    }
++
++    template <typename TCallback>
++    static request_callback_t from_shared (std::shared_ptr<TCallback> callback)
++    {
++        request_callback_t selected;
++        selected._owner = std::move (callback);
++        selected._invoke = [] (void *owner, TArgs... arguments) {
++            (*static_cast<TCallback *> (owner)) (std::forward<TArgs> (arguments)...);
++        };
++        return selected;
++    }
++
++    explicit operator bool () const noexcept { return bool (_owner); }
++    void operator() (TArgs... arguments) const
++    {
++        if (!_owner)
++            throw std::bad_function_call ();
++        const auto invoke = _invoke;
++        const auto owner = _owner;
++        invoke (owner.get (), std::forward<TArgs> (arguments)...);
++    }
++
++  private:
++    std::shared_ptr<void> _owner;
++    void (*_invoke) (void *, TArgs...) = nullptr;
++};
++
+ // The selected operation delivers into the final reply. Codec owners compose
+-// synchronous conversions here without adding asynchronous result states.
++// synchronous conversions without adding asynchronous result states.
++// Completion and public failure retain independent callable ownership.
+ template <typename T> struct request_receiver_t
+ {
+     std::shared_ptr<task_completion_source_t<void>> admitted;
+-    std::function<void (const result_t<T> &)> complete;
+-    std::function<void (std::exception_ptr)> fail_public;
++    request_callback_t<const result_t<T> &> complete;
++    request_callback_t<std::exception_ptr> fail_public;
++
++    template <typename TInput, typename TProject> struct projection_t
++    {
++        request_callback_t<const result_t<T> &> deliver;
++        TProject project;
++        void operator() (const result_t<TInput> &terminal)
++        {
++            auto projected = [&] () -> result_t<T> {
++                try {
++                    return project (terminal);
++                }
++                catch (...) {
++                    return current_exception_result<T> ();
++                }
++            }();
++            deliver (projected);
++        }
++    };
+ 
+     template <typename TInput, typename TProject>
+     request_receiver_t<TInput> project (TProject &&project)
+     {
++        using storage_t = projection_t<TInput, std::decay_t<TProject>>;
++        auto storage = std::make_shared<storage_t> (
++          storage_t{std::move (complete), std::forward<TProject> (project)});
+         return {std::move (admitted),
+-                [deliver = std::move (complete), project = std::forward<TProject> (project)] (
+-                  const result_t<TInput> &terminal) mutable {
+-                    auto projected = [&] () -> result_t<T> {
+-                        try {
+-                            return project (terminal);
+-                        }
+-                        catch (...) {
+-                            return current_exception_result<T> ();
+-                        }
+-                    }();
+-                    deliver (projected);
+-                },
++                request_callback_t<const result_t<TInput> &>::from_shared (std::move (storage)),
+                 std::move (fail_public)};
+     }
+ 
+@@ -231,9 +290,10 @@ template <typename TReply> class request_task_t : public task_t<TReply>
+ 
+     detail::request_receiver_t<TReply> receiver (detail::request_projection_t)
+     {
+-        return {_admitted, [reply = this->shared_state ()] (const result_t<TReply> &result) {
+-                    reply->complete (result);
+-                }};
++        return {_admitted,
++                detail::request_callback_t<const result_t<TReply> &> (
++                  this->shared_state (),
++                  [] (auto &reply, const result_t<TReply> &result) { reply.complete (result); })};
+     }
+ 
+     detail::request_receiver_t<TReply> receiver (detail::public_request_projection_t)
+@@ -261,9 +321,10 @@ template <typename TReply> class request_task_t : public task_t<TReply>
+               physical->complete (projected);
+               reply->complete (std::move (projected));
+           },
+-          [reply = this->shared_state ()] (std::exception_ptr failure) {
+-              reply->complete (detail::result_access_t::failure<TReply> (std::move (failure)));
+-          }};
++          detail::request_callback_t<std::exception_ptr> (
++            this->shared_state (), [] (auto &reply, std::exception_ptr failure) {
++                reply.complete (detail::result_access_t::failure<TReply> (std::move (failure)));
++            })};
+     }
+ 
+     /* The reply of a selected request in this reply type (hot path E4·E5:
+@@ -417,7 +478,7 @@ struct request_task_access_t
+     template <typename T, typename TTag, typename TSubmit, typename TReceiver>
+     static request_task_t<T> receive (TTag tag, TSubmit &&submit, TReceiver &&make_receiver)
+     {
+-        auto admitted = std::make_shared<task_completion_source_t<void>> ();
++        auto admitted = make_task_completion_source<void> ();
+         request_task_t<T> pending (tag, admitted);
+         auto receiver = std::forward<TReceiver> (make_receiver) (pending);
+         try {
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/task.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/task.hpp
+index 28d0becadf..77f6569052 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/task.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/task.hpp
+@@ -24,7 +24,6 @@
+ #include <type_traits>
+ #include <utility>
+ #include <variant>
+-#include <vector>
+ 
+ namespace zlink::framework
+ {
+@@ -561,7 +560,30 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+ {
+     struct callback_t
+     {
+-        std::function<void (const result_t<T> &)> invoke;
++        virtual ~callback_t ()
++        {
++            while (next) {
++                auto removed = std::move (next);
++                next = std::move (removed->next);
++            }
++        }
++        virtual void invoke (const result_t<T> &) = 0;
++        std::unique_ptr<callback_t> next;
++    };
++    template <typename TCallback> struct terminal_callback_t final : callback_t
++    {
++        terminal_callback_t (TCallback callback, ambient_context_snapshot_t snapshot) :
++            callback (std::move (callback)),
++            ambient (std::move (snapshot)),
++            owner (capture_current_serial_turn ())
++        {
++        }
++        void invoke (const result_t<T> &result) override
++        {
++            const auto ambient_guard = enter_ambient_context (ambient);
++            callback (result);
++        }
++        TCallback callback;
+         ambient_context_snapshot_t ambient;
+         std::shared_ptr<serial_turn_t> owner;
+     };
+@@ -587,7 +609,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+     bool complete (result_t<T> result)
+     {
+         std::shared_ptr<task_wait_registration_t> continuations;
+-        std::vector<callback_t> terminal_callbacks;
++        std::unique_ptr<callback_t> terminal_callbacks;
+         task_wait_registration_t::delivery_t delivery;
+         auto self = this->shared_from_this ();
+         {
+@@ -601,13 +623,14 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+             if (continuations)
+                 delivery = continuations->take_delivery ();
+             terminal_callbacks = std::move (_terminal_callbacks);
++            _terminal_callbacks_tail = nullptr;
+         }
+         _ready.notify_all ();
+         // Internal delivery defects terminate; the first result is already fixed.
+         [&] () noexcept {
+-            for (auto &callback : terminal_callbacks) {
+-                const auto ambient_guard = enter_ambient_context (callback.ambient);
+-                callback.invoke (*_result);
++            for (auto *callback = terminal_callbacks.get (); callback;
++                 callback = callback->next.get ()) {
++                callback->invoke (*_result);
+             }
+             while (continuations) {
+                 auto continuation = std::move (continuations);
+@@ -680,8 +703,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+         return *_result;
+     }
+ 
+-    void on_completed (std::function<void (const result_t<T> &)> callback,
+-                       task_scheduler_t scheduler = {})
++    template <typename TCallback>
++    void on_completed (TCallback callback, task_scheduler_t scheduler = {})
+     {
+         const auto self = this->shared_from_this ();
+         std::shared_ptr<task_wait_registration_t> registration;
+@@ -690,19 +713,42 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+             std::lock_guard lock (_mutex);
+             if (!_result) {
+                 owner_state = this->weak_from_this ();
+-                registration = std::make_shared<task_wait_registration_t> (
+-                  [weak = owner_state, callback = std::move (callback)] (
+-                    bool cancelled, const ambient_context_snapshot_t &ambient) {
+-                      const auto ambient_guard = enter_ambient_context (ambient);
+-                      if (cancelled) {
+-                          const auto failure = result_t<T>::failure (
+-                            framework_error_kind_t::shutting_down,
+-                            registered_execution_context_shutting_down_message);
+-                          callback (failure);
+-                      } else if (auto self = weak.lock ())
+-                          callback (*self->_result);
+-                  },
+-                  std::move (scheduler));
++                struct observer_t
++                {
++                    observer_t (std::weak_ptr<task_shared_state_t<T>> owner,
++                                TCallback callback,
++                                task_scheduler_t scheduler) :
++                        owner (std::move (owner)),
++                        callback (std::move (callback)),
++                        registration (
++                          [this] (bool cancelled, const ambient_context_snapshot_t &ambient) {
++                              auto owner = std::move (this->owner);
++                              auto reset_callback = [] (std::optional<TCallback> *callback) {
++                                  callback->reset ();
++                              };
++                              std::unique_ptr<std::optional<TCallback>, decltype (reset_callback)>
++                                callback_lifetime (&this->callback, reset_callback);
++                              const auto ambient_guard = enter_ambient_context (ambient);
++                              if (cancelled) {
++                                  const auto failure = result_t<T>::failure (
++                                    framework_error_kind_t::shutting_down,
++                                    registered_execution_context_shutting_down_message);
++                                  (*this->callback) (failure);
++                              } else if (auto self = owner.lock ())
++                                  (*this->callback) (*self->_result);
++                          },
++                          std::move (scheduler))
++                    {
++                    }
++                    std::weak_ptr<task_shared_state_t<T>> owner;
++                    std::optional<TCallback> callback;
++                    // Destroy the stop registration before its callable captures.
++                    task_wait_registration_t registration;
++                };
++                auto observer = std::make_shared<observer_t> (owner_state, std::move (callback),
++                                                              std::move (scheduler));
++                registration =
++                  std::shared_ptr<task_wait_registration_t> (observer, &observer->registration);
+                 append_continuation_unlocked (registration);
+             }
+         }
+@@ -711,7 +757,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+             return;
+         }
+         auto invoke = [self, callback = std::move (callback),
+-                       ambient = capture_ambient_context ()] () noexcept {
++                       ambient = capture_ambient_context ()] () mutable noexcept {
+             const auto ambient_guard = enter_ambient_context (ambient);
+             callback (*self->_result);
+         };
+@@ -723,14 +769,20 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+         }();
+     }
+ 
+-    void on_terminal (std::function<void (const result_t<T> &)> callback)
++    template <typename TCallback> void on_terminal (TCallback callback)
+     {
+         auto snapshot = capture_ambient_context ();
+         {
+             std::lock_guard lock (_mutex);
+             if (!_result) {
+-                _terminal_callbacks.push_back (callback_t{
+-                  std::move (callback), std::move (snapshot), capture_current_serial_turn ()});
++                auto terminal = std::make_unique<terminal_callback_t<TCallback>> (
++                  std::move (callback), std::move (snapshot));
++                auto *tail = terminal.get ();
++                if (_terminal_callbacks_tail)
++                    _terminal_callbacks_tail->next = std::move (terminal);
++                else
++                    _terminal_callbacks = std::move (terminal);
++                _terminal_callbacks_tail = tail;
+                 return;
+             }
+         }
+@@ -801,10 +853,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+     std::optional<result_t<T>> _result;
+     std::shared_ptr<task_wait_registration_t> _continuations_head;
+     task_wait_registration_t *_continuations_tail = nullptr;
+-    std::vector<callback_t> _terminal_callbacks;
++    std::unique_ptr<callback_t> _terminal_callbacks;
++    callback_t *_terminal_callbacks_tail = nullptr;
+ };
+ 
+-template <typename T> class application_task_shared_state_t final : public task_shared_state_t<T>
++template <typename T> class application_task_shared_state_t : public task_shared_state_t<T>
+ {
+   private:
+     void bind_wait_owner (const std::shared_ptr<task_wait_registration_t> &registration,
+@@ -958,6 +1011,8 @@ template <typename T> class task_state_t
+     mutable std::atomic<referenced_state_t *> _reference{nullptr};
+ };
+ 
++template <typename T> std::shared_ptr<task_completion_source_t<T>> make_task_completion_source ();
++
+ } // namespace detail
+ 
+ template <typename T> class task_completion_source_t
+@@ -978,11 +1033,33 @@ template <typename T> class task_completion_source_t
+     bool complete (result_t<T> result) { return _state->complete (std::move (result)); }
+ 
+   private:
++    template <typename U>
++    friend std::shared_ptr<task_completion_source_t<U>> detail::make_task_completion_source ();
++
++    // The shared-source allocation owns this wrapper and state. An empty-owner
++    // alias avoids an ownership cycle; task() acquires the state's strong owner.
++    explicit task_completion_source_t (detail::task_shared_state_t<T> *state) :
++        _state (std::shared_ptr<detail::task_shared_state_t<T>>{}, state)
++    {
++    }
+     std::shared_ptr<detail::task_shared_state_t<T>> _state;
+ };
+ 
+ namespace detail
+ {
++// The source wrapper has no independent lifetime data. Its task handles own
++// this same state through shared_from_this, including after the source is gone.
++template <typename T> std::shared_ptr<task_completion_source_t<T>> make_task_completion_source ()
++{
++    struct shared_source_t final : application_task_shared_state_t<T>
++    {
++        shared_source_t () : source (this) {}
++        task_completion_source_t<T> source;
++    };
++    auto storage = std::make_shared<shared_source_t> ();
++    return std::shared_ptr<task_completion_source_t<T>> (storage, &storage->source);
++}
++
+ 
+ struct task_result_access_t;
+ 
+@@ -1279,7 +1356,7 @@ template <> class task_t<void>
+ 
+ template <typename T> task_t<T> task_completion_source_t<T>::task () const
+ {
+-    return task_t<T> (_state);
++    return task_t<T> (_state->shared_from_this ());
+ }
+ 
+ namespace detail
+@@ -1298,9 +1375,9 @@ struct task_result_access_t
+ template <typename T, typename TCallback>
+ void observe_task_completion (task_t<T> &task, TCallback &&callback)
+ {
+-    task.shared_state ()->on_completed (
+-      std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)),
+-      task._resume_scheduler ? *task._resume_scheduler : task_scheduler_t{});
++    task.shared_state ()->on_completed (std::forward<TCallback> (callback),
++                                        task._resume_scheduler ? *task._resume_scheduler
++                                                               : task_scheduler_t{});
+ }
+ 
+ template <typename T, typename TCallback>
+@@ -1314,8 +1391,7 @@ void observe_task_terminal (task_t<T> &task, TCallback &&callback)
+             invoke (*ready);
+         }();
+     } else {
+-        task._state.shared_state ()->on_terminal (
+-          std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)));
++        task._state.shared_state ()->on_terminal (std::forward<TCallback> (callback));
+     }
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+index 001e5b7023..840b14fc6b 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+@@ -310,10 +310,10 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
+     return result;
+ }
+ 
+-void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
+-                                raw_message_t parts,
++void raw_route_port_t::request (std::span<const std::uint8_t> target_routing_id,
++                                raw_message_t &&parts,
+                                 std::chrono::milliseconds timeout,
+-                                std::function<void (result_t<raw_request_completion_t>)> completion,
++                                raw_request_callback_t completion,
+                                 runtime::mesh::service_liveness_registry_t::connection_t admission,
+                                 std::shared_ptr<task_completion_source_t<void>> admitted)
+ {
+@@ -340,10 +340,11 @@ void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
+                 return;
+             }
+             if (!admission && _request_receive_source)
+-                admission = _request_receive_source (target_routing_id);
+-            auto operation =
+-              std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
+-                .message (materialize_binding_part (std::move (parts[0])));
++                admission = _request_receive_source (
++                  raw_bytes_t (target_routing_id.begin (), target_routing_id.end ()));
++            auto operation = std::move (_socket->request (zlink::routing_id_t::from (
++                                          target_routing_id.data (), target_routing_id.size ())))
++                               .message (materialize_binding_part (std::move (parts[0])));
+             for (std::size_t index = 1; index < parts.size (); ++index) {
+                 operation = std::move (operation).message (
+                   materialize_binding_part (std::move (parts[index])));
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
+index 4456633c6a..3d678c6cff 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
+@@ -8,6 +8,10 @@
+ #include "runtime/mesh/service_liveness_registry.hpp"
+ 
+ #include <chrono>
++#include <cstddef>
++#include <new>
++#include <type_traits>
++#include <utility>
+ #include <cstdint>
+ #include <functional>
+ #include <memory>
+@@ -91,6 +95,106 @@ struct raw_request_completion_t
+     std::optional<raw_request_failure_t> failure;
+ };
+ 
++// Raw request callbacks are a closed set of submit/terminal captures. Keep them
++// in the existing observer frame; oversize captures fail at compile time.
++class raw_request_callback_t
++{
++    using result_type = result_t<raw_request_completion_t>;
++    struct operations_t
++    {
++        void (*invoke) (void *, result_type);
++        void (*copy) (void *, const void *);
++        void (*move) (void *, void *) noexcept;
++        void (*destroy) (void *) noexcept;
++    };
++
++  public:
++    raw_request_callback_t () = default;
++    raw_request_callback_t (std::nullptr_t) noexcept {}
++    template <typename TCallback>
++        requires (!std::is_same_v<std::decay_t<TCallback>, raw_request_callback_t>)
++    raw_request_callback_t (TCallback &&callback)
++    {
++        using callback_t = std::decay_t<TCallback>;
++        static_assert (sizeof (callback_t) <= sizeof (_storage));
++        static_assert (alignof (callback_t) <= alignof (std::max_align_t));
++        static_assert (std::is_nothrow_move_constructible_v<callback_t>);
++        static_assert (std::is_copy_constructible_v<callback_t>);
++        static_assert (std::is_invocable_r_v<void, callback_t &, result_type>);
++        if constexpr (std::is_same_v<callback_t, std::function<void (result_type)>>
++                      || std::is_pointer_v<callback_t> || std::is_member_pointer_v<callback_t>) {
++            if (!callback)
++                return;
++        }
++        static constexpr operations_t operations{
++          [] (void *data, result_type result) {
++              std::invoke (*std::launder (reinterpret_cast<callback_t *> (data)),
++                           std::move (result));
++          },
++          [] (void *destination, const void *source) {
++              std::construct_at (reinterpret_cast<callback_t *> (destination),
++                                 *std::launder (reinterpret_cast<const callback_t *> (source)));
++          },
++          [] (void *destination, void *source) noexcept {
++              auto *original = std::launder (reinterpret_cast<callback_t *> (source));
++              std::construct_at (reinterpret_cast<callback_t *> (destination),
++                                 std::move (*original));
++              std::destroy_at (original);
++          },
++          [] (void *data) noexcept {
++              std::destroy_at (std::launder (reinterpret_cast<callback_t *> (data)));
++          }};
++        std::construct_at (reinterpret_cast<callback_t *> (_storage),
++                           std::forward<TCallback> (callback));
++        _operations = &operations;
++    }
++    raw_request_callback_t (const raw_request_callback_t &other)
++    {
++        if (other._operations) {
++            other._operations->copy (_storage, other._storage);
++            _operations = other._operations;
++        }
++    }
++    raw_request_callback_t (raw_request_callback_t &&other) noexcept { *this = std::move (other); }
++    raw_request_callback_t &operator= (const raw_request_callback_t &other)
++    {
++        if (this != &other) {
++            raw_request_callback_t copy (other);
++            *this = std::move (copy);
++        }
++        return *this;
++    }
++    raw_request_callback_t &operator= (raw_request_callback_t &&other) noexcept
++    {
++        if (this != &other) {
++            reset ();
++            if (other._operations) {
++                const auto *operations = std::exchange (other._operations, nullptr);
++                operations->move (_storage, other._storage);
++                _operations = operations;
++            }
++        }
++        return *this;
++    }
++    ~raw_request_callback_t () { reset (); }
++    explicit operator bool () const noexcept { return _operations != nullptr; }
++    void operator() (result_type result) const
++    {
++        if (!_operations)
++            throw std::bad_function_call ();
++        _operations->invoke (_storage, std::move (result));
++    }
++
++  private:
++    void reset () noexcept
++    {
++        if (const auto *operations = std::exchange (_operations, nullptr))
++            operations->destroy (_storage);
++    }
++    alignas (std::max_align_t) mutable std::byte _storage[128];
++    const operations_t *_operations = nullptr;
++};
++
+ // A send that the binding accepts immediately has its terminal admission
+ // result now.  Only a DONTWAIT rejection needs the binding-owned completion
+ // task that retries on writable readiness.
+@@ -130,10 +234,10 @@ class raw_route_port_t
+     {
+         _request_receive_source = std::move (source);
+     }
+-    void request (const raw_bytes_t &target_routing_id,
+-                  raw_message_t parts,
++    void request (std::span<const std::uint8_t> target_routing_id,
++                  raw_message_t &&parts,
+                   std::chrono::milliseconds timeout,
+-                  std::function<void (result_t<raw_request_completion_t>)> completion,
++                  raw_request_callback_t completion,
+                   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+                   std::shared_ptr<task_completion_source_t<void>> admitted = {});
+     task_t<raw_request_completion_t>
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+index e4bb32c668..e1c423cc30 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+@@ -1738,8 +1738,7 @@ void route_client_t::submit_request_reply_message_erased (
+   std::string router_channel_id,
+   zlink::routing_id_t target_node_rid,
+   std::string packet_name,
+-  std::type_index request_type,
+-  payload_encoder_t encode_payload,
++  node_payload_encoder_t encode_payload,
+   std::chrono::milliseconds timeout,
+   std::map<std::string, std::string> metadata,
+   detail::request_receiver_t<encoded_payload_t> receiver)
+@@ -1770,50 +1769,18 @@ void route_client_t::submit_request_reply_message_erased (
+                                      "route channel or MeshNode '" + router_channel_id
+                                        + "' is not registered");
+     }
+-    // Selected transports may borrow this stable target until physical completion.
+-    auto target_owner = std::make_shared<const zlink::routing_id_t> (std::move (target_node_rid));
+-    auto effective_timeout = timeout;
+-    if (route) {
+-        auto &runtime = **route;
+-        effective_timeout = timeout > std::chrono::milliseconds::zero ()
+-                              ? timeout
+-                              : runtime.default_request_timeout ();
+-    } else if (effective_timeout <= std::chrono::milliseconds::zero ()) {
+-        effective_timeout = state->runtime->default_request_timeout;
+-    }
+-    const auto deadline = request_started + effective_timeout;
++    using reply_parts_t = runtime::messaging::message_parts_t;
++    using node_reply_t = result_t<reply_parts_t>;
++    struct request_decoder_t
+     {
+-        runtime::messaging::client_call_codec_t codec;
+-        auto header = codec.create_envelope (
+-          runtime::messaging::message_kind_t::request, router_channel_id, packet_name,
+-          runtime::messaging::remaining_request_timeout (deadline));
+-        header.metadata = std::move (metadata);
+-        if (detail::message_flow_tracer_t (state->runtime->dispatch)
+-              .enabled_for (message_flow_outcome_t::sent)) {
+-            detail::message_flow_tracer_t (state->runtime->dispatch)
+-              .trace (message_flow_outcome_t::sent, [&] {
+-                  return message_flow_event_t{message_flow_outcome_t::sent,
+-                                              dispatch_error_surface_t::route_mesh_channel,
+-                                              dispatch_message_kind_t::request,
+-                                              packet_name,
+-                                              router_channel_id,
+-                                              std::nullopt,
+-                                              header.correlation_id,
+-                                              target_owner->to_string (),
+-                                              std::nullopt,
+-                                              std::nullopt,
+-                                              std::nullopt};
+-              });
+-        }
+-        parts =
+-          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
+-    }
+-    const auto ambient_guard = detail::enter_ambient_context (ambient_context);
+-    try {
+-        auto decode = [state, transport = transport.value (), packet_name = std::move (packet_name),
+-                       router_channel_id = std::move (router_channel_id),
+-                       target_owner] (const result_t<runtime::messaging::message_parts_t> &reply)
+-          -> result_t<encoded_payload_t> {
++        std::shared_ptr<detail::route_client_state_t> state;
++        detail::node_transport_t transport;
++        zlink::routing_id_t target;
++        std::string packet_name;
++        std::string router_channel_id;
++
++        result_t<encoded_payload_t> decode (const result_t<reply_parts_t> &reply)
++        {
+             // Retain the selected callable and its borrowed target until terminal.
+             (void) transport;
+             try {
+@@ -1851,7 +1818,7 @@ void route_client_t::submit_request_reply_message_erased (
+                                                       router_channel_id,
+                                                       std::nullopt,
+                                                       reply_header.value ().correlation_id,
+-                                                      target_owner->to_string (),
++                                                      target.to_string (),
+                                                       std::nullopt,
+                                                       std::nullopt,
+                                                       std::nullopt};
+@@ -1866,21 +1833,87 @@ void route_client_t::submit_request_reply_message_erased (
+                 return result_t<encoded_payload_t>::failure (
+                   framework_error_kind_t::internal_failure, error.what ());
+             }
+-        };
++        }
++
++        result_t<encoded_payload_t> operator() (const result_t<reply_parts_t> &reply)
++        {
++            return decode (reply);
++        }
++        result_t<encoded_payload_t> operator() (const result_t<node_reply_t> &reply)
++        {
++            return decode (reply.value ());
++        }
++    };
++    request_decoder_t decode{state, transport.value (), std::move (target_node_rid),
++                             std::move (packet_name), std::move (router_channel_id)};
++
++    auto effective_timeout = timeout;
++    if (route) {
++        auto &runtime = **route;
++        effective_timeout = timeout > std::chrono::milliseconds::zero ()
++                              ? timeout
++                              : runtime.default_request_timeout ();
++    } else if (effective_timeout <= std::chrono::milliseconds::zero ()) {
++        effective_timeout = state->runtime->default_request_timeout;
++    }
++    const auto deadline = request_started + effective_timeout;
++    {
++        runtime::messaging::client_call_codec_t codec;
++        auto header = codec.create_envelope (
++          runtime::messaging::message_kind_t::request, decode.router_channel_id, decode.packet_name,
++          runtime::messaging::remaining_request_timeout (deadline), std::nullopt, std::nullopt, {});
++        header.metadata = std::move (metadata);
++        if (detail::message_flow_tracer_t (state->runtime->dispatch)
++              .enabled_for (message_flow_outcome_t::sent)) {
++            detail::message_flow_tracer_t (state->runtime->dispatch)
++              .trace (message_flow_outcome_t::sent, [&] {
++                  return message_flow_event_t{message_flow_outcome_t::sent,
++                                              dispatch_error_surface_t::route_mesh_channel,
++                                              dispatch_message_kind_t::request,
++                                              decode.packet_name,
++                                              decode.router_channel_id,
++                                              std::nullopt,
++                                              header.correlation_id,
++                                              decode.target.to_string (),
++                                              std::nullopt,
++                                              std::nullopt,
++                                              std::nullopt};
++              });
++        }
++        auto [payload, content_type] = encode_payload (*state->serializers);
++        parts =
++          codec.encode_payload_parts (std::move (header), std::move (payload), content_type.get ());
++    }
++    const auto ambient_guard = detail::enter_ambient_context (ambient_context);
++    try {
+         if (mesh) {
+             const auto remaining = runtime::messaging::remaining_request_timeout (deadline);
+             if (remaining <= std::chrono::milliseconds::zero ())
+                 throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                              "node request deadline elapsed before submission");
+-            (*mesh)->request (*target_owner, std::move (parts), remaining,
+-                              receiver.project<result_t<runtime::messaging::message_parts_t>> (
+-                                [decode = std::move (decode)] (const auto &terminal) {
+-                                    return decode (terminal.value ());
+-                                }));
++            using projection_t =
++              detail::request_receiver_t<encoded_payload_t>::projection_t<node_reply_t,
++                                                                          request_decoder_t>;
++            auto context = std::make_shared<projection_t> (
++              projection_t{std::move (receiver.complete), std::move (decode)});
++            detail::request_receiver_t<node_reply_t> physical{
++              std::move (receiver.admitted),
++              detail::request_callback_t<const result_t<node_reply_t> &>::from_shared (context),
++              std::move (receiver.fail_public)};
++            (*mesh)->request (context->project.target, std::move (parts), remaining,
++                              std::move (physical));
+         } else {
+-            (*route)->request_reply_parts (
+-              *target_owner, std::nullopt, std::move (parts), deadline,
+-              receiver.project<runtime::messaging::message_parts_t> (std::move (decode)));
++            using projection_t =
++              detail::request_receiver_t<encoded_payload_t>::projection_t<reply_parts_t,
++                                                                          request_decoder_t>;
++            auto context = std::make_shared<projection_t> (
++              projection_t{std::move (receiver.complete), std::move (decode)});
++            detail::request_receiver_t<reply_parts_t> physical{
++              std::move (receiver.admitted),
++              detail::request_callback_t<const result_t<reply_parts_t> &>::from_shared (context),
++              std::move (receiver.fail_public)};
++            (*route)->request_reply_parts (context->project.target, std::nullopt, std::move (parts),
++                                           deadline, std::move (physical));
+         }
+     }
+     catch (const framework_exception_t &) {
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
+index 9f9c187ef1..beed74eca9 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
+@@ -4170,7 +4170,8 @@ mesh_node_runtime_t::classify_node_target_from_topology (const zlink::routing_id
+                                                          bool &unknown) const
+ {
+     using node_target_t = runtime::mesh::raw_mesh_node_owner_t::node_target_t;
+-    const auto classified = _node->transport ().classify_node_target (target.to_bytes ());
++    const auto classified =
++      _node->transport ().classify_node_target ({target.data (), target.size ()});
+     unknown = classified == node_target_t::unknown;
+     if (classified == node_target_t::object_client)
+         return zlink::submit_result_t::not_found;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+index 95cb0a98f8..9ca42a5280 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -245,14 +245,13 @@ request_admission_completion (foundation::operation_registry_t::callback_t callb
+     };
+ }
+ 
+-bool start_admitted_request (
+-  const std::shared_ptr<detail::backend::raw_route_port_t> &port,
+-  const admitted_peer_t *peer,
+-  const std::vector<std::uint8_t> &target_routing_id,
+-  detail::backend::raw_message_t &request_parts,
+-  foundation::operation_registry_t::clock_t::time_point deadline,
+-  const std::shared_ptr<task_completion_source_t<void>> &admitted,
+-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> completion)
++bool start_admitted_request (const std::shared_ptr<detail::backend::raw_route_port_t> &port,
++                             const admitted_peer_t *peer,
++                             std::span<const std::uint8_t> target_routing_id,
++                             detail::backend::raw_message_t &request_parts,
++                             foundation::operation_registry_t::clock_t::time_point deadline,
++                             const std::shared_ptr<task_completion_source_t<void>> &admitted,
++                             detail::backend::raw_request_callback_t completion)
+ {
+     if (!peer || !peer->ready)
+         return false;
+@@ -305,7 +304,7 @@ task_t<void> run_request_admission (
+   foundation::operation_registry_t::clock_t::time_point deadline,
+   task_t<TTerminal> terminal,
+   std::shared_ptr<task_completion_source_t<void>> admitted,
+-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {},
++  detail::backend::raw_request_callback_t observe = {},
+   raw_mesh_node_owner_t::physical_receiver_t receiver = {})
+ {
+     struct wait_subscriptions_t
+@@ -408,7 +407,7 @@ task_t<bool> submit_registered_request (
+   foundation::operation_registry_t::clock_t::time_point deadline,
+   task_t<TTerminal> terminal,
+   std::shared_ptr<task_completion_source_t<void>> admitted = {},
+-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {},
++  detail::backend::raw_request_callback_t observe = {},
+   raw_mesh_node_owner_t::physical_receiver_t receiver = {})
+ {
+     if (!port) {
+@@ -451,12 +450,6 @@ catch (...) {
+ 
+ } // namespace
+ 
+-bool raw_mesh_byte_vector_less_t::operator() (const std::vector<std::uint8_t> &left,
+-                                              const std::vector<std::uint8_t> &right) const noexcept
+-{
+-    return std::lexicographical_compare (left.begin (), left.end (), right.begin (), right.end ());
+-}
+-
+ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
+                                               std::shared_ptr<zlink::context_t> context) :
+     _options (std::move (options)),
+@@ -1351,7 +1344,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
+ }
+ 
+ task_t<bool>
+-raw_mesh_node_owner_t::request_to_node (const std::vector<std::uint8_t> &target_routing_id,
++raw_mesh_node_owner_t::request_to_node (std::span<const std::uint8_t> target_routing_id,
+                                         const protocol::application_payload_t &application_payload,
+                                         std::chrono::milliseconds timeout,
+                                         foundation::operation_registry_t::callback_t callback,
+@@ -1524,7 +1517,7 @@ service_topology_registry_t::peer_observer_t raw_mesh_node_owner_t::observe_requ
+ }
+ 
+ task_t<bool> raw_mesh_node_owner_t::request_with_header (
+-  const std::vector<std::uint8_t> &target_routing_id,
++  std::span<const std::uint8_t> target_routing_id,
+   const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
+   const protocol::application_payload_t &application_payload,
+   foundation::operation_registry_t::clock_t::time_point deadline,
+@@ -1566,7 +1559,10 @@ try {
+         value.correlation = take_reply_route_id_locked (requested_correlation);
+         value.operation =
+           operation_id (_options.descriptor.lifecycle_generation, value.correlation);
+-        detail::backend::raw_message_t wire;
++        auto clear_wire = [] (detail::backend::raw_message_t *wire) { wire->clear (); };
++        std::unique_ptr<detail::backend::raw_message_t, decltype (clear_wire)> wire_storage (
++          &_request_wire, clear_wire);
++        auto &wire = *wire_storage;
+         wire.reserve (2);
+         wire.push_back (header (value.correlation));
+         wire.push_back (std::move (encoded_payload));
+@@ -1575,7 +1571,9 @@ try {
+         value.registered = _operations->register_operation (
+           value.operation, deadline,
+           request_admission_completion (std::move (callback), value.admitted),
+-          peer && peer->ready ? std::vector<std::uint8_t>{} : target_routing_id,
++          peer && peer->ready
++            ? std::vector<std::uint8_t>{}
++            : std::vector<std::uint8_t> (target_routing_id.begin (), target_routing_id.end ()),
+           std::move (request_metric), std::move (request), wait_owner);
+         if (value.registered) {
+             try {
+@@ -1586,10 +1584,13 @@ try {
+                 };
+                 if (!start_admitted_request (port, peer.get (), target_routing_id, wire, deadline,
+                                              value.admitted, finish)) {
++                    std::vector<std::uint8_t> target_owner (target_routing_id.begin (),
++                                                            target_routing_id.end ());
++                    auto peer_observer = observe_request_peer_on_lane (target_owner);
+                     (void) submit_registered_request (
+-                      port, observe_request_peer_on_lane (target_routing_id), _operations,
+-                      value.operation, value.correlation, target_routing_id, std::move (wire), {},
+-                      deadline, value.admitted->task (), value.admitted, std::move (finish),
++                      port, std::move (peer_observer), _operations, value.operation,
++                      value.correlation, std::move (target_owner), std::move (wire), {}, deadline,
++                      value.admitted->task (), value.admitted, std::move (finish),
+                       std::move (receiver));
+                 }
+             }
+@@ -4331,8 +4332,8 @@ bool raw_mesh_node_owner_t::route_current_locked (const std::vector<std::uint8_t
+     return route != _routes.end () && route->second.generation == route_generation;
+ }
+ 
+-raw_mesh_node_owner_t::node_target_t raw_mesh_node_owner_t::classify_node_target (
+-  const std::vector<std::uint8_t> &target_routing_id) const
++raw_mesh_node_owner_t::node_target_t
++raw_mesh_node_owner_t::classify_node_target (std::span<const std::uint8_t> target_routing_id) const
+ {
+     // An Object Client is never a Node direct application target, even when
+     // a channel connection admitted it (02-channel-messaging.ko.md section 8).
+@@ -4341,7 +4342,7 @@ raw_mesh_node_owner_t::node_target_t raw_mesh_node_owner_t::classify_node_target
+                  ? node_target_t::object_client
+                  : node_target_t::application;
+     for (const auto &descriptor : _topology.not_required_peers ()) {
+-        if (descriptor.node_routing_id == target_routing_id)
++        if (std::ranges::equal (descriptor.node_routing_id, target_routing_id))
+             return node_target_t::object_client;
+     }
+     return node_target_t::unknown;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+index 9c2f6a78ab..bbe925ab7c 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+@@ -86,12 +86,6 @@ struct raw_mesh_node_options_t
+     metric_provider_t metric_provider = noop_metric_provider ();
+ };
+ 
+-struct raw_mesh_byte_vector_less_t
+-{
+-    bool operator() (const std::vector<std::uint8_t> &left,
+-                     const std::vector<std::uint8_t> &right) const noexcept;
+-};
+-
+ /* Outcome of an exact-identity-fenced relocationPrepare(40) round trip
+  * (spec 15 §4.2 / spec 28). Exactly one of ready/failed is set for a usable
+  * reply whose identity fields (relocation, target_attempt_generation,
+@@ -237,7 +231,7 @@ class raw_mesh_node_owner_t
+                             const std::string &source_spot_id,
+                             const protocol::application_payload_t &application_payload,
+                             const std::vector<std::uint8_t> &metadata);
+-    task_t<bool> request_to_node (const std::vector<std::uint8_t> &target_routing_id,
++    task_t<bool> request_to_node (std::span<const std::uint8_t> target_routing_id,
+                                   const protocol::application_payload_t &application_payload,
+                                   std::chrono::milliseconds timeout,
+                                   foundation::operation_registry_t::callback_t callback,
+@@ -508,7 +502,7 @@ class raw_mesh_node_owner_t
+         object_client,
+         unknown
+     };
+-    node_target_t classify_node_target (const std::vector<std::uint8_t> &target_routing_id) const;
++    node_target_t classify_node_target (std::span<const std::uint8_t> target_routing_id) const;
+     // Selected Core route generation and remote ADMIT readiness.
+     std::pair<std::uint64_t, bool>
+     peer_route (const std::vector<std::uint8_t> &rid,
+@@ -610,7 +604,7 @@ class raw_mesh_node_owner_t
+     service_topology_registry_t::peer_observer_t
+     observe_request_peer_on_lane (const std::vector<std::uint8_t> &target_routing_id) const;
+     task_t<bool> request_with_header (
+-      const std::vector<std::uint8_t> &target_routing_id,
++      std::span<const std::uint8_t> target_routing_id,
+       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
+       const protocol::application_payload_t &application_payload,
+       foundation::operation_registry_t::clock_t::time_point deadline,
+@@ -687,6 +681,8 @@ class raw_mesh_node_owner_t
+     static void publish_peer_metrics (opentelemetry::metrics::ObserverResult result, void *state);
+     std::atomic_size_t _last_pump_bytes{0};
+     std::shared_ptr<foundation::operation_registry_t> _operations;
++    // The owner lane clears consumed frames while retaining the two-part vector capacity.
++    detail::backend::raw_message_t _request_wire;
+     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
+       _expected_peers;
+     peer_reconcile_t _peer_reconcile;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_topology_registry.cpp b/framework/languages/cpp/framework/src/runtime/mesh/service_topology_registry.cpp
+index 61899b4674..47995b54f4 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_topology_registry.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_topology_registry.cpp
+@@ -130,12 +130,6 @@ service_topology_registry_t::service_topology_registry_t (
+           "zlink.mesh_node.channel.selection_failures", "", "{failure}");
+ }
+ 
+-bool service_topology_registry_t::byte_vector_less_t::operator() (
+-  const std::vector<std::uint8_t> &left, const std::vector<std::uint8_t> &right) const noexcept
+-{
+-    return std::lexicographical_compare (left.begin (), left.end (), right.begin (), right.end ());
+-}
+-
+ bool service_topology_registry_t::valid_descriptor (const service_node_descriptor_t &descriptor)
+ {
+     return !descriptor.mesh_name.empty () && !descriptor.node_routing_id.empty ()
+@@ -518,7 +512,7 @@ service_topology_registry_t::not_required_peers_on_lane () const
+ }
+ 
+ std::shared_ptr<const admitted_peer_t>
+-service_topology_registry_t::peer (const std::vector<std::uint8_t> &node_routing_id) const
++service_topology_registry_t::peer (std::span<const std::uint8_t> node_routing_id) const
+ {
+     auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+     const auto found = topology->peers.find (node_routing_id);
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_topology_registry.hpp b/framework/languages/cpp/framework/src/runtime/mesh/service_topology_registry.hpp
+index e629bf66bd..6e838d019d 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_topology_registry.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_topology_registry.hpp
+@@ -13,6 +13,7 @@
+ #include <opentelemetry/metrics/async_instruments.h>
+ #include <opentelemetry/metrics/sync_instruments.h>
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <memory>
+ #include <cstdint>
+@@ -33,6 +34,17 @@ inline constexpr char legacy_protocol_capability[] = "framework-service-v12";
+ 
+ std::uint64_t sum_service_weights (std::span<const int> weights);
+ 
++struct raw_mesh_byte_vector_less_t
++{
++    using is_transparent = void;
++    bool operator() (std::span<const std::uint8_t> left,
++                     std::span<const std::uint8_t> right) const noexcept
++    {
++        return std::lexicographical_compare (left.begin (), left.end (), right.begin (),
++                                             right.end ());
++    }
++};
++
+ enum class service_node_state_t
+ {
+     preparing,
+@@ -169,7 +181,7 @@ class service_topology_registry_t
+     // The admitted peer inside the current immutable topology snapshot; the
+     // pointer keeps that snapshot alive and is null when the peer is absent.
+     std::shared_ptr<const admitted_peer_t>
+-    peer (const std::vector<std::uint8_t> &node_routing_id) const;
++    peer (std::span<const std::uint8_t> node_routing_id) const;
+     result_t<std::vector<std::uint8_t>>
+     select (const std::string &channel_name,
+             service_liveness_registry_t::connection_t *admission = nullptr);
+@@ -192,12 +204,6 @@ class service_topology_registry_t
+     std::function<void ()> publish_local_on_lane (service_node_descriptor_t descriptor);
+     std::vector<admitted_peer_t> peers_on_lane () const;
+     std::vector<service_node_descriptor_t> not_required_peers_on_lane () const;
+-    struct byte_vector_less_t
+-    {
+-        bool operator() (const std::vector<std::uint8_t> &left,
+-                         const std::vector<std::uint8_t> &right) const noexcept;
+-    };
+-
+     static bool selectable (const service_node_descriptor_t &descriptor,
+                             const std::string &channel_name);
+     peer_admission_result_t admit_impl (service_node_descriptor_t descriptor,
+@@ -218,7 +224,7 @@ class service_topology_registry_t
+         std::vector<zlink::connection_attempt_t> attempts;
+         std::shared_ptr<task_completion_source_t<void>> changed =
+           std::make_shared<task_completion_source_t<void>> ();
+-        std::map<std::vector<std::uint8_t>, admitted_peer_t, byte_vector_less_t> peers;
++        std::map<std::vector<std::uint8_t>, admitted_peer_t, raw_mesh_byte_vector_less_t> peers;
+     };
+ 
+     // The registry publishes its sole descriptor/peer state at mutation turns.
+@@ -226,14 +232,14 @@ class service_topology_registry_t
+     metric_provider_t _metric_provider;
+     std::shared_ptr<std::shared_ptr<const topology_state_t>> _topology;
+     service_liveness_registry_t *const _liveness_owner;
+-    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>
++    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
+       _not_required_peers;
+     struct selection_state_t
+     {
+         const char *unavailable_reason = "not_ready";
+         std::uint64_t total_weight = 0;
+-        std::map<std::vector<std::uint8_t>, std::uint64_t, byte_vector_less_t> weights;
+-        std::map<std::vector<std::uint8_t>, std::int64_t, byte_vector_less_t> cumulative;
++        std::map<std::vector<std::uint8_t>, std::uint64_t, raw_mesh_byte_vector_less_t> weights;
++        std::map<std::vector<std::uint8_t>, std::int64_t, raw_mesh_byte_vector_less_t> cumulative;
+         std::vector<std::pair<std::vector<std::uint8_t>, service_liveness_registry_t::connection_t>>
+           ordered_node_ids;
+         std::vector<std::uint64_t> ordered_weights;
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+index 6cee8be5fd..de481abd77 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+@@ -45,6 +45,14 @@ std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
+ 
+ } // namespace
+ 
++message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header_t &header,
++                                                           encoded_payload_t payload,
++                                                           const std::string &content_type) const
++{
++    auto body = detail::encoded_payload_to_raw (std::move (payload));
++    return message_parts_t (_codec.encode_header (header, content_type), std::move (body));
++}
++
+ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
+                                                         std::string channel_name,
+                                                         std::string message_name,
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+index 129b27dcb4..c69630550a 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+@@ -32,10 +32,13 @@ class client_call_codec_t
+                                           serialized_payload_t serialized) const
+     {
+         header.content_type = std::move (serialized.content_type);
+-        return _codec.encode_raw_body_parts (
+-          header, detail::encoded_payload_to_raw (std::move (serialized.payload)));
++        return encode_payload_parts (header, std::move (serialized.payload), header.content_type);
+     }
+ 
++    message_parts_t encode_payload_parts (const envelope_header_t &header,
++                                          encoded_payload_t payload,
++                                          const std::string &content_type) const;
++
+     template <typename TEncodePayload>
+     message_parts_t encode_node_send_parts (const std::string &channel_name,
+                                             const std::string &packet_name,
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+index e9d8fb81f8..15e6867616 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+@@ -122,6 +122,7 @@ class envelope_codec_t
+     result_t<zlink::message_t> decode_body (const message_parts_t &parts) const;
+ 
+   private:
++    friend class client_call_codec_t;
+     zlink::message_t encode_header (const envelope_header_t &header,
+                                     const std::string &content_type) const;
+ };
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+index c76c10624f..b19f5cc822 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+@@ -376,8 +376,10 @@ std::vector<std::uint8_t> encode_node_request_header (std::uint64_t correlation)
+     if (correlation == 0) {
+         throw service_wire_error_t ("request correlation must be nonzero");
+     }
+-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
+-                                     static_cast<std::uint8_t> (command::nodeRequest), 0};
++    std::vector<std::uint8_t> result;
++    result.reserve (prefix_size + 8);
++    result.insert (result.end (), {magic[0], magic[1], wire_major,
++                                   static_cast<std::uint8_t> (command::nodeRequest), 0});
+     append_u64 (result, correlation);
+     return result;
+ }
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index c23cb8cad1..eb9aa57181 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -3260,11 +3260,11 @@ public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
+                                         std::shared_ptr<task_completion_source_t<void>> admitted)
+ try {
+     const auto host = shared_from_this ();
+-    auto target_bytes = target.to_bytes ();
++    const std::span<const std::uint8_t> target_bytes (target.data (), target.size ());
+     auto accepted =
+       _transport->request_to_node (target_bytes, encode_application (std::move (parts)), timeout,
+                                    std::move (completion), {}, std::move (admitted));
+-    auto classify = [host, target_bytes = std::move (target_bytes)] (const result_t<bool> &result) {
++    auto classify = [host, target] (const result_t<bool> &result) {
+         if (!result)
+             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
+         const auto accepted = result.value ();
+@@ -3285,7 +3285,7 @@ try {
+             //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
+             //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
+             //  RequestResult.NotFound).
+-            if (!host->_transport->topology ().peer (target_bytes))
++            if (!host->_transport->topology ().peer ({target.data (), target.size ()}))
+                 return result_t<zlink::submit_result_t>::success (
+                   zlink::submit_result_t::not_found);
+         }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
+index 2b4ae2827f..a6919849e6 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
+@@ -12,6 +12,7 @@
+ 
+ #include <gtest/gtest.h>
+ #include <zlink/Contracts/Core/context.hpp>
++#include <array>
+ #include <atomic>
+ #include <future>
+ 
+@@ -31,8 +32,9 @@ struct raw_mesh_node_owner_test_access_t
+         expected.node_routing_id = {'n'};
+         expected.advertised_endpoint = "tcp://127.0.0.1:1";
+         owner._expected_peers.emplace (expected.node_routing_id, std::move (expected));
++        const std::array<std::uint8_t, 1> target{'n'};
+         return owner.request_with_header (
+-          {'n'},
++          target,
+           [] (std::uint64_t correlation) {
+               return protocol::encode_actor_message_header (protocol::command::actorRequest, {},
+                                                             {"actor", 3, {'n'}, 5, 7, 11},
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
+index 66ae2d12ea..4e36163419 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
+@@ -30,6 +30,7 @@
+ #include "runtime_context_hooks_environment.hpp"
+ 
+ #include <algorithm>
++#include <array>
+ #include <atomic>
+ #include <condition_variable>
+ #include <future>
+@@ -1423,7 +1424,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ColdSendUsesServiceSendAdmissionBefo
+     target.start ();
+     source.start ();
+     ASSERT_TRUE (source.connect_peer (target.endpoint ()));
+-    ASSERT_FALSE (source.topology ().peer ({1}));
++    ASSERT_FALSE (source.topology ().peer (std::array<std::uint8_t, 1>{1}));
+     rt::protocol::application_payload_t payload{"probe", "application/json", {1}};
+     EXPECT_FALSE (source.send_to_node ({1}, payload).result ().value ());
+     rt::protocol::instance_spot_activation_header_t command{
+@@ -1454,7 +1455,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ColdSendUsesServiceSendAdmissionBefo
+     ASSERT_TRUE (admitted);
+     ASSERT_TRUE (*admitted);
+     EXPECT_FALSE (admitted->value ());
+-    EXPECT_FALSE (source.topology ().peer ({1}));
++    EXPECT_FALSE (source.topology ().peer (std::array<std::uint8_t, 1>{1}));
+     source.close ();
+     target.close ();
+ }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp
+index aa77a4608c..ccb9213172 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #include "runtime/mesh/raw_mesh_node_owner.hpp"
+ 
++#include <array>
+ #include <atomic>
+ #include <cassert>
+ #include <cstdlib>
+@@ -103,7 +104,7 @@ void verify_restart (bool sealed, bool draining)
+         source.publish_draining ().result ().value ();
+         until (
+           [&] {
+-              return target->topology ().peer ({'a'})->descriptor.state
++              return target->topology ().peer (std::array<std::uint8_t, 1>{'a'})->descriptor.state
+                      == mesh::service_node_state_t::draining;
+           },
+           [&] { pump (*target); });
+@@ -146,7 +147,8 @@ void verify_restart (bool sealed, bool draining)
+               pump (source);
+               pump (*target);
+           });
+-        assert (target->topology ().peer ({'a'})->descriptor.state == expected_state);
++        assert (target->topology ().peer (std::array<std::uint8_t, 1>{'a'})->descriptor.state
++                == expected_state);
+         assert (source.topology ().local_descriptor ().state == expected_state);
+     }
+     const auto close_started = std::chrono::steady_clock::now ();
+@@ -167,7 +169,7 @@ void verify_inbound_hello (bool sealed)
+     std::vector<bool> target_readiness;
+     target.topology ().set_change_handler ([&] {
+         ++target_changes;
+-        const auto peer = target.topology ().peer ({'g'});
++        const auto peer = target.topology ().peer (std::array<std::uint8_t, 1>{'g'});
+         assert (peer);
+         target_readiness.push_back (peer->ready);
+         // HELLO records admission before its ADMIT is submitted; remote ADMIT
+@@ -178,8 +180,8 @@ void verify_inbound_hello (bool sealed)
+         connect (source, target);
+         assert (target_changes == 2);
+         assert ((target_readiness == std::vector<bool>{false, true}));
+-        assert (target.topology ().peer ({'g'}));
+-        assert (source.topology ().peer ({'h'}));
++        assert (target.topology ().peer (std::array<std::uint8_t, 1>{'g'}));
++        assert (source.topology ().peer (std::array<std::uint8_t, 1>{'h'}));
+     } else {
+         assert (source.connect_peer (target.endpoint (), target.topology ().local_descriptor ()));
+         bool hello_received = false;
+@@ -220,26 +222,26 @@ void verify_admitted_peer_update_after_seal ()
+     source.start ();
+     target.start ();
+     connect (source, target);
+-    const auto admitted = source.topology ().peer ({'j'});
++    const auto admitted = source.topology ().peer (std::array<std::uint8_t, 1>{'j'});
+     seal->store (true, std::memory_order_release);
+     source.publish_draining ().result ().value ();
+     until (
+       [&] {
+-          return target.topology ().peer ({'i'})->descriptor
++          return target.topology ().peer (std::array<std::uint8_t, 1>{'i'})->descriptor
+                  == source.topology ().local_descriptor ();
+       },
+       [&] { pump (target); });
+-    assert (target.topology ().peer ({'i'})->descriptor.state
++    assert (target.topology ().peer (std::array<std::uint8_t, 1>{'i'})->descriptor.state
+             == mesh::service_node_state_t::draining);
+ 
+     target.publish_draining ().result ().value ();
+     until (
+       [&] {
+-          return source.topology ().peer ({'j'})->descriptor
++          return source.topology ().peer (std::array<std::uint8_t, 1>{'j'})->descriptor
+                  == target.topology ().local_descriptor ();
+       },
+       [&] { pump (source); });
+-    const auto updated = source.topology ().peer ({'j'});
++    const auto updated = source.topology ().peer (std::array<std::uint8_t, 1>{'j'});
+     assert (updated->descriptor.state == mesh::service_node_state_t::draining);
+     assert (updated->descriptor.descriptor_revision > admitted->descriptor.descriptor_revision);
+     assert (updated->connection_id == admitted->connection_id);
+@@ -285,14 +287,14 @@ void verify_crossed_admission_diagnostics ()
+     std::vector<bool> target_readiness;
+     source.topology ().set_change_handler ([&] {
+         ++source_changes;
+-        const auto peer = source.topology ().peer ({'f'});
++        const auto peer = source.topology ().peer (std::array<std::uint8_t, 1>{'f'});
+         assert (peer);
+         source_readiness.push_back (peer->ready);
+         assert (source_changes == (peer->ready ? 2 : 1));
+     });
+     target.topology ().set_change_handler ([&] {
+         ++target_changes;
+-        const auto peer = target.topology ().peer ({'e'});
++        const auto peer = target.topology ().peer (std::array<std::uint8_t, 1>{'e'});
+         assert (peer);
+         target_readiness.push_back (peer->ready);
+         assert (target_changes == (peer->ready ? 2 : 1));
+@@ -324,10 +326,11 @@ void verify_crossed_admission_diagnostics ()
+         }
+         assert (found);
+     }
+-    const auto before = source.topology ().peer ({'f'});
++    const auto before = source.topology ().peer (std::array<std::uint8_t, 1>{'f'});
+     assert (source.topology ().admit (before->descriptor, before->connection_id)
+             == mesh::peer_admission_result_t::duplicate_connection);
+-    assert (source.topology ().peer ({'f'})->admission_epoch == before->admission_epoch);
++    assert (source.topology ().peer (std::array<std::uint8_t, 1>{'f'})->admission_epoch
++            == before->admission_epoch);
+ }
+ } // namespace
+ 
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+index c77f14bab2..55f31cd899 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+@@ -210,7 +210,7 @@ allocation_sample_t node_receiver_allocations (fw::serializer_registry_t &regist
+     node_transport_t transport;
+     std::string packet_name = payload_t::packet_name;
+     std::string router_channel_id = "m";
+-    std::shared_ptr<const zlink::routing_id_t> target_owner;
++    const auto target_owner = zlink::routing_id_t::from ("n");
+     return sample_allocations ([&] {
+         pending.emplace (
+           fw::detail::request_task_access_t::receive_public<payload_t, zlink::message_t> (
+@@ -374,12 +374,26 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
+         fw::detail::observe_task_terminal (reply, std::move (receiver.complete));
+     });
+     auto client = builder.route_client (serializers);
+-    const auto first_encode = encode_allocations (serializers, "m").total;
+-    const auto encode = encode_allocations (serializers, "m");
++    const auto encode_node = [&] {
++        return sample_allocations ([&] {
++            fw::runtime::messaging::client_call_codec_t codec;
++            auto header = codec.create_envelope (
++              fw::runtime::messaging::message_kind_t::request, "m", payload_t::packet_name,
++              fw::runtime::configuration::default_request_timeout, std::nullopt, std::nullopt, {});
++            const auto serializer = serializers.get<payload_t> ();
++            (void) codec.encode_payload_parts (
++              std::move (header), serializer.serialize (payload_t{}), serializer.content_type ());
++        });
++    };
++    const auto first_encode = encode_node ().total;
++    const auto encode = encode_node ();
+     std::printf ("encode calibration: first=%zu steady=%zu\n", first_encode, encode.total);
+-    // A transport may borrow its target until the physical terminal.
+-    const auto target_owner = sample_allocations (
+-      [] { (void) std::make_shared<const zlink::routing_id_t> (zlink::routing_id_t::from ("n")); });
++    // The receiver's projection owns the fixed target through the physical terminal.
++    const auto target_owner = sample_allocations ([] {
++        const auto target = zlink::routing_id_t::from ("n");
++        const auto copy = target;
++        (void) copy;
++    });
+     const auto receiver = node_receiver_allocations (serializers);
+     print_allocation_sizes ("node encode reference", encode);
+     print_allocation_sizes ("node target reference", target_owner);
+@@ -917,8 +931,9 @@ TEST (RequestCallAllocations, RawNodeRequestKeepsInvalidTimeoutInTheReturnedTask
+       fw::test::runtime_failure_options (std::move (options)));
+     fw::runtime::protocol::application_payload_t payload;
+     std::optional<fw::task_t<bool>> pending;
++    const std::array<std::uint8_t, 1> target{'b'};
+     EXPECT_NO_THROW (pending.emplace (
+-      node.request_to_node ({'b'}, payload, std::chrono::milliseconds::zero (), {})));
++      node.request_to_node (target, payload, std::chrono::milliseconds::zero (), {})));
+     ASSERT_TRUE (pending.has_value ());
+     ASSERT_TRUE (pending->await_ready ());
+     const auto &result = pending->result ();
+@@ -958,7 +973,10 @@ TEST (RequestCallAllocations, HostNodeRequestAddsNoCoroutineAboveTheRawTask)
+         raw.emplace (
+           host->transport ().request_to_node (target_bytes, payload, std::chrono::seconds (1), {}));
+     });
+-    const auto target_count = fw::tests::count_allocations ([&] { (void) target.to_bytes (); });
++    const auto target_count = fw::tests::count_allocations ([&] {
++        const std::span<const std::uint8_t> bytes (target.data (), target.size ());
++        (void) bytes;
++    });
+     const auto callback_count = fw::tests::count_allocations ([&] {
+         fw::runtime::foundation::operation_registry_t::callback_t callback =
+           [host, operation] (fw::runtime::foundation::operation_terminal_t,
+@@ -1026,7 +1044,7 @@ struct allocation_host_capture_t final : fw::hosted_service_t
+ // The real app transport must not allocate an operation or a coroutine when
+ // topology has already classified an Object Client as an invalid Node target.
+ // Compare the same route layer over an immediate transport, plus the real
+-// topology classifier's routing-id byte vector. No allocation size identifies
++// topology classifier's borrowed routing-id bytes. No allocation size identifies
+ // a reply state or an admission source.
+ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
+ {
+@@ -1110,7 +1128,10 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
+         receiver.complete (fw::result_t<transport_reply_t>::success (std::move (failure)));
+     });
+     auto reference = builder.route_client (serializers);
+-    const auto target_bytes = sample_allocations ([&] { (void) target.to_bytes (); });
++    const auto target_bytes = sample_allocations ([&] {
++        const std::span<const std::uint8_t> bytes (target.data (), target.size ());
++        (void) bytes;
++    });
+     std::optional<fw::request_task_t<payload_t>> pending;
+     auto measure = [&] (fw::route_client_t &client) {
+         auto call = client.request_to_node ("m", target, payload_t{});
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
+index aef951c420..5ba1772f46 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
+@@ -199,6 +199,103 @@ TEST (RequestNativeCounts, TypedChannelReplyBorrowsItsNativeBody)
+     EXPECT_EQ (calls[3], 0u);
+     EXPECT_EQ (calls[4], 0u);
+ }
++TEST (RequestNativeCounts, TemporaryNodeTargetSurvivesPublicFailureUntilPhysicalDecode)
++{
++    using parts_t = fw::runtime::messaging::message_parts_t;
++    using transport_t = fw::result_t<parts_t>;
++    fw::serializer_registry_t serializers;
++    int decoded = 0;
++    serializers.add<count_payload_t> (
++      [] (const count_payload_t &value) {
++          return fw::encoded_payload_t::from_string (std::to_string (value.value));
++      },
++      [&] (const fw::encoded_payload_t &value) {
++          ++decoded;
++          return count_payload_t{std::stoi (value.to_string ())};
++      },
++      "x/count");
++    auto builder = fw::test::runtime_failure_builder ();
++    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
++    runtime.bind_serializers (serializers);
++    const zlink::routing_id_t *borrowed_target = nullptr;
++    std::optional<fw::detail::request_receiver_t<transport_t>> selected;
++    runtime.bind_mesh_node_transport ("m", {}, [&] (const auto &target, auto, auto, auto receiver) {
++        borrowed_target = &target;
++        selected.emplace (std::move (receiver));
++    });
++    auto client = builder.route_client (serializers);
++    auto pending =
++      client.request_to_node ("m", zlink::routing_id_t::from ("temporary-peer"), count_payload_t{})
++        .async<count_payload_t> ();
++    ASSERT_NE (borrowed_target, nullptr);
++    EXPECT_EQ (borrowed_target->to_string (), "temporary-peer");
++    const auto failure = fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
++                                                      "admission failed before native reply");
++    selected->admitted->complete (failure);
++    ASSERT_TRUE (pending.await_ready ());
++    EXPECT_EQ (pending.result ().exception (), failure.exception ());
++    EXPECT_EQ (borrowed_target->to_string (), "temporary-peer");
++    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
++    EXPECT_FALSE (physical.await_ready ());
++    fw::runtime::messaging::client_call_codec_t codec;
++    auto header =
++      codec.create_envelope (fw::runtime::messaging::message_kind_t::response, "m", "CountPayload");
++    auto parts = codec.encode_payload_parts (
++      std::move (header),
++      serializers.get<count_payload_t> ().serialize_with_content_type (count_payload_t{42}));
++    selected->complete (
++      fw::result_t<transport_t>::success (transport_t::success (std::move (parts))));
++    EXPECT_EQ (physical.result ().value ().value, 42);
++    EXPECT_EQ (pending.result ().exception (), failure.exception ());
++    EXPECT_EQ (decoded, 1);
++    EXPECT_EQ (borrowed_target->to_string (), "temporary-peer");
++    selected.reset ();
++}
++
++TEST (RequestNativeCounts, NodeEncoderKeepsSelectedMediaTypeAcrossReentrantRegistration)
++{
++    using parts_t = fw::runtime::messaging::message_parts_t;
++    using transport_t = fw::result_t<parts_t>;
++    fw::serializer_registry_t serializers;
++    int original_calls = 0;
++    int replacement_calls = 0;
++    serializers.add<count_payload_t> (
++      [&] (const count_payload_t &value) {
++          ++original_calls;
++          serializers.add<count_payload_t> (
++            [&] (const count_payload_t &) {
++                ++replacement_calls;
++                return fw::encoded_payload_t::from_string ("replacement");
++            },
++            [] (const fw::encoded_payload_t &) { return count_payload_t{}; },
++            "application/x-replacement");
++          return fw::encoded_payload_t::from_string (std::to_string (value.value));
++      },
++      [] (const fw::encoded_payload_t &) { return count_payload_t{}; }, "application/x-original");
++    auto builder = fw::test::runtime_failure_builder ();
++    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
++    runtime.bind_serializers (serializers);
++    std::string observed_type;
++    runtime.bind_mesh_node_transport ("m", {}, [&] (const auto &, auto parts, auto, auto receiver) {
++        fw::runtime::messaging::envelope_codec_t codec;
++        observed_type = codec.decode_header (parts, false).value ().content_type;
++        const auto failure = fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
++                                                          "finish media type test");
++        receiver.admitted->complete (failure);
++        receiver.complete (
++          fw::detail::result_access_t::failure<transport_t> (failure.exception ()));
++    });
++    auto client = builder.route_client (serializers);
++    auto pending =
++      client.request_to_node ("m", zlink::routing_id_t::from ("peer"), count_payload_t{})
++        .async<count_payload_t> ();
++    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
++    EXPECT_EQ (observed_type, "application/x-original");
++    EXPECT_EQ (serializers.get<count_payload_t> ().content_type (), "application/x-replacement");
++    EXPECT_EQ (original_calls, 1);
++    EXPECT_EQ (replacement_calls, 0);
++}
++
+ TEST (RequestNativeCounts, TypedEnvelopeReplyBorrowsItsBody)
+ {
+     fw::serializer_registry_t serializers;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
+index 8c4ca39f39..c7867c0ee0 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
+@@ -115,4 +115,156 @@ TEST (RequestCallAllocations, AdoptedReplyPreservesBothResumeSchedulers)
+     EXPECT_EQ (public_wait.result ().value (), 42);
+     EXPECT_EQ (scheduled.load (), 2u);
+ }
++TEST (RequestCallAllocations, ReceiverCopiesRetainPhysicalProjectionWithoutAllocating)
++{
++    std::optional<fw::detail::request_receiver_t<long>> selected;
++    auto lifetime = std::make_shared<int> (42);
++    std::weak_ptr<int> weak = lifetime;
++    int projections = 0;
++    auto pending = fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
++        selected.emplace (receiver.template project<long> (
++          [lifetime, &projections] (const fw::result_t<long> &result) {
++              ++projections;
++              return fw::result_t<int>::success (static_cast<int> (result.value ()) + *lifetime);
++          }));
++    });
++    lifetime.reset ();
++    std::optional<fw::detail::request_receiver_t<long>> copy;
++    const auto allocations = fw::tests::count_allocations ([&] { copy.emplace (*selected); });
++    EXPECT_EQ (allocations, 0u);
++    selected.reset ();
++    ASSERT_FALSE (weak.expired ());
++    const auto failure = fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
++                                                      "admission failed before physical reply");
++    copy->admitted->complete (failure);
++    ASSERT_TRUE (pending.await_ready ());
++    EXPECT_EQ (pending.result ().exception (), failure.exception ());
++    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
++    ASSERT_FALSE (physical.await_ready ());
++    copy->complete (fw::result_t<long>::success (1));
++    EXPECT_EQ (physical.result ().value (), 43);
++    EXPECT_EQ (pending.result ().exception (), failure.exception ());
++    EXPECT_EQ (projections, 1);
++    copy.reset ();
++    EXPECT_TRUE (weak.expired ());
++}
++
++TEST (RequestCallAllocations, TerminalObserversKeepRegistrationOrderDuringReentry)
++{
++    fw::task_completion_source_t<int> source;
++    auto task = source.task ();
++    std::vector<int> order;
++    fw::detail::observe_task_terminal (task, [&] (const auto &) {
++        order.push_back (1);
++        fw::detail::observe_task_terminal (task, [&] (const auto &) { order.push_back (9); });
++    });
++    fw::detail::observe_task_terminal (task, [&] (const auto &) { order.push_back (2); });
++    source.complete (fw::result_t<int>::success (42));
++    EXPECT_EQ (order, (std::vector<int>{1, 9, 2}));
++}
++
++TEST (RequestCallAllocations, SharedAdmissionSourceUsesOneAllocationAndReleasesItsState)
++{
++    std::shared_ptr<fw::task_completion_source_t<int>> source;
++    const auto allocations = fw::tests::count_allocations (
++      [&] { source = fw::detail::make_task_completion_source<int> (); });
++    EXPECT_EQ (allocations, 1u);
++    std::optional<fw::task_t<int>> pending (source->task ());
++    std::weak_ptr<fw::task_completion_source_t<int>> state = source;
++    source->complete (fw::result_t<int>::success (42));
++    source.reset ();
++    ASSERT_FALSE (state.expired ());
++    EXPECT_EQ (pending->result ().value (), 42);
++    pending.reset ();
++    EXPECT_TRUE (state.expired ());
++}
++
++TEST (RequestCallAllocations, CompletionObserverReleasesCapturesBeforeDeliveryStorage)
++{
++    fw::task_completion_source_t<int> source;
++    std::function<void ()> delivery;
++    auto task = fw::detail::with_task_resume_scheduler (
++      source.task (), [&] (std::function<void ()> work) { delivery = std::move (work); });
++    auto captured = std::make_shared<int> (42);
++    std::weak_ptr<int> weak = captured;
++    int calls = 0;
++    fw::detail::observe_task_completion (task, [captured, &calls] (const auto &result) {
++        EXPECT_EQ (result.value (), *captured);
++        ++calls;
++    });
++    captured.reset ();
++    source.complete (fw::result_t<int>::success (42));
++    ASSERT_TRUE (delivery);
++    ASSERT_FALSE (weak.expired ());
++    delivery ();
++    EXPECT_EQ (calls, 1);
++    EXPECT_TRUE (weak.expired ());
++    EXPECT_TRUE (delivery);
++}
++
++TEST (RequestCallAllocations, InlineRawCallbackCopiesAndMovesWithoutAllocating)
++{
++    using callback_t = fw::detail::backend::raw_request_callback_t;
++    using raw_result_t = fw::result_t<fw::detail::backend::raw_request_completion_t>;
++    auto captured = std::make_shared<int> (42);
++    std::weak_ptr<int> weak = captured;
++    int calls = 0;
++    callback_t original = [captured, &calls,
++                           padding = std::array<char, 64>{}] (raw_result_t result) {
++        EXPECT_TRUE (result);
++        EXPECT_EQ (*captured, 42);
++        EXPECT_EQ (padding.front (), 0);
++        ++calls;
++    };
++    captured.reset ();
++    callback_t copy;
++    const auto allocations = fw::tests::count_allocations ([&] { copy = original; });
++    EXPECT_EQ (allocations, 0u);
++    callback_t moved (std::move (copy));
++    EXPECT_FALSE (copy);
++    original = nullptr;
++    EXPECT_FALSE (weak.expired ());
++    moved (raw_result_t::success ({}));
++    EXPECT_EQ (calls, 1);
++    moved = nullptr;
++    EXPECT_TRUE (weak.expired ());
++}
++
++TEST (RequestCallAllocations, InlineRawCallbackCopyFailureKeepsTheDestination)
++{
++    using callback_t = fw::detail::backend::raw_request_callback_t;
++    using raw_result_t = fw::result_t<fw::detail::backend::raw_request_completion_t>;
++    struct throwing_copy_t
++    {
++        bool *throw_copy;
++        int *calls;
++        throwing_copy_t (bool *flag, int *count) : throw_copy (flag), calls (count) {}
++        throwing_copy_t (throwing_copy_t &&) noexcept = default;
++        throwing_copy_t (const throwing_copy_t &other) :
++            throw_copy (other.throw_copy), calls (other.calls)
++        {
++            if (*throw_copy)
++                throw std::runtime_error ("callback copy failed");
++        }
++        void operator() (raw_result_t) const { ++*calls; }
++    };
++    bool throw_copy = false;
++    int source_calls = 0;
++    int destination_calls = 0;
++    callback_t source = throwing_copy_t (&throw_copy, &source_calls);
++    callback_t destination = [&] (raw_result_t) { ++destination_calls; };
++    throw_copy = true;
++    EXPECT_THROW (destination = source, std::runtime_error);
++    destination (raw_result_t::success ({}));
++    EXPECT_EQ (destination_calls, 1);
++    EXPECT_EQ (source_calls, 0);
++    throw_copy = false;
++    destination = source;
++    destination (raw_result_t::success ({}));
++    EXPECT_EQ (source_calls, 1);
++    callback_t empty = std::function<void (raw_result_t)>{};
++    EXPECT_FALSE (empty);
++    EXPECT_THROW (empty (raw_result_t::success ({})), std::bad_function_call);
++}
++
+ } // namespace
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
+index b4fd148a47..330967e715 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
+@@ -16,6 +16,7 @@
+ #include <zlink/Contracts/Core/context.hpp>
+ #include <zlink/Contracts/Core/routing_id.hpp>
+ 
++#include <array>
+ #include <atomic>
+ #include <chrono>
+ #include <cstdint>
+@@ -349,7 +350,7 @@ TEST (ServiceTopologyPreparedFacts, ReadsDoNotRequestTopologyTurns)
+         EXPECT_EQ (remote, peer->descriptor);
+         EXPECT_EQ (std::vector<std::uint8_t>{1}, peer->connection_id);
+     });
+-    EXPECT_NO_THROW (EXPECT_FALSE (topology.peer ({'c'})));
++    EXPECT_NO_THROW (EXPECT_FALSE (topology.peer (std::array<std::uint8_t, 1>{'c'})));
+ }
+ 
+ TEST (ServiceTopologyPreparedFacts, PublishesChangesBeforeNotification)
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
+index 97f36f298c..1f7f5b40a4 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
+@@ -639,7 +639,8 @@ TEST (SendAllocations, KnownTargetForwardsTheNativeTaskWithoutAnotherResult)
+     std::vector<zlink::message_t> parts;
+     parts.push_back (zlink::message_t::from ("payload"));
+     const auto native = [&] {
+-        (void) node.native_node ().transport ().classify_node_target (target.to_bytes ());
++        (void) node.native_node ().transport ().classify_node_target (
++          {target.data (), target.size ()});
+         return node.native_node ().send_to_node (target, parts).result ();
+     };
+     const auto forward = [&] {

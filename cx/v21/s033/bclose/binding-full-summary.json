@@ -1,0 +1,42 @@
+[
+  {
+    "suite": "bindings/java/build/test-results/integrationTest",
+    "tests": 36,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "time": 3.538
+  },
+  {
+    "suite": "bindings/java/build/test-results/test",
+    "tests": 172,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 2,
+    "time": 48.473
+  },
+  {
+    "suite": "bindings/java/codec/zlink-ext-netty/build/test-results/test",
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "time": 0.69
+  },
+  {
+    "suite": "bindings/java/kotlin-contract-test/build/test-results/test",
+    "tests": 4,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "time": 0.364
+  },
+  {
+    "suite": "bindings/java/perf/multi/Zlink.BindingBench.Multi/build/test-results/test",
+    "tests": 23,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "time": 10.944
+  }
+]

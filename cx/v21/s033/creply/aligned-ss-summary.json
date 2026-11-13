@@ -1,0 +1,714 @@
+{
+  "main-perf-1": {
+    "messages": 914364,
+    "seconds": 22.847319635096937,
+    "connections": [
+      {
+        "local": 5254,
+        "peer": 47480,
+        "delta": {
+          "data_segs_out": 811620.0,
+          "data_segs_in": 0.0,
+          "segs_out": 811620.0,
+          "segs_in": 597158.0,
+          "bytes_sent": 1295383141.0,
+          "bytes_received": 0.0,
+          "total_retrans": 0,
+          "acks_out": 0.0,
+          "acks_in": 597158.0
+        },
+        "per_request": {
+          "data_segs_out": 0.8876333713925745,
+          "data_segs_in": 0.0,
+          "segs_out": 0.8876333713925745,
+          "segs_in": 0.6530856420419001,
+          "bytes_sent": 1416.7040051883057,
+          "bytes_received": 0.0,
+          "total_retrans": 0.0,
+          "acks_out": 0.0,
+          "acks_in": 0.6530856420419001
+        },
+        "avg_data_seg_bytes": 1596.0463529730662,
+        "data_segments_per_request_intervals": [
+          0.8885782991345532,
+          0.8923677862539336,
+          0.8896834872444629,
+          0.8794652081434214,
+          0.883208675235398,
+          0.8780347237230747,
+          0.9060457320723093,
+          0.8856945420752267,
+          0.8916257917043668,
+          0.8789409407273029,
+          0.8903160305523746
+        ],
+        "rcvbuf": 131072,
+        "rcvmss": 536.0,
+        "mss": 65483.0
+      },
+      {
+        "local": 47480,
+        "peer": 5254,
+        "delta": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 811630.0,
+          "segs_out": 597169.0,
+          "segs_in": 811630.0,
+          "bytes_sent": 0.0,
+          "bytes_received": 1295407230.0,
+          "total_retrans": 0,
+          "acks_out": 597169.0,
+          "acks_in": 0.0
+        },
+        "per_request": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 0.8876443079561313,
+          "segs_out": 0.6530976722618126,
+          "segs_in": 0.8876443079561313,
+          "bytes_sent": 0.0,
+          "bytes_received": 1416.7303502762577,
+          "total_retrans": 0.0,
+          "acks_out": 0.6530976722618126,
+          "acks_in": 0.0
+        },
+        "avg_data_seg_bytes": null,
+        "data_segments_per_request_intervals": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rcvbuf": 6291456,
+        "rcvmss": 1417.0,
+        "mss": 32768.0
+      },
+      {
+        "local": 47476,
+        "peer": 5254,
+        "delta": {
+          "data_segs_out": 818719.0,
+          "data_segs_in": 10.0,
+          "segs_out": 818719.0,
+          "segs_in": 379045.0,
+          "bytes_sent": 1304181174.0,
+          "bytes_received": 210.0,
+          "total_retrans": 0,
+          "acks_out": 0.0,
+          "acks_in": 379035.0
+        },
+        "per_request": {
+          "data_segs_out": 0.8953972378615082,
+          "data_segs_in": 1.0936563556745454e-05,
+          "segs_out": 0.8953972378615082,
+          "segs_in": 0.4145449733366581,
+          "bytes_sent": 1426.3260298961902,
+          "bytes_received": 0.00022966783469165452,
+          "total_retrans": 0.0,
+          "acks_out": 0.0,
+          "acks_in": 0.4145340367731013
+        },
+        "avg_data_seg_bytes": 1592.9533502947897,
+        "data_segments_per_request_intervals": [
+          0.8974524858708788,
+          0.8913881984155166,
+          0.8971272629809215,
+          0.8952051048313583,
+          0.9016653353665917,
+          0.8936555963787431,
+          0.9002154914402011,
+          0.887052768279461,
+          0.898304681175294,
+          0.8957896109747566,
+          0.8916264299290495
+        ],
+        "rcvbuf": 131072,
+        "rcvmss": 536.0,
+        "mss": 65483.0
+      },
+      {
+        "local": 5254,
+        "peer": 47476,
+        "delta": {
+          "data_segs_out": 10.0,
+          "data_segs_in": 818739.0,
+          "segs_out": 379043.0,
+          "segs_in": 818739.0,
+          "bytes_sent": 210.0,
+          "bytes_received": 1304192590.0,
+          "total_retrans": 0,
+          "acks_out": 379033.0,
+          "acks_in": 0.0
+        },
+        "per_request": {
+          "data_segs_out": 1.0936563556745454e-05,
+          "data_segs_in": 0.8954191109886216,
+          "segs_out": 0.4145427860239467,
+          "segs_in": 0.8954191109886216,
+          "bytes_sent": 0.00022966783469165452,
+          "bytes_received": 1426.3385150771464,
+          "total_retrans": 0.0,
+          "acks_out": 0.41453184946038996,
+          "acks_in": 0.0
+        },
+        "avg_data_seg_bytes": 21.0,
+        "data_segments_per_request_intervals": [
+          2.441316846306898e-05,
+          0.0,
+          2.436587802441461e-05,
+          0.0,
+          0.0,
+          2.401363974737651e-05,
+          0.0,
+          2.382852989884789e-05,
+          0.0,
+          2.3713821600920095e-05,
+          0.0
+        ],
+        "rcvbuf": 6291456,
+        "rcvmss": 1427.0,
+        "mss": 32768.0
+      }
+    ]
+  },
+  "binding-perf-1": {
+    "messages": 908441,
+    "seconds": 22.712022702908143,
+    "connections": [
+      {
+        "local": 5247,
+        "peer": 47350,
+        "delta": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 899414.0,
+          "segs_out": 705525.0,
+          "segs_in": 899414.0,
+          "bytes_sent": 0.0,
+          "bytes_received": 1137445756.0,
+          "total_retrans": 0,
+          "acks_out": 705525.0,
+          "acks_in": 0.0
+        },
+        "per_request": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 0.9900631961789483,
+          "segs_out": 0.7766327147277589,
+          "segs_in": 0.9900631961789483,
+          "bytes_sent": 0.0,
+          "bytes_received": 1252.085447486408,
+          "total_retrans": 0.0,
+          "acks_out": 0.7766327147277589,
+          "acks_in": 0.0
+        },
+        "avg_data_seg_bytes": null,
+        "data_segments_per_request_intervals": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rcvbuf": 5617813,
+        "rcvmss": 1252.0,
+        "mss": 32768.0
+      },
+      {
+        "local": 47352,
+        "peer": 5247,
+        "delta": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 629303.0,
+          "segs_out": 309240.0,
+          "segs_in": 629303.0,
+          "bytes_sent": 0.0,
+          "bytes_received": 1137447008.0,
+          "total_retrans": 0,
+          "acks_out": 309240.0,
+          "acks_in": 0.0
+        },
+        "per_request": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 0.6927285316272603,
+          "segs_out": 0.34040735721967635,
+          "segs_in": 0.6927285316272603,
+          "bytes_sent": 0.0,
+          "bytes_received": 1252.0868256716726,
+          "total_retrans": 0.0,
+          "acks_out": 0.34040735721967635,
+          "acks_in": 0.0
+        },
+        "avg_data_seg_bytes": null,
+        "data_segments_per_request_intervals": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rcvbuf": 4797286,
+        "rcvmss": 2504.0,
+        "mss": 32768.0
+      },
+      {
+        "local": 47350,
+        "peer": 5247,
+        "delta": {
+          "data_segs_out": 899408.0,
+          "data_segs_in": 0.0,
+          "segs_out": 899408.0,
+          "segs_in": 705546.0,
+          "bytes_sent": 1137442000.0,
+          "bytes_received": 0.0,
+          "total_retrans": 0,
+          "acks_out": 0.0,
+          "acks_in": 705546.0
+        },
+        "per_request": {
+          "data_segs_out": 0.9900565914572328,
+          "data_segs_in": 0.0,
+          "segs_out": 0.9900565914572328,
+          "segs_in": 0.7766558312537634,
+          "bytes_sent": 1252.081312930614,
+          "bytes_received": 0.0,
+          "total_retrans": 0.0,
+          "acks_out": 0.0,
+          "acks_in": 0.7766558312537634
+        },
+        "avg_data_seg_bytes": 1264.6563072598865,
+        "data_segments_per_request_intervals": [
+          0.9923468759997047,
+          0.9890739196546819,
+          0.9925742877065926,
+          0.986427650621458,
+          0.9917844790971422,
+          0.9877173045769966,
+          0.9899917806894551,
+          0.9913796221501513,
+          0.9893514734868516,
+          0.9869418601870231,
+          0.9930613410773369
+        ],
+        "rcvbuf": 131072,
+        "rcvmss": 536.0,
+        "mss": 65483.0
+      },
+      {
+        "local": 5247,
+        "peer": 47352,
+        "delta": {
+          "data_segs_out": 629284.0,
+          "data_segs_in": 0.0,
+          "segs_out": 629284.0,
+          "segs_in": 309232.0,
+          "bytes_sent": 1137438244.0,
+          "bytes_received": 0.0,
+          "total_retrans": 0,
+          "acks_out": 0.0,
+          "acks_in": 309232.0
+        },
+        "per_request": {
+          "data_segs_out": 0.6927076166751611,
+          "data_segs_in": 0.0,
+          "segs_out": 0.6927076166751611,
+          "segs_in": 0.34039855092405563,
+          "bytes_sent": 1252.07717837482,
+          "bytes_received": 0.0,
+          "total_retrans": 0.0,
+          "acks_out": 0.0,
+          "acks_in": 0.34039855092405563
+        },
+        "avg_data_seg_bytes": 1807.5117816439001,
+        "data_segments_per_request_intervals": [
+          0.7010360016733519,
+          0.6770000490508657,
+          0.7008061852391031,
+          0.6824726972003989,
+          0.7018384806747163,
+          0.6804806692618294,
+          0.672545085335783,
+          0.7014937969448899,
+          0.685928561126869,
+          0.6982158658790328,
+          0.7175263621432482
+        ],
+        "rcvbuf": 131072,
+        "rcvmss": 536.0,
+        "mss": 65483.0
+      }
+    ]
+  },
+  "main-perf-2": {
+    "messages": 915168,
+    "seconds": 22.88049806188792,
+    "connections": [
+      {
+        "local": 5254,
+        "peer": 34204,
+        "delta": {
+          "data_segs_out": 810271.0,
+          "data_segs_in": 0.0,
+          "segs_out": 810271.0,
+          "segs_in": 365494.0,
+          "bytes_sent": 1296853987.0,
+          "bytes_received": 0.0,
+          "total_retrans": 0,
+          "acks_out": 0.0,
+          "acks_in": 365494.0
+        },
+        "per_request": {
+          "data_segs_out": 0.8853795150180076,
+          "data_segs_in": 0.0,
+          "segs_out": 0.8853795150180076,
+          "segs_in": 0.39937366691143045,
+          "bytes_sent": 1417.0665790324836,
+          "bytes_received": 0.0,
+          "total_retrans": 0.0,
+          "acks_out": 0.0,
+          "acks_in": 0.39937366691143045
+        },
+        "avg_data_seg_bytes": 1600.5188227148694,
+        "data_segments_per_request_intervals": [
+          0.8916450046593751,
+          0.8827902078205175,
+          0.8801866779804837,
+          0.8941682310906558,
+          0.8848924335477021,
+          0.8733442512403063,
+          0.8905720884038721,
+          0.8931141661685594,
+          0.8691138609750021,
+          0.8838814309728437,
+          0.8954935874808801
+        ],
+        "rcvbuf": 131072,
+        "rcvmss": 536.0,
+        "mss": 65483.0
+      },
+      {
+        "local": 34198,
+        "peer": 5254,
+        "delta": {
+          "data_segs_out": 813275.0,
+          "data_segs_in": 10.0,
+          "segs_out": 813275.0,
+          "segs_in": 369646.0,
+          "bytes_sent": 1306012015.0,
+          "bytes_received": 210.0,
+          "total_retrans": 0,
+          "acks_out": 0.0,
+          "acks_in": 369636.0
+        },
+        "per_request": {
+          "data_segs_out": 0.8886619724465891,
+          "data_segs_in": 1.0926955487954125e-05,
+          "segs_out": 0.8886619724465891,
+          "segs_in": 0.40391053883002903,
+          "bytes_sent": 1427.0735154638273,
+          "bytes_received": 0.00022946606524703662,
+          "total_retrans": 0.0,
+          "acks_out": 0.0,
+          "acks_in": 0.40389961187454104
+        },
+        "avg_data_seg_bytes": 1605.867652393102,
+        "data_segments_per_request_intervals": [
+          0.8905046838981804,
+          0.8929424299202763,
+          0.8894114794836051,
+          0.8913704354145219,
+          0.8947260464050001,
+          0.875487693271037,
+          0.8887054121645068,
+          0.8963777644949193,
+          0.8820577313227426,
+          0.8862608613301134,
+          0.8876809036357218
+        ],
+        "rcvbuf": 131072,
+        "rcvmss": 536.0,
+        "mss": 65483.0
+      },
+      {
+        "local": 5254,
+        "peer": 34198,
+        "delta": {
+          "data_segs_out": 10.0,
+          "data_segs_in": 813262.0,
+          "segs_out": 369635.0,
+          "segs_in": 813262.0,
+          "bytes_sent": 210.0,
+          "bytes_received": 1305974913.0,
+          "total_retrans": 0,
+          "acks_out": 369625.0,
+          "acks_in": 0.0
+        },
+        "per_request": {
+          "data_segs_out": 1.0926955487954125e-05,
+          "data_segs_in": 0.8886477674044547,
+          "segs_out": 0.4038985191789923,
+          "segs_in": 0.8886477674044547,
+          "bytes_sent": 0.00022946606524703662,
+          "bytes_received": 1427.032974273576,
+          "total_retrans": 0.0,
+          "acks_out": 0.40388759222350434,
+          "acks_in": 0.0
+        },
+        "avg_data_seg_bytes": 21.0,
+        "data_segments_per_request_intervals": [
+          2.4523027122467997e-05,
+          0.0,
+          2.424389356930723e-05,
+          0.0,
+          0.0,
+          2.408361832281682e-05,
+          0.0,
+          2.390914524805738e-05,
+          0.0,
+          2.3675923952932263e-05,
+          0.0
+        ],
+        "rcvbuf": 6291456,
+        "rcvmss": 2854.0,
+        "mss": 32768.0
+      },
+      {
+        "local": 34204,
+        "peer": 5254,
+        "delta": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 810250.0,
+          "segs_out": 365484.0,
+          "segs_in": 810250.0,
+          "bytes_sent": 0.0,
+          "bytes_received": 1296798724.0,
+          "total_retrans": 0,
+          "acks_out": 365484.0,
+          "acks_in": 0.0
+        },
+        "per_request": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 0.8853565684114829,
+          "segs_out": 0.3993627399559425,
+          "segs_in": 0.8853565684114829,
+          "bytes_sent": 0.0,
+          "bytes_received": 1417.0061933983707,
+          "total_retrans": 0.0,
+          "acks_out": 0.3993627399559425,
+          "acks_in": 0.0
+        },
+        "avg_data_seg_bytes": null,
+        "data_segments_per_request_intervals": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rcvbuf": 6291456,
+        "rcvmss": 1417.0,
+        "mss": 32768.0
+      }
+    ]
+  },
+  "binding-perf-2": {
+    "messages": 908398,
+    "seconds": 22.709799331845716,
+    "connections": [
+      {
+        "local": 33396,
+        "peer": 5247,
+        "delta": {
+          "data_segs_out": 893826.0,
+          "data_segs_in": 0.0,
+          "segs_out": 893826.0,
+          "segs_in": 687924.0,
+          "bytes_sent": 1137304280.0,
+          "bytes_received": 0.0,
+          "total_retrans": 0,
+          "acks_out": 0.0,
+          "acks_in": 687924.0
+        },
+        "per_request": {
+          "data_segs_out": 0.9839585732245117,
+          "data_segs_in": 0.0,
+          "segs_out": 0.9839585732245117,
+          "segs_in": 0.7572936091889237,
+          "bytes_sent": 1251.9889739959797,
+          "bytes_received": 0.0,
+          "total_retrans": 0.0,
+          "acks_out": 0.0,
+          "acks_in": 0.7572936091889237
+        },
+        "avg_data_seg_bytes": 1272.4000868177923,
+        "data_segments_per_request_intervals": [
+          0.9827267802619916,
+          0.9848536878510633,
+          0.9814633669177345,
+          0.9818432180154272,
+          0.9852535346535857,
+          0.979533970700498,
+          0.9881801827906359,
+          0.9852762507367889,
+          0.9816058918627627,
+          0.9863626601761042,
+          0.9863367093445442
+        ],
+        "rcvbuf": 131072,
+        "rcvmss": 536.0,
+        "mss": 65483.0
+      },
+      {
+        "local": 5247,
+        "peer": 33396,
+        "delta": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 893829.0,
+          "segs_out": 687923.0,
+          "segs_in": 893829.0,
+          "bytes_sent": 0.0,
+          "bytes_received": 1137309288.0,
+          "total_retrans": 0,
+          "acks_out": 687923.0,
+          "acks_in": 0.0
+        },
+        "per_request": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 0.9839618757416904,
+          "segs_out": 0.7572925083498643,
+          "segs_in": 0.9839618757416904,
+          "bytes_sent": 0.0,
+          "bytes_received": 1251.99448699799,
+          "total_retrans": 0.0,
+          "acks_out": 0.7572925083498643,
+          "acks_in": 0.0
+        },
+        "avg_data_seg_bytes": null,
+        "data_segments_per_request_intervals": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rcvbuf": 4684889,
+        "rcvmss": 1252.0,
+        "mss": 32768.0
+      },
+      {
+        "local": 33404,
+        "peer": 5247,
+        "delta": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 620004.0,
+          "segs_out": 304842.0,
+          "segs_in": 620004.0,
+          "bytes_sent": 0.0,
+          "bytes_received": 1137310540.0,
+          "total_retrans": 0,
+          "acks_out": 304842.0,
+          "acks_in": 0.0
+        },
+        "per_request": {
+          "data_segs_out": 0.0,
+          "data_segs_in": 0.6825246202655664,
+          "segs_out": 0.33558198058560235,
+          "segs_in": 0.6825246202655664,
+          "bytes_sent": 0.0,
+          "bytes_received": 1251.9958652484925,
+          "total_retrans": 0.0,
+          "acks_out": 0.33558198058560235,
+          "acks_in": 0.0
+        },
+        "avg_data_seg_bytes": null,
+        "data_segments_per_request_intervals": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rcvbuf": 3321461,
+        "rcvmss": 2504.0,
+        "mss": 32768.0
+      },
+      {
+        "local": 5247,
+        "peer": 33404,
+        "delta": {
+          "data_segs_out": 620010.0,
+          "data_segs_in": 0.0,
+          "segs_out": 620010.0,
+          "segs_in": 304843.0,
+          "bytes_sent": 1137311792.0,
+          "bytes_received": 0.0,
+          "total_retrans": 0,
+          "acks_out": 0.0,
+          "acks_in": 304843.0
+        },
+        "per_request": {
+          "data_segs_out": 0.6825312252999236,
+          "data_segs_in": 0.0,
+          "segs_out": 0.6825312252999236,
+          "segs_in": 0.33558308142466187,
+          "bytes_sent": 1251.997243498995,
+          "bytes_received": 0.0,
+          "total_retrans": 0.0,
+          "acks_out": 0.0,
+          "acks_in": 0.33558308142466187
+        },
+        "avg_data_seg_bytes": 1834.3442718665829,
+        "data_segments_per_request_intervals": [
+          0.6664040185166946,
+          0.6812529127523363,
+          0.6769783820796244,
+          0.6563981331416107,
+          0.7188445968124293,
+          0.6446375125716433,
+          0.7119296847646299,
+          0.7089052218787215,
+          0.6679001257409736,
+          0.6899682630586775,
+          0.6840125167208102
+        ],
+        "rcvbuf": 131072,
+        "rcvmss": 536.0,
+        "mss": 65483.0
+      }
+    ]
+  }
+}

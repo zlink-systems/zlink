@@ -1,0 +1,803 @@
+diff --git a/framework/bench/grpc/cpp/run_local.sh b/framework/bench/grpc/cpp/run_local.sh
+index edb5410cf2..ecda846f29 100755
+--- a/framework/bench/grpc/cpp/run_local.sh
++++ b/framework/bench/grpc/cpp/run_local.sh
+@@ -61,7 +61,7 @@ for run in $(seq 1 "${RUNS}"); do
+         mkdir -p "${cell_dir}"
+         log "cell=${cell_id} run=${run}: start target B then source A"
+ 
+-        setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -76,7 +76,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
++        setsid taskset -c 0-7 "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/dotnet/run_local.sh b/framework/bench/grpc/dotnet/run_local.sh
+index 4874eb88a9..a1bf2e8534 100755
+--- a/framework/bench/grpc/dotnet/run_local.sh
++++ b/framework/bench/grpc/dotnet/run_local.sh
+@@ -62,7 +62,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -80,7 +80,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
+index 2ebc4da40e..f0b2a02a61 100644
+--- a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
++++ b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
+@@ -232,10 +232,28 @@ public final class BenchDrivers {
+             throws InterruptedException {
+         long deadline = source.activeDeadline;
+         long sequence = 0;
++        boolean paceRequests =
++                options.requestRate != 0
++                        && options.runsImplementation("zlink-java")
++                        && "request-backpressure".equals(trigger.pattern());
++        long requestIntervalNs =
++                paceRequests ? Math.max(1L, 1_000_000_000L / options.requestRate) : 0;
++        long nextSubmissionNs = BenchMetricHeader.nowNs();
+         long cpuStart = resources.beginSubmit();
+         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+         CompletableFuture<Void> admissionPending = null;
+         while (BenchMetricHeader.nowNs() < deadline) {
++            if (requestIntervalNs != 0) {
++                long remaining;
++                while ((remaining = nextSubmissionNs - BenchMetricHeader.nowNs()) > 0
++                        && BenchMetricHeader.nowNs() < deadline) {
++                    LockSupport.parkNanos(remaining);
++                }
++                if (BenchMetricHeader.nowNs() >= deadline) {
++                    break;
++                }
++                nextSubmissionNs += requestIntervalNs;
++            }
+             if (admissionPending != null) {
+                 try {
+                     if (!operation.await(
+@@ -551,6 +569,8 @@ public final class BenchDrivers {
+         long deadline = source.activeDeadline;
+         long sequence = 0;
+         int issuedSinceYield = 0;
++        long requestIntervalNs = options.requestRate == 0 ? 0 : Math.max(1L, 1_000_000_000L / options.requestRate);
++        long nextSubmissionNs = BenchMetricHeader.nowNs();
+         long cpuStart = resources.beginSubmit();
+         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+         BenchRequestOperation requests =
+@@ -558,6 +578,13 @@ public final class BenchDrivers {
+                         ? requestOperation
+                         : null;
+         while (BenchMetricHeader.nowNs() < deadline) {
++            if (requestIntervalNs != 0) {
++                long remaining;
++                while ((remaining = nextSubmissionNs - BenchMetricHeader.nowNs()) > 0
++                        && BenchMetricHeader.nowNs() < deadline) LockSupport.parkNanos(remaining);
++                if (BenchMetricHeader.nowNs() >= deadline) break;
++                nextSubmissionNs += requestIntervalNs;
++            }
+             long started = source.begin();
+             CompletableFuture<Void> future;
+             BenchRequestOperation.Submission submitted;
+diff --git a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchOptions.java b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchOptions.java
+index 893fce4072..c99002c53f 100644
+--- a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchOptions.java
++++ b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchOptions.java
+@@ -19,6 +19,7 @@ public final class BenchOptions {
+     public final int drainBoundMs;
+     public final int requestTimeoutMs;
+     public final int routeReadyMs;
++    public final long requestRate;
+     public final String triggerUrl;
+     public final String statsUrl;
+     public final String targetEndpoint;
+@@ -42,6 +43,7 @@ public final class BenchOptions {
+         drainBoundMs = Args.integer(argv, "--drain-bound-ms", 30_000);
+         requestTimeoutMs = Args.integer(argv, "--request-timeout-ms", 30_000);
+         routeReadyMs = Args.integer(argv, "--route-ready-ms", 30_000);
++        requestRate = requestRateFromEnvironment();
+         triggerUrl = Args.value(argv, "--trigger-url", "");
+         statsUrl = Args.value(argv, "--stats-url", "");
+         targetEndpoint = Args.value(argv, "--target-endpoint", "");
+@@ -83,6 +85,22 @@ public final class BenchOptions {
+         }
+     }
+ 
++    private static long requestRateFromEnvironment() {
++        String value = System.getenv("ZLINK_JAVA_BENCH_REQUEST_RATE");
++        if (value == null || value.isBlank()) {
++            return 0;
++        }
++        try {
++            long rate = Long.parseLong(value);
++            if (rate > 0) {
++                return rate;
++            }
++        } catch (NumberFormatException ignored) {
++            // Report malformed benchmark configuration below.
++        }
++        throw new IllegalArgumentException("ZLINK_JAVA_BENCH_REQUEST_RATE must be a positive integer");
++    }
++
+     public boolean runsImplementation(String name) {
+         return implementation.equals(name);
+     }
+diff --git a/framework/bench/grpc/java/run_local.sh b/framework/bench/grpc/java/run_local.sh
+index e9ab239086..11621d900b 100755
+--- a/framework/bench/grpc/java/run_local.sh
++++ b/framework/bench/grpc/java/run_local.sh
+@@ -70,7 +70,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -88,7 +88,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/node/run_local.sh b/framework/bench/grpc/node/run_local.sh
+index a04f4b1708..172a2ce554 100644
+--- a/framework/bench/grpc/node/run_local.sh
++++ b/framework/bench/grpc/node/run_local.sh
+@@ -68,7 +68,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run} starting target B then source A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -94,7 +94,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java
+index 57caf7d9f2..21a5b92c78 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java
+@@ -84,6 +84,8 @@ import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
+ import systems.zlink.framework.runtime.spots.ZLinkSpotFlowFrame;
+ import systems.zlink.framework.streams.ZLinkStreamCodec;
+ 
++import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
++
+ import java.io.ByteArrayOutputStream;
+ import java.io.DataOutputStream;
+ import java.io.IOException;
+@@ -2406,29 +2408,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+             UUID operationId,
+             CompletableFuture<Void> requestAdmission,
+             ZLinkServiceOperationRegistry.Operation<R> receiver) {
+-        RouterSocket router = requireStarted();
+-        long correlation = allocateCorrelation();
+-        int flags =
+-                metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
+-        List<Message> frames =
+-                encodeApplicationFrames(
+-                        wire.encodeNodeRequestHeader(correlation, flags), metadata, parts);
+-        try {
+-            return request(
+-                    router,
+-                    target,
+-                    frames,
+-                    timeout,
+-                    correlation,
+-                    operationOwner,
+-                    operationId,
+-                    null,
+-                    requestAdmission,
+-                    receiver);
+-        } catch (RuntimeException | Error failure) {
+-            Message.closeAll(frames);
+-            throw failure;
+-        }
++        return requestNative(requireStarted(), target, parts, timeout, null, requestAdmission, receiver);
+     }
+ 
+     CompletionStage<ZLinkBackendReceived> requestChannel(
+@@ -2462,14 +2442,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+             ZLinkServiceOperationRegistry.Operation<R> receiver) {
+         String selectedChannel = requireChannel(channelName);
+         RouterSocket router = requireStarted();
+-        long correlation = allocateCorrelation();
+-        int flags =
+-                metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
+-        List<Message> frames =
+-                encodeApplicationFrames(
+-                        wire.encodeChannelRequestHeader(correlation, selectedChannel, flags),
+-                        metadata,
+-                        parts);
++        List<Message> frames = parts;
+         try {
+             ZLinkServiceTopologyRegistry currentTopology = topology;
+             Optional<ZLinkServiceTopologyRegistry.Peer> target =
+@@ -2492,23 +2465,32 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+                                 unavailableChannelStatus(selectedChannel)));
+                 return receiver;
+             }
+-            return request(
+-                    router,
+-                    target.orElseThrow().descriptor().nodeRoutingId(),
+-                    frames,
+-                    timeout,
+-                    correlation,
+-                    operationOwner,
+-                    operationId,
+-                    target.orElseThrow().liveness(),
+-                    requestAdmission,
+-                    receiver);
++            return requestNative(
++                    router, target.orElseThrow().descriptor().nodeRoutingId(), frames, timeout,
++                    target.orElseThrow().liveness(), requestAdmission, receiver);
+         } catch (RuntimeException | Error failure) {
+             Message.closeAll(frames);
+             throw failure;
+         }
+     }
+ 
++    private <R> CompletionStage<R> requestNative(
++            RouterSocket router, RoutingId target, List<Message> frames, Duration timeout,
++            ZLinkServiceLivenessRegistry.PeerState admission, CompletableFuture<Void> requestAdmission,
++            ZLinkServiceOperationRegistry.Operation<R> receiver) {
++        port.requestMessagesTo(router, target, frames, timeout,
++                reply -> {
++                    if (reply.size() != 2 || ZLinkChannelEnvelope.nativeOperation(reply.getFirst().dataBuffer()) != ServiceWireConstants.COMMAND_REPLY)
++                        throw new IllegalArgumentException("invalid prototype reply");
++                    // The receiver decodes synchronously before the binding closes its reply parts.
++                    return new ZLinkBackendReceived(ZLinkBackendRequestResult.OK, Optional.of(target),
++                            Optional.empty(), Optional.empty(), reply);
++                }, null,
++                (reply, failure) -> receiver.receiveBinding(reply, failure, ignored -> {}),
++                admission, requestAdmission);
++        return receiver;
++    }
++
+     Optional<Integer> classifyChannelTarget(String channelName) {
+         String selectedChannel = requireChannel(channelName);
+         ZLinkServiceTopologyRegistry currentTopology = topology;
+@@ -5158,7 +5140,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+             //  Generic application request-to-Actor completion path: not one
+             //  of request-specific-tail's tail-bearing originalOperationKind
+             //  cases, so the tail MUST be empty (schema "otherwise" branch).
+-            //  See decodeRequestReply() below for the full rationale.
+             if (frames.getFirst().size() != PREFIX_BYTES + Long.BYTES + 2 * Integer.BYTES) {
+                 throw new IllegalArgumentException(
+                         "generic Actor reply carries an operation-specific tail");
+@@ -5187,90 +5168,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+                 java.util.Map.of());
+     }
+ 
+-    private CompletionStage<ZLinkBackendReceived> request(
+-            RouterSocket router,
+-            RoutingId target,
+-            List<Message> frames,
+-            Duration timeout,
+-            long correlation,
+-            ZLinkServiceOperationRegistry operationOwner,
+-            UUID operationId,
+-            ZLinkServiceLivenessRegistry.PeerState admission,
+-            CompletableFuture<Void> requestAdmission) {
+-        return request(
+-                router,
+-                target,
+-                frames,
+-                timeout,
+-                correlation,
+-                operationOwner,
+-                operationId,
+-                admission,
+-                requestAdmission,
+-                ZLinkServiceOperationRegistry.<ZLinkBackendReceived>prepareOperation(
+-                        operationId == null ? ZLinkServiceOperationIds.next() : operationId));
+-    }
+-
+-    private <R> CompletionStage<R> request(
+-            RouterSocket router,
+-            RoutingId target,
+-            List<Message> frames,
+-            Duration timeout,
+-            long correlation,
+-            ZLinkServiceOperationRegistry operationOwner,
+-            UUID operationId,
+-            ZLinkServiceLivenessRegistry.PeerState admission,
+-            CompletableFuture<Void> requestAdmission,
+-            ZLinkServiceOperationRegistry.Operation<R> completion) {
+-        if (operationOwner == null) {
+-            operationOwner = operations;
+-            operationId = completion.id();
+-        }
+-        var registry = operationOwner;
+-        var requestId = operationId;
+-        operationOwner
+-                .<ZLinkBackendReceived>submitTerminal(
+-                        operationId,
+-                        timeout,
+-                        terminal ->
+-                                admitRequest(
+-                                        target,
+-                                        registry,
+-                                        requestId,
+-                                        completion,
+-                                        terminal,
+-                                        frames,
+-                                        requestAdmission,
+-                                        admittedTimeout ->
+-                                                port.requestMessagesTo(
+-                                                        router,
+-                                                        target,
+-                                                        frames,
+-                                                        admittedTimeout,
+-                                                        replyFrames ->
+-                                                                decodeRequestReply(
+-                                                                        target,
+-                                                                        correlation,
+-                                                                        RequestResult.OK,
+-                                                                        replyFrames),
+-                                                        failure ->
+-                                                                decodeRequestReply(
+-                                                                        target,
+-                                                                        correlation,
+-                                                                        requestTerminal(failure),
+-                                                                        List.of()),
+-                                                        terminal,
+-                                                        admission,
+-                                                        requestAdmission)),
+-                        ZLinkBackendReceived::close,
+-                        completion)
+-                .whenComplete(
+-                        (accepted, failure) -> {
+-                            if (failure != null || !accepted) Message.closeAll(frames);
+-                        });
+-        return completion;
+-    }
+-
+     private List<Message> encodeApplicationFrames(
+             byte[] header, byte[] metadata, List<Message> parts) {
+         Message headerFrame = Message.from(header);
+@@ -5290,69 +5187,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+         }
+     }
+ 
+-    private ZLinkBackendReceived decodeRequestReply(
+-            RoutingId target, long correlation, RequestResult result, List<Message> frames) {
+-        if (result != RequestResult.OK) {
+-            return new ZLinkBackendReceived(
+-                    backendResult(result),
+-                    Optional.of(target),
+-                    Optional.empty(),
+-                    Optional.empty(),
+-                    List.of());
+-        }
+-        try {
+-            if (frames.isEmpty() || frames.size() > 2) {
+-                throw new IllegalArgumentException("invalid service reply frame count");
+-            }
+-            //  This is the generic requestToNode/requestToChannel completion
+-            //  path: its originalOperationKind is not one of
+-            //  request-specific-tail's tail-bearing cases
+-            //  (service-wire-v1.schema.json), so the schema's "otherwise"
+-            //  branch applies and the tail MUST be empty.
+-            //  decodeReplyHeader itself now permissively accepts
+-            //  tail-bearing frames (fix for the residual-convergence tail
+-            //  rejection bug), so this generic caller enforces the
+-            //  empty-tail contract explicitly, matching Node's
+-            //  raw-service-mesh-runtime.ts generic reply guard ("Generic
+-            //  node/channel reply carries an operation-specific tail.").
+-            if (frames.getFirst().size() != 21) {
+-                throw new IllegalArgumentException(
+-                        "generic service reply carries an operation-specific tail");
+-            }
+-            ZLinkServiceM6AWireCodec.Reply header =
+-                    wire.decodeReplyHeader(frames.getFirst().dataBuffer());
+-            if (header.correlation() != correlation
+-                    || (header.terminalResult() == 0) != (frames.size() == 2)) {
+-                throw new IllegalArgumentException("service reply terminal mismatch");
+-            }
+-            List<Message> parts = List.of();
+-            if (header.terminalResult() == 0) {
+-                // The reply keeps the received frame; its parts are read from it in place.
+-                Message frame = new Message();
+-                frames.get(1).move(frame);
+-                parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrameView(frame);
+-            }
+-            ZLinkBackendRequestResult terminal =
+-                    header.terminalResult() == 0
+-                            ? ZLinkBackendRequestResult.OK
+-                            : backendResult(header.terminalResult());
+-            return new ZLinkBackendReceived(
+-                    terminal,
+-                    header.failureCode(),
+-                    Optional.of(target),
+-                    Optional.empty(),
+-                    Optional.empty(),
+-                    parts);
+-        } catch (RuntimeException failure) {
+-            return new ZLinkBackendReceived(
+-                    ZLinkBackendRequestResult.PROTOCOL_ERROR,
+-                    Optional.of(target),
+-                    Optional.empty(),
+-                    Optional.empty(),
+-                    List.of());
+-        }
+-    }
+-
+     @Override
+     public void cancelPendingOperations() {
+         operations.cancelPendingOperations();
+@@ -5842,7 +5676,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+                         || allowedInfrastructureControlCommand(frames, head)
+                                 == infrastructureCommand) {
+                     try {
+-                        header = wire.decodeHeader(head);
++                        header = head[2] == 2
++                                ? new ZLinkServiceM6AWireCodec.Header(
++                                        ZLinkChannelEnvelope.nativeOperation(ByteBuffer.wrap(head)), 0)
++                                : wire.decodeHeader(head);
+                     } catch (RuntimeException invalid) {
+                         /* Malformed record, distinct from no record. */
+                     }
+@@ -5913,16 +5750,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+                 kind = RecordKind.NODE_SEND;
+             } else if (command == ServiceWireConstants.COMMAND_NODE_REQUEST) {
+                 kind = RecordKind.NODE_REQUEST;
+-                correlation = wire.decodeNodeRequestHeader(head);
++                if (head[2] != 2) throw new IllegalArgumentException("prototype requires major 2 Node request");
+             } else if (command == ServiceWireConstants.COMMAND_CHANNEL_SEND) {
+                 kind = RecordKind.CHANNEL_SEND;
+                 channelName = wire.decodeChannelSendHeader(head);
+             } else if (command == ServiceWireConstants.COMMAND_CHANNEL_REQUEST) {
+                 kind = RecordKind.CHANNEL_REQUEST;
+-                ZLinkServiceM6AWireCodec.ChannelRequest request =
+-                        wire.decodeChannelRequestHeader(head);
+-                correlation = request.correlation();
+-                channelName = request.channelName();
++                if (head[2] != 2) throw new IllegalArgumentException("prototype requires major 2 Channel request");
++                channelName = ZLinkChannelEnvelope.nativeChannel(ByteBuffer.wrap(head));
+             } else if (command == ServiceWireConstants.COMMAND_SPOT_SEND
+                     || command == ServiceWireConstants.COMMAND_SPOT_REQUEST) {
+                 try {
+@@ -6034,9 +5869,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+                 return;
+             }
+             if (kind == null) return;
+-            int payloadOffset = (flags & ServiceWireConstants.FLAG_METADATA) == 0 ? 1 : 2;
+-            if (frames.size() != payloadOffset + 1
+-                    || (correlation != null && inbound.requestSequence() == null)) {
++            boolean nativeRequest = kind == RecordKind.NODE_REQUEST || kind == RecordKind.CHANNEL_REQUEST;
++            int payloadOffset = nativeRequest ? 0 : (flags & ServiceWireConstants.FLAG_METADATA) == 0 ? 1 : 2;
++            if (frames.size() != (nativeRequest ? 2 : payloadOffset + 1)
++                    || ((nativeRequest || correlation != null) && inbound.requestSequence() == null)) {
+                 rejectProtocolRecord(inbound, channelName == null ? "node" : "channel");
+                 return;
+             }
+@@ -6044,8 +5880,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+             ZLinkFrameworkMultipartView messages;
+             try {
+                 messages =
+-                        ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrameView(
+-                                inbound.received().parts().get(payloadOffset).dataBuffer());
++                        nativeRequest
++                                ? ZLinkFrameworkMultipartView.received(inbound.received())
++                                : ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrameView(
++                                        inbound.received().parts().get(payloadOffset).dataBuffer());
+             } catch (RuntimeException invalid) {
+                 rejectProtocolRecord(inbound, channelName == null ? "node" : "channel");
+                 return;
+@@ -6094,7 +5932,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+             Long requestCorrelation = correlation;
+             var replyWinner = replied = new AtomicBoolean();
+             Consumer<List<Message>> reply =
+-                    correlation == null
++                    inbound.requestSequence() == null
+                             ? null
+                             : replyParts -> {
+                                 if (!replyWinner.compareAndSet(false, true)) {
+@@ -6107,11 +5945,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+                                             requireStarted(),
+                                             inbound.source(),
+                                             inbound.requestSequence(),
+-                                            encodeApplicationFrames(
+-                                                    wire.encodeReplyHeader(
+-                                                            requestCorrelation, 0, 0),
+-                                                    null,
+-                                                    replyParts));
++                                            nativeRequest ? replyParts : encodeApplicationFrames(
++                                                    wire.encodeReplyHeader(requestCorrelation, 0, 0),
++                                                    null, replyParts));
+                                 } finally {
+                                     ZLinkFrameworkMultipartView.closeAll(replyParts);
+                                 }
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelCallRuntime.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelCallRuntime.java
+index 8b562e727f..153f9c110b 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelCallRuntime.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelCallRuntime.java
+@@ -258,6 +258,10 @@ final class ZLinkChannelCallRuntime {
+     }
+ 
+     <TReply> TReply decodeReply(ZLinkBackendReceived reply, Class<TReply> replyType) {
++        return decodeReply(reply, replyType, false);
++    }
++
++    <TReply> TReply decodeReply(ZLinkBackendReceived reply, Class<TReply> replyType, boolean nativeWire) {
+         if (reply.result() != ZLinkBackendRequestResult.OK) {
+             throw ZLinkFrameworkErrorOrigin.framework(
+                     reply.result().toFrameworkErrorKind(reply.failureCode()),
+@@ -265,7 +269,8 @@ final class ZLinkChannelCallRuntime {
+                     reply.failureCode());
+         }
+         ZLinkChannelEnvelope.Header header =
+-                ZLinkChannelEnvelope.tryDecodeHeader(reply.parts(), false);
++                nativeWire ? ZLinkChannelEnvelope.decodeNative(reply.parts())
++                        : ZLinkChannelEnvelope.tryDecodeHeader(reply.parts(), false);
+         ZLinkFrameworkException errorReply = ZLinkFrameworkErrorReply.failure(header);
+         if (errorReply != null) throw errorReply;
+         return replyDecoder.decode(
+@@ -407,6 +412,16 @@ final class ZLinkChannelCallRuntime {
+                 names);
+     }
+ 
++    List<Message> nativeEnvelopeParts(
++            int operation, String channelName, Optional<String> packetName,
++            ZLinkFrameworkMultipartView payload, String contentType, Map<String, String> metadata,
++            UUID operationId) {
++        return ZLinkChannelEnvelope.encodeNative(
++                ZLinkChannelEnvelope.create(ZLinkChannelEnvelope.KIND_REQUEST, channelName,
++                        packetName.orElseThrow(), contentType, null, metadata,
++                        ZLinkFlowContext.current(), operationId), payload, operation);
++    }
++
+     static List<Message> envelopeParts(
+             int kind,
+             String channelName,
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelRouteCalls.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelRouteCalls.java
+index 83c62c585c..064e3e519b 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelRouteCalls.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelRouteCalls.java
+@@ -491,7 +491,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
+             List<Message> requestParts) {
+         return ZLinkServiceOperationRegistry.<ZLinkBackendReceived, TReply>prepareOperation(
+                 id,
+-                reply -> runtime.decodeReply(reply, replyType),
++                reply -> runtime.decodeReply(reply, replyType, true),
+                 null,
+                 ZLinkChannelCallRuntime::requestFailure,
+                 (result, error) -> {
+@@ -529,16 +529,14 @@ final class RouteRequestCall implements ZLinkRequestCall {
+ 
+     private List<Message> requestParts(java.util.UUID operationId, Map<String, String> metadata) {
+         List<Message> requestParts =
+-                runtime.registeredEnvelopeParts(
+-                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
++                runtime.nativeEnvelopeParts(
++                        systems.zlink.framework.runtime.protocol.ServiceWireConstants.COMMAND_NODE_REQUEST,
+                         channelName,
+                         packetName,
+                         payload,
+                         contentType,
+                         metadata,
+-                        operationId,
+-                        channelNames,
+-                        names);
++                        operationId);
+         ZLinkMessageFlowTracer.TracePoint sent = runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+         if (sent != null) {
+             sent.trace(
+@@ -985,16 +983,14 @@ final class ChannelRequestCall implements ZLinkRequestCall {
+                 this.metadata == null ? ZLinkApplicationMetadata.empty() : this.metadata;
+         var operationId = ZLinkServiceOperationIds.next();
+         List<Message> parts =
+-                runtime.registeredEnvelopeParts(
+-                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
++                runtime.nativeEnvelopeParts(
++                        systems.zlink.framework.runtime.protocol.ServiceWireConstants.COMMAND_CHANNEL_REQUEST,
+                         channelName,
+                         packetName,
+                         payload,
+                         contentType,
+                         metadata.values(),
+-                        operationId,
+-                        channelNames,
+-                        names);
++                        operationId);
+         var result =
+                 requestResult(
+                         replyType,
+@@ -1037,7 +1033,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
+             List<Message> requestParts) {
+         return ZLinkServiceOperationRegistry.<ZLinkBackendReceived, TReply>prepareOperation(
+                 id,
+-                reply -> runtime.decodeReply(reply, replyType),
++                reply -> runtime.decodeReply(reply, replyType,
++                        surface == ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL),
+                 null,
+                 ZLinkChannelCallRuntime::requestFailure,
+                 (result, error) -> {
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkMeshApplicationDispatcher.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkMeshApplicationDispatcher.java
+index 6f16ae0b73..d21b462536 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkMeshApplicationDispatcher.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkMeshApplicationDispatcher.java
+@@ -222,8 +222,9 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
+         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope;
+         try {
+             envelope =
+-                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+-                            .decodeDispatchHeader(record.parts(), captureFlow);
++                    (kind == RecordKind.NODE_REQUEST || kind == RecordKind.CHANNEL_REQUEST)
++                            ? ZLinkChannelEnvelope.decodeNative(record.parts())
++                            : ZLinkChannelEnvelope.decodeDispatchHeader(record.parts(), captureFlow);
+         } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+             //  A JSON-object first frame that is not a valid shared envelope
+             //  is a protocol error (C++ decode parity).
+@@ -678,14 +679,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
+                                                 replyAndClose(
+                                                         record,
+                                                         token,
+-                                                        ZLinkChannelDispatchReporter.replyParts(
+-                                                                envelope,
+-                                                                reply,
+-                                                                namespace.channelNames,
+-                                                                route != null
+-                                                                        ? route.envelopeNames()
+-                                                                        : channel.envelopeNames(),
+-                                                                framework.codecs()));
++                                                        ZLinkChannelEnvelope.encodeNative(
++                                                                ZLinkChannelEnvelope.reply(envelope), ZLinkFrameworkMultipartView.owned(reply), systems.zlink.framework.runtime.protocol.ServiceWireConstants.COMMAND_REPLY));
+                                                 traceFlow(
+                                                         ZLinkMessageFlowOutcome.REPLIED,
+                                                         record,
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java
+index ec429fea46..f05c3cfae7 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java
+@@ -843,6 +843,16 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
+             }
+         }
+ 
++        /** Completes a local typed operation directly from its binding request completion. */
++        public <V> void receiveBinding(V value, Throwable failure, Consumer<? super V> discardValue) {
++            try {
++                if (failure == null) receiveValue(value, discardValue);
++                else receiveFailure(failure);
++            } finally {
++                clearCancellation();
++            }
++        }
++
+         private <V> void receiveValue(V value, Consumer<? super V> discardValue) {
+             T decoded;
+             Consumer<? super T> discard = discardResult;
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/messaging/ZLinkChannelEnvelope.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/messaging/ZLinkChannelEnvelope.java
+index 97c41bb0af..3b0c5a9ed8 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/messaging/ZLinkChannelEnvelope.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/messaging/ZLinkChannelEnvelope.java
+@@ -127,6 +127,96 @@ public final class ZLinkChannelEnvelope {
+         }
+     }
+ 
++    /** Measurement-only major 2: native [descriptor, typed payload], flow off, empty metadata. */
++    public static List<Message> encodeNative(Header header, ZLinkFrameworkMultipartView body, int operation) {
++        if (!header.metadata().isEmpty() || header.flowId() != null || header.topic() != null
++                || header.source() != null) {
++            throw new IllegalArgumentException("prototype requires empty metadata and flow off");
++        }
++        byte[] channel = header.channelName().getBytes(StandardCharsets.UTF_8);
++        byte[] name = header.messageName().getBytes(StandardCharsets.UTF_8);
++        int codec = switch (header.contentType()) {
++            case "application/json" -> 0;
++            case "application/x-protobuf" -> 1;
++            case "application/zlink-framework-json-v1" -> 2;
++            default -> throw new IllegalArgumentException("unsupported prototype codec");
++        };
++        if (channel.length > 255 || name.length > 255 || header.correlationId() == null
++                || header.correlationId().length() != 32) {
++            throw new IllegalArgumentException("invalid prototype names or 128-bit identity");
++        }
++        long high = Long.parseUnsignedLong(header.correlationId(), 0, 16, 16);
++        long low = Long.parseUnsignedLong(header.correlationId(), 16, 32, 16);
++        int flags = header.deadline() == null ? 0 : 1;
++        byte[] errorCode = null, errorMessage = null;
++        if (header.isError()) {
++            flags |= 2;
++            errorCode = (header.errorCode() == null ? "" : header.errorCode()).getBytes(StandardCharsets.UTF_8);
++            errorMessage = (header.errorMessage() == null ? "" : header.errorMessage()).getBytes(StandardCharsets.UTF_8);
++        }
++        ByteBuffer b = ByteBuffer.allocate(24 + channel.length + name.length
++                + ((flags & 1) == 0 ? 0 : 8) + ((flags & 2) == 0 ? 0 : 8 + errorCode.length + errorMessage.length));
++        b.put((byte)'Z').put((byte)'M').put((byte)2).put((byte)operation).put((byte)flags);
++        b.put((byte)codec).putLong(high).putLong(low);
++        b.put((byte)channel.length).put(channel).put((byte)name.length).put(name);
++        if ((flags & 1) != 0) b.putLong(java.time.Instant.parse(header.deadline()).toEpochMilli());
++        if ((flags & 2) != 0) b.putInt(errorCode.length).put(errorCode).putInt(errorMessage.length).put(errorMessage);
++        return ZLinkFrameworkMultipartView.encoded(b.array(), body);
++    }
++
++    public static int nativeOperation(ByteBuffer b) {
++        int start = b.position();
++        if (b.remaining() < 24 || b.get(start) != 'Z' || b.get(start + 1) != 'M'
++                || b.get(start + 2) != 2) throw new IllegalArgumentException("invalid prototype descriptor");
++        int operation = Byte.toUnsignedInt(b.get(start + 3));
++        if (operation != ServiceWireConstants.COMMAND_NODE_REQUEST
++                && operation != ServiceWireConstants.COMMAND_CHANNEL_REQUEST
++                && operation != ServiceWireConstants.COMMAND_REPLY)
++            throw new IllegalArgumentException("invalid prototype operation");
++        return operation;
++    }
++
++    public static String nativeChannel(ByteBuffer b) {
++        nativeOperation(b);
++        b.position(b.position() + 22);
++        return nativeText(b);
++    }
++
++    private static String nativeText(ByteBuffer b) {
++        byte[] text = new byte[Byte.toUnsignedInt(b.get())];
++        b.get(text);
++        return new String(text, StandardCharsets.UTF_8);
++    }
++
++    public static Header decodeNative(List<Message> parts) {
++        if (parts.size() != 2) throw new IllegalArgumentException("prototype requires two native parts");
++        ByteBuffer b = ZLinkFrameworkMultipartView.buffer(parts, 0);
++        int operation = nativeOperation(b);
++        b.position(b.position() + 4);
++        int flags = Byte.toUnsignedInt(b.get());
++        int kind = operation == ServiceWireConstants.COMMAND_REPLY
++                ? (flags & 2) == 0 ? KIND_RESPONSE : KIND_ERROR : KIND_REQUEST;
++        String codec = switch (Byte.toUnsignedInt(b.get())) {
++            case 0 -> "application/json";
++            case 1 -> "application/x-protobuf";
++            case 2 -> "application/zlink-framework-json-v1";
++            default -> throw new IllegalArgumentException("invalid prototype codec");
++        };
++        if ((flags & ~3) != 0 || (operation != ServiceWireConstants.COMMAND_REPLY && (flags & 2) != 0))
++            throw new IllegalArgumentException("invalid prototype kind or flags");
++        String identity = ZLinkServiceOperationIds.correlationId(new UUID(b.getLong(), b.getLong()));
++        String channel = nativeText(b);
++        String name = nativeText(b);
++        String deadline = (flags & 1) == 0 ? null : java.time.Instant.ofEpochMilli(b.getLong()).toString();
++        String errorCode = null, errorMessage = null;
++        if ((flags & 2) != 0) {
++            byte[] text = new byte[b.getInt()]; b.get(text); errorCode = new String(text, StandardCharsets.UTF_8);
++            text = new byte[b.getInt()]; b.get(text); errorMessage = new String(text, StandardCharsets.UTF_8);
++        }
++        if (b.hasRemaining()) throw new IllegalArgumentException("trailing prototype descriptor bytes");
++        return new Header(kind, channel, name, codec, identity, deadline, null, errorCode, errorMessage, null, Map.of(), null, null);
++    }
++
+     public static String newCorrelationId() {
+         return ZLinkServiceOperationIds.correlationId(ZLinkServiceOperationIds.next());
+     }

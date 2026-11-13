@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../redis-common.sh"
+source "$SCRIPT_DIR/../sample-build-common.sh"
+zlink_cpp_sample_prepare_build
+if [[ ! -x "$BIN_DIR/sample_cpp_framework_deliverydispatch_client" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_deliverydispatch_client" ]]; then
+  BIN_DIR="$BIN_DIR/linux-ninja-debug"
+fi
+
+PIDS=()
+WAIT_ATTEMPTS=300
+WAIT_INTERVAL_SECONDS=0.1
+RUN_DIR="$(mktemp -d)"
+LOG_DIR="$RUN_DIR/logs"
+CONFIG_DIR="$RUN_DIR/config"
+FLOW_LOG_DIR="$RUN_DIR/flow-logs"
+REDIS_CONTAINER_NAME=""
+mkdir -p "$LOG_DIR" "$CONFIG_DIR" "$FLOW_LOG_DIR"
+cleanup() {
+  local code=${1:-$?}
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
+  if [[ -n "$REDIS_CONTAINER_NAME" ]]; then
+    zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
+  fi
+  zlink_sample_close_run_dir "$RUN_DIR" "$code" "DeliveryDispatch"
+  return "$code"
+}
+trap zlink_cpp_sample_exit_trap EXIT
+
+read -r -a DELIVERY_PORTS <<<"$(zlink_sample_allocate_paired_ports 20)"
+RESERVED_PORT="${DELIVERY_PORTS[0]}"
+API_HTTP_PORT="${DELIVERY_PORTS[1]}"
+DISPATCH_ROUTE="tcp://127.0.0.1:${DELIVERY_PORTS[2]}"
+DISPATCH_SPOT_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[3]}"
+TRACKING_ROUTE="tcp://127.0.0.1:${DELIVERY_PORTS[4]}"
+TRACKING_SPOT_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[5]}"
+TRACKING_SPOT="tcp://127.0.0.1:${DELIVERY_PORTS[6]}"
+DISPATCH_SPOT="tcp://127.0.0.1:${DELIVERY_PORTS[7]}"
+CUSTOMER_STREAM="tcp://127.0.0.1:${DELIVERY_PORTS[8]}"
+CUSTOMER_SPOT_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[9]}"
+CUSTOMER_SPOT="tcp://127.0.0.1:${DELIVERY_PORTS[10]}"
+COURIER_STREAM="tcp://127.0.0.1:${DELIVERY_PORTS[11]}"
+COURIER_SESSION_SPOT_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[12]}"
+COURIER_SESSION_SPOT="tcp://127.0.0.1:${DELIVERY_PORTS[13]}"
+COURIER_NODE1_ROUTE="tcp://127.0.0.1:${DELIVERY_PORTS[14]}"
+COURIER_NODE1_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[15]}"
+COURIER_NODE1="tcp://127.0.0.1:${DELIVERY_PORTS[16]}"
+COURIER_NODE2_ROUTE="tcp://127.0.0.1:${DELIVERY_PORTS[17]}"
+COURIER_NODE2_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[18]}"
+COURIER_NODE2="tcp://127.0.0.1:${DELIVERY_PORTS[19]}"
+if [[ -z "$RESERVED_PORT" || -z "$COURIER_NODE2" ]]; then
+  echo "Failed to allocate local TCP ports for the DeliveryDispatch sample." >&2
+  echo "This environment may block local socket creation." >&2
+  exit 1
+fi
+zlink_cpp_sample_log_step "build"
+cmake --build "$BUILD_DIR" --parallel 2 --target \
+  zdd_dispatch \
+  zdd_courier_actor_node \
+  zdd_customer_gateway \
+  zdd_courier_session \
+  zdd_tracking \
+  zdd_client
+
+zlink_cpp_sample_log_step "Redis start"
+zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port \
+  "zlink-redis-cpp-sample-deliverydispatch" "redis:7-alpine"
+REDIS_ENDPOINT="tcp://127.0.0.1:${redis_port}"
+REDIS_KEY_PREFIX="deliverydispatch:$$:"
+API_HTTP_URL="http://127.0.0.1:${API_HTTP_PORT}"
+
+# 각 role은 자기 설정 파일 하나만 받는다(공통 정책 sample-e2e-configuration-policy.ko.md §2.1).
+# 실행별 port와 Redis endpoint는 runner가 정하지만, 애플리케이션에는 환경 변수가 아니라 이
+# 파일로만 전달한다.
+write_role_config() {
+  local role="$1"
+  local instance_name="${2:-}"
+  local instance_field=""
+  if [[ -n "$instance_name" ]]; then
+    instance_field=", \"instanceName\": \"$instance_name\""
+  fi
+  zlink_sample_write_private_file "$CONFIG_DIR/${role}.json" <<CONFIG_JSON
+{
+  "sample": {
+    "role": {"name": "$role", "logDir": "$FLOW_LOG_DIR"$instance_field},
+    "topology": {
+      "redisEndpoint": "$REDIS_ENDPOINT",
+      "redisKeyPrefix": "$REDIS_KEY_PREFIX",
+      "dispatchApiHttpUrl": "$API_HTTP_URL",
+      "dispatchRouteEndpoint": "$DISPATCH_ROUTE",
+      "dispatchSpotRouterEndpoint": "$DISPATCH_SPOT_ROUTER",
+      "dispatchSpotEndpoint": "$DISPATCH_SPOT",
+      "trackingRouteEndpoint": "$TRACKING_ROUTE",
+      "trackingSpotRouterEndpoint": "$TRACKING_SPOT_ROUTER",
+      "trackingSpotEndpoint": "$TRACKING_SPOT",
+      "customerStreamEndpoint": "$CUSTOMER_STREAM",
+      "customerSpotRouterEndpoint": "$CUSTOMER_SPOT_ROUTER",
+      "customerSpotEndpoint": "$CUSTOMER_SPOT",
+      "courierStreamEndpoint": "$COURIER_STREAM",
+      "courierSessionSpotRouterEndpoint": "$COURIER_SESSION_SPOT_ROUTER",
+      "courierSessionSpotEndpoint": "$COURIER_SESSION_SPOT",
+      "courierActorNode1RouteEndpoint": "$COURIER_NODE1_ROUTE",
+      "courierActorNode1RouterEndpoint": "$COURIER_NODE1_ROUTER",
+      "courierActorNode1Endpoint": "$COURIER_NODE1",
+      "courierActorNode2RouteEndpoint": "$COURIER_NODE2_ROUTE",
+      "courierActorNode2RouterEndpoint": "$COURIER_NODE2_ROUTER",
+      "courierActorNode2Endpoint": "$COURIER_NODE2"
+    }
+  }
+}
+CONFIG_JSON
+}
+
+write_role_config tracking
+write_role_config customer-gateway
+write_role_config courier-session
+write_role_config dispatch
+write_role_config courier-node-1 courier-node-1
+write_role_config courier-node-2 courier-node-2
+
+port_of() {
+  local endpoint="$1"
+  echo "${endpoint##*:}"
+}
+
+wait_port() {
+  local label="$1"
+  local port="$2"
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+    if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "timed out waiting for ${label} on ${port}" >&2
+  for log in "$LOG_DIR"/*.log; do
+    if [[ -f "$log" ]]; then
+      echo "===== ${log}" >&2
+      cat "$log" >&2
+    fi
+  done
+  return 1
+}
+
+wait_port redis "$(port_of "$REDIS_ENDPOINT")"
+
+start_role() {
+  local name="$1"
+  shift
+  stdbuf -oL -eL "$@" >"$LOG_DIR/${name}.log" 2>&1 &
+  local pid=$!
+  PIDS+=("$pid")
+  zlink_cpp_sample_log_step "process start: $name pid=$pid"
+}
+
+dump_logs() {
+  for log in "$LOG_DIR"/*.log; do
+    if [[ -f "$log" ]]; then
+      echo "===== ${log}" >&2
+      cat "$log" >&2
+    fi
+  done
+  for log in "$FLOW_LOG_DIR"/flow-*.log; do
+    if [[ -f "$log" ]]; then
+      echo "===== ${log}" >&2
+      cat "$log" >&2
+    fi
+  done
+}
+
+start_role tracking "$BIN_DIR/sample_cpp_framework_deliverydispatch_tracking" \
+  --config="$CONFIG_DIR/tracking.json"
+start_role customer-gateway "$BIN_DIR/sample_cpp_framework_deliverydispatch_customer_gateway" \
+  --config="$CONFIG_DIR/customer-gateway.json"
+start_role courier-session "$BIN_DIR/sample_cpp_framework_deliverydispatch_courier_session" \
+  --config="$CONFIG_DIR/courier-session.json"
+start_role courier-node-1 \
+  "$BIN_DIR/sample_cpp_framework_deliverydispatch_courier_actor_node" \
+  --config="$CONFIG_DIR/courier-node-1.json"
+start_role courier-node-2 \
+  "$BIN_DIR/sample_cpp_framework_deliverydispatch_courier_actor_node" \
+  --config="$CONFIG_DIR/courier-node-2.json"
+start_role dispatch "$BIN_DIR/sample_cpp_framework_deliverydispatch_dispatch" \
+  --config="$CONFIG_DIR/dispatch.json"
+
+wait_port tracking "$(port_of "$TRACKING_ROUTE")"
+wait_port tracking-spot "$(port_of "$TRACKING_SPOT_ROUTER")"
+wait_port customer-stream "$(port_of "$CUSTOMER_STREAM")"
+wait_port customer-spot "$(port_of "$CUSTOMER_SPOT_ROUTER")"
+wait_port courier-stream "$(port_of "$COURIER_STREAM")"
+wait_port courier-session-spot "$(port_of "$COURIER_SESSION_SPOT_ROUTER")"
+wait_port courier-node-1-spot "$(port_of "$COURIER_NODE1_ROUTER")"
+wait_port courier-node-2-spot "$(port_of "$COURIER_NODE2_ROUTER")"
+wait_port dispatch "$(port_of "$DISPATCH_ROUTE")"
+wait_port dispatch-http "$API_HTTP_PORT"
+
+log_line_count() {
+  local expected="$1"
+  shift
+  awk -v expected="$expected" '$0 == expected { count += 1 } END { print count + 0 }' "$@"
+}
+
+wait_log_count() {
+  local label="$1"
+  local expected="$2"
+  local count="$3"
+  shift 3
+  local actual=0
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+    actual="$(log_line_count "$expected" "$@")"
+    if [[ "$actual" -eq "$count" ]]; then
+      return 0
+    fi
+    if [[ "$actual" -gt "$count" ]]; then
+      break
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "Expected ${label} exactly ${count} time(s), found ${actual}." >&2
+  return 1
+}
+
+log_prefix_count() {
+  local prefix="$1"
+  shift
+  awk -v prefix="$prefix" 'index($0, prefix) == 1 { count += 1 } END { print count + 0 }' "$@"
+}
+
+wait_log_prefix_count() {
+  local label="$1"
+  local prefix="$2"
+  local count="$3"
+  shift 3
+  local actual=0
+  for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
+    actual="$(log_prefix_count "$prefix" "$@")"
+    if [[ "$actual" -eq "$count" ]]; then
+      return 0
+    fi
+    if [[ "$actual" -gt "$count" ]]; then
+      break
+    fi
+    sleep "$WAIT_INTERVAL_SECONDS"
+  done
+  echo "Expected ${label} exactly ${count} time(s), found ${actual}." >&2
+  return 1
+}
+
+wait_log_count "tracking route readiness" \
+  "deliverydispatch-ready kind=route node=tracking" 1 "$LOG_DIR/tracking.log"
+wait_log_count "customer gateway route readiness" \
+  "deliverydispatch-ready kind=route node=customer-gateway" 1 "$LOG_DIR/customer-gateway.log"
+wait_log_count "courier session route readiness" \
+  "deliverydispatch-ready kind=route node=courier-session" 1 "$LOG_DIR/courier-session.log"
+wait_log_count "courier node 1 route readiness" \
+  "deliverydispatch-ready kind=route node=courier-node-1" 1 "$LOG_DIR/courier-node-1.log"
+wait_log_count "courier node 2 route readiness" \
+  "deliverydispatch-ready kind=route node=courier-node-2" 1 "$LOG_DIR/courier-node-2.log"
+wait_log_count "dispatch route readiness" \
+  "deliverydispatch-ready kind=route node=dispatch" 1 "$LOG_DIR/dispatch.log"
+wait_log_count "dispatch actor route courier node 1" \
+  "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-1" 1 "$LOG_DIR/dispatch.log"
+wait_log_count "dispatch actor route courier node 2" \
+  "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" 1 "$LOG_DIR/dispatch.log"
+
+"$BIN_DIR/sample_cpp_framework_deliverydispatch_client" \
+  --api-url "$API_HTTP_URL" \
+  --stream-endpoint "$CUSTOMER_STREAM" \
+  --courier-stream-endpoint "$COURIER_STREAM" >"$LOG_DIR/client.log" 2>&1 || {
+  cat "$LOG_DIR/client.log" >&2
+  for log in "$LOG_DIR"/*.log; do
+    echo "===== ${log}" >&2
+    cat "$log" >&2
+  done
+  exit 1
+}
+
+wait_log_count "client server evidence completion marker" \
+  "deliverydispatch-server-evidence=completed" 1 "$LOG_DIR/client.log"
+wait_log_count "client reassignment completion marker" \
+  "deliverydispatch-reassignment=completed" 1 "$LOG_DIR/client.log"
+wait_log_count "client completion marker" \
+  "deliverydispatch=completed" 1 "$LOG_DIR/client.log"
+wait_log_count "courier a bind" \
+  "deliverydispatch-courier bound courier=courier-a" 1 "$LOG_DIR/courier-session.log"
+wait_log_count "courier b bind" \
+  "deliverydispatch-courier bound courier=courier-b" 1 "$LOG_DIR/courier-session.log"
+wait_log_count "courier a bind relay" \
+  "deliverydispatch-courier bind-relayed courier=courier-a" 1 \
+  "$LOG_DIR/courier-node-1.log" "$LOG_DIR/courier-node-2.log"
+wait_log_count "courier b bind relay" \
+  "deliverydispatch-courier bind-relayed courier=courier-b" 1 \
+  "$LOG_DIR/courier-node-1.log" "$LOG_DIR/courier-node-2.log"
+wait_log_count "customer bind" \
+  "deliverydispatch-customer bound customer=customer-1" 1 "$LOG_DIR/customer-gateway.log"
+wait_log_count "delivered customer pushes" \
+  "deliverydispatch-customer pushed status=Delivered delivery=delivery-success" 1 \
+  "$LOG_DIR/customer-gateway.log"
+wait_log_count "reassigned delivered customer pushes" \
+  "deliverydispatch-customer pushed status=Delivered delivery=delivery-reassign" 1 \
+  "$LOG_DIR/customer-gateway.log"
+wait_log_prefix_count "all delivered customer pushes" \
+  "deliverydispatch-customer pushed status=Delivered delivery=" 2 "$LOG_DIR/customer-gateway.log"
+wait_log_count "delivered tracking status" \
+  "deliverydispatch-tracking status=Delivered delivery=delivery-success" 1 "$LOG_DIR/tracking.log"
+wait_log_count "reassigned delivered tracking status" \
+  "deliverydispatch-tracking status=Delivered delivery=delivery-reassign" 1 "$LOG_DIR/tracking.log"
+wait_log_prefix_count "all delivered tracking status" \
+  "deliverydispatch-tracking status=Delivered delivery=" 2 "$LOG_DIR/tracking.log"
+wait_log_count "stale courier decision" \
+  "deliverydispatch-dispatch stale-decision-ignored delivery=delivery-reassign courier=courier-a attempt=1" \
+  1 "$LOG_DIR/dispatch.log"
+wait_log_count "candidates exhausted" \
+  "deliverydispatch-dispatch failed delivery=delivery-exhausted reason=candidates-exhausted" \
+  1 "$LOG_DIR/dispatch.log"
+trap - EXIT
+cleanup
+cleanup_status=$?
+zlink_cpp_sample_assert_graceful_teardown
+if [[ "$cleanup_status" -ne 0 ]]; then
+  exit "$cleanup_status"
+fi
+echo "deliverydispatch-placement=completed"

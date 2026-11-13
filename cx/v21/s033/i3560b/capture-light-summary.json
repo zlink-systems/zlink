@@ -1,0 +1,19 @@
+{
+  "runner_exit": 0,
+  "captures": [
+    {
+      "implementation": "zlink-cpp",
+      "source_pid": 3578650,
+      "target_pid": 3578609,
+      "source_completed_delta": 719882,
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-light/zlink-cpp-run-01"
+    },
+    {
+      "implementation": "zlink-framework-cpp",
+      "source_pid": 3579590,
+      "target_pid": 3579548,
+      "source_completed_delta": 186133,
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-light/zlink-framework-cpp-run-02"
+    }
+  ]
+}

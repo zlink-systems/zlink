@@ -1,0 +1,1004 @@
+diff --git a/bindings/java/src/main/java/systems/zlink/runtime/sockets/CompletionOwner.java b/bindings/java/src/main/java/systems/zlink/runtime/sockets/CompletionOwner.java
+index 14761d7eef..ed55ceb8af 100644
+--- a/bindings/java/src/main/java/systems/zlink/runtime/sockets/CompletionOwner.java
++++ b/bindings/java/src/main/java/systems/zlink/runtime/sockets/CompletionOwner.java
+@@ -3,8 +3,6 @@
+ package systems.zlink.runtime.sockets;
+ 
+ import systems.zlink.contracts.core.RoutingId;
+-import systems.zlink.contracts.errors.CloseResult;
+-import systems.zlink.contracts.errors.ZlinkCloseException;
+ import systems.zlink.contracts.errors.ZlinkRecvException;
+ import systems.zlink.contracts.errors.ZlinkRequestException;
+ import systems.zlink.contracts.errors.ZlinkSubmitException;
+@@ -37,7 +35,6 @@ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.CompletionStage;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.ConcurrentLinkedQueue;
+-import java.util.concurrent.atomic.AtomicInteger;
+ import java.util.concurrent.atomic.AtomicLong;
+ import java.util.concurrent.locks.ReentrantLock;
+ 
+@@ -83,7 +80,7 @@ final class CompletionOwner implements AutoCloseable {
+     private final NativeSocketRuntime socket;
+     private final ConcurrentHashMap<Long, Pending<?>> pending =
+         new ConcurrentHashMap<>();
+-    private final Object ownerLock = new Object();
++    private final SocketCore core;
+     private final HashMap<Long, WritableCompletion> earlyWritable =
+         new HashMap<>();
+     private long[] unpublishedSends = new long[4];
+@@ -94,16 +91,12 @@ final class CompletionOwner implements AutoCloseable {
+         new ConcurrentLinkedQueue<>();
+     private PublicSettlement publicSettlementHead;
+     private PublicSettlement publicSettlementTail;
+-    private volatile boolean closed;
+-    // Includes native argument preparation before Core can admit the call.
+-    // Increment only under ownerLock after checking closed. Atomic release
+-    // avoids reacquiring ownerLock when native preparation or the call ends.
+-    private final AtomicInteger activeNativeCalls = new AtomicInteger();
+     private boolean finalized;
+     private Object publicOwner;
+ 
+-    CompletionOwner(NativeSocketRuntime socket) {
++    CompletionOwner(NativeSocketRuntime socket, SocketCore core) {
+         this.socket = Objects.requireNonNull(socket, "socket");
++        this.core = Objects.requireNonNull(core, "core");
+     }
+ 
+     SendSubmission submitSend(RoutingId target, List<Message> parts) {
+@@ -117,7 +110,7 @@ final class CompletionOwner implements AutoCloseable {
+                     SendFlags.DONT_WAIT.value(), 0,
+                     MemorySegment.ofAddress(token), true, false, 0L);
+             } finally {
+-                activeNativeCalls.decrementAndGet();
++                core.releaseNativeCall();
+             }
+             if (attempt.result() == SubmitResult.OK) {
+                 if (attempt.completionId() != 0L) {
+@@ -142,15 +135,15 @@ final class CompletionOwner implements AutoCloseable {
+         }
+         Pending<Void> state;
+         boolean rejectClosed;
+-        synchronized (ownerLock) {
++        synchronized (core.ownerLock) {
+             removeUnpublishedSendLocked(token);
+             state = new Pending<>(token, PendingKind.RETRY_SEND, target,
+                 retained, 0);
+             state.armWritable(attempt.completionId());
+-            rejectClosed = closed;
++            rejectClosed = core.isClosed();
+             if (!rejectClosed)
+                 pending.put(token, state);
+-            ownerLock.notifyAll();
++            core.ownerLock.notifyAll();
+         }
+         if (rejectClosed)
+             state.rejectClosed();
+@@ -165,7 +158,7 @@ final class CompletionOwner implements AutoCloseable {
+     }
+ 
+     void submitSendBlocking(RoutingId target, List<Message> parts) {
+-        SubmitAttempt attempt = withNativeCall(() ->
++        SubmitAttempt attempt = core.withNativeCall(() ->
+             submitPartsAttempt(target, parts, SendFlags.NONE.value(), 0,
+                 MemorySegment.NULL, false, false, 0L));
+         requireSuccess(attempt);
+@@ -186,7 +179,7 @@ final class CompletionOwner implements AutoCloseable {
+                     SendFlags.DONT_WAIT.value(), timeoutMs, state.context(),
+                     true, true, 0L);
+             } finally {
+-                activeNativeCalls.decrementAndGet();
++                core.releaseNativeCall();
+             }
+             if (attempt.result() == SubmitResult.OK) {
+                 if (attempt.completionId() == 0L) {
+@@ -247,7 +240,7 @@ final class CompletionOwner implements AutoCloseable {
+                     flags, timeoutMillis(timeout), state.context(), true,
+                     true, 0L);
+             } finally {
+-                activeNativeCalls.decrementAndGet();
++                core.releaseNativeCall();
+             }
+             requireSuccess(attempt);
+             closeParts(parts);
+@@ -265,26 +258,13 @@ final class CompletionOwner implements AutoCloseable {
+     }
+ 
+     void submitReply(RoutingId target, long token, List<Message> parts) {
+-        SubmitAttempt attempt = withNativeCall(() ->
++        SubmitAttempt attempt = core.withNativeCall(() ->
+             submitPartsAttempt(target, parts, SendFlags.NONE.value(), 0,
+                 MemorySegment.NULL, false, false, token));
+         requireSuccess(attempt);
+         closeParts(parts);
+     }
+ 
+-    <T> T withNativeCall(NativeSendAction<T> action) {
+-        Objects.requireNonNull(action, "action");
+-        synchronized (ownerLock) {
+-            ensureOpenForSubmitLocked();
+-            activeNativeCalls.incrementAndGet();
+-        }
+-        try {
+-            return action.run();
+-        } finally {
+-            activeNativeCalls.decrementAndGet();
+-        }
+-    }
+-
+     /**
+      * Submits a caller-owned DONT_WAIT send. A WRITABLE token needs no
+      * continuation: Core ends it and the drain closes the unmatched record.
+@@ -306,7 +286,7 @@ final class CompletionOwner implements AutoCloseable {
+             }
+             return new NoWaitAttempt(submitted.value(), errno);
+         } finally {
+-            activeNativeCalls.decrementAndGet();
++            core.releaseNativeCall();
+         }
+     }
+ 
+@@ -374,27 +354,6 @@ final class CompletionOwner implements AutoCloseable {
+         }
+     }
+ 
+-    int closeNativeSocket() {
+-        synchronized (ownerLock) {
+-            if (closed)
+-                return CloseResult.OK.value();
+-            // Core cannot see a submit still preparing its native arguments.
+-            if (activeNativeCalls.get() != 0)
+-                throw new ZlinkCloseException(CloseResult.BUSY, NativeErrno.EBUSY);
+-            int rc = Native.close(socket.handle());
+-            if (rc == CloseResult.OK.value()) {
+-                closed = true;
+-            }
+-            return rc;
+-        }
+-    }
+-
+-    private void ensureOpenForSubmitLocked() {
+-        if (closed)
+-            throw new ZlinkSubmitException(SubmitResult.TERMINATED,
+-                NativeErrno.ESHUTDOWN);
+-    }
+-
+     private static void validateParts(List<Message> parts) {
+         Objects.requireNonNull(parts, "parts");
+         if (parts.isEmpty()) {
+@@ -432,44 +391,44 @@ final class CompletionOwner implements AutoCloseable {
+     private <T> Pending<T> register(PendingKind kind, RoutingId target,
+                                     List<Message> retained,
+                                     int requestTimeoutMs) {
+-        synchronized (ownerLock) {
+-            ensureOpenForSubmitLocked();
++        synchronized (core.ownerLock) {
++            core.ensureOpenForSubmitLocked();
+             long token = nextContextTokenLocked();
+             Pending<T> state = new Pending<>(token, kind, target, retained,
+                 requestTimeoutMs);
+             pending.put(token, state);
+-            activeNativeCalls.incrementAndGet();
++            core.reserveNativeCallLocked();
+             return state;
+         }
+     }
+ 
+     private long nextContextToken() {
+-        synchronized (ownerLock) {
+-            ensureOpenForSubmitLocked();
++        synchronized (core.ownerLock) {
++            core.ensureOpenForSubmitLocked();
+             long token = nextContextTokenLocked();
+-            activeNativeCalls.incrementAndGet();
++            core.reserveNativeCallLocked();
+             return token;
+         }
+     }
+ 
+     private long nextSendContextToken() {
+-        synchronized (ownerLock) {
+-            ensureOpenForSubmitLocked();
++        synchronized (core.ownerLock) {
++            core.ensureOpenForSubmitLocked();
+             long token = nextContextTokenLocked();
+             if (unpublishedSendCount == unpublishedSends.length)
+                 unpublishedSends = Arrays.copyOf(unpublishedSends,
+                     unpublishedSends.length * 2);
+             unpublishedSends[unpublishedSendCount++] = token;
+-            activeNativeCalls.incrementAndGet();
++            core.reserveNativeCallLocked();
+             return token;
+         }
+     }
+ 
+     private void discardUnpublishedSend(long token) {
+-        synchronized (ownerLock) {
++        synchronized (core.ownerLock) {
+             removeUnpublishedSendLocked(token);
+             if (earlyWritable.remove(token) != null)
+-                ownerLock.notifyAll();
++                core.ownerLock.notifyAll();
+         }
+     }
+ 
+@@ -567,7 +526,7 @@ final class CompletionOwner implements AutoCloseable {
+     }
+ 
+     private void receiveOneBlocking() {
+-        if (closed)
++        if (core.isClosed())
+             throw new IllegalStateException("socket is closed");
+         MemorySegment completion = NATIVE_SCRATCH.get().completion;
+         while (true) {
+@@ -590,7 +549,7 @@ final class CompletionOwner implements AutoCloseable {
+     private int drainLocked(boolean settleInline) {
+         int progress = 0;
+         MemorySegment completion = NATIVE_SCRATCH.get().completion;
+-        while (!closed) {
++        while (!core.isClosed()) {
+             completion.fill((byte) 0);
+             completion.set(ValueLayout.JAVA_INT,
+                 NativeLayouts.COMPLETION_STRUCT_SIZE_OFFSET,
+@@ -599,7 +558,7 @@ final class CompletionOwner implements AutoCloseable {
+                 RECV_DONT_WAIT);
+             if (rc == RecvResult.NO_DATA.value()) {
+                 Pending<?> state;
+-                while (!closed && (state = retries.poll()) != null) {
++                while (!core.isClosed() && (state = retries.poll()) != null) {
+                     if (!state.awaitingWritable())
+                         continue;
+                     if (state.kind == PendingKind.REQUEST)
+@@ -631,7 +590,7 @@ final class CompletionOwner implements AutoCloseable {
+             MemorySegment context = completion.get(ValueLayout.ADDRESS,
+                 NativeLayouts.COMPLETION_CONTEXT_OFFSET);
+             token = context.address();
+-            synchronized (ownerLock) {
++            synchronized (core.ownerLock) {
+                 state = pending.get(token);
+                 if (state == null && unpublishedSendLocked(token)) {
+                     WritableCompletion record = (WritableCompletion)
+@@ -655,16 +614,16 @@ final class CompletionOwner implements AutoCloseable {
+         }
+         if (storedEarly) {
+             boolean interrupted = false;
+-            synchronized (ownerLock) {
+-                while (unpublishedSendLocked(token) && !closed) {
++            synchronized (core.ownerLock) {
++                while (unpublishedSendLocked(token) && !core.isClosed()) {
+                     try {
+-                        ownerLock.wait();
++                        core.ownerLock.wait();
+                     } catch (InterruptedException failure) {
+                         interrupted = true;
+                     }
+                 }
+                 result = earlyWritable.remove(token);
+-                if (!closed && result != null)
++                if (!core.isClosed() && result != null)
+                     state = pending.get(token);
+             }
+             if (interrupted)
+@@ -720,14 +679,14 @@ final class CompletionOwner implements AutoCloseable {
+     }
+ 
+     private boolean hasPublicOwner() {
+-        synchronized (ownerLock) {
++        synchronized (core.ownerLock) {
+             return publicOwner != null;
+         }
+     }
+ 
+     private void ensurePublicOwner() {
+-        synchronized (ownerLock) {
+-            ensureOpenForSubmitLocked();
++        synchronized (core.ownerLock) {
++            core.ensureOpenForSubmitLocked();
+             if (publicOwner == null)
+                 throw new ZlinkSubmitException(SubmitResult.INVALID_STATE);
+         }
+@@ -739,8 +698,8 @@ final class CompletionOwner implements AutoCloseable {
+         try {
+             drainLock.lock();
+             try {
+-                synchronized (ownerLock) {
+-                    if (closed)
++                synchronized (core.ownerLock) {
++                    if (core.isClosed())
+                         throw new IllegalStateException("socket is closed");
+                     if (publicOwner == claimant)
+                         return false;
+@@ -762,7 +721,7 @@ final class CompletionOwner implements AutoCloseable {
+         Objects.requireNonNull(claimant, "claimant");
+         drainLock.lock();
+         try {
+-            synchronized (ownerLock) {
++            synchronized (core.ownerLock) {
+                 if (publicOwner != claimant)
+                     return;
+                 publicOwner = null;
+@@ -780,7 +739,7 @@ final class CompletionOwner implements AutoCloseable {
+         }
+         SubmitAttempt attempt;
+         try {
+-            attempt = withNativeCall(() ->
++            attempt = core.withNativeCall(() ->
+                 submitPartsAttempt(state.target, state.retained,
+                     SendFlags.DONT_WAIT.value(), 0, state.context(), true,
+                     false, 0L));
+@@ -821,7 +780,7 @@ final class CompletionOwner implements AutoCloseable {
+         }
+         SubmitAttempt attempt;
+         try {
+-            attempt = withNativeCall(() ->
++            attempt = core.withNativeCall(() ->
+                 submitPartsAttempt(state.target, state.retained,
+                     SendFlags.DONT_WAIT.value(), state.requestTimeoutMs,
+                     state.context(), true, true, 0L));
+@@ -865,17 +824,16 @@ final class CompletionOwner implements AutoCloseable {
+ 
+     @Override
+     public void close() {
+-        synchronized (ownerLock) {
++        synchronized (core.ownerLock) {
+             if (finalized)
+                 return;
+             finalized = true;
+-            closed = true;
+             publicOwner = this;
+-            ownerLock.notifyAll();
++            core.ownerLock.notifyAll();
+         }
+         rejectPendingClosed();
+         pending.clear();
+-        synchronized (ownerLock) {
++        synchronized (core.ownerLock) {
+             earlyWritable.clear();
+         }
+         retries.clear();
+@@ -934,11 +892,6 @@ final class CompletionOwner implements AutoCloseable {
+                    MemorySegment completionIdOut);
+     }
+ 
+-    @FunctionalInterface
+-    interface NativeSendAction<T> {
+-        T run();
+-    }
+-
+     private record WritableCompletion(int kind, long completionId,
+                                       long context,
+                                       int sendResult, int terminalErrno) {
+@@ -1177,7 +1130,7 @@ final class CompletionOwner implements AutoCloseable {
+         }
+ 
+         synchronized boolean beginRetry() {
+-            if (closed || dispatched || (kind == PendingKind.RETRY_SEND
++            if (core.isClosed() || dispatched || (kind == PendingKind.RETRY_SEND
+                     && admitted.isCancelled())) {
+                 return false;
+             }
+diff --git a/bindings/java/src/main/java/systems/zlink/runtime/sockets/NativeSocketRuntime.java b/bindings/java/src/main/java/systems/zlink/runtime/sockets/NativeSocketRuntime.java
+index be979a69cb..4180a1fa27 100644
+--- a/bindings/java/src/main/java/systems/zlink/runtime/sockets/NativeSocketRuntime.java
++++ b/bindings/java/src/main/java/systems/zlink/runtime/sockets/NativeSocketRuntime.java
+@@ -296,6 +296,10 @@ final class NativeSocketRuntime implements AutoCloseable {
+         socketCore.completionOwner().submitReply(target, token, parts);
+     }
+ 
++    SocketCore socketCore() {
++        return socketCore;
++    }
++
+     CompletionOwner completionOwner() {
+         return socketCore.completionOwner();
+     }
+diff --git a/bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketCore.java b/bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketCore.java
+index 84a2af7d7c..139332b2f8 100644
+--- a/bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketCore.java
++++ b/bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketCore.java
+@@ -11,9 +11,13 @@ import java.lang.foreign.ValueLayout;
+ import java.nio.ByteBuffer;
+ import java.nio.charset.StandardCharsets;
+ import java.util.Objects;
++import java.util.concurrent.atomic.AtomicInteger;
++import java.util.function.Supplier;
+ import systems.zlink.contracts.core.RoutingId;
+ import systems.zlink.contracts.eventing.SocketMonitor;
+ import systems.zlink.contracts.sockets.*;
++import systems.zlink.contracts.errors.CloseResult;
++import systems.zlink.contracts.errors.ZlinkCloseException;
+ import systems.zlink.contracts.errors.ZlinkException;
+ import systems.zlink.contracts.errors.ZlinkSubmitException;
+ import systems.zlink.runtime.eventing.NativeMonitorSocket;
+@@ -48,6 +52,11 @@ final class SocketCore {
+     }
+ 
+     private final NativeSocketRuntime socket;
++    final Object ownerLock = new Object();
++    private volatile boolean closed;
++    // Covers native preparation as well as the call. Increment under ownerLock
++    // after the open check; atomic release needs no second lock entry.
++    private final AtomicInteger activeNativeCalls = new AtomicInteger();
+     private Arena sendScratchArena = Arena.ofShared();
+     private MemorySegment sendScratch = MemorySegment.NULL;
+     private int sendScratchCapacity = NativeSocketRuntime.DEFAULT_IO_BUFFER_SIZE;
+@@ -59,7 +68,7 @@ final class SocketCore {
+             || type == SocketType.DEALER
+             || type == SocketType.ROUTER
+             || type == SocketType.STREAM
+-            ? new CompletionOwner(socket) : null;
++            ? new CompletionOwner(socket, this) : null;
+     }
+ 
+     void bind(String endpoint) {
+@@ -241,9 +250,50 @@ final class SocketCore {
+     }
+ 
+     int closeNativeHandle() {
+-        return completionOwner == null
+-            ? Native.close(socket.handle())
+-            : completionOwner.closeNativeSocket();
++        synchronized (ownerLock) {
++            if (closed)
++                return CloseResult.OK.value();
++            // Core cannot see a submit still preparing its native arguments.
++            if (activeNativeCalls.get() != 0)
++                throw new ZlinkCloseException(CloseResult.BUSY,
++                    NativeErrno.EBUSY);
++            int rc = Native.close(socket.handle());
++            if (rc == CloseResult.OK.value())
++                closed = true;
++            return rc;
++        }
++    }
++
++    <T> T withNativeCall(Supplier<T> action) {
++        Objects.requireNonNull(action, "action");
++        synchronized (ownerLock) {
++            ensureOpenForSubmitLocked();
++            reserveNativeCallLocked();
++        }
++        try {
++            return action.get();
++        } finally {
++            releaseNativeCall();
++        }
++    }
++
++    void ensureOpenForSubmitLocked() {
++        if (closed)
++            throw new ZlinkSubmitException(SubmitResult.TERMINATED,
++                NativeErrno.ESHUTDOWN);
++    }
++
++    // Caller holds ownerLock and has checked open before fallible preparation.
++    void reserveNativeCallLocked() {
++        activeNativeCalls.incrementAndGet();
++    }
++
++    void releaseNativeCall() {
++        activeNativeCalls.decrementAndGet();
++    }
++
++    boolean isClosed() {
++        return closed;
+     }
+ 
+     MemorySegment ensureSendScratch(int length) {
+diff --git a/bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketSendPlane.java b/bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketSendPlane.java
+index 46f6888f86..b989427896 100644
+--- a/bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketSendPlane.java
++++ b/bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketSendPlane.java
+@@ -37,7 +37,7 @@ final class SocketSendPlane {
+         WholeSubmitter submitter = sendSubmitter(routingId, flag.getValue());
+         PartAttempt attempt = isDontWait(flag)
+             ? submitTrackedNoWait(submitter, message)
+-            : socket.completionOwner().withNativeCall(
++            : socket.socketCore().withNativeCall(
+                 () -> submitSingleAttempt(submitter, message));
+         requireSuccess(attempt);
+     }
+@@ -59,7 +59,7 @@ final class SocketSendPlane {
+         PartAttempt attempt = isDontWait(flags)
+             ? submitTrackedNoWait(
+                 sendSubmitter(target, flags.getValue()), part)
+-            : socket.completionOwner().withNativeCall(() ->
++            : socket.socketCore().withNativeCall(() ->
+                 submitSingleAttempt(sendSubmitter(target, flags.getValue()),
+                     part));
+         if (attempt.result() == SubmitResult.OK.value()) {
+@@ -82,7 +82,7 @@ final class SocketSendPlane {
+         WholeSubmitter submitter = sendSubmitter(target, flags.getValue());
+         PartAttempt attempt = isDontWait(flags)
+             ? submitTrackedNoWait(submitter, part)
+-            : socket.completionOwner().withNativeCall(
++            : socket.socketCore().withNativeCall(
+                 () -> submitSingleAttempt(submitter, part));
+         requireSuccess(attempt);
+     }
+@@ -124,7 +124,7 @@ final class SocketSendPlane {
+                         });
+                 attempt = new PartAttempt(tracked.result(), tracked.errno());
+             } else {
+-                attempt = socket.completionOwner().withNativeCall(() -> {
++                attempt = socket.socketCore().withNativeCall(() -> {
+                     submitted[0] = true;
+                     int result = Native.sendRid(socket.handle(), nativeTarget,
+                         nativeMsg, 1L, flag.getValue(), MemorySegment.NULL,
+@@ -151,16 +151,18 @@ final class SocketSendPlane {
+         Objects.requireNonNull(message, "message");
+         Objects.requireNonNull(flags, "flags");
+         ensureBlockingSendAllowed(flags);
+-        requireSuccess(submitSingleAttempt(
+-            publishSubmitter(topicId, flags.getValue()), message));
++        requireSuccess(socket.socketCore().withNativeCall(() ->
++            submitSingleAttempt(
++                publishSubmitter(topicId, flags.getValue()), message)));
+     }
+ 
+     SendResult publishMessageFrameNoWaitResult(String topicId,
+                                                 Message message) {
+         Objects.requireNonNull(topicId, "topicId");
+         Objects.requireNonNull(message, "message");
+-        return sendResult(submitSingleAttempt(
+-            publishSubmitter(topicId, SendFlag.DONTWAIT.getValue()), message));
++        return sendResult(socket.socketCore().withNativeCall(() ->
++            submitSingleAttempt(publishSubmitter(topicId,
++                SendFlag.DONTWAIT.getValue()), message)));
+     }
+ 
+     void sendMessageFrame(Message message, SendFlag flag) {
+@@ -170,7 +172,7 @@ final class SocketSendPlane {
+         WholeSubmitter submitter = sendSubmitter(null, flag.getValue());
+         PartAttempt attempt = isDontWait(flag)
+             ? submitTrackedNoWait(submitter, message)
+-            : socket.completionOwner().withNativeCall(
++            : socket.socketCore().withNativeCall(
+                 () -> submitSingleAttempt(submitter, message));
+         requireSuccess(attempt);
+     }
+@@ -181,7 +183,7 @@ final class SocketSendPlane {
+         WholeSubmitter submitter = sendSubmitter(null, flag.getValue());
+         PartAttempt attempt = isDontWait(flag)
+             ? submitTrackedNoWait(submitter, message)
+-            : socket.completionOwner().withNativeCall(
++            : socket.socketCore().withNativeCall(
+                 () -> submitSingleAttempt(submitter, message));
+         if (attempt.result() == SubmitResult.OK.value()) {
+             return true;
+@@ -209,7 +211,7 @@ final class SocketSendPlane {
+         WholeSubmitter submitter = sendSubmitter(routingId, flags.getValue());
+         PartAttempt attempt = isDontWait(flags)
+             ? submitTrackedNoWait(submitter, parts)
+-            : socket.completionOwner().withNativeCall(
++            : socket.socketCore().withNativeCall(
+                 () -> submitPartsAttempt(submitter, parts));
+         requireSuccess(attempt);
+     }
+@@ -224,19 +226,19 @@ final class SocketSendPlane {
+ 
+     void publishParts(String topicId, List<Message> parts,
+                       SendFlag flags) {
+-        socket.ensureOpen();
+         validateParts(parts);
+         ensureBlockingSendAllowed(flags);
+-        requireSuccess(submitPartsAttempt(
+-            publishSubmitter(topicId, flags.getValue()), parts));
++        requireSuccess(socket.socketCore().withNativeCall(() ->
++            submitPartsAttempt(
++                publishSubmitter(topicId, flags.getValue()), parts)));
+     }
+ 
+     SendResult publishNoWaitPartsResult(String topicId,
+                                         List<Message> parts) {
+-        socket.ensureOpen();
+         validateParts(parts);
+-        return sendResult(submitPartsAttempt(
+-            publishSubmitter(topicId, SendFlag.DONTWAIT.getValue()), parts));
++        return sendResult(socket.socketCore().withNativeCall(() ->
++            submitPartsAttempt(publishSubmitter(topicId,
++                SendFlag.DONTWAIT.getValue()), parts)));
+     }
+ 
+     private WholeSubmitter sendSubmitter(RoutingId routingId, int flags) {
+diff --git a/bindings/java/src/test/java/systems/zlink/runtime/sockets/SubmitCloseAdmissionContractTest.java b/bindings/java/src/test/java/systems/zlink/runtime/sockets/SubmitCloseAdmissionContractTest.java
+index 73b2df9dab..43a66586b4 100644
+--- a/bindings/java/src/test/java/systems/zlink/runtime/sockets/SubmitCloseAdmissionContractTest.java
++++ b/bindings/java/src/test/java/systems/zlink/runtime/sockets/SubmitCloseAdmissionContractTest.java
+@@ -103,12 +103,13 @@ class SubmitCloseAdmissionContractTest {
+         TestSupport.assumeNative();
+         try (Context context = Zlink.createContext();
+              DealerSocket dealer = context.createDealerSocket()) {
+-            CompletionOwner owner = ((NativeSocketBase) dealer).runtime()
+-                .completionOwner();
++            NativeSocketRuntime runtime = ((NativeSocketBase) dealer).runtime();
++            CompletionOwner owner = runtime.completionOwner();
++            SocketCore core = runtime.socketCore();
+             RuntimeException failure = new RuntimeException(
+                 "native preparation failed");
+             assertSame(failure, assertThrows(RuntimeException.class,
+-                () -> owner.withNativeCall(() -> {
++                () -> core.withNativeCall(() -> {
+                     throw failure;
+                 })));
+             assertSame(failure, assertThrows(RuntimeException.class,
+@@ -116,7 +117,7 @@ class SubmitCloseAdmissionContractTest {
+                     throw failure;
+                 })));
+             dealer.close();
+-            assertTerminated(() -> owner.withNativeCall(() -> {
++            assertTerminated(() -> core.withNativeCall(() -> {
+                 fail("released handle must never be used");
+                 return null;
+             }));
+@@ -167,12 +168,12 @@ class SubmitCloseAdmissionContractTest {
+         TestSupport.assumeNative();
+         try (Context context = Zlink.createContext();
+              DealerSocket dealer = context.createDealerSocket()) {
+-            CompletionOwner owner = ((NativeSocketBase) dealer).runtime()
+-                .completionOwner();
++            SocketCore core = ((NativeSocketBase) dealer).runtime()
++                .socketCore();
+             CountDownLatch entered = new CountDownLatch(1);
+             CountDownLatch release = new CountDownLatch(1);
+             FutureTask<Void> submit = new FutureTask<>(() ->
+-                owner.withNativeCall(() -> {
++                core.withNativeCall(() -> {
+                     entered.countDown();
+                     try {
+                         assertTrue(release.await(TestSupport.DEFAULT_TIMEOUT_MS,
+@@ -198,7 +199,7 @@ class SubmitCloseAdmissionContractTest {
+             submit.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+             dealer.close();
+             ZlinkSubmitException terminated = assertThrows(
+-                ZlinkSubmitException.class, () -> owner.withNativeCall(() -> {
++                ZlinkSubmitException.class, () -> core.withNativeCall(() -> {
+                     fail("closed socket must not enter the native action");
+                     return null;
+                 }));
+diff --git a/bindings/java/src/test/java/systems/zlink/runtime/sockets/PublishCloseAdmissionContractTest.java b/bindings/java/src/test/java/systems/zlink/runtime/sockets/PublishCloseAdmissionContractTest.java
+new file mode 100644
+index 0000000000..cd87667402
+--- /dev/null
++++ b/bindings/java/src/test/java/systems/zlink/runtime/sockets/PublishCloseAdmissionContractTest.java
+@@ -0,0 +1,180 @@
++/* SPDX-License-Identifier: MPL-2.0 */
++package systems.zlink.runtime.sockets;
++
++import static org.junit.jupiter.api.Assertions.*;
++
++import java.util.AbstractList;
++import java.util.List;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.FutureTask;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicInteger;
++import org.junit.jupiter.api.Test;
++import systems.zlink.TestSupport;
++import systems.zlink.contracts.core.Context;
++import systems.zlink.contracts.core.Zlink;
++import systems.zlink.contracts.errors.CloseResult;
++import systems.zlink.contracts.errors.ZlinkCloseException;
++import systems.zlink.contracts.errors.ZlinkSubmitException;
++import systems.zlink.contracts.messaging.Message;
++import systems.zlink.contracts.sockets.PubSocket;
++import systems.zlink.contracts.sockets.SendFlags;
++import systems.zlink.contracts.sockets.SubmitResult;
++import systems.zlink.contracts.sockets.XPubSocket;
++import systems.zlink.runtime.nativeapi.NativeErrno;
++
++class PublishCloseAdmissionContractTest {
++    @Test
++    void preparingPublishKeepsHandleAndPermitsAnotherPublish()
++        throws Exception {
++        assertAdmission(SendFlag.NONE);
++    }
++
++    @Test
++    void preparingNoWaitPublishKeepsHandleAndPermitsAnotherPublish()
++        throws Exception {
++        assertAdmission(SendFlag.DONTWAIT);
++    }
++
++    private static void assertAdmission(SendFlag flag) throws Exception {
++        TestSupport.assumeNative();
++        try (Context context = Zlink.createContext();
++             PubSocket pub = context.createPubSocket();
++             Message first = Message.from("first");
++             Message second = Message.from("second")) {
++            pub.bind(TestSupport.inprocEndpoint("publish-admission"));
++            NativeSocketRuntime runtime = ((NativeSocketBase) pub).runtime();
++            CountDownLatch entered = new CountDownLatch(1);
++            CountDownLatch release = new CountDownLatch(1);
++            AtomicInteger reads = new AtomicInteger();
++            List<Message> parts = new AbstractList<>() {
++                @Override
++                public Message get(int index) {
++                    // Validation reads once; the move reads inside admission.
++                    if (reads.incrementAndGet() == 2) {
++                        entered.countDown();
++                        try {
++                            assertTrue(release.await(
++                                TestSupport.DEFAULT_TIMEOUT_MS,
++                                TimeUnit.MILLISECONDS));
++                        } catch (InterruptedException failure) {
++                            Thread.currentThread().interrupt();
++                            throw new AssertionError(failure);
++                        }
++                    }
++                    return first;
++                }
++
++                @Override
++                public int size() {
++                    return 1;
++                }
++            };
++            FutureTask<Void> blocked = new FutureTask<>(() -> {
++                if (flag == SendFlag.DONTWAIT) {
++                    runtime.publishNoWaitPartsResult("race", parts);
++                } else {
++                    runtime.publishParts("race", parts, flag);
++                }
++                return null;
++            });
++            FutureTask<Void> concurrent = new FutureTask<>(() -> {
++                pub.publish("race").message(second)
++                    .flags(SendFlags.DONT_WAIT).submit();
++                return null;
++            });
++            Thread sender = Thread.ofPlatform().start(blocked);
++            Thread other = null;
++            try {
++                assertTrue(entered.await(TestSupport.DEFAULT_TIMEOUT_MS,
++                    TimeUnit.MILLISECONDS));
++                other = Thread.ofPlatform().start(concurrent);
++                concurrent.get(TestSupport.DEFAULT_TIMEOUT_MS,
++                    TimeUnit.MILLISECONDS);
++                assertFalse(blocked.isDone());
++                ZlinkCloseException busy = assertThrows(
++                    ZlinkCloseException.class, pub::close);
++                assertEquals(CloseResult.BUSY, busy.getResult());
++                assertEquals(NativeErrno.EBUSY, busy.getNativeErrno());
++            } finally {
++                release.countDown();
++                sender.join(TestSupport.DEFAULT_TIMEOUT_MS);
++                if (other != null)
++                    other.join(TestSupport.DEFAULT_TIMEOUT_MS);
++            }
++            blocked.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
++            pub.close();
++        }
++    }
++
++    @Test
++    void closedPublishRejectsEveryEntryWithoutConsumingMessages() {
++        TestSupport.assumeNative();
++        try (Context context = Zlink.createContext();
++             PubSocket pub = context.createPubSocket();
++             XPubSocket xpub = context.createXPubSocket();
++             Message part = Message.from("retained")) {
++            NativeSocketRuntime runtime = ((NativeSocketBase) pub).runtime();
++            var publish = pub.publish("race").message(part);
++            var noWait = pub.publish("race").message(part)
++                .flags(SendFlags.DONT_WAIT);
++            pub.close();
++            xpub.close();
++            assertTerminated(publish::submit);
++            assertTerminated(noWait::submit);
++            assertTerminated(() -> runtime.publishMessageFrame(
++                "race", part, SendFlag.NONE));
++            assertTerminated(() -> runtime.publishMessageFrameNoWaitResult(
++                "race", part));
++            assertTerminated(() -> xpub.publish("race").message(part).submit());
++            assertTerminated(() -> xpub.publish("race").message(part)
++                .flags(SendFlags.DONT_WAIT).submit());
++            assertEquals("retained", part.toUtf8String());
++        }
++    }
++
++    @Test
++    void failedPublishPreparationReleasesReservation() {
++        TestSupport.assumeNative();
++        for (SendFlag flag : List.of(SendFlag.NONE, SendFlag.DONTWAIT)) {
++            try (Context context = Zlink.createContext();
++                 PubSocket pub = context.createPubSocket();
++                 Message part = Message.from("retained")) {
++                NativeSocketRuntime runtime =
++                    ((NativeSocketBase) pub).runtime();
++                RuntimeException failure = new RuntimeException(
++                    "publish preparation failed");
++                AtomicInteger reads = new AtomicInteger();
++                List<Message> parts = new AbstractList<>() {
++                    @Override
++                    public Message get(int index) {
++                        if (reads.incrementAndGet() == 2)
++                            throw failure;
++                        return part;
++                    }
++
++                    @Override
++                    public int size() {
++                        return 1;
++                    }
++                };
++                assertSame(failure, assertThrows(RuntimeException.class, () -> {
++                    if (flag == SendFlag.DONTWAIT) {
++                        runtime.publishNoWaitPartsResult("race", parts);
++                    } else {
++                        runtime.publishParts("race", parts, flag);
++                    }
++                }));
++                pub.close();
++                assertEquals("retained", part.toUtf8String());
++            }
++        }
++    }
++
++    private static void assertTerminated(Runnable publish) {
++        ZlinkSubmitException failure = assertThrows(
++            ZlinkSubmitException.class, publish::run);
++        assertEquals(SubmitResult.TERMINATED, failure.getResult());
++        assertEquals(NativeErrno.ESHUTDOWN, failure.getNativeErrno());
++    }
++}
+diff --git a/bindings/java/src/test/java/systems/zlink/runtime/sockets/PublishCloseRaceContractTest.java b/bindings/java/src/test/java/systems/zlink/runtime/sockets/PublishCloseRaceContractTest.java
+new file mode 100644
+index 0000000000..8672e8dd6f
+--- /dev/null
++++ b/bindings/java/src/test/java/systems/zlink/runtime/sockets/PublishCloseRaceContractTest.java
+@@ -0,0 +1,153 @@
++/* SPDX-License-Identifier: MPL-2.0 */
++package systems.zlink.runtime.sockets;
++
++import static org.junit.jupiter.api.Assertions.*;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++import java.util.TreeMap;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.TimeUnit;
++import org.junit.jupiter.api.Test;
++import systems.zlink.TestSupport;
++import systems.zlink.contracts.core.Context;
++import systems.zlink.contracts.core.Zlink;
++import systems.zlink.contracts.errors.CloseResult;
++import systems.zlink.contracts.errors.ZlinkCloseException;
++import systems.zlink.contracts.errors.ZlinkSubmitException;
++import systems.zlink.contracts.messaging.Message;
++import systems.zlink.contracts.sockets.PubSocket;
++import systems.zlink.contracts.sockets.SendFlags;
++import systems.zlink.contracts.sockets.SendResult;
++import systems.zlink.contracts.sockets.SubmitResult;
++import systems.zlink.runtime.nativeapi.NativeErrno;
++
++class PublishCloseRaceContractTest {
++    private enum Operation {
++        PUBLISH,
++        PUBLISH_NO_WAIT,
++        FRAME,
++        FRAME_NO_WAIT
++    }
++
++    @Test
++    void publishRacingCloseNeverUsesReleasedHandle() throws Exception {
++        race(Operation.PUBLISH);
++    }
++
++    @Test
++    void publishNoWaitRacingCloseNeverUsesReleasedHandle() throws Exception {
++        race(Operation.PUBLISH_NO_WAIT);
++    }
++
++    @Test
++    void frameRacingCloseNeverUsesReleasedHandle() throws Exception {
++        race(Operation.FRAME);
++    }
++
++    @Test
++    void frameNoWaitRacingCloseNeverUsesReleasedHandle() throws Exception {
++        race(Operation.FRAME_NO_WAIT);
++    }
++
++    private static void publish(Operation operation, PubSocket pub,
++        Message first, Message second) {
++        switch (operation) {
++            case PUBLISH -> pub.publish("race").message(first).message(second)
++                .submit();
++            case PUBLISH_NO_WAIT -> pub.publish("race").message(first)
++                .message(second).flags(SendFlags.DONT_WAIT).submit();
++            case FRAME -> ((NativeSocketBase) pub).runtime()
++                .publishMessageFrame("race", first, SendFlag.NONE);
++            case FRAME_NO_WAIT -> assertEquals(SendResult.SENT,
++                ((NativeSocketBase) pub).runtime()
++                    .publishMessageFrameNoWaitResult("race", first));
++        }
++    }
++
++    private static void race(Operation operation) throws Exception {
++        TestSupport.assumeNative();
++        int rounds = 1_000;
++        int submitters = 4;
++        Map<String, Integer> outcomes = new TreeMap<>();
++        Map<String, Integer> closes = new TreeMap<>();
++        Throwable firstFailure = null;
++        try (Context context = Zlink.createContext();
++             var workers = Executors.newFixedThreadPool(submitters + 1)) {
++            for (int round = 0; round < rounds; round++) {
++                try (PubSocket pub = context.createPubSocket()) {
++                    pub.bind(TestSupport.inprocEndpoint("publish-close"));
++                    CountDownLatch ready = new CountDownLatch(submitters + 1);
++                    CountDownLatch start = new CountDownLatch(1);
++                    List<Future<Throwable>> submissions = new ArrayList<>();
++                    for (int index = 0; index < submitters; index++) {
++                        submissions.add(workers.submit(() -> {
++                            try (Message first = Message.from("first");
++                                 Message second = Message.from("second")) {
++                                ready.countDown();
++                                assertTrue(start.await(
++                                    TestSupport.DEFAULT_TIMEOUT_MS,
++                                    TimeUnit.MILLISECONDS));
++                                publish(operation, pub, first, second);
++                                return null;
++                            } catch (RuntimeException failure) {
++                                return failure;
++                            }
++                        }));
++                    }
++                    Future<String> close = workers.submit(() -> {
++                        ready.countDown();
++                        assertTrue(start.await(TestSupport.DEFAULT_TIMEOUT_MS,
++                            TimeUnit.MILLISECONDS));
++                        try {
++                            pub.close();
++                            return "OK";
++                        } catch (ZlinkCloseException failure) {
++                            assertEquals(CloseResult.BUSY, failure.getResult());
++                            assertEquals(NativeErrno.EBUSY,
++                                failure.getNativeErrno());
++                            return "BUSY";
++                        }
++                    });
++                    try {
++                        assertTrue(ready.await(TestSupport.DEFAULT_TIMEOUT_MS,
++                            TimeUnit.MILLISECONDS));
++                    } finally {
++                        start.countDown();
++                    }
++                    for (Future<Throwable> submission : submissions) {
++                        Throwable failure = submission.get(
++                            TestSupport.DEFAULT_TIMEOUT_MS,
++                            TimeUnit.MILLISECONDS);
++                        String outcome = failure == null ? "OK"
++                            : failure instanceof ZlinkSubmitException submit
++                                ? submit.getResult() + "/"
++                                    + submit.getNativeErrno()
++                                : failure.getClass().getSimpleName();
++                        outcomes.merge(outcome, 1, Integer::sum);
++                        if (failure != null
++                            && !(failure instanceof ZlinkSubmitException submit
++                                && submit.getResult()
++                                    == SubmitResult.TERMINATED
++                                && submit.getNativeErrno()
++                                    == NativeErrno.ESHUTDOWN)
++                            && firstFailure == null) {
++                            firstFailure = failure;
++                        }
++                    }
++                    closes.merge(close.get(TestSupport.DEFAULT_TIMEOUT_MS,
++                        TimeUnit.MILLISECONDS), 1, Integer::sum);
++                    // Cleanup closes a BUSY socket after all publishes return.
++                }
++            }
++        }
++        System.out.println(operation + " rounds=" + rounds + " submissions="
++            + (rounds * submitters) + " outcomes=" + outcomes
++            + " closes=" + closes);
++        assertNull(firstFailure,
++            () -> "unexpected publish outcome: " + outcomes);
++    }
++}

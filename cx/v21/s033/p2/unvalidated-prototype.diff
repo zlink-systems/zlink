@@ -1,0 +1,1451 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index 579f291898..a85893fe39 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -3049,6 +3049,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+     tests/support/allocation_counter.cpp)
+   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ZLINK_FRAMEWORK_CPP_TEST_PROBES
+       AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
++    add_zlink_framework_test(
++      test_cpp_framework_queue_head
++      tests/Zlink.Framework.UnitTests/test_cpp_framework_queue_head.cpp
++      "framework-unit;framework-contract;framework-regression;messaging;execution"
++      "unit")
++    target_use_zlink_gtest_main(test_cpp_framework_queue_head)
++    target_sources(test_cpp_framework_queue_head PRIVATE tests/support/allocation_counter.cpp)
++    target_include_directories(test_cpp_framework_queue_head PRIVATE
++      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+     add_zlink_framework_test(
+       test_cpp_framework_receive_record
+       tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/application_dispatch_terminal_owner.hpp b/framework/languages/cpp/framework/src/runtime/mesh/application_dispatch_terminal_owner.hpp
+index 18c9eb014f..aaeb58b47b 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/application_dispatch_terminal_owner.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/application_dispatch_terminal_owner.hpp
+@@ -3,6 +3,7 @@
+ 
+ #include "runtime/dispatch/offload_executor.hpp"
+ #include "runtime/dispatch/application_record.hpp"
++#include "runtime/mesh/service_mailbox.hpp"
+ 
+ #include <atomic>
+ #include <functional>
+@@ -36,13 +37,21 @@ class application_dispatch_terminal_owner_t final
+ 
+     handler_entry_t take_application_entry () noexcept { return std::move (_application_entry); }
+     void settle () noexcept;
++    void set_application_entry (handler_entry_t entry) noexcept
++    {
++        _application_entry = std::move (entry);
++    }
++    void retain_record (mesh::service_mailbox_t::head_t head) noexcept
++    {
++        _record = std::move (head);
++    }
+     void enter_handler () { _application_entry (); }
+     void retain_physical_work (offload_executor_t::retained_work_t work) noexcept;
+-    host::mailbox_callback_t take_mailbox_reservation () noexcept;
+ 
+   private:
+     template <typename Callback> static void invoke (const Callback &callback) noexcept;
+ 
++    mesh::service_mailbox_t::head_t _record;
+     handler_entry_t _application_entry;
+     std::atomic_bool _settled{false};
+     std::shared_ptr<detail::mesh_node_runtime_t> _node;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index ab034f1847..fe74db6f3c 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -151,32 +151,49 @@ decode_mesh_record_header_impl (const host::receive_record_t &record,
+     if (decoded)
+         return header_result_t::success (std::move (decoded.value ()));
+ 
+-    const bool request = is_application_request (record.kind);
++    return report_mesh_record_header_failure (
++      record.kind, record.source_node_rid, record.channel_name, decoded, rejected_header,
++      [&record] (std::vector<zlink::message_t> &&reply) {
++          return host::reply (record.reply_token, std::move (reply));
++      },
++      dispatch_options);
++}
++
++result_t<std::optional<messaging::envelope_header_t>> report_mesh_record_header_failure (
++  host::record_kind_t kind,
++  const zlink::routing_id_t &source,
++  std::string_view channel_name,
++  const result_t<messaging::envelope_header_t> &decoded,
++  const std::optional<messaging::envelope_header_t> &rejected_header,
++  const std::function<zlink::submit_result_t (std::vector<zlink::message_t> &&)> &submit_reply,
++  const dispatch_options_t &dispatch_options)
++{
++    const bool request = is_application_request (kind);
+     const bool can_correlate = rejected_header && rejected_header->can_correlate_reply ();
+     auto submitted = zlink::submit_result_t::terminated;
+-    if (record.kind == kind_t::actor_request) {
++    if (kind == host::record_kind_t::actor_request) {
+         detail::channel_reply_writer_t replies;
+         auto reply = detail::encode_actor_reply (
+           replies.create_error_header (detail::actor_message_channel_name, {}, *decoded.error ()),
+           zlink::message_t{});
+-        submitted = host::reply (record.reply_token, reply.items ());
++        submitted = submit_reply (std::move (reply).take_items ());
+     } else if (request && can_correlate) {
+         detail::channel_reply_writer_t replies;
+         auto reply = replies.reply_raw_envelope (
+           replies.create_error_header (rejected_header->channel_name, *rejected_header,
+                                        *decoded.error ()),
+           zlink::message_t::from (""));
+-        submitted = host::reply (record.reply_token, reply.items ());
++        submitted = submit_reply (std::move (reply).take_items ());
+     }
+     detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
+         message_dispatch_error_event_t event{
+-          application_dispatch_surface (record.kind),
++          application_dispatch_surface (kind),
+           request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+           dispatch_error_reason_t::invalid_frame,
+           submitted == zlink::submit_result_t::ok ? dispatch_error_action_t::reply_error
+                                                   : dispatch_error_action_t::drop};
+-        event.channel_name = record.channel_name;
+-        event.source_rid = record.source_node_rid.to_string ();
++        event.channel_name = std::string (channel_name);
++        event.source_rid = source.to_string ();
+         event.exception = decoded.exception ();
+         if (rejected_header) {
+             if (!rejected_header->message_name.empty ())
+@@ -258,6 +275,7 @@ application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
+ 
+ application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
+   application_dispatch_terminal_owner_t &&other) noexcept :
++    _record (std::move (other._record)),
+     _application_entry (std::move (other._application_entry)),
+     _settled (other._settled.exchange (true, std::memory_order_acq_rel)),
+     _node (std::move (other._node)),
+@@ -285,17 +303,13 @@ void application_dispatch_terminal_owner_t::settle () noexcept
+     auto node = std::move (_node);
+     _complete_stateful_dispatch = {};
+     _release_mailbox_reservation = {};
++    _record.clear ();
+     if (node)
+         node->application_work_finished ();
+     node.reset ();
+     _physical_work.reset ();
+ }
+ 
+-host::mailbox_callback_t application_dispatch_terminal_owner_t::take_mailbox_reservation () noexcept
+-{
+-    return std::exchange (_release_mailbox_reservation, {});
+-}
+-
+ void application_dispatch_terminal_owner_t::retain_physical_work (
+   offload_executor_t::retained_work_t work) noexcept
+ {
+@@ -3818,10 +3832,6 @@ void mesh_node_host_service_t::dispatch_application (
+         if (!handled && decoded_header.value ()
+             && (owner.owner_kind == host::owner_kind_t::node
+                 || owner.owner_kind == host::owner_kind_t::channel)) {
+-            // Callers always pass an empty application_completed for node and channel owners.
+-            // The native claim still owns settlement. Transfer its existing release
+-            // callback to the bounded pipeline handoff, leaving physical work retained.
+-            terminal_callback_guard_t prefix (terminal.take_mailbox_reservation ());
+             detail::mesh_record_dispatcher_t dispatcher (*services, *serializers,
+                                                          registration->handlers, *filters,
+                                                          dispatch_options, {}, registration);
+@@ -3874,6 +3884,54 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+     auto owned_node = std::move (node);
+     auto owned_registration = std::move (registration);
+     auto &mailbox = owned_node->native_node ().transport ().mailbox ();
++    if (mesh::service_mailbox_t::concurrent_owner (owner)) {
++        const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
++        for (;;) {
++            mesh::service_mailbox_t::application_ready_batch_t ready;
++            auto head = mailbox.take_application_head (owner, &ready);
++            if (head.empty ())
++                co_return;
++            auto &record = head.front ();
++            owned_node->application_work_started ();
++            application_dispatch_terminal_owner_t terminal (owned_node);
++            terminal.retain_record (std::move (head));
++            try {
++                mesh::service_mailbox_t::notify_application_ready (ready);
++                if (!record.application && !record.application_kind ()) {
++                    (void) owned_node->native_node ().dispatch_application_control (record);
++                    if (!reject_only && std::chrono::steady_clock::now () >= deadline)
++                        co_return;
++                    continue;
++                }
++                const bool admitted = (record.application_permit && *record.application_permit)
++                                      || static_cast<bool> (record.before_application_handler);
++                terminal.set_application_entry (
++                  handler_entry_t (std::move (record.before_application_handler),
++                                   record.application_permit ? std::move (*record.application_permit)
++                                                             : application_job_queue_t::permit_t{}));
++                detail::mesh_record_dispatcher_t dispatcher (*services, *serializers,
++                                                             owned_registration->handlers, *filters,
++                                                             dispatch_options, {}, owned_registration);
++                // The existing invoker coroutine owns this exact queue node through terminal.
++                auto pending =
++                  dispatcher.dispatch (record, owned_node->native_node ().transport (),
++                                       std::move (terminal), executor, reject_only || !admitted);
++            }
++            catch (...) {
++                const auto failure = std::current_exception ();
++                detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
++                    return message_dispatch_error_event_t{.surface = dispatch_error_surface_t::node,
++                                                          .reason =
++                                                            dispatch_error_reason_t::handler_exception,
++                                                          .action = dispatch_error_action_t::drop,
++                                                          .exception = failure};
++                });
++                throw;
++            }
++            if (!reject_only && std::chrono::steady_clock::now () >= deadline)
++                co_return;
++        }
++    }
+     if (!mailbox.begin_application_drain (owner))
+         co_return;
+     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
+index 5c10f4de24..06d4c9ca3f 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
+@@ -21,6 +21,7 @@
+ #include <functional>
+ #include <memory>
+ #include <mutex>
++#include <string_view>
+ #include <vector>
+ 
+ namespace zlink::framework::detail
+@@ -46,6 +47,16 @@ decode_mesh_record_header_view (const host::receive_record_t &record,
+                                 const dispatch_options_t &dispatch_options = {});
+ 
+ 
++result_t<std::optional<messaging::envelope_header_t>> report_mesh_record_header_failure (
++  host::record_kind_t kind,
++  const zlink::routing_id_t &source,
++  std::string_view channel_name,
++  const result_t<messaging::envelope_header_t> &decoded,
++  const std::optional<messaging::envelope_header_t> &rejected_header,
++  const std::function<zlink::submit_result_t (std::vector<zlink::message_t> &&)> &reply,
++  const dispatch_options_t &dispatch_options);
++
++
+ class mesh_node_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
+ {
+   public:
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.cpp
+index ad6e3441fc..09311f9ab7 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.cpp
+@@ -1,9 +1,14 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ 
+ #include "runtime/mesh/mesh_record_dispatcher.hpp"
++#include "runtime/mesh/mesh_node_host_service.hpp"
+ 
+ #include "runtime/channels/route_packet_dispatcher.hpp"
++#include "runtime/channels/channel_reply_writer.hpp"
++#include "runtime/diagnostics/dispatch_error_reporter.hpp"
++#include "runtime/diagnostics/message_flow_tracer.hpp"
+ 
++#include <stdexcept>
+ #include <utility>
+ #include <memory>
+ 
+@@ -28,6 +33,107 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
+ {
+ }
+ 
++task_t<std::optional<route_dispatch_reply_t>>
++mesh_record_dispatcher_t::dispatch (runtime::mesh::service_mailbox_record_t &original,
++                                    runtime::mesh::raw_mesh_node_owner_t &transport,
++                                    runtime::application_dispatch_terminal_owner_t terminal,
++                                    runtime::offload_executor_t *executor,
++                                    bool reject_only) const
++{
++    using kind_t = runtime::host::record_kind_t;
++    const auto kind = original.application ? original.application->record.kind
++                                           : original.application_kind ().value ();
++    if (!is_node_or_channel_record_kind (kind))
++        throw std::invalid_argument ("queue head is not Node/Channel messaging");
++    try {
++        if (original.application)
++            original.application_parts = std::move (original.application->parts);
++        else {
++            if (original.parts ().size () != 2)
++                throw runtime::protocol::service_wire_error_t (
++                  "application wire requires a header and payload");
++            original.application_parts = runtime::protocol::borrow_application_parts (
++              runtime::protocol::message_bytes (original.body_parts ()[0]),
++              message_flow_tracer_t (_dispatch_options).flow_tracing ());
++        }
++    }
++    catch (const runtime::protocol::service_wire_error_t &) {
++        if (original.correlation)
++            (void) transport.reply_failure (
++              original,
++              static_cast<std::uint32_t> (
++                runtime::protocol::request_terminal_result::protocolError),
++              static_cast<std::uint32_t> (
++                runtime::protocol::framework_error_code::requestProtocolError));
++        return task_t<std::optional<route_dispatch_reply_t>> (
++          result_t<std::optional<route_dispatch_reply_t>>::failure (
++            framework_error_kind_t::protocol_error, "invalid application wire payload"));
++    }
++    auto encoded = runtime::messaging::message_parts_t::borrow (original.application_parts);
++    const bool request = kind == kind_t::node_request || kind == kind_t::channel_request;
++    const bool channel = kind == kind_t::channel_send || kind == kind_t::channel_request;
++    const auto submit = [&transport, &original] (route_dispatch_reply_t &&reply) {
++        const auto submitted =
++          original.application
++            ? runtime::host::reply (original.application->record.reply_token,
++                                    std::move (reply.parts).take_items ())
++                == zlink::submit_result_t::ok
++            : transport.reply (original, runtime::protocol::application_payload_t::from_parts (
++                                           std::move (reply.parts).take_items ()));
++        return submitted ? result_t<void>::success ()
++                         : result_t<void>::failure (framework_error_kind_t::internal_failure,
++                                                    "MeshNode reply submit failed");
++    };
++    std::optional<runtime::messaging::envelope_header_t> rejected_header;
++    auto decoded = runtime::messaging::envelope_codec_t{}.decode_header_view (
++      encoded, message_flow_tracer_t (_dispatch_options).flow_tracing (), &rejected_header);
++    const auto source =
++      original.application ? original.application->record.source_node_rid : original.source_rid ();
++    const auto channel_name =
++      channel ? std::string_view (original.owner).substr (8) : std::string_view{};
++    if (!decoded) {
++        auto failure = runtime::report_mesh_record_header_failure (
++          kind, source, channel_name, decoded, rejected_header,
++          [&submit, &source] (std::vector<zlink::message_t> &&parts) {
++              return submit ({source, {}, runtime::messaging::message_parts_t (std::move (parts))})
++                       ? zlink::submit_result_t::ok
++                       : zlink::submit_result_t::terminated;
++          },
++          _dispatch_options);
++        return task_t<std::optional<route_dispatch_reply_t>> (
++          propagate_failure<std::optional<route_dispatch_reply_t>> (
++            failure, "MeshNode envelope header decode failed"));
++    }
++    original.envelope_header = std::move (decoded.value ());
++    auto &header = original.envelope_header;
++    const auto received_at = original.received_at.value_or (std::chrono::system_clock::now ());
++    route_received_packet_t received{source, {}, std::move (encoded), {}, received_at};
++    const std::string dispatch_channel =
++      channel ? std::string (channel_name) : std::string (header.channel_name);
++    if (reject_only) {
++        if (request) {
++            channel_reply_writer_t replies;
++            auto parts = replies.reply_raw_envelope (
++              replies.create_error_header (
++                dispatch_channel, header,
++                framework_exception_t (framework_error_kind_t::shutting_down,
++                                       "MeshNode is draining and rejects new application work")),
++              zlink::message_t::from (""));
++            (void) submit ({source, {}, std::move (parts)});
++        }
++        return task_t<std::optional<route_dispatch_reply_t>> (
++          result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt));
++    }
++    route_packet_dispatcher_t dispatcher (dispatch_channel, *_services, *_serializers, *_handlers,
++                                          _no_internal_packets, _dispatch_options, _filters,
++                                          channel ? handler_dispatch_kind_t::channel_send
++                                                  : handler_dispatch_kind_t::node_direct_send,
++                                          channel ? handler_dispatch_kind_t::channel_request
++                                                  : handler_dispatch_kind_t::node_direct_request,
++                                          _before_application_handler, _registration, submit);
++    return dispatcher.dispatch (received, std::move (header), std::move (terminal), executor);
++}
++
+ task_t<std::optional<route_dispatch_reply_t>>
+ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &record,
+                                     std::vector<zlink::message_t> parts,
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.hpp
+index c960b096d1..72569fa0c7 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.hpp
+@@ -37,6 +37,13 @@ class mesh_record_dispatcher_t
+                               std::function<void ()> before_application_handler = {},
+                               std::shared_ptr<void> registration = {});
+ 
++    task_t<std::optional<route_dispatch_reply_t>>
++    dispatch (runtime::mesh::service_mailbox_record_t &record,
++              runtime::mesh::raw_mesh_node_owner_t &transport,
++              runtime::application_dispatch_terminal_owner_t terminal,
++              runtime::offload_executor_t *executor,
++              bool reject_only) const;
++
+     task_t<std::optional<route_dispatch_reply_t>>
+     dispatch (const runtime::host::receive_record_t &record,
+               std::vector<zlink::message_t> parts,
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+index 14782e13d8..42a0a89a39 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "runtime/mesh/service_mailbox.hpp"
+ #include "runtime/mesh/receive_path_probe.hpp"
++#include "runtime/mesh/mailbox_path_probe.hpp"
+ 
+ #include "runtime/dispatch/dispatch_limits.hpp"
+ #include "runtime/spots/activation_admission.hpp"
+@@ -137,7 +138,7 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+         throw std::invalid_argument (
+           "service mailbox record requires an owner and retained payload");
+     }
+-    // A queued original carries no claim credit; take mints it.
++    // Only a stateful prefix take mints a claim credit.
+     record.transferred = {};
+     const auto retained = retained_bytes (record);
+     std::unique_lock lock (_state->mutex);
+@@ -154,6 +155,11 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+     if (admitted)
+         admitted ();
+     queue.records.push_back (std::move (record));
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++    if (record.domain == service_mailbox_domain_t::application && concurrent_owner (owner))
++        if (auto *probe = mailbox_path_probe.load (std::memory_order_acquire))
++            ++probe->commits;
++#endif
+     queue.bytes += retained;
+     ++queue.messages;
+     ++target.messages;
+@@ -238,6 +244,11 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
+     }
+     auto &queue = found->second;
+     auto claim = std::make_shared<service_mailbox_claim_t> ();
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++    if (domain_value == service_mailbox_domain_t::application && concurrent_owner (owner))
++        if (auto *probe = mailbox_path_probe.load (std::memory_order_acquire))
++            ++probe->prefix_claims;
++#endif
+     claim->owner = owner;
+     claim->domain = domain_value;
+     const auto limit = std::min (message_budget, queue.records.size ());
+@@ -296,6 +307,81 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
+     return claim;
+ }
+ 
++bool service_mailbox_t::concurrent_owner (std::string_view owner) noexcept
++{
++    return owner == "node" || owner.starts_with ("channel:");
++}
++
++service_mailbox_t::head_t service_mailbox_t::take_application_head ()
++{
++    std::unique_lock lock (_state->mutex);
++    const auto &ready = _state->application.ready;
++    if (ready.empty () || !concurrent_owner (ready.front ()))
++        return {};
++    // Preserve the existing ready-owner order for standalone callers.
++    const auto owner = ready.front ();
++    return take_application_head_locked (owner, lock);
++}
++
++service_mailbox_t::head_t
++service_mailbox_t::take_application_head (const std::string &owner,
++                                          application_ready_batch_t *ready)
++{
++    std::unique_lock lock (_state->mutex);
++    return take_application_head_locked (owner, lock, ready);
++}
++
++service_mailbox_t::head_t
++service_mailbox_t::take_application_head_locked (const std::string &owner,
++                                                 std::unique_lock<std::mutex> &lock,
++                                                 application_ready_batch_t *publication)
++{
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++    if (concurrent_owner (owner))
++        if (auto *probe = mailbox_path_probe.load (std::memory_order_acquire))
++            ++probe->take_calls;
++#endif
++    head_t head;
++    auto &source = _state->application;
++    const auto found = source.owners.find (owner);
++    if (!concurrent_owner (owner) || found == source.owners.end ()
++        || found->second.records.empty ())
++        return head;
++    auto &queue = found->second;
++    const auto bytes = retained_bytes (queue.records.front ());
++    // Prepare any allocating publication storage before detaching the original.
++    const auto membership = std::find (source.ready.begin (), source.ready.end (), owner);
++    if (queue.records.size () > 1) {
++        if (membership == source.ready.end ())
++            source.ready.push_back (owner);
++    } else if (membership != source.ready.end ())
++        source.ready.erase (membership);
++    auto ready = take_application_ready_locked (*_state);
++    head.splice (head.end (), queue.records, queue.records.begin ());
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++    if (auto *probe = mailbox_path_probe.load (std::memory_order_acquire)) {
++        ++probe->takes;
++        if (probe->taken)
++            probe->taken (probe->context, head.front ());
++    }
++#endif
++    --queue.messages;
++    --source.messages;
++    queue.bytes -= bytes;
++    source.bytes -= bytes;
++    if (queue.records.empty ())
++        source.owners.erase (found);
++    else
++        queue.phase = owner_phase_t::ready;
++    lock.unlock ();
++    // Hosted callers establish terminal ownership before posting a successor.
++    if (publication)
++        *publication = std::move (ready);
++    else
++        notify_application_ready (ready);
++    return head;
++}
++
+ service_mailbox_record_t *service_mailbox_t::slot_locked (const claim_handle_t &handle)
+ {
+     // A claim whose credits all settled has left the FIFO; its view is not read.
+@@ -426,11 +512,21 @@ bool service_mailbox_t::release (service_mailbox_claim_t &claim)
+ bool service_mailbox_t::settle_once (service_mailbox_claim_t &claim, std::size_t index) noexcept
+ {
+     // The single settlement decision: each slot credit settles once.
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++    if (claim.domain == service_mailbox_domain_t::application && concurrent_owner (claim.owner))
++        if (auto *probe = mailbox_path_probe.load (std::memory_order_acquire))
++            ++probe->settlement_rmws;
++#endif
+     return !claim._settled[index].exchange (true, std::memory_order_acq_rel);
+ }
+ 
+ bool service_mailbox_t::settles_last (service_mailbox_claim_t &claim, std::size_t count) noexcept
+ {
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++    if (claim.domain == service_mailbox_domain_t::application && concurrent_owner (claim.owner))
++        if (auto *probe = mailbox_path_probe.load (std::memory_order_acquire))
++            ++probe->settlement_rmws;
++#endif
+     return claim._remaining.fetch_sub (count, std::memory_order_acq_rel) == count;
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+index d29ad0f56a..d8ed73a968 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+@@ -180,6 +180,8 @@ struct service_mailbox_record_t
+     std::optional<application_job_queue_t::permit_t> application_permit;
+     service_mailbox_application_t application;
+     messaging::envelope_header_t envelope_header{.content_type = {}};
++    // Native application views are owned by the same record as the received token.
++    std::vector<zlink::message_t> application_parts;
+     service_mailbox_settlement_t transferred;
+     // Read once by the publication owner before the mailbox accepts the record.
+     std::optional<request_source_t> source_original = std::nullopt;
+@@ -358,6 +360,12 @@ class service_mailbox_t
+                                                               std::size_t message_budget,
+                                                               std::size_t byte_budget,
+                                                               const claimed_t &claimed = {});
++    // A detached canonical queue node. It carries no prefix credit or settlement.
++    using head_t = std::list<service_mailbox_record_t>;
++    static bool concurrent_owner (std::string_view owner) noexcept;
++    head_t take_application_head (const std::string &owner,
++                                  application_ready_batch_t *ready = nullptr);
++    head_t take_application_head ();
+     using claim_handle_t = service_mailbox_slot_t;
+     // A missing source belongs to its original. Claims and cut share one lookup; the
+     // existing producer mutex transfers its starter, and Store work runs outside it.
+@@ -423,6 +431,9 @@ class service_mailbox_t
+ 
+   private:
+     friend class service_mailbox_settlement_t;
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++    friend struct service_mailbox_test_access_t;
++#endif
+     friend struct service_mailbox_claim_t;
+     friend struct host::application_claim_batch_t;
+ 
+@@ -471,6 +482,9 @@ class service_mailbox_t
+     static bool next_locked (const claim_handle_t &handle);
+     static service_mailbox_record_t transfer_locked (service_mailbox_record_t &slot);
+ 
++    head_t take_application_head_locked (const std::string &owner,
++                                         std::unique_lock<std::mutex> &lock,
++                                         application_ready_batch_t *ready = nullptr);
+     void notify_application_ready ();
+ 
+     struct state_t
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+index 4fecfdd249..5be0a75ab1 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+@@ -3376,6 +3376,19 @@ std::pmr::vector<std::span<const std::byte>> decode_application_part_views (
+       std::pmr::polymorphic_allocator<std::span<const std::byte>> (storage));
+ }
+ 
++application_payload_t::multipart_t borrow_application_parts (std::span<const std::uint8_t> bytes,
++                                                             bool capture_flow)
++{
++    return decode_application_parts_with (bytes, capture_flow, [] (auto part) {
++        auto message = zlink::advanced::external_message_t::from (
++          std::span<std::uint8_t> (const_cast<std::uint8_t *> (part.data ()), part.size ()),
++          [] (void *, void *) {});
++        if (!message.valid ())
++            throw std::bad_alloc ();
++        return message;
++    });
++}
++
+ namespace
+ {
+ // One received message backs every part decoded from it. Each part holds one
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
+index 80ae03b1b1..41e3873302 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
+@@ -1070,6 +1070,10 @@ decode_application_part_views (std::span<const std::uint8_t> bytes, bool capture
+ std::pmr::vector<std::span<const std::byte>> decode_application_part_views (
+   std::span<const std::uint8_t> bytes, bool capture_flow, std::pmr::memory_resource *storage);
+ 
++// Native part views borrow canonical storage. The caller retains bytes through
++// the handler terminal; these handles do not create a second payload owner.
++application_payload_t::multipart_t borrow_application_parts (std::span<const std::uint8_t> bytes,
++                                                             bool capture_flow = true);
+ application_payload_t::multipart_t decode_application_parts (zlink::message_t &&bytes,
+                                                              bool capture_flow = true);
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index 21ecf741b9..d6dead29d4 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -731,17 +731,6 @@ struct application_claim_batch_t
+         index = count = handed_off = 0;
+     }
+ 
+-    void take_ordinary (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim,
+-                        bool stateful) noexcept
+-    {
+-        // These owners can enter a relocation cut even after this claim is made.
+-        if (stateful && stateful_application_owner (claim->owner))
+-            return;
+-        for (std::size_t index = 0; index < claim->claimed_messages; ++index)
+-            entries[index].original.emplace (
+-              mesh::service_mailbox_t::transfer_locked (*claim->records[index]));
+-    }
+-
+     std::array<entry_t, dispatch_limits::receive_batch_messages> storage;
+     std::span<entry_t> entries;
+     std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+@@ -7595,12 +7584,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
+         }
+ 
+         while (accept_application_receive && !application_dispatch_started && standalone) {
++            auto head = _transport->mailbox ().take_application_head ();
++            if (!head.empty ()) {
++                dispatch_application_head (std::move (head), dispatch);
++                ++count;
++                application_dispatch_started = true;
++                break;
++            }
+             std::shared_ptr<application_claim_batch_t> batch;
+             auto claim = _transport->mailbox ().try_claim (
+               mesh::service_mailbox_domain_t::application, 1, dispatch_limits::receive_batch_bytes,
+               [&] (const auto &claimed) {
+                   batch = acquire_application_claim_batch (claimed->claimed_messages);
+-                  batch->take_ordinary (claimed, static_cast<bool> (_stateful_dispatch));
+               });
+             if (!claim)
+                 break;
+@@ -8070,6 +8065,103 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
+     co_return native;
+ }
+ 
++bool public_host_runtime_t::dispatch_application_control (mesh::service_mailbox_record_t &record)
++{
++    if (record.application)
++        return false;
++    const auto wire = record.service_header ();
++    if (wire.kind == protocol::command::logicalMulticast) {
++        namespace generated = protocol::generated::detail;
++        generated::logicalMulticast_23_t multicast;
++        generated::reader_t reader (protocol::message_bytes (record.parts ().front ()));
++        if (generated::decode_head_logicalMulticast_23 (reader, multicast)
++            != generated::error_code::ok)
++            throw protocol::service_wire_error_t ("invalid logical multicast frame");
++        auto targets =
++          _objects.multicast_local_targets (multicast.channelName.value, multicast.topic.value);
++        auto metadata =
++          (multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata)) == 0
++            ? std::shared_ptr<const std::vector<std::uint8_t>>{}
++            : std::make_shared<const std::vector<std::uint8_t>> (record.parts ()[1].to_bytes ());
++        auto parts = protocol::decode_application_parts (std::move (record.body_parts ().back ()));
++        auto before = std::move (record.before_application_handler);
++        auto pending = std::make_shared<task_t<void>> (enqueue_local_multicast (
++          std::move (targets), std::move (multicast.channelName.value),
++          std::move (multicast.topic.value), std::move (parts), std::move (metadata),
++          record.source_rid (), std::move (before),
++          record.application_permit ? std::move (*record.application_permit)
++                                    : application_job_queue_t::permit_t{}));
++        detail::observe_task_completion (
++          *pending, [self = shared_from_this (), pending] (const result_t<void> &) {});
++        return true;
++    }
++    if (record.parts ().size () != 2)
++        throw protocol::service_wire_error_t ("application wire requires two parts");
++    if (wire.kind == protocol::command::boundSessionSend) {
++        // The outbound stream delivery is a transport handoff, not an application handler.
++        record.before_application_handler = {};
++        record.application_permit.reset ();
++        (void) dispatch_bound_session_send (record);
++        return true;
++    }
++    return false;
++}
++
++void public_host_runtime_t::dispatch_application_head (
++  mesh::service_mailbox_t::head_t head,
++  const mesh::service_mailbox_t::application_dispatch_t &dispatch)
++{
++    auto *original = &head.front ();
++    if (dispatch_application_control (*original))
++        return;
++    const auto kind = original->application ? original->application->record.kind
++                                            : original->application_kind ().value ();
++    if (original->application) {
++        auto &application = *original->application;
++        dispatch (application.owner, application.record, std::move (application.parts),
++                  original->application_permit ? std::move (*original->application_permit)
++                                               : std::move (application.application_permit));
++        return;
++    }
++    ready_record_t owner;
++    owner.domain = ready_domain_t::application;
++    owner.owner_kind = kind == record_kind_t::channel_send || kind == record_kind_t::channel_request
++                         ? owner_kind_t::channel
++                         : owner_kind_t::node;
++    receive_record_t record;
++    record.domain = ready_domain_t::application;
++    record.kind = kind;
++    record.operation_kind = operation_kind (kind);
++    record.source_node_rid = original->source_rid ();
++    record.received_at = original->received_at.value_or (std::chrono::system_clock::now ());
++    record.before_application_handler = std::move (original->before_application_handler);
++    if (original->operation)
++        record.operation_id = {original->operation->first, original->operation->second};
++    if (owner.owner_kind == owner_kind_t::channel) {
++        owner.channel_name = kind == record_kind_t::channel_send
++                               ? protocol::decode_channel_send_header (
++                                   protocol::message_bytes (original->parts ().front ()))
++                               : protocol::decode_channel_request_header (
++                                   protocol::message_bytes (original->parts ().front ()))
++                                   .channel_name;
++        record.channel_name = owner.channel_name;
++    }
++    auto parts =
++      protocol::decode_application_parts (original->body_parts ()[0].copy (), capture_flow ());
++    // The manual callback API may retain a reply after this turn. Adopt the same node;
++    // hosted workers instead retain it directly in the invoker's terminal owner.
++    if (is_request (kind))
++        record.reply_token = {
++          weak_from_this (),
++          std::shared_ptr<mesh::service_mailbox_record_t> (
++            original, [head = std::move (head)] (mesh::service_mailbox_record_t *) mutable {
++                head.clear ();
++            })};
++    dispatch (owner, record, std::move (parts),
++              original->application_permit ? std::move (*original->application_permit)
++                                           : application_job_queue_t::permit_t{});
++}
++
+ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
+   std::shared_ptr<mesh::service_mailbox_claim_t> claim,
+   mesh::service_mailbox_t::application_dispatch_t dispatch,
+@@ -8307,44 +8399,7 @@ public_host_runtime_t::dispatch_application_claim (
+                 throw protocol::service_wire_error_t (
+                   "application wire requires a header and payload");
+             const auto wire = mailbox_record.service_header ();
+-            if (wire.kind == protocol::command::logicalMulticast) {
+-                namespace generated = protocol::generated::detail;
+-                generated::logicalMulticast_23_t multicast;
+-                generated::reader_t reader (
+-                  protocol::message_bytes (mailbox_record.parts ().front ()));
+-                if (generated::decode_head_logicalMulticast_23 (reader, multicast)
+-                    != generated::error_code::ok)
+-                    throw protocol::service_wire_error_t ("invalid logical multicast frame");
+-                auto targets = _objects.multicast_local_targets (multicast.channelName.value,
+-                                                                 multicast.topic.value);
+-                auto metadata =
+-                  (multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata)) == 0
+-                    ? std::shared_ptr<const std::vector<std::uint8_t>>{}
+-                    : std::make_shared<const std::vector<std::uint8_t>> (
+-                        mailbox_record.parts ()[1].to_bytes ());
+-                auto parts = protocol::decode_application_parts (
+-                  std::move (mailbox_record.body_parts ().back ()));
+-                auto before = std::move (mailbox_record.before_application_handler);
+-                auto pending = std::make_shared<task_t<void>> (enqueue_local_multicast (
+-                  std::move (targets), std::move (multicast.channelName.value),
+-                  std::move (multicast.topic.value), std::move (parts), std::move (metadata),
+-                  mailbox_record.source_rid (), std::move (before),
+-                  mailbox_record.application_permit ? std::move (*mailbox_record.application_permit)
+-                                                    : application_job_queue_t::permit_t{}));
+-                detail::observe_task_completion (
+-                  *pending, [self = shared_from_this (), pending] (const result_t<void> &) {});
+-                ++batch->count;
+-                if (!entry.retained.load (std::memory_order_acquire))
+-                    release_mailbox_reservation ();
+-                continue;
+-            }
+-            if (mailbox_record.parts ().size () != 2)
+-                throw protocol::service_wire_error_t ("application wire requires two parts");
+-            if (wire.kind == protocol::command::boundSessionSend) {
+-                // The outbound stream delivery is a transport handoff, not an application handler.
+-                mailbox_record.before_application_handler = {};
+-                mailbox_record.application_permit.reset ();
+-                (void) dispatch_bound_session_send (mailbox_record);
++            if (dispatch_application_control (mailbox_record)) {
+                 ++batch->count;
+                 if (!entry.retained.load (std::memory_order_acquire))
+                     release_mailbox_reservation ();
+@@ -8376,17 +8431,7 @@ public_host_runtime_t::dispatch_application_claim (
+                   weak_from_this (),
+                   std::shared_ptr<mesh::service_mailbox_record_t> (batch, &mailbox_record)};
+             }
+-            if (kind == record_kind_t::channel_send || kind == record_kind_t::channel_request) {
+-                owner.owner_kind = owner_kind_t::channel;
+-                owner.channel_name =
+-                  kind == record_kind_t::channel_send
+-                    ? protocol::decode_channel_send_header (
+-                        protocol::message_bytes (mailbox_record.parts ().front ()))
+-                    : protocol::decode_channel_request_header (
+-                        protocol::message_bytes (mailbox_record.parts ().front ()))
+-                        .channel_name;
+-                record.channel_name = owner.channel_name;
+-            } else if (kind == record_kind_t::spot_send || kind == record_kind_t::spot_request) {
++            if (kind == record_kind_t::spot_send || kind == record_kind_t::spot_request) {
+                 owner.owner_kind = owner_kind_t::spot;
+                 const auto spot = protocol::decode_spot_message_header (
+                   protocol::message_bytes (mailbox_record.parts ().front ()), wire.kind);
+@@ -8419,7 +8464,7 @@ public_host_runtime_t::dispatch_application_claim (
+                   node_rid_t::from_string (status ().routing_id ().to_string ()),
+                   std::move (actor_type), actor.target.actor_id, actor.target.object_generation);
+             } else {
+-                owner.owner_kind = owner_kind_t::node;
++                throw protocol::service_wire_error_t ("stateful claim requires a Spot or Actor");
+             }
+             auto parts = protocol::decode_application_parts (
+               std::move (mailbox_record.body_parts ()[0]), capture_flow ());
+@@ -8532,6 +8577,20 @@ public_host_runtime_t::dispatch_application_owner (
+   std::function<void ()> started,
+   std::function<void ()> rejected)
+ {
++    if (mesh::service_mailbox_t::concurrent_owner (owner)) {
++        auto head = _transport->mailbox ().take_application_head (owner);
++        if (head.empty ())
++            return false;
++        started ();
++        try {
++            dispatch_application_head (std::move (head), dispatch);
++            return true;
++        }
++        catch (...) {
++            rejected ();
++            return task_t<bool> (detail::current_exception_result<bool> ());
++        }
++    }
+     std::shared_ptr<application_claim_batch_t> batch;
+     std::size_t claimed = 0;
+     const auto transfer = [&] (const auto &claim) {
+@@ -8542,7 +8601,6 @@ public_host_runtime_t::dispatch_application_owner (
+         batch->claim = claim;
+         batch->dispatch = std::move (dispatch);
+         batch->rejected = std::move (rejected);
+-        batch->take_ordinary (claim, static_cast<bool> (_stateful_dispatch));
+     };
+     try {
+         // Account the accepted claim even if its consumer storage cannot be allocated.
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
+index f5d3e6e300..55ea6ca4af 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
+@@ -908,6 +908,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
+       bool accept_application_receive,
+       std::optional<std::chrono::steady_clock::time_point> next_activity,
+       bool standalone) noexcept;
++    bool dispatch_application_control (mesh::service_mailbox_record_t &record);
+     using application_owner_result_t = std::variant<bool, task_t<bool>>;
+     application_owner_result_t
+     dispatch_application_owner (std::string owner,
+@@ -1095,6 +1096,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
+     dispatch_user_spot_operations (std::shared_ptr<mesh::service_mailbox_claim_t> &&first_claim,
+                                    receive_batch_budget_t infrastructure_budget);
+     using application_claim_result_t = std::variant<std::size_t, task_t<std::size_t>>;
++    void
++    dispatch_application_head (mesh::service_mailbox_t::head_t head,
++                               const mesh::service_mailbox_t::application_dispatch_t &dispatch);
+     task_t<std::size_t>
+     dispatch_application_claim (std::shared_ptr<mesh::service_mailbox_claim_t> claim,
+                                 mesh::service_mailbox_t::application_dispatch_t dispatch,
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+index 9e3e2d5099..3ebf4a0b05 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+@@ -6,6 +6,7 @@
+ #include "runtime/locations/location_runtime.hpp"
+ #include "runtime/locations/store_location_resolvers.hpp"
+ #include "runtime/mesh/mesh_node_host_service.hpp"
++#include "runtime/mesh/mailbox_path_probe.hpp"
+ #include "runtime/messaging/client_call_codec.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+ #include <zlink.h>
+@@ -55,9 +56,8 @@ struct handler_t
+             return;
+         }
+         if (probe.value.starts_with ("queued-probe-")) {
+-            const auto index = std::stoul (probe.value.substr (13));
+-            assert (handled_queued.fetch_add (1) == index);
+-            if (index + 1 == queued_records)
++            const auto completed = handled_queued.fetch_add (1) + 1;
++            if (completed == queued_records)
+                 queue_drained.set_value ();
+             return;
+         }
+@@ -132,7 +132,9 @@ extern "C" void wrapped_notify (std::condition_variable *ready)
+ int main ()
+ {
+     bool correct = true;
+-    {
++    for (const bool channel_owner : {false, true}) {
++        worker_notifications = 0;
++        watch_notifications = false;
+         fw::completion_owner_t completion;
+         handled = {};
+         received_queued = 0;
+@@ -156,6 +158,8 @@ int main ()
+                                                             "HandoffProbe", &handler_t::handle);
+         registration->handlers.on_send<handler_t, probe_t> ("parallel", "HandoffProbe",
+                                                             &handler_t::handle);
++        registration->channels.emplace (
++          "mailbox-owner-dispatch", fw::detail::mesh_channel_registration_t{100, {}, true, true});
+         registration->channels.emplace (
+           "parallel", fw::detail::mesh_channel_registration_t{100, {}, true, true});
+         fw::serializer_registry_t serializers;
+@@ -213,17 +217,22 @@ int main ()
+               .value ();
+             std::this_thread::yield ();
+         }
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++        rt::mesh::mailbox_path_probe_t path;
++        rt::mesh::mailbox_path_probe = &path;
++#endif
+         rt::messaging::client_call_codec_t codec;
+         auto header = codec.create_envelope (rt::messaging::message_kind_t::command,
+                                              "mailbox-owner-dispatch", "HandoffProbe");
+         auto parts =
+           codec.encode_envelope_parts (header, probe_t{"owner-dispatch-probe"}, serializers);
+-        assert (
+-          source
+-            .send_to_node (*registration->routing_id, parts.items (), std::vector<std::uint8_t>{})
+-            .result ()
+-            .value ()
+-          == zlink::submit_result_t::ok);
++        const auto send = [&] (const auto &items) {
++            return channel_owner ? source.send_to_channel ("mailbox-owner-dispatch", items,
++                                                           std::vector<std::uint8_t>{})
++                                 : source.send_to_node (*registration->routing_id, items,
++                                                        std::vector<std::uint8_t>{});
++        };
++        assert (send (parts.items ()).result ().value () == zlink::submit_result_t::ok);
+         assert (invocation.wait_for (5s) == std::future_status::ready);
+         std::thread::id receiver;
+         {
+@@ -236,23 +245,20 @@ int main ()
+             for (std::size_t index = 0; index < queued_records; ++index) {
+                 auto queued = codec.encode_envelope_parts (
+                   header, probe_t{"queued-probe-" + std::to_string (index)}, serializers);
+-                assert (source
+-                          .send_to_node (*registration->routing_id, queued.items (),
+-                                         std::vector<std::uint8_t>{})
+-                          .result ()
+-                          .value ()
+-                        == zlink::submit_result_t::ok);
++                assert (send (queued.items ()).result ().value () == zlink::submit_result_t::ok);
+             }
+             const auto receive_deadline = std::chrono::steady_clock::now () + 5s;
+             while (received_queued.load () < queued_records) {
+                 assert (std::chrono::steady_clock::now () < receive_deadline);
+                 std::this_thread::yield ();
+             }
+-            assert (handled_queued.load () == 0);
++            const bool same_owner = drained.wait_for (5s) == std::future_status::ready;
++            correct = correct && same_owner;
+             const auto notifications_while_busy = worker_notifications.load ();
+             std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
+                       << std::endl;
+-            correct = correct && notifications_while_busy == 1;
++            std::cout << "channel_owner=" << channel_owner
++                      << " same_owner_progress_while_A_blocked=" << same_owner << std::endl;
+             auto completed = std::make_shared<std::promise<void>> ();
+             auto terminal = completed->get_future ();
+             const auto operation =
+@@ -291,6 +297,16 @@ int main ()
+         source.stop ();
+         service.request_stop ();
+         service.stop ();
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++        rt::mesh::mailbox_path_probe = nullptr;
++        std::cout << "node_channel_records=" << path.commits.load ()
++                  << " takes=" << path.takes.load ()
++                  << " take_calls=" << path.take_calls.load ()
++                  << " prefix_claims=" << path.prefix_claims.load ()
++                  << " settlement_rmws=" << path.settlement_rmws.load () << '\n';
++        correct = correct && path.commits == queued_records + 2 && path.takes == queued_records + 2
++                  && path.prefix_claims == 0 && path.settlement_rmws == 0;
++#endif
+     }
+     return correct ? 0 : 1;
+ }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
+index 9f79692ccd..d2206aed24 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
+@@ -650,6 +650,31 @@ TEST_F (ReceiveRecord, CloseDuringRotationKeepsLeaseAndRejectsLaterReply)
+     (void) target.mailbox ().release (*claim);
+ }
+ 
++TEST_F (ReceiveRecord, QueueHeadsKeepOriginalReplyTokensAcrossShutdown)
++{
++    request ();
++    request ();
++    const auto turn = target.begin_receive_turn ();
++    ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
++    ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
++    auto running = target.mailbox ().take_application_head ("node");
++    ASSERT_EQ (running.size (), 1u);
++    const auto first_token = running.front ().reply_token ();
++    ASSERT_TRUE (first_token);
++    target.close ();
++    auto queued = target.mailbox ().take_application_head ("node");
++    ASSERT_EQ (queued.size (), 1u);
++    EXPECT_EQ (running.front ().reply_token (), first_token);
++    EXPECT_TRUE (queued.front ().reply_token ());
++    EXPECT_NE (queued.front ().reply_token (), first_token);
++    EXPECT_EQ (running.front ().parts ().size (), 2u);
++    EXPECT_EQ (queued.front ().parts ().size (), 2u);
++    EXPECT_FALSE (target.reply (running.front (), payload ()));
++    EXPECT_FALSE (target.reply (queued.front (), payload ()));
++    EXPECT_FALSE (running.front ().transferred);
++    EXPECT_FALSE (queued.front ().transferred);
++}
++
+ TEST_F (ReceiveRecord, MalformedPrefixTruncationAndPartCountsKeepProtocolError)
+ {
+     const auto good_header = wire::encode_node_request_header (17);
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mailbox_path_probe.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mailbox_path_probe.hpp
+new file mode 100644
+index 0000000000..a6793ff9d4
+--- /dev/null
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mailbox_path_probe.hpp
+@@ -0,0 +1,23 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#pragma once
++
++#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
++#include <atomic>
++#include <cstddef>
++
++namespace zlink::framework::runtime::mesh
++{
++struct service_mailbox_record_t;
++struct mailbox_path_probe_t
++{
++    std::atomic_size_t prefix_claims{0};
++    std::atomic_size_t settlement_rmws{0};
++    std::atomic_size_t commits{0};
++    std::atomic_size_t takes{0};
++    std::atomic_size_t take_calls{0};
++    void *context = nullptr;
++    void (*taken) (void *, const service_mailbox_record_t &) noexcept = nullptr;
++};
++inline std::atomic<mailbox_path_probe_t *> mailbox_path_probe{nullptr};
++}
++#endif
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_queue_head.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_queue_head.cpp
+new file mode 100644
+index 0000000000..520549cd4d
+--- /dev/null
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_queue_head.cpp
+@@ -0,0 +1,373 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "runtime/mesh/service_mailbox.hpp"
++#include "runtime/mesh/mailbox_path_probe.hpp"
++#include "runtime/mesh/application_dispatch_terminal_owner.hpp"
++#include "runtime/execution/serial_execution_queue.hpp"
++#include "runtime/channels/route_handler_invoker.hpp"
++#include "allocation_counter.hpp"
++#include <gtest/gtest.h>
++#include <array>
++#include <barrier>
++#include <cstdlib>
++#include <limits>
++#include <future>
++#include <chrono>
++#include <thread>
++
++namespace mesh = zlink::framework::runtime::mesh;
++namespace rt = zlink::framework::runtime;
++using mailbox_t = mesh::service_mailbox_t;
++using record_t = mesh::service_mailbox_record_t;
++namespace zlink::framework::runtime::mesh
++{
++struct service_mailbox_test_access_t
++{
++    static bool settle_once (service_mailbox_claim_t &claim)
++    {
++        return service_mailbox_t::settle_once (claim, 0);
++    }
++};
++}
++namespace
++{
++record_t record (std::uint64_t sequence, std::string owner = "node")
++{
++    auto value =
++      record_t::from_parts (std::move (owner), mesh::service_mailbox_domain_t::application,
++                            std::vector<zlink::message_t> (1));
++    value.source_node_generation = sequence;
++    return value;
++}
++struct probe_scope_t
++{
++    mesh::mailbox_path_probe_t probe;
++    probe_scope_t () { mesh::mailbox_path_probe = &probe; }
++    ~probe_scope_t () { mesh::mailbox_path_probe = nullptr; }
++};
++}
++TEST (QueueHead, NodeAndChannelHaveOneCommitOneTakeAndNoClaimOrSettlement)
++{
++    const auto *negative = std::getenv ("ZLINK_QUEUE_HEAD_NEGATIVE");
++    const std::string_view fault = negative ? negative : "";
++    for (const auto *owner : {"node", "channel:test"}) {
++        mailbox_t mailbox;
++        mailbox_t negative_mailbox;
++        std::shared_ptr<mesh::service_mailbox_claim_t> old;
++        std::shared_ptr<mesh::service_mailbox_claim_t> extra_allocation;
++        if (fault == "settlement") {
++            ASSERT_TRUE (negative_mailbox.try_enqueue (record (0, owner)));
++            old =
++              negative_mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner,
++                                                1, std::numeric_limits<std::size_t>::max ());
++            ASSERT_TRUE (old);
++        }
++        probe_scope_t scope;
++        ASSERT_TRUE (mailbox.try_enqueue (record (1, owner)));
++        if (fault == "claim") {
++            auto extra =
++              mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1,
++                                       std::numeric_limits<std::size_t>::max ());
++            ASSERT_TRUE (extra);
++            EXPECT_EQ (scope.probe.prefix_claims, 0u) << "prefix claim allocation";
++            mailbox.release (*extra);
++            continue;
++        }
++        if (old)
++            EXPECT_TRUE (mesh::service_mailbox_test_access_t::settle_once (*old));
++        mailbox_t::head_t head;
++        const auto take_allocations = zlink::framework::tests::measure_allocations ([&] {
++            if (fault == "allocation")
++                extra_allocation = std::make_shared<mesh::service_mailbox_claim_t> ();
++            head = mailbox.take_application_head (owner);
++        });
++        EXPECT_EQ (take_allocations.count, 0u) << "queue head take allocated";
++        ASSERT_EQ (head.size (), 1u);
++        EXPECT_FALSE (head.front ().transferred);
++        if (fault == "take")
++            (void) mailbox.take_application_head (owner);
++        const auto allocations = zlink::framework::tests::measure_allocations ([&] {
++            rt::application_dispatch_terminal_owner_t terminal;
++            terminal.retain_record (std::move (head));
++        });
++        EXPECT_EQ (allocations.count, 0u) << "terminal allocated an ownership wrapper";
++        EXPECT_EQ (scope.probe.prefix_claims, 0u) << "prefix claim allocation";
++        EXPECT_EQ (scope.probe.settlement_rmws, 0u) << "settlement RMW";
++        EXPECT_EQ (scope.probe.commits, 1u) << "queue commit";
++        EXPECT_EQ (scope.probe.takes, 1u) << "queue transfer";
++        EXPECT_EQ (scope.probe.take_calls, 1u) << "queue take";
++    }
++}
++TEST (QueueHead, ApplicationViewsUseTheCanonicalPayloadWithoutAnotherOwner)
++{
++    namespace wire = rt::protocol;
++    std::vector<zlink::message_t> inner;
++    inner.push_back (zlink::message_t::from ("header"));
++    inner.push_back (zlink::message_t::from (std::string (1024, 'b')));
++    auto payload = wire::application_payload_t::from_parts (std::move (inner));
++    auto encoded = wire::encode_application_payload_message (payload);
++    const auto bytes = wire::message_bytes (encoded);
++    std::vector<zlink::message_t> views;
++    const auto *negative = std::getenv ("ZLINK_QUEUE_HEAD_NEGATIVE");
++    const auto allocations = zlink::framework::tests::measure_allocations ([&] {
++        views = negative && std::string_view (negative) == "payload-wrapper"
++                  ? wire::decode_application_parts (encoded.copy (), false)
++                  : wire::borrow_application_parts (bytes, false);
++    });
++    ASSERT_EQ (views.size (), 2u);
++    // The one vector stores the two native view handles. No retained-message owner.
++    EXPECT_EQ (allocations.count, 1u) << "extra payload owner allocation";
++    const auto begin = reinterpret_cast<std::uintptr_t> (encoded.data ());
++    const auto end = begin + encoded.size ();
++    for (const auto &part : views) {
++        const auto address = reinterpret_cast<std::uintptr_t> (part.data ());
++        EXPECT_GE (address, begin);
++        EXPECT_LE (address + part.size (), end);
++    }
++    EXPECT_EQ (views[1].size (), 1024u);
++}
++TEST (QueueHead, ConcurrentWorkersTakeFIFOWithoutWaitingForTerminals)
++{
++    mailbox_t mailbox;
++    constexpr std::size_t count = 1024;
++    for (std::size_t index = 0; index != count; ++index)
++        ASSERT_TRUE (mailbox.try_enqueue (record (index)));
++    struct observations_t
++    {
++        std::array<std::uint64_t, count> sequence{};
++        std::size_t seen = 0;
++    } observed;
++    probe_scope_t scope;
++    scope.probe.context = &observed;
++    scope.probe.taken = [] (void *context, const record_t &record) noexcept {
++        auto &value = *static_cast<observations_t *> (context);
++        value.sequence[value.seen++] = record.source_node_generation;
++    };
++    std::array<std::thread, 4> workers;
++    std::barrier held (4);
++    for (auto &worker : workers)
++        worker = std::thread ([&] {
++            auto first = mailbox.take_application_head ("node");
++            held.arrive_and_wait ();
++            for (;;) {
++                auto head = mailbox.take_application_head ("node");
++                if (head.empty ())
++                    break;
++                std::this_thread::yield ();
++            }
++        });
++    for (auto &worker : workers)
++        worker.join ();
++    ASSERT_EQ (observed.seen, count);
++    for (std::size_t index = 0; index != count; ++index)
++        EXPECT_EQ (observed.sequence[index], index);
++    EXPECT_EQ (scope.probe.takes, count);
++    EXPECT_EQ (scope.probe.settlement_rmws, 0u);
++}
++TEST (QueueHead, SuccessorIsReadyWhileTheFirstHeadIsStillOwned)
++{
++    mailbox_t mailbox;
++    std::size_t notifications = 0;
++    mailbox.bind_application_dispatch ({}, [&] (const auto &) { ++notifications; });
++    ASSERT_TRUE (mailbox.try_enqueue (record (1)));
++    ASSERT_TRUE (mailbox.try_enqueue (record (2)));
++    const auto before = notifications;
++    mailbox_t::application_ready_batch_t ready;
++    auto first = mailbox.take_application_head ("node", &ready);
++    ASSERT_EQ (first.size (), 1u);
++    EXPECT_EQ (notifications, before);
++    mailbox_t::notify_application_ready (ready);
++    EXPECT_EQ (notifications, before + 1);
++    auto next = mailbox.take_application_head ("node");
++    ASSERT_EQ (next.size (), 1u);
++    EXPECT_EQ (first.front ().source_node_generation, 1u);
++    EXPECT_EQ (next.front ().source_node_generation, 2u);
++}
++TEST (QueueHead, LastTakeAndEnqueueShareTheReadyBoundary)
++{
++    mailbox_t mailbox;
++    std::atomic_size_t notifications{0};
++    mailbox.bind_application_dispatch ({}, [&] (const auto &) { ++notifications; });
++    constexpr std::size_t rounds = 1000;
++    std::barrier boundary (2);
++    std::atomic_bool correct{true};
++    std::thread producer ([&] {
++        for (std::size_t index = 0; index != rounds; ++index) {
++            boundary.arrive_and_wait ();
++            if (!mailbox.try_enqueue (record (2 * index + 1)))
++                correct = false;
++            boundary.arrive_and_wait ();
++        }
++    });
++    for (std::size_t index = 0; index != rounds; ++index) {
++        ASSERT_TRUE (mailbox.try_enqueue (record (2 * index)));
++        const auto before = notifications.load ();
++        boundary.arrive_and_wait ();
++        auto first = mailbox.take_application_head ("node");
++        boundary.arrive_and_wait ();
++        auto second = mailbox.take_application_head ("node");
++        EXPECT_EQ (first.size (), 1u);
++        EXPECT_EQ (second.size (), 1u);
++        if (!first.empty () && !second.empty ()) {
++            EXPECT_EQ (first.front ().source_node_generation, 2 * index);
++            EXPECT_EQ (second.front ().source_node_generation, 2 * index + 1);
++        }
++        EXPECT_GT (notifications.load (), before);
++        EXPECT_TRUE (mailbox.take_application_head ("node").empty ());
++    }
++    producer.join ();
++    EXPECT_TRUE (correct);
++}
++TEST (QueueHead, CloseKeepsQueuedAndTakenRecordsButRejectsNewCommits)
++{
++    mailbox_t mailbox;
++    probe_scope_t scope;
++    ASSERT_TRUE (mailbox.try_enqueue (record (1)));
++    ASSERT_TRUE (mailbox.try_enqueue (record (2)));
++    auto running = mailbox.take_application_head ("node");
++    ASSERT_EQ (running.size (), 1u);
++    mailbox.close ();
++    EXPECT_FALSE (mailbox.try_enqueue (record (3)));
++    auto queued = mailbox.take_application_head ("node");
++    ASSERT_EQ (queued.size (), 1u);
++    EXPECT_EQ (running.front ().source_node_generation, 1u);
++    EXPECT_EQ (queued.front ().source_node_generation, 2u);
++    EXPECT_TRUE (mailbox.take_application_head ("node").empty ());
++    rt::application_dispatch_terminal_owner_t terminal;
++    terminal.retain_record (std::move (running));
++    terminal.settle ();
++    terminal.settle ();
++    EXPECT_EQ (scope.probe.commits, 2u);
++    EXPECT_EQ (scope.probe.takes, 2u);
++    EXPECT_EQ (scope.probe.settlement_rmws, 0u);
++}
++TEST (QueueHead, StatefulOwnersKeepTheirRelocationVisiblePrefix)
++{
++    for (const auto *owner : {"spot:test", "actor:test"}) {
++        mailbox_t mailbox;
++        ASSERT_TRUE (mailbox.try_enqueue (record (1, owner)));
++        ASSERT_TRUE (mailbox.try_enqueue (record (2, owner)));
++        EXPECT_TRUE (mailbox.take_application_head (owner).empty ());
++        auto claim =
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1, 4096);
++        ASSERT_TRUE (claim);
++        EXPECT_FALSE (
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1, 4096));
++        auto first = mailbox.take ({claim, 0});
++        ASSERT_TRUE (first);
++        EXPECT_FALSE (
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1, 4096));
++        EXPECT_TRUE (first->transferred ());
++        auto next =
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1, 4096);
++        ASSERT_TRUE (next);
++        EXPECT_TRUE (mailbox.release (*next));
++    }
++}
++
++TEST (QueueHead, SpotAndActorGatesHoldUntilHandlerTerminal)
++{
++    using namespace std::chrono_literals;
++    const auto *negative = std::getenv ("ZLINK_QUEUE_HEAD_NEGATIVE");
++    const std::string_view fault = negative ? negative : "";
++    for (const bool actor : {false, true}) {
++        rt::offload_executor_t executor (2);
++        rt::serial_execution_queue_t gate (executor, {}, {},
++                                           actor ? rt::serial_lane_policy_t::actor_delivery ()
++                                                 : rt::serial_lane_policy_t::spot_wide ());
++        std::promise<void> entered, second;
++        auto started = entered.get_future ();
++        auto proceeded = second.get_future ();
++        rt::serial_execution_queue_t::async_completion_t finish;
++        ASSERT_TRUE (gate.try_post_async ("first", [&] (auto complete) {
++            finish = std::move (complete);
++            entered.set_value ();
++        }));
++        ASSERT_EQ (started.wait_for (2s), std::future_status::ready);
++        const auto sibling = [&] { second.set_value (); };
++        if (fault == (actor ? "actor-gate" : "spot-gate"))
++            ASSERT_TRUE (executor.try_submit_internal (sibling));
++        else
++            ASSERT_TRUE (gate.try_post ("second", sibling));
++        EXPECT_EQ (proceeded.wait_for (20ms), std::future_status::timeout)
++          << (actor ? "Actor gate removed" : "Spot gate removed");
++        finish ([] {});
++        EXPECT_EQ (proceeded.wait_for (2s), std::future_status::ready);
++        gate.drain ();
++    }
++}
++
++namespace
++{
++namespace fw = zlink::framework;
++struct suspension_t
++{
++    fw::task_completion_source_t<void> resume;
++    const void *body = nullptr;
++    std::weak_ptr<mesh::request_source_lookup_state_t> record_lifetime;
++    bool completed = false;
++};
++fw::task_t<zlink::message_t> suspended_invocation (suspension_t &state,
++                                                   const zlink::message_t &message,
++                                                   const fw::route_message_context_t &context,
++                                                   fw::detail::handler_start_callback_ref_t before)
++{
++    before ();
++    EXPECT_EQ (message.data (), state.body);
++    EXPECT_FALSE (state.record_lifetime.expired ());
++    co_await state.resume.task ();
++    EXPECT_EQ (message.data (), state.body);
++    EXPECT_FALSE (state.record_lifetime.expired ());
++    EXPECT_EQ (context.mesh_name, "retained-context");
++    EXPECT_EQ (context.packet_name, "retained-packet");
++    state.completed = true;
++    co_return zlink::message_t{};
++}
++}
++TEST (QueueHead, ExistingInvokerRetainsCanonicalRecordAcrossSuspensionAndShutdown)
++{
++    mailbox_t mailbox;
++    auto original = record (1);
++    original.replace_parts ({zlink::message_t::from (std::string (1024, 'r'))});
++    suspension_t state;
++    state.body = original.parts ().front ().data ();
++    {
++        auto lifetime = std::make_shared<mesh::request_source_lookup_state_t> ();
++        state.record_lifetime = lifetime;
++        original.source_original = mesh::request_source_t{std::move (lifetime)};
++    }
++    ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
++    auto head = mailbox.take_application_head ("node");
++    ASSERT_EQ (head.size (), 1u);
++    auto body = head.front ().parts ().front ().copy ();
++    rt::application_dispatch_terminal_owner_t terminal;
++    const auto *negative = std::getenv ("ZLINK_QUEUE_HEAD_NEGATIVE");
++    if (negative && std::string_view (negative) == "drop-record")
++        head.clear ();
++    else
++        terminal.retain_record (std::move (head));
++    fw::service_collection_t services;
++    auto provider = services.build_provider ();
++    fw::serializer_registry_t serializers;
++    fw::handler_registry_t filters;
++    fw::detail::route_handler_registry_t::entry_t handler{
++      {rt::messaging::message_kind_t::command, "retained-context", "retained-packet", typeid (void),
++       typeid (void), typeid (void)},
++      [&state] (auto &, auto &, const auto &message, const auto &context, auto before) {
++          return suspended_invocation (state, message, context, before);
++      },
++      {}};
++    fw::route_message_context_t context;
++    context.mesh_name = "retained-context";
++    context.packet_name = "retained-packet";
++    auto pending = fw::detail::route_handler_invoker_t::invoke (
++      handler, filters, fw::handler_dispatch_kind_t::node_direct_send, provider, serializers,
++      std::move (body), std::move (context), {}, {}, std::move (terminal));
++    EXPECT_FALSE (pending.await_ready ());
++    EXPECT_FALSE (state.record_lifetime.expired ());
++    mailbox.close ();
++    EXPECT_FALSE (state.record_lifetime.expired ());
++    state.resume.complete (fw::result_t<void>::success ());
++    EXPECT_TRUE (pending.result ());
++    EXPECT_TRUE (state.completed);
++    EXPECT_TRUE (state.record_lifetime.expired ());
++}

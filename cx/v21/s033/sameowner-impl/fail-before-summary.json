@@ -1,0 +1,20 @@
+[
+  {
+    "case": "mailbox",
+    "iteration": 1,
+    "exit": 1,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/fail-before-mailbox-01.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 1,
+    "exit": -6,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/fail-before-channel-01.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 1,
+    "exit": -6,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/fail-before-actor-01.log"
+  }
+]

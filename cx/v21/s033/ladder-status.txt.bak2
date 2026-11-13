@@ -1,0 +1,4 @@
+C++ L0 5/6칸 측정(시간 한도), send 1K 0.998 · serial 1K 0.949 · serial 4K 0.962 · bp 1K 0.995 · send 4K 0.864(편차 큼) · bp 4K 미측정
+.NET L0 5/6칸 통과, bp 1K 0.946
+Java L1 6칸 통과(단계 손실 최대 2.4%)
+Node L0 4/6칸 통과, serial 1K 0.937 · 4K 0.938

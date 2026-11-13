@@ -1,0 +1,3 @@
+- 2026-10-16 #1876 재현 확인(로그 원문: java-repro-final.log in flight=true 줄, node unhandledRejection exit=1). Java 1·2 재현, Node는 관찰 누락만. Java는 A로 c0302java 뒤 투입, Node A/B는 zlink 결정.
+- 2026-10-16 #1876 Node 23187b13ca 승인 → PR: close가 pumpTask join, pending control admission이 close를 막지 않음(시험 :107) 확인, 로그 2739·M6A44 확인.
+- 2026-10-16 #1876 Java bfeb667758 승인 → PR. closeCore 기한 검사·Spot shutdown(무interrupt)+closeAsync compose·host 조기 ERROR 제거 diff 확인. ExecutorService.close는 무기한 대기지만 publish는 DONT_WAIT라 허용, 기한 판정은 host.

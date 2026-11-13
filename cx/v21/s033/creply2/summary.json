@@ -1,0 +1,458 @@
+{
+  "throughput": {
+    "binding/request-backpressure/1024": {
+      "runs": [
+        {
+          "name": "binding-unpaced-request-backpressure-1024-1",
+          "rate": 262048.905316,
+          "us": 3.8160815775746832,
+          "caller_us": 3.8128913333758305
+        },
+        {
+          "name": "binding-unpaced-request-backpressure-1024-2",
+          "rate": 283613.413328,
+          "us": 3.5259263243783754,
+          "caller_us": 3.5233911833511473
+        },
+        {
+          "name": "binding-unpaced-request-backpressure-1024-3",
+          "rate": 273219.867792,
+          "us": 3.660055939860463,
+          "caller_us": 3.656168960452331
+        },
+        {
+          "name": "binding-unpaced-request-backpressure-1024-4",
+          "rate": 283090.454546,
+          "us": 3.5324398401342347,
+          "caller_us": 3.5283775343180803
+        },
+        {
+          "name": "binding-unpaced-request-backpressure-1024-5",
+          "rate": 269480.346936,
+          "us": 3.710845749495395,
+          "caller_us": 3.7067341324049545
+        }
+      ],
+      "rate": 273219.867792,
+      "min": 262048.905316,
+      "max": 283613.413328,
+      "caller_us": 3.656168960452331
+    },
+    "binding/request-backpressure/4096": {
+      "runs": [
+        {
+          "name": "binding-unpaced-request-backpressure-4096-1",
+          "rate": 160879.328629,
+          "us": 6.215838967764941,
+          "caller_us": 6.153338706944064
+        },
+        {
+          "name": "binding-unpaced-request-backpressure-4096-2",
+          "rate": 155076.126632,
+          "us": 6.448445816376547,
+          "caller_us": 6.3310196180603295
+        },
+        {
+          "name": "binding-unpaced-request-backpressure-4096-3",
+          "rate": 148142.674901,
+          "us": 6.750249384036536,
+          "caller_us": 6.498019565552627
+        },
+        {
+          "name": "binding-unpaced-request-backpressure-4096-4",
+          "rate": 154830.649494,
+          "us": 6.458669541644931,
+          "caller_us": 6.341683660237116
+        },
+        {
+          "name": "binding-unpaced-request-backpressure-4096-5",
+          "rate": 159392.546412,
+          "us": 6.273819086967759,
+          "caller_us": 6.2129253989096505
+        }
+      ],
+      "rate": 155076.126632,
+      "min": 148142.674901,
+      "max": 160879.328629,
+      "caller_us": 6.3310196180603295
+    },
+    "binding/request-serial/1024": {
+      "runs": [
+        {
+          "name": "binding-unpaced-request-serial-1024-1",
+          "rate": 17020.882004,
+          "us": 58.75136198964276,
+          "caller_us": 13.869904035790883
+        },
+        {
+          "name": "binding-unpaced-request-serial-1024-2",
+          "rate": 16918.789013,
+          "us": 59.105885133482275,
+          "caller_us": 14.647029394928243
+        },
+        {
+          "name": "binding-unpaced-request-serial-1024-3",
+          "rate": 16756.147731,
+          "us": 59.679588414581275,
+          "caller_us": 14.236685175475193
+        },
+        {
+          "name": "binding-unpaced-request-serial-1024-4",
+          "rate": 16494.732319,
+          "us": 60.62541547571022,
+          "caller_us": 15.497978085133182
+        },
+        {
+          "name": "binding-unpaced-request-serial-1024-5",
+          "rate": 16746.272162,
+          "us": 59.714782509576175,
+          "caller_us": 15.067353352381279
+        }
+      ],
+      "rate": 16756.147731,
+      "min": 16494.732319,
+      "max": 17020.882004,
+      "caller_us": 14.647029394928243
+    },
+    "direct/request-backpressure/1024": {
+      "runs": [
+        {
+          "name": "direct-unpaced-request-backpressure-1024-1",
+          "rate": 54973.176157,
+          "us": 18.190689894723594,
+          "caller_us": 16.663872529099866
+        },
+        {
+          "name": "direct-unpaced-request-backpressure-1024-2",
+          "rate": 53505.438777,
+          "us": 18.689688802811254,
+          "caller_us": 17.103476224427858
+        },
+        {
+          "name": "direct-unpaced-request-backpressure-1024-3",
+          "rate": 54563.654064,
+          "us": 18.327218313257724,
+          "caller_us": 17.007402013646782
+        },
+        {
+          "name": "direct-unpaced-request-backpressure-1024-4",
+          "rate": 53708.735345,
+          "us": 18.6189451972098,
+          "caller_us": 16.84919583726981
+        },
+        {
+          "name": "direct-unpaced-request-backpressure-1024-5",
+          "rate": 49605.720224,
+          "us": 20.1589654476216,
+          "caller_us": 17.971999922070925
+        }
+      ],
+      "rate": 53708.735345,
+      "min": 49605.720224,
+      "max": 54973.176157,
+      "caller_us": 17.007402013646782,
+      "ratio": 0.19657697582186084,
+      "framework_us": 18.6189451972098,
+      "binding_us": 3.660055939860463,
+      "budget_us": 6.100093233100772,
+      "over_budget_us": 12.518851964109029
+    },
+    "direct/request-backpressure/4096": {
+      "runs": [
+        {
+          "name": "direct-unpaced-request-backpressure-4096-1",
+          "rate": 48403.83775,
+          "us": 20.659518882880317,
+          "caller_us": 19.164038289505257
+        },
+        {
+          "name": "direct-unpaced-request-backpressure-4096-2",
+          "rate": 46291.795,
+          "us": 21.60210032901079,
+          "caller_us": 19.547070922611663
+        },
+        {
+          "name": "direct-unpaced-request-backpressure-4096-3",
+          "rate": 45033.884335,
+          "us": 22.205501807509137,
+          "caller_us": 20.41567174531848
+        },
+        {
+          "name": "direct-unpaced-request-backpressure-4096-4",
+          "rate": 48743.549131,
+          "us": 20.51553524164736,
+          "caller_us": 19.17392181451983
+        },
+        {
+          "name": "direct-unpaced-request-backpressure-4096-5",
+          "rate": 47073.990962,
+          "us": 21.243153163011815,
+          "caller_us": 19.62945951928995
+        }
+      ],
+      "rate": 47073.990962,
+      "min": 45033.884335,
+      "max": 48743.549131,
+      "caller_us": 19.547070922611663,
+      "ratio": 0.3035540800790563,
+      "framework_us": 21.243153163011815,
+      "binding_us": 6.448445816376547,
+      "budget_us": 10.747409693960913,
+      "over_budget_us": 10.495743469050902
+    },
+    "direct/request-serial/1024": {
+      "runs": [
+        {
+          "name": "direct-unpaced-request-serial-1024-1",
+          "rate": 8567.502274,
+          "us": 116.72013242817845,
+          "caller_us": 18.582778843625434
+        },
+        {
+          "name": "direct-unpaced-request-serial-1024-2",
+          "rate": 8545.903479,
+          "us": 117.01512923207214,
+          "caller_us": 18.192459156839487
+        },
+        {
+          "name": "direct-unpaced-request-serial-1024-3",
+          "rate": 8575.101999,
+          "us": 116.61668865473747,
+          "caller_us": 18.799776378030227
+        },
+        {
+          "name": "direct-unpaced-request-serial-1024-4",
+          "rate": 8878.100956,
+          "us": 112.63670068137486,
+          "caller_us": 17.8009915389838
+        },
+        {
+          "name": "direct-unpaced-request-serial-1024-5",
+          "rate": 8560.953259,
+          "us": 116.80942177189382,
+          "caller_us": 18.080346348962586
+        }
+      ],
+      "rate": 8567.502274,
+      "min": 8545.903479,
+      "max": 8878.100956,
+      "caller_us": 18.192459156839487,
+      "ratio": 0.5113050094533091,
+      "framework_us": 116.72013242817845,
+      "binding_us": 59.679588414581275,
+      "budget_us": 99.46598069096879,
+      "over_budget_us": 17.254151737209654
+    },
+    "main/request-backpressure/1024": {
+      "runs": [
+        {
+          "name": "main-unpaced-request-backpressure-1024-1",
+          "rate": 53851.466556,
+          "us": 18.56959640941445,
+          "caller_us": 16.648608800053346
+        },
+        {
+          "name": "main-unpaced-request-backpressure-1024-2",
+          "rate": 54380.973429,
+          "us": 18.388784476350054,
+          "caller_us": 16.714871814252387
+        },
+        {
+          "name": "main-unpaced-request-backpressure-1024-3",
+          "rate": 52903.340981,
+          "us": 18.90239787236019,
+          "caller_us": 17.064309800854012
+        },
+        {
+          "name": "main-unpaced-request-backpressure-1024-4",
+          "rate": 52733.129538,
+          "us": 18.963410834158637,
+          "caller_us": 16.885002043324015
+        },
+        {
+          "name": "main-unpaced-request-backpressure-1024-5",
+          "rate": 52583.346158,
+          "us": 19.017428008389697,
+          "caller_us": 17.354791329900213
+        }
+      ],
+      "rate": 52903.340981,
+      "min": 52583.346158,
+      "max": 54380.973429,
+      "caller_us": 16.885002043324015,
+      "ratio": 0.1936291873959725,
+      "framework_us": 18.90239787236019,
+      "binding_us": 3.660055939860463,
+      "budget_us": 6.100093233100772,
+      "over_budget_us": 12.802304639259418
+    },
+    "main/request-backpressure/4096": {
+      "runs": [
+        {
+          "name": "main-unpaced-request-backpressure-4096-1",
+          "rate": 46432.790435,
+          "us": 21.536504496749398,
+          "caller_us": 19.61473759099096
+        },
+        {
+          "name": "main-unpaced-request-backpressure-4096-2",
+          "rate": 45914.418234,
+          "us": 21.77965089100251,
+          "caller_us": 19.811467399284396
+        },
+        {
+          "name": "main-unpaced-request-backpressure-4096-3",
+          "rate": 42315.965474,
+          "us": 23.631742506606056,
+          "caller_us": 20.963009825335035
+        },
+        {
+          "name": "main-unpaced-request-backpressure-4096-4",
+          "rate": 47145.52369,
+          "us": 21.210921456199863,
+          "caller_us": 19.538419088457047
+        },
+        {
+          "name": "main-unpaced-request-backpressure-4096-5",
+          "rate": 45153.154142,
+          "us": 22.146847080829563,
+          "caller_us": 20.079106703127913
+        }
+      ],
+      "rate": 45914.418234,
+      "min": 42315.965474,
+      "max": 47145.52369,
+      "caller_us": 19.811467399284396,
+      "ratio": 0.2960766381724003,
+      "framework_us": 21.77965089100251,
+      "binding_us": 6.448445816376547,
+      "budget_us": 10.747409693960913,
+      "over_budget_us": 11.032241197041598
+    },
+    "main/request-serial/1024": {
+      "runs": [
+        {
+          "name": "main-unpaced-request-serial-1024-1",
+          "rate": 7866.791743,
+          "us": 127.11662297274061,
+          "caller_us": 18.670889582236143
+        },
+        {
+          "name": "main-unpaced-request-serial-1024-2",
+          "rate": 8464.902715,
+          "us": 118.13484852318234,
+          "caller_us": 18.81569172883282
+        },
+        {
+          "name": "main-unpaced-request-serial-1024-3",
+          "rate": 8729.302089,
+          "us": 114.55669534682774,
+          "caller_us": 17.71756761573107
+        },
+        {
+          "name": "main-unpaced-request-serial-1024-4",
+          "rate": 8443.510896,
+          "us": 118.43414573832511,
+          "caller_us": 19.111481229502047
+        },
+        {
+          "name": "main-unpaced-request-serial-1024-5",
+          "rate": 8797.12985,
+          "us": 113.6734386158913,
+          "caller_us": 17.658372974908403
+        }
+      ],
+      "rate": 8464.902715,
+      "min": 7866.791743,
+      "max": 8797.12985,
+      "caller_us": 18.670889582236143,
+      "ratio": 0.5051819100006716,
+      "framework_us": 118.13484852318234,
+      "binding_us": 59.679588414581275,
+      "budget_us": 99.46598069096879,
+      "over_budget_us": 18.66886783221355
+    }
+  },
+  "valid_runs": [
+    "binding-perf-1",
+    "binding-perf-2",
+    "binding-unpaced-request-backpressure-1024-1",
+    "binding-unpaced-request-backpressure-1024-2",
+    "binding-unpaced-request-backpressure-1024-3",
+    "binding-unpaced-request-backpressure-1024-4",
+    "binding-unpaced-request-backpressure-1024-5",
+    "binding-unpaced-request-backpressure-4096-1",
+    "binding-unpaced-request-backpressure-4096-2",
+    "binding-unpaced-request-backpressure-4096-3",
+    "binding-unpaced-request-backpressure-4096-4",
+    "binding-unpaced-request-backpressure-4096-5",
+    "binding-unpaced-request-serial-1024-1",
+    "binding-unpaced-request-serial-1024-2",
+    "binding-unpaced-request-serial-1024-3",
+    "binding-unpaced-request-serial-1024-4",
+    "binding-unpaced-request-serial-1024-5",
+    "direct-mutex",
+    "direct-perf-1",
+    "direct-perf-2",
+    "direct-unpaced-request-backpressure-1024-1",
+    "direct-unpaced-request-backpressure-1024-2",
+    "direct-unpaced-request-backpressure-1024-3",
+    "direct-unpaced-request-backpressure-1024-4",
+    "direct-unpaced-request-backpressure-1024-5",
+    "direct-unpaced-request-backpressure-4096-1",
+    "direct-unpaced-request-backpressure-4096-2",
+    "direct-unpaced-request-backpressure-4096-3",
+    "direct-unpaced-request-backpressure-4096-4",
+    "direct-unpaced-request-backpressure-4096-5",
+    "direct-unpaced-request-serial-1024-1",
+    "direct-unpaced-request-serial-1024-2",
+    "direct-unpaced-request-serial-1024-3",
+    "direct-unpaced-request-serial-1024-4",
+    "direct-unpaced-request-serial-1024-5",
+    "main-mutex",
+    "main-perf-1",
+    "main-perf-2",
+    "main-unpaced-request-backpressure-1024-1",
+    "main-unpaced-request-backpressure-1024-2",
+    "main-unpaced-request-backpressure-1024-3",
+    "main-unpaced-request-backpressure-1024-4",
+    "main-unpaced-request-backpressure-1024-5",
+    "main-unpaced-request-backpressure-4096-1",
+    "main-unpaced-request-backpressure-4096-2",
+    "main-unpaced-request-backpressure-4096-3",
+    "main-unpaced-request-backpressure-4096-4",
+    "main-unpaced-request-backpressure-4096-5",
+    "main-unpaced-request-serial-1024-1",
+    "main-unpaced-request-serial-1024-2",
+    "main-unpaced-request-serial-1024-3",
+    "main-unpaced-request-serial-1024-4",
+    "main-unpaced-request-serial-1024-5"
+  ],
+  "negative_inputs_rejected": [
+    "count",
+    "error",
+    "abandoned",
+    "headers",
+    "contaminated",
+    "drain"
+  ],
+  "min_memavailable_kb": 26129728,
+  "mutex": {
+    "main": {
+      "requests": 1200000,
+      "calls": 1200000,
+      "contended": 136188,
+      "wait_ns": 1098826199,
+      "errors": 0,
+      "wait_us_per_request": 0.9156884991666667
+    },
+    "direct": {
+      "requests": 1200000,
+      "calls": 1200000,
+      "contended": 129084,
+      "wait_ns": 1059202855,
+      "errors": 0,
+      "wait_us_per_request": 0.8826690458333334
+    }
+  }
+}

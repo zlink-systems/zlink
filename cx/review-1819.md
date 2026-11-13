@@ -1,0 +1,2 @@
+# #1819 감독자 리뷰 (2026-10-15)
+- 3ac6a452f2 승인: 시험만 수정(수신 시계 고정, 단언·tick offset 불변). runtime은 스펙대로 — 05-transport-liveness.ko.md:68(monotonic clock 하나), :113('Framework가 실제로 receive한 시점에 갱신'). 시험이 수신은 실제 performance.now, 판정은 base+offset로 시각 출처를 섞은 것이 원인. 로그 원문: red.log not ok(deadlineMs 15040), green.log pass 1, focused-summary 50/50. npm test 새 실패 0(실패 2는 main 대조 재현: stream-session-runtime 'stalled Actor binding replacement callback' :742, location-runtime.test.js:222 25ms 전제).

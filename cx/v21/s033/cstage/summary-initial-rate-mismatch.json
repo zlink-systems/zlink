@@ -1,0 +1,946 @@
+{
+  "caller": {
+    "main": {
+      "runs": [
+        {
+          "run": "run1",
+          "caller_us": 4.414265657082574,
+          "throughput": 226360.640166,
+          "completed": 1131888,
+          "source_cpu_us_at_own_rate": 10.573578508369591
+        },
+        {
+          "run": "run2",
+          "caller_us": 4.417384278472025,
+          "throughput": 226194.946378,
+          "completed": 1131013,
+          "source_cpu_us_at_own_rate": 10.557415354493806
+        },
+        {
+          "run": "run3",
+          "caller_us": 4.325633418140843,
+          "throughput": 231059.339381,
+          "completed": 1155392,
+          "source_cpu_us_at_own_rate": 10.370894361680353
+        },
+        {
+          "run": "run4",
+          "caller_us": 4.376833668420901,
+          "throughput": 228294.944633,
+          "completed": 1141515,
+          "source_cpu_us_at_own_rate": 10.467621189955025
+        },
+        {
+          "run": "run5",
+          "caller_us": 4.236040075200554,
+          "throughput": 235946.776295,
+          "completed": 1179826,
+          "source_cpu_us_at_own_rate": 10.15317114146461
+        }
+      ],
+      "caller_median": 4.376833668420901,
+      "caller_range": [
+        4.236040075200554,
+        4.417384278472025
+      ],
+      "throughput_median": 228294.944633,
+      "throughput_range": [
+        226194.946378,
+        235946.776295
+      ]
+    },
+    "staged": {
+      "runs": [
+        {
+          "run": "run1",
+          "caller_us": 6.4583476277248835,
+          "throughput": 136889.658309,
+          "completed": 684661,
+          "source_cpu_us_at_own_rate": 21.43332108680631
+        },
+        {
+          "run": "run2",
+          "caller_us": 6.328321579070085,
+          "throughput": 140797.680533,
+          "completed": 704047,
+          "source_cpu_us_at_own_rate": 20.026366835916235
+        },
+        {
+          "run": "run3",
+          "caller_us": 6.198398690786347,
+          "throughput": 143708.245377,
+          "completed": 718652,
+          "source_cpu_us_at_own_rate": 20.424402178872896
+        },
+        {
+          "run": "run4",
+          "caller_us": 6.218333688048228,
+          "throughput": 142356.464675,
+          "completed": 711847,
+          "source_cpu_us_at_own_rate": 20.498155855878416
+        },
+        {
+          "run": "run5",
+          "caller_us": 6.4292848057564,
+          "throughput": 137635.371077,
+          "completed": 688197,
+          "source_cpu_us_at_own_rate": 21.331144581704233
+        }
+      ],
+      "caller_median": 6.328321579070085,
+      "caller_range": [
+        6.198398690786347,
+        6.4583476277248835
+      ],
+      "throughput_median": 140797.680533,
+      "throughput_range": [
+        136889.658309,
+        143708.245377
+      ]
+    }
+  },
+  "cpu": {
+    "main": {
+      "caller_tid": "936147",
+      "sample_seconds": 58.00000281003304,
+      "completed": 5941079,
+      "rate": 102432.39158899302,
+      "process_user_us": 10.036897338008803,
+      "process_kernel_us": 15.729465977476481,
+      "process_total_us": 25.766363315485286,
+      "groups": {
+        "caller": 9.383817316686077,
+        "worker": 0.0,
+        "Core_IO": 16.308485377824468,
+        "other": 0.06732783724976557
+      },
+      "threads": [
+        {
+          "tid": "936147",
+          "name": "cstage-caller",
+          "group": "caller",
+          "user_us": 6.936450432657098,
+          "kernel_us": 2.4473668840289786,
+          "total_us": 9.383817316686077,
+          "schedstat_us": 9.384413905285555
+        },
+        {
+          "tid": "935383",
+          "name": "ZLINKbg/IO/0",
+          "group": "Core_IO",
+          "user_us": 1.558639432332073,
+          "kernel_us": 7.515469833005082,
+          "total_us": 9.074109265337155,
+          "schedstat_us": 9.075184578929182
+        },
+        {
+          "tid": "935385",
+          "name": "ZLINKbg/IO/2",
+          "group": "Core_IO",
+          "user_us": 1.437449325282495,
+          "kernel_us": 5.795243591273572,
+          "total_us": 7.232692916556067,
+          "schedstat_us": 7.232061812677461
+        },
+        {
+          "tid": "935353",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.015148763381197253,
+          "kernel_us": 0.05049587793732418,
+          "total_us": 0.06564464131852144,
+          "schedstat_us": 0.06588815987802889
+        },
+        {
+          "tid": "935362",
+          "name": "ZLINKbg/Reaper",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0016831959312441393,
+          "total_us": 0.0016831959312441393,
+          "schedstat_us": 0.001138818386357091
+        },
+        {
+          "tid": "935364",
+          "name": "ZLINKbg/IO/0",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0016831959312441393,
+          "total_us": 0.0016831959312441393,
+          "schedstat_us": 0.0011341024079969313
+        },
+        {
+          "tid": "935344",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0008399103933814043
+        },
+        {
+          "tid": "935345",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935346",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935347",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935348",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935349",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935350",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935351",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935352",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935354",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935355",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935356",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935357",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935358",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935359",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935360",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935361",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935363",
+          "name": "ZLINKbg/core-ct",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935365",
+          "name": "ZLINKbg/IO/1",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.001107807016200256
+        },
+        {
+          "tid": "935366",
+          "name": "ZLINKbg/IO/2",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0011072446604396273
+        },
+        {
+          "tid": "935367",
+          "name": "ZLINKbg/IO/3",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0010972826653205586
+        },
+        {
+          "tid": "935368",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935369",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935370",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 1.2667900898136516e-05
+        },
+        {
+          "tid": "935371",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935372",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935373",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935374",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935375",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935376",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935377",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 1.8969954784307698e-05
+        },
+        {
+          "tid": "935381",
+          "name": "ZLINKbg/Reaper",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0009608438130514675
+        },
+        {
+          "tid": "935382",
+          "name": "ZLINKbg/core-ct",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "935384",
+          "name": "ZLINKbg/IO/1",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0010882237048186027
+        },
+        {
+          "tid": "935386",
+          "name": "ZLINKbg/IO/3",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0010177538457239838
+        },
+        {
+          "tid": "935387",
+          "name": "zlink-req-time",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 3.1416852056671858e-06
+        },
+        {
+          "tid": "937491",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 4.278835544856414e-05
+        }
+      ],
+      "process_minus_thread_sum_us": 0.006732783724974212,
+      "full_60s_rate": 102436.481152,
+      "full_60s_process_us": 25.771385060394156
+    },
+    "staged": {
+      "caller_tid": "938365",
+      "sample_seconds": 58.00000408105552,
+      "completed": 5594055,
+      "rate": 96449.21735147222,
+      "process_user_us": 13.439267222077724,
+      "process_kernel_us": 19.701272154099307,
+      "process_total_us": 33.14053937617703,
+      "groups": {
+        "caller": 9.769299729802443,
+        "worker": 7.170111841946495,
+        "Core_IO": 16.120685263194584,
+        "other": 0.07329209312386095
+      },
+      "threads": [
+        {
+          "tid": "938365",
+          "name": "cstage-caller",
+          "group": "caller",
+          "user_us": 6.698182266709927,
+          "kernel_us": 3.071117463092515,
+          "total_us": 9.769299729802443,
+          "schedstat_us": 9.76948748841404
+        },
+        {
+          "tid": "937658",
+          "name": "ZLINKbg/IO/0",
+          "group": "Core_IO",
+          "user_us": 1.6606915734650445,
+          "kernel_us": 7.647404253265297,
+          "total_us": 9.30809582673034,
+          "schedstat_us": 9.309953452549179
+        },
+        {
+          "tid": "937662",
+          "name": "cstage-body",
+          "group": "worker",
+          "user_us": 3.4500912129036987,
+          "kernel_us": 3.7200206290427964,
+          "total_us": 7.170111841946495,
+          "schedstat_us": 7.169570891777075
+        },
+        {
+          "tid": "937660",
+          "name": "ZLINKbg/IO/2",
+          "group": "Core_IO",
+          "user_us": 1.633877393053876,
+          "kernel_us": 5.176924431382959,
+          "total_us": 6.810801824436835,
+          "schedstat_us": 6.808925175744608
+        },
+        {
+          "tid": "937628",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.016088508246701185,
+          "kernel_us": 0.05720358487715977,
+          "total_us": 0.07329209312386095,
+          "schedstat_us": 0.07313426253406519
+        },
+        {
+          "tid": "937661",
+          "name": "ZLINKbg/IO/3",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0017876120274112428,
+          "total_us": 0.0017876120274112428,
+          "schedstat_us": 0.001163627100555858
+        },
+        {
+          "tid": "937619",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0008851911538231211
+        },
+        {
+          "tid": "937620",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937621",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937622",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937623",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937624",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937625",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937626",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937627",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937629",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937630",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937631",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937632",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937633",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937634",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937635",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937636",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937637",
+          "name": "ZLINKbg/Reaper",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0012525345210227645
+        },
+        {
+          "tid": "937638",
+          "name": "ZLINKbg/core-ct",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937639",
+          "name": "ZLINKbg/IO/0",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0012483500787890001
+        },
+        {
+          "tid": "937640",
+          "name": "ZLINKbg/IO/1",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0012343028447163997
+        },
+        {
+          "tid": "937641",
+          "name": "ZLINKbg/IO/2",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0012177061183703056
+        },
+        {
+          "tid": "937642",
+          "name": "ZLINKbg/IO/3",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.001256405952390529
+        },
+        {
+          "tid": "937643",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937644",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937645",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937646",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 1.2672917945926524e-05
+        },
+        {
+          "tid": "937647",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937648",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937649",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937650",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937651",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937652",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 1.9335347972088224e-05
+        },
+        {
+          "tid": "937656",
+          "name": "ZLINKbg/Reaper",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0010668935146329452
+        },
+        {
+          "tid": "937657",
+          "name": "ZLINKbg/core-ct",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0
+        },
+        {
+          "tid": "937659",
+          "name": "ZLINKbg/IO/1",
+          "group": "Core_IO",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 0.0011551463115754136
+        },
+        {
+          "tid": "937663",
+          "name": "zlink-req-time",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 1.8017341624277918e-06
+        },
+        {
+          "tid": "939759",
+          "name": "bench_cpp_clien",
+          "group": "other",
+          "user_us": 0.0,
+          "kernel_us": 0.0,
+          "total_us": 0.0,
+          "schedstat_us": 4.200208971846004e-05
+        }
+      ],
+      "process_minus_thread_sum_us": 0.007150448109648266,
+      "full_60s_rate": 96490.927783,
+      "full_60s_process_us": 33.13882531206586
+    }
+  },
+  "artifact_sha256": {
+    "/root/jobs/fx/cx/v21/s033/cstage/bin-main/bench_cpp_client": "05cb639eca7af4e2ca0ba97fb9005cd92deadec7ceb24c4ace66a41d6c1b4baf",
+    "/root/jobs/fx/cx/v21/s033/cstage/bin-main/bench_cpp_zlink_server": "dda07a037c27d86edbcf6b5e075804afff2d0aab476b9fc45ae5d77856f935b4",
+    "/root/jobs/fx/cx/v21/s033/cstage/package-main/core/lib/libzlink.so": "618b445f61b46fbeca863a968bc59797796c2f96cc7c3dfce6ba656f1193eac1",
+    "/root/jobs/fx/cx/v21/s033/cstage/bin-staged/bench_cpp_client": "90c401c5b1dfe1dd6bb92716c77bdb989c2c7f3ab0a737aef1846bb76b3602d8",
+    "/root/jobs/fx/cx/v21/s033/cstage/package-staged/core/lib/libzlink.so": "b00bc2c3e03fbb67cfd5da1dcf7d803d9a9ffde032ebb14592ddda4d245306ab"
+  },
+  "caller_target": {
+    "staged_at_most_5_831": false,
+    "staged_at_most_main": false,
+    "difference_us": 1.9514879106491838
+  },
+  "same_rate": {
+    "relative_rate_difference": 0.05841095911855802,
+    "staged_cpu_at_most_main": false,
+    "difference_us": 7.374176060691745,
+    "full_60s_staged_cpu_at_most_main": false,
+    "full_60s_difference_us": 7.367440251671706
+  }
+}

@@ -1,0 +1,1889 @@
+diff --git a/bindings/cpp/CMakeLists.txt b/bindings/cpp/CMakeLists.txt
+index 306ca3c5d3..8768254d26 100644
+--- a/bindings/cpp/CMakeLists.txt
++++ b/bindings/cpp/CMakeLists.txt
+@@ -526,6 +526,7 @@ if(ZLINK_CPP_BUILD_TESTS)
+     test_cpp_contract_behavior.cpp
+     test_cpp_contract_optimization_guard.cpp
+     test_cpp_contract_flow_state.cpp
++    test_cpp_contract_multipart_resume.cpp
+     test_cpp_contract_lifecycle_rules.cpp
+     test_cpp_contract_router_selected_route.cpp
+     test_cpp_perf_application_ready_queue.cpp
+diff --git a/core/src/api/socket/socket_request_reply_runtime_io.cpp b/core/src/api/socket/socket_request_reply_runtime_io.cpp
+index 5b0d79046a..061f5903e0 100644
+--- a/core/src/api/socket/socket_request_reply_runtime_io.cpp
++++ b/core/src/api/socket/socket_request_reply_runtime_io.cpp
+@@ -1457,10 +1457,12 @@ int send_completion_staged_frames_on_pipe (
+ #endif
+                 written = i + 1 < total_part_count
+                             ? completion_->write (
+-                                msg, i == 0 ? &admission : NULL)
++                                msg, i == 0 ? &admission : NULL,
++                                zlink::pipe_write_complete_record)
+                           : total_part_count > 1
+                             ? completion_->write_and_flush (
+-                                msg, i == 0 ? &admission : NULL)
++                                msg, i == 0 ? &admission : NULL,
++                                zlink::pipe_write_complete_record)
+                             : completion_->write_and_flush_if_transport_connection (
+                                 msg, transport_connection_id,
+                                 i == 0 ? &admission : NULL);
+diff --git a/core/src/runtime/core/pipe.hpp b/core/src/runtime/core/pipe.hpp
+index 74f06fe8dc..6c6fe6b443 100644
+--- a/core/src/runtime/core/pipe.hpp
++++ b/core/src/runtime/core/pipe.hpp
+@@ -42,6 +42,16 @@ void test_set_pipe_write_commit_hook (pipe_write_commit_test_hook_fn hook_,
+ //  hot slot-presence predicate can be evaluated inline at its call sites.
+ const uint32_t pending_peer_weight_unset = UINT32_MAX;
+ 
++// Admission policy is call input, never a second pipe-owned record state.
++// Complete-record writers retain every part until the scoped attempt finishes.
++enum pipe_write_mode_t
++{
++    pipe_write_unchecked,
++    pipe_write_final,
++    pipe_write_incremental,
++    pipe_write_complete_record
++};
++
+ enum pipe_message_admission_t : int
+ {
+     pipe_message_admission_ready = 0,
+@@ -372,7 +382,8 @@ class pipe_t ZLINK_FINAL : public object_t,
+     //  the readiness decision made by admit_owner_message_start(); its actual
+     //  byte-HWM admission is still checked while the part is recorded.
+     bool write_owner_started_message (
+-      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
++      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     //  Request correlation must be visible after this exact candidate has
+     //  accepted the message but before the first application frame is made
+     //  observable. The prepare phase owns the request-state lock before the
+@@ -381,7 +392,8 @@ class pipe_t ZLINK_FINAL : public object_t,
+     bool write_owner_started_message_observed (
+       const msg_t *msg_, pipe_write_observer_fn observer_,
+       void *observer_userdata_,
+-      pipe_message_admission_t *admission_out_ = NULL);
++      pipe_message_admission_t *admission_out_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     //  Applies an absolute remote state on the pipe's own thread and reports
+     //  whether the caller must publish the write-activated edge. Callers that
+     //  already run on that thread use this directly, so the state is in effect
+@@ -428,7 +440,8 @@ class pipe_t ZLINK_FINAL : public object_t,
+     //  message does not pass check_write. If false, the message object
+     //  retains ownership of its message buffer.
+     bool write (const msg_t *msg_,
+-                pipe_message_admission_t *admission_out_ = NULL);
++                pipe_message_admission_t *admission_out_ = NULL,
++                pipe_write_mode_t write_mode_ = pipe_write_incremental);
+ 
+     // Writes the transport's routing-id setup frame even while a paired
+     // Application lane is held for Completion-lane validation.
+@@ -460,7 +473,8 @@ class pipe_t ZLINK_FINAL : public object_t,
+     //  Writes a message and flushes it downstream in the endpoint owner's C2
+     //  turn. Use this for final single-part send hot paths.
+     bool write_and_flush (const msg_t *msg_,
+-                          pipe_message_admission_t *admission_out_ = NULL);
++                          pipe_message_admission_t *admission_out_ = NULL,
++                          pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     //  Rejects a connection already retired at admission. The endpoint turn
+     //  owns the write; stamped records accepted before concurrent retirement
+     //  are discarded by session pull if they outlive their connection.
+@@ -491,7 +505,8 @@ class pipe_t ZLINK_FINAL : public object_t,
+     bool write_message_observed (
+       const msg_t *msg_, pipe_write_observer_fn observer_,
+       void *observer_userdata_,
+-      pipe_message_admission_t *admission_out_ = NULL);
++      pipe_message_admission_t *admission_out_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental);
+ 
+ 
+     //  Remove unfinished parts of the outbound message from the pipe.
+@@ -639,15 +654,12 @@ class pipe_t ZLINK_FINAL : public object_t,
+     //  These helpers require endpoint-owner exclusion: the socket lifecycle
+     //  turn for socket endpoints and the I/O thread for session endpoints.
+     //  Cross-owner policy state is published through the atomic fields below.
+-    //  enforce_incremental_hwm_ rejects a multipart as soon as the frames
+-    //  accumulated so far exceed the HWM, instead of waiting for the final
+-    //  frame. Only writers that check the HWM per call may ask for it: the
+-    //  *_no_recursive_hwm_check writers admit a whole message up front, so
+-    //  rejecting one of its later frames would break that guarantee and make
+-    //  the caller drop a message it was told it could send.
++    // Incremental input checks each accumulated MORE charge. A complete
++    // record may use the same empty-queue exception for all its frames.
++    // Pre-admitted writers check only FINAL; unchecked writers already own
++    // the record's byte admission.
+     bool write_message_unlocked (const msg_t *msg_,
+-                                 bool enforce_hwm_,
+-                                 bool enforce_incremental_hwm_ = false,
++                                 pipe_write_mode_t write_mode_,
+                                  pipe_message_admission_t *admission_out_ = NULL,
+                                  const uint64_t *max_message_bytes_snapshot_ = NULL);
+     pipe_message_admission_t write_state_admission_unlocked () const;
+diff --git a/core/src/runtime/core/pipe_transport.cpp b/core/src/runtime/core/pipe_transport.cpp
+index ffba41c3dc..a7b20632d3 100644
+--- a/core/src/runtime/core/pipe_transport.cpp
++++ b/core/src/runtime/core/pipe_transport.cpp
+@@ -794,7 +794,7 @@ void zlink::pipe_t::send_disconnect_msg ()
+         // Rollback any incomplete message in the pipe, and push the disconnect message.
+         rollback_unlocked (false);
+ 
+-        const bool written = write_message_unlocked (&_disconnect_msg, false);
++        const bool written = write_message_unlocked (&_disconnect_msg, pipe_write_unchecked);
+         zlink_assert (written);
+         flush_unlocked ();
+         _disconnect_msg.init ();
+@@ -816,7 +816,7 @@ void zlink::pipe_t::send_hiccup_msg (const std::vector<unsigned char> &hiccup_)
+         const int rc = msg.init_buffer (&hiccup_[0], hiccup_.size ());
+         errno_assert (rc == 0);
+ 
+-        const bool written = write_message_unlocked (&msg, false);
++        const bool written = write_message_unlocked (&msg, pipe_write_unchecked);
+         zlink_assert (written);
+         flush_unlocked ();
+     }
+diff --git a/core/src/runtime/core/pipe_write.cpp b/core/src/runtime/core/pipe_write.cpp
+index 1ba397e534..cd51d603f3 100644
+--- a/core/src/runtime/core/pipe_write.cpp
++++ b/core/src/runtime/core/pipe_write.cpp
+@@ -60,13 +60,14 @@ zlink::pipe_message_admission_t zlink::pipe_t::admit_owner_message_start ()
+ }
+ 
+ bool zlink::pipe_t::write_owner_started_message (
+-  const msg_t *msg_, pipe_message_admission_t *admission_out_)
++  const msg_t *msg_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (unlikely (!admit_owner_started_write_unlocked (admission_out_)))
+         return false;
+ 
+     const bool more = (msg_->flags () & msg_t::more) != 0;
+-    if (!write_message_unlocked (msg_, true, true, admission_out_))
++    if (!write_message_unlocked (msg_, write_mode_, admission_out_))
+         return false;
+     if (!more)
+         flush_unlocked ();
+@@ -75,7 +76,8 @@ bool zlink::pipe_t::write_owner_started_message (
+ 
+ bool zlink::pipe_t::write_owner_started_message_observed (
+   const msg_t *msg_, pipe_write_observer_fn observer_,
+-  void *observer_userdata_, pipe_message_admission_t *admission_out_)
++  void *observer_userdata_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (!observer_) {
+         errno = EFAULT;
+@@ -112,7 +114,7 @@ bool zlink::pipe_t::write_owner_started_message_observed (
+ 
+         const bool more = (msg_->flags () & msg_t::more) != 0;
+         if (written)
+-            written = write_message_unlocked (msg_, true, true,
++            written = write_message_unlocked (msg_, write_mode_,
+                                                admission_out_);
+         if (written) {
+             committed = observer_ (this, observer_userdata_,
+@@ -451,7 +453,8 @@ uint64_t zlink::pipe_t::remote_flow_pause_started_ms () const
+ }
+ 
+ bool zlink::pipe_t::write (
+-  const msg_t *msg_, pipe_message_admission_t *admission_out_)
++  const msg_t *msg_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
+     // Hot path: PAIR/DEALER steady-state send reaches this path for every
+     // message. The socket lifecycle turn (or session I/O owner) is this
+@@ -459,7 +462,7 @@ bool zlink::pipe_t::write (
+     if (unlikely (!admit_write_unlocked (admission_out_)))
+         return false;
+ 
+-    return write_message_unlocked (msg_, true, true, admission_out_);
++    return write_message_unlocked (msg_, write_mode_, admission_out_);
+ }
+ 
+ bool zlink::pipe_t::write_routing_id_and_flush (const msg_t *msg_)
+@@ -471,7 +474,7 @@ bool zlink::pipe_t::write_routing_id_and_flush (const msg_t *msg_)
+ 
+     if (_state != active)
+         return false;
+-    if (!write_message_unlocked (msg_, false))
++    if (!write_message_unlocked (msg_, pipe_write_unchecked))
+         return false;
+     flush_unlocked ();
+     return true;
+@@ -490,7 +493,7 @@ bool zlink::pipe_t::write_transport_probe_and_flush (const msg_t *msg_)
+     // The peer socket still withholds reads until its own pair is ready.
+     if (!_transport_pair_write_held || _state != active)
+         return false;
+-    if (!write_message_unlocked (msg_, false))
++    if (!write_message_unlocked (msg_, pipe_write_unchecked))
+         return false;
+     flush_unlocked ();
+     return true;
+@@ -810,13 +813,14 @@ bool zlink::pipe_t::has_pending_peer_controls ()
+ }
+ 
+ bool zlink::pipe_t::write_and_flush (
+-  const msg_t *msg_, pipe_message_admission_t *admission_out_)
++  const msg_t *msg_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (unlikely (!admit_write_unlocked (admission_out_)))
+         return false;
+ 
+     const bool more = (msg_->flags () & msg_t::more) != 0;
+-    if (!write_message_unlocked (msg_, true, true, admission_out_))
++    if (!write_message_unlocked (msg_, write_mode_, admission_out_))
+         return false;
+     if (!more)
+         flush_unlocked ();
+@@ -891,7 +895,7 @@ bool zlink::pipe_t::try_write_complete_record_and_flush (
+ 
+     for (size_t i = 0; i != part_count_; ++i) {
+         const bool written =
+-          write_message_unlocked (&parts_[i], false, false, NULL,
++          write_message_unlocked (&parts_[i], pipe_write_unchecked, NULL,
+                                   &max_message_bytes);
+         zlink_assert (written);
+         LIBZLINK_UNUSED (written);
+@@ -906,14 +910,14 @@ bool zlink::pipe_t::write_no_recursive_hwm_check (
+     if (unlikely (!admit_write_unlocked (admission_out_)))
+         return false;
+ 
+-    return write_message_unlocked (msg_, true, false, admission_out_);
++    return write_message_unlocked (msg_, pipe_write_final, admission_out_);
+ }
+ 
+ bool zlink::pipe_t::write_admitted_publish_frame (const msg_t *msg_)
+ {
+     if (unlikely (!write_state_ready_unlocked (NULL)))
+         return false;
+-    if (!write_message_unlocked (msg_, false))
++    if (!write_message_unlocked (msg_, pipe_write_unchecked))
+         return false;
+     if ((msg_->flags () & msg_t::more) == 0)
+         flush_unlocked ();
+@@ -1027,7 +1031,7 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
+     if (unlikely (!hwm_credit_ready_unlocked (admission_out_)))
+         return false;
+ 
+-    if (!write_message_unlocked (msg_, true, false, admission_out_))
++    if (!write_message_unlocked (msg_, pipe_write_final, admission_out_))
+         return false;
+     flush_unlocked ();
+     return true;
+@@ -1035,7 +1039,8 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
+ 
+ bool zlink::pipe_t::write_message_observed (
+   const msg_t *msg_, pipe_write_observer_fn observer_,
+-  void *observer_userdata_, pipe_message_admission_t *admission_out_)
++  void *observer_userdata_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (!observer_ || !msg_) {
+         errno = EINVAL;
+@@ -1073,8 +1078,8 @@ bool zlink::pipe_t::write_message_observed (
+         written = admit_write_unlocked (admission_out_);
+         const bool more = (msg_->flags () & msg_t::more) != 0;
+         if (written)
+-            written = write_message_unlocked (msg_, true, more,
+-                                               admission_out_);
++            written = write_message_unlocked (
++              msg_, more ? write_mode_ : pipe_write_final, admission_out_);
+         if (written) {
+             committed = observer_ (this, observer_userdata_,
+                                    pipe_write_observer_commit);
+@@ -1173,8 +1178,7 @@ void zlink::pipe_t::set_max_message_bytes (uint64_t max_message_bytes_)
+ }
+ 
+ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
+-                                            bool enforce_hwm_,
+-                                            bool enforce_incremental_hwm_,
++                                            pipe_write_mode_t write_mode_,
+                                             pipe_message_admission_t *admission_out_,
+                                             const uint64_t *max_message_bytes_snapshot_)
+ {
+@@ -1227,26 +1231,32 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
+           <= _peers_bytes_read.load (std::memory_order_acquire);
+     }
+     bool commit_credit_ready =
+-      !(commits_bytes || enforce_incremental_hwm_) || !enforce_hwm_
++      write_mode_ == pipe_write_unchecked
++      || (write_mode_ == pipe_write_final && !commits_bytes)
+       || can_commit_bytes_with_peer_snapshot_unlocked (
+-        _out_incomplete_bytes, _out_incomplete_payload_bytes,
+-        !more
+-          && (incomplete_before == 0 || _out_multipart_started_empty),
++        _out_incomplete_bytes, _out_incomplete_payload_bytes, false,
+         &max_message_bytes);
+     if (!commit_credit_ready) {
+-        const bool exceeds_max_message_size =
+-          max_message_bytes != 0
+-          && _out_incomplete_payload_bytes > max_message_bytes;
+-        if (!exceeds_max_message_size
++        // The first frame fixes empty-queue eligibility. All parts of an
++        // owner-submitted record are present; incremental input can extend
++        // the exception only to FINAL. Keep ordinary HWM admission above
++        // independent of this exceptional policy.
++        const bool allow_empty_pipe_exception =
++          (_out_multipart_started_empty || (!more && incomplete_before == 0))
++          && (!more || write_mode_ == pipe_write_complete_record);
++        commit_credit_ready =
++          allow_empty_pipe_exception
++          && can_commit_bytes_with_peer_snapshot_unlocked (
++            _out_incomplete_bytes, _out_incomplete_payload_bytes, true,
++            &max_message_bytes);
++        if (!commit_credit_ready
+             && _bytes_written.load (std::memory_order_acquire)
+                  > _peers_bytes_read.load (std::memory_order_acquire)) {
+             arm_hwm_credit_wait_unlocked ();
+             commit_credit_ready =
+               can_commit_bytes_with_peer_snapshot_unlocked (
+                 _out_incomplete_bytes, _out_incomplete_payload_bytes,
+-                !more
+-                  && (incomplete_before == 0
+-                      || _out_multipart_started_empty),
++                allow_empty_pipe_exception,
+                 &max_message_bytes);
+             if (commit_credit_ready)
+                 clear_hwm_credit_wait_unlocked ();
+@@ -1255,11 +1265,9 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
+             _out_incomplete_bytes = incomplete_before;
+             _out_incomplete_payload_bytes = payload_before;
+             _out_multipart_started_empty = multipart_started_empty_before;
+-            errno = exceeds_max_message_size ? EMSGSIZE : EAGAIN;
++            errno = EAGAIN;
+             if (admission_out_)
+-                *admission_out_ = exceeds_max_message_size
+-                                    ? pipe_message_admission_too_large
+-                                    : pipe_message_admission_hwm_full;
++                *admission_out_ = pipe_message_admission_hwm_full;
+             return false;
+         }
+     }
+diff --git a/core/src/runtime/sockets/common/socket_base.cpp b/core/src/runtime/sockets/common/socket_base.cpp
+index 82258f79c0..01bcaaa768 100644
+--- a/core/src/runtime/sockets/common/socket_base.cpp
++++ b/core/src/runtime/sockets/common/socket_base.cpp
+@@ -449,8 +449,10 @@ bool zlink::socket_base_t::xhas_out ()
+ }
+ 
+ int zlink::socket_base_t::xsend (msg_t *,
+-                                 pipe_message_admission_t *admission_out_)
++                                 pipe_message_admission_t *admission_out_,
++                                 pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_invalid;
+     errno = ENOTSUP;
+@@ -460,13 +462,14 @@ int zlink::socket_base_t::xsend (msg_t *,
+ int zlink::socket_base_t::xsend_pipe (
+   msg_t *msg_, pipe_t **pipe_out_,
+   pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (pipe_out_)
+         *pipe_out_ = NULL;
+     LIBZLINK_UNUSED (observer_);
+     LIBZLINK_UNUSED (observer_userdata_);
+-    return xsend (msg_, admission_out_);
++    return xsend (msg_, admission_out_, write_mode_);
+ }
+ 
+ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
+@@ -482,8 +485,10 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
+                                        routed_send_attempt_identity_t
+                                          *attempt_identity_out_,
+                                        uint64_t expected_route_incarnation_id_,
+-                                       bool request_only_)
++                                       bool request_only_,
++                                       pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     LIBZLINK_UNUSED (target_rid_);
+     LIBZLINK_UNUSED (msg_);
+     if (connection_id_out_)
+@@ -525,8 +530,10 @@ int zlink::socket_base_t::xcommit_request_submit_pipe (pipe_t *pipe_)
+ int zlink::socket_base_t::xsend_selected_pipe (
+   pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
+   pipe_message_admission_t *admission_out_, pipe_write_observer_fn observer_,
+-  void *observer_userdata_)
++  void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     LIBZLINK_UNUSED (pipe_);
+     LIBZLINK_UNUSED (msg_);
+     LIBZLINK_UNUSED (flags_);
+@@ -542,8 +549,10 @@ int zlink::socket_base_t::xsend_selected_pipe (
+ int zlink::socket_base_t::xsend_configured_endpoint (
+   const std::string &endpoint_, msg_t *msg_, int flags_, bool request_only_,
+   pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     LIBZLINK_UNUSED (endpoint_);
+     LIBZLINK_UNUSED (msg_);
+     LIBZLINK_UNUSED (flags_);
+diff --git a/core/src/runtime/sockets/common/socket_base.hpp b/core/src/runtime/sockets/common/socket_base.hpp
+index 3392d5ac87..767d358a80 100644
+--- a/core/src/runtime/sockets/common/socket_base.hpp
++++ b/core/src/runtime/sockets/common/socket_base.hpp
+@@ -906,7 +906,8 @@ class socket_base_t : public own_t,
+       zlink::pipe_t *pipe_, zlink_routing_id_t *target_rid_out_);
+     virtual int xsend (
+       zlink::msg_t *msg_,
+-      pipe_message_admission_t *admission_out_ = NULL);
++      pipe_message_admission_t *admission_out_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     // Concrete sockets may commit a complete record in one pipe-owned
+     // transaction. False means no frame was published or source ownership
+     // transferred, and the caller must use the ordinary per-frame path.
+@@ -921,7 +922,8 @@ class socket_base_t : public own_t,
+       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
+       pipe_message_admission_t *admission_out_ = NULL,
+       pipe_write_observer_fn observer_ = NULL,
+-      void *observer_userdata_ = NULL);
++      void *observer_userdata_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     virtual int xsend_routed (const zlink_routing_id_t *target_rid_,
+                               zlink::msg_t *msg_,
+                               uint64_t *connection_id_out_,
+@@ -935,7 +937,8 @@ class socket_base_t : public own_t,
+                               routed_send_attempt_identity_t
+                                 *attempt_identity_out_ = NULL,
+                               uint64_t expected_route_incarnation_id_ = 0,
+-                              bool request_only_ = false);
++                              bool request_only_ = false,
++                              pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     //  Hot-path pair for the single-part blocking send: pick the pipe the
+     //  load balancer would commit to, then admit one frame to exactly that
+     //  pipe. Both run under one send scope, so the pointer never outlives
+@@ -951,14 +954,16 @@ class socket_base_t : public own_t,
+                                      bool request_only_,
+                                      pipe_message_admission_t *admission_out_,
+                                      pipe_write_observer_fn observer_,
+-                                     void *observer_userdata_);
++                                     void *observer_userdata_,
++                                     pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     virtual int xsend_configured_endpoint (
+       const std::string &endpoint_, zlink::msg_t *msg_, int flags_,
+       bool request_only_,
+       zlink::pipe_t **pipe_out_,
+       pipe_message_admission_t *admission_out_ = NULL,
+       pipe_write_observer_fn observer_ = NULL,
+-      void *observer_userdata_ = NULL);
++      void *observer_userdata_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     virtual int xselect_routed_submit_target (
+       const zlink_routing_id_t *router_rid_or_null_,
+       zlink_routed_submit_target_t *target_out_);
+diff --git a/core/src/runtime/sockets/common/socket_base_msg.cpp b/core/src/runtime/sockets/common/socket_base_msg.cpp
+index 77602d5d20..10b30f2720 100644
+--- a/core/src/runtime/sockets/common/socket_base_msg.cpp
++++ b/core/src/runtime/sockets/common/socket_base_msg.cpp
+@@ -355,9 +355,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
+                                expected_transport_pair_generation_,
+                                &first_admission, observer_, observer_userdata_,
+                                NULL, expected_route_incarnation_id_,
+-                               request_only_)
++                               request_only_, send_scope.write_mode ())
+                : xsend_pipe (msg_, pipe_out_, &first_admission, observer_,
+-                             observer_userdata_);
++                             observer_userdata_, send_scope.write_mode ());
+     if (record_context_admission_ && rc != 0
+         && first_admission == pipe_message_admission_hwm_full)
+         _auto_hwm_send_blocked_attempts.fetch_add (
+@@ -486,9 +486,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
+                                        expected_transport_pair_generation_, NULL,
+                                        observer_, observer_userdata_, NULL,
+                                        expected_route_incarnation_id_,
+-                                       request_only_)
++                                       request_only_, send_scope.write_mode ())
+                        : xsend_pipe (msg_, pipe_out_, NULL, observer_,
+-                                     observer_userdata_);
++                                     observer_userdata_, send_scope.write_mode ());
+             if (unlikely (rc == -2))
+                 return finish_multipart_abort ();
+             if (rc == 0) {
+@@ -571,9 +571,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
+                                expected_transport_pair_generation_, NULL,
+                                observer_, observer_userdata_, NULL,
+                                expected_route_incarnation_id_,
+-                               request_only_)
++                               request_only_, send_scope.write_mode ())
+                : xsend_pipe (msg_, pipe_out_, NULL, observer_,
+-                             observer_userdata_);
++                             observer_userdata_, send_scope.write_mode ());
+         if (unlikely (rc == -2))
+             return finish_multipart_abort ();
+         if (rc == 0) {
+diff --git a/core/src/runtime/sockets/common/socket_runtime.hpp b/core/src/runtime/sockets/common/socket_runtime.hpp
+index 0b54e2ed8c..a4c83598a9 100644
+--- a/core/src/runtime/sockets/common/socket_runtime.hpp
++++ b/core/src/runtime/sockets/common/socket_runtime.hpp
+@@ -840,6 +840,11 @@ class socket_public_send_scope_t
+     ~socket_public_send_scope_t ();
+ 
+     bool acquired () const { return _entered; }
++    pipe_write_mode_t write_mode () const
++    {
++        return _admission_mode == socket_send_admission_complete
++                 ? pipe_write_complete_record : pipe_write_incremental;
++    }
+     bool multipart_active () const { return _multipart_active; }
+     bool sync_locked () const { return _sync_locked; }
+     bool multipart_marker_owned () const { return _multipart_marker_owned; }
+diff --git a/core/src/runtime/sockets/common/socket_send_complete.cpp b/core/src/runtime/sockets/common/socket_send_complete.cpp
+index d60037c1f8..b7a18ecbf0 100644
+--- a/core/src/runtime/sockets/common/socket_send_complete.cpp
++++ b/core/src/runtime/sockets/common/socket_send_complete.cpp
+@@ -384,13 +384,13 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
+                          ? xsend_selected_pipe (
+                              selected_pipe, msg, flags, request_admission_,
+                              NULL, observe_commit ? observer_ : NULL,
+-                             observe_commit ? observer_userdata_ : NULL)
++                             observe_commit ? observer_userdata_ : NULL, pipe_write_complete_record)
+                        : configured_endpoint_start
+                          ? xsend_configured_endpoint (
+                              target_.logical_endpoint, msg, flags,
+                              request_admission_, attempted_pipe_out_, NULL,
+                              observe_commit ? observer_ : NULL,
+-                             observe_commit ? observer_userdata_ : NULL)
++                             observe_commit ? observer_userdata_ : NULL, pipe_write_complete_record)
+                        : routed_start
+                          ? send_direct_with_retry (
+                              &rid, msg, flags, scope, false,
+diff --git a/core/src/runtime/sockets/dealer/dealer.cpp b/core/src/runtime/sockets/dealer/dealer.cpp
+index c49ddc9c81..15e5d5521e 100644
+--- a/core/src/runtime/sockets/dealer/dealer.cpp
++++ b/core/src/runtime/sockets/dealer/dealer.cpp
+@@ -25,7 +25,8 @@ zlink::dealer_t::~dealer_t ()
+ int zlink::dealer_t::sendpipe_to (
+   pipe_t *pipe_, msg_t *msg_, int flags_,
+   pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (!pipe_ || !msg_ || !msg_->check ()) {
+         errno = EFAULT;
+@@ -35,7 +36,7 @@ int zlink::dealer_t::sendpipe_to (
+     if ((flags_ & ZLINK_SNDMORE) != 0)
+         msg_->set_flags (msg_t::more);
+     return _lb.sendpipe_to (pipe_, msg_, admission_out_, observer_,
+-                            observer_userdata_);
++                            observer_userdata_, write_mode_);
+ }
+ 
+ bool zlink::dealer_t::active_submit_candidate (dealer_t *dealer_, pipe_t *pipe_)
+@@ -140,18 +141,20 @@ int zlink::dealer_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_
+ }
+ 
+ int zlink::dealer_t::xsend (
+-  msg_t *msg_, pipe_message_admission_t *admission_out_)
++  msg_t *msg_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
+-    return _lb.sendpipe (msg_, NULL, admission_out_);
++    return _lb.sendpipe (msg_, NULL, admission_out_, NULL, NULL, write_mode_);
+ }
+ 
+ int zlink::dealer_t::xsend_pipe (
+   msg_t *msg_, pipe_t **pipe_out_,
+   pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     return _lb.sendpipe (msg_, pipe_out_, admission_out_, observer_,
+-                         observer_userdata_);
++                         observer_userdata_, write_mode_);
+ }
+ 
+ int zlink::dealer_t::xsend_routed (
+@@ -162,7 +165,8 @@ int zlink::dealer_t::xsend_routed (
+   pipe_message_admission_t *admission_out_,
+   pipe_write_observer_fn observer_, void *observer_userdata_,
+   routed_send_attempt_identity_t *attempt_identity_out_,
+-  uint64_t expected_route_incarnation_id_, bool request_only_)
++  uint64_t expected_route_incarnation_id_, bool request_only_,
++  pipe_write_mode_t write_mode_)
+ {
+     LIBZLINK_UNUSED (expected_route_incarnation_id_);
+     LIBZLINK_UNUSED (request_only_);
+@@ -208,7 +212,7 @@ int zlink::dealer_t::xsend_routed (
+     return sendpipe_to (
+       pipe, msg_,
+       (msg_->flags () & msg_t::more) != 0 ? ZLINK_SNDMORE : 0,
+-      admission_out_, observer_, observer_userdata_);
++      admission_out_, observer_, observer_userdata_, write_mode_);
+ }
+ 
+ int zlink::dealer_t::xselect_routed_submit_target (
+@@ -273,16 +277,18 @@ int zlink::dealer_t::xcommit_request_submit_pipe (pipe_t *pipe_)
+ int zlink::dealer_t::xsend_selected_pipe (
+   pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
+   pipe_message_admission_t *admission_out_, pipe_write_observer_fn observer_,
+-  void *observer_userdata_)
++  void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     return send_selected_pipe (pipe_, msg_, flags_, request_only_, NULL,
+-                               admission_out_, observer_, observer_userdata_);
++                               admission_out_, observer_, observer_userdata_, write_mode_);
+ }
+ 
+ int zlink::dealer_t::send_selected_pipe (
+   pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
+   pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (!pipe_) {
+         errno = EAGAIN;
+@@ -304,13 +310,14 @@ int zlink::dealer_t::send_selected_pipe (
+     if (pipe_out_)
+         *pipe_out_ = pipe_;
+     return sendpipe_to (
+-      pipe_, msg_, flags_, admission_out_, observer_, observer_userdata_);
++      pipe_, msg_, flags_, admission_out_, observer_, observer_userdata_, write_mode_);
+ }
+ 
+ int zlink::dealer_t::xsend_configured_endpoint (
+   const std::string &endpoint_, msg_t *msg_, int flags_, bool request_only_,
+   pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (pipe_out_)
+         *pipe_out_ = NULL;
+@@ -323,7 +330,7 @@ int zlink::dealer_t::xsend_configured_endpoint (
+         return -1;
+     }
+     return send_selected_pipe (pipe, msg_, flags_, request_only_, pipe_out_,
+-                               admission_out_, observer_, observer_userdata_);
++                               admission_out_, observer_, observer_userdata_, write_mode_);
+ }
+ 
+ int zlink::dealer_t::xselect_request_submit_target (
+diff --git a/core/src/runtime/sockets/dealer/dealer.hpp b/core/src/runtime/sockets/dealer/dealer.hpp
+index c65795e0f6..30a1e1c47b 100644
+--- a/core/src/runtime/sockets/dealer/dealer.hpp
++++ b/core/src/runtime/sockets/dealer/dealer.hpp
+@@ -28,7 +28,8 @@ class dealer_t : public socket_base_t
+       zlink::pipe_t *pipe_, zlink::msg_t *msg_, int flags_,
+       pipe_message_admission_t *admission_out_ = NULL,
+       pipe_write_observer_fn observer_ = NULL,
+-      void *observer_userdata_ = NULL);
++      void *observer_userdata_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental);
+ #ifdef ZLINK_BUILD_TESTS
+     uint32_t test_peer_weight (zlink::pipe_t *pipe_) const;
+     size_t test_peer_weight_count (uint32_t weight_) const;
+@@ -42,12 +43,14 @@ class dealer_t : public socket_base_t
+     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_OVERRIDE;
+     int xgetsockopt (int option_, void *optval_, size_t *optvallen_) ZLINK_OVERRIDE;
+     int xsend (zlink::msg_t *msg_,
+-               pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
++               pipe_message_admission_t *admission_out_ = NULL,
++               pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
+     int xsend_pipe (
+       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
+       pipe_message_admission_t *admission_out_ = NULL,
+       pipe_write_observer_fn observer_ = NULL,
+-      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
++      void *observer_userdata_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
+     int xsend_routed (const zlink_routing_id_t *target_rid_,
+                       zlink::msg_t *msg_,
+                       uint64_t *connection_id_out_,
+@@ -61,7 +64,8 @@ class dealer_t : public socket_base_t
+                       routed_send_attempt_identity_t
+                         *attempt_identity_out_ = NULL,
+                       uint64_t expected_route_incarnation_id_ = 0,
+-                      bool request_only_ = false)
++                      bool request_only_ = false,
++                      pipe_write_mode_t write_mode_ = pipe_write_incremental)
+       ZLINK_OVERRIDE;
+     int xselect_routed_submit_pipe (pipe_t **pipe_out_,
+                                     bool request_only_) ZLINK_OVERRIDE;
+@@ -70,14 +74,16 @@ class dealer_t : public socket_base_t
+                              bool request_only_,
+                              pipe_message_admission_t *admission_out_,
+                              pipe_write_observer_fn observer_,
+-                             void *observer_userdata_) ZLINK_OVERRIDE;
++                             void *observer_userdata_,
++                             pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
+     int xsend_configured_endpoint (
+       const std::string &endpoint_, zlink::msg_t *msg_, int flags_,
+       bool request_only_,
+       zlink::pipe_t **pipe_out_,
+       pipe_message_admission_t *admission_out_ = NULL,
+       pipe_write_observer_fn observer_ = NULL,
+-      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
++      void *observer_userdata_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
+     int xselect_routed_submit_target (
+       const zlink_routing_id_t *router_rid_or_null_,
+       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
+@@ -108,7 +114,8 @@ class dealer_t : public socket_base_t
+     int send_selected_pipe (
+       pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
+       pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
+-      pipe_write_observer_fn observer_, void *observer_userdata_);
++      pipe_write_observer_fn observer_, void *observer_userdata_,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
+     void update_request_route_weight (pipe_t *pipe_, uint32_t weight_);
+     void remember_request_route (pipe_t *pipe_, uint32_t weight_);
+diff --git a/core/src/runtime/sockets/internal/lb.cpp b/core/src/runtime/sockets/internal/lb.cpp
+index 46bb84d7f1..0ddfcde2da 100644
+--- a/core/src/runtime/sockets/internal/lb.cpp
++++ b/core/src/runtime/sockets/internal/lb.cpp
+@@ -277,7 +277,8 @@ zlink::pipe_t *zlink::lb_t::find_pipe_by_endpoint (
+ 
+ int zlink::lb_t::sendpipe_to (
+   pipe_t *pipe_, msg_t *msg_, pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_invalid;
+@@ -318,8 +319,8 @@ int zlink::lb_t::sendpipe_to (
+     const bool ok =
+       observer_
+         ? pipe_->write_message_observed (
+-            msg_, observer_, observer_userdata_, &write_admission)
+-        : more ? pipe_->write (msg_, &write_admission)
++            msg_, observer_, observer_userdata_, &write_admission, write_mode_)
++        : more ? pipe_->write (msg_, &write_admission, write_mode_)
+                : pipe_->write_single_message_and_flush_no_recursive_hwm_check (
+                    msg_, &write_admission);
+     if (!ok) {
+@@ -444,7 +445,8 @@ void zlink::lb_t::commit_weighted_selection (pipe_entry_t *selected_, uint32_t t
+ int zlink::lb_t::sendpipe (
+   msg_t *msg_, pipe_t **pipe_,
+   pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_ready;
+@@ -477,8 +479,8 @@ int zlink::lb_t::sendpipe (
+         const bool ok =
+           observer_
+             ? _weighted_multipart_pipe->write_message_observed (
+-                msg_, observer_, observer_userdata_, &write_admission)
+-          : more ? _weighted_multipart_pipe->write (msg_, &write_admission)
++                msg_, observer_, observer_userdata_, &write_admission, write_mode_)
++          : more ? _weighted_multipart_pipe->write (msg_, &write_admission, write_mode_)
+                  : _weighted_multipart_pipe
+                      ->write_single_message_and_flush_no_recursive_hwm_check (
+                        msg_, &write_admission);
+@@ -513,8 +515,8 @@ int zlink::lb_t::sendpipe (
+         const bool ok =
+           observer_
+             ? pipe->write_message_observed (
+-                msg_, observer_, observer_userdata_, &write_admission)
+-            : more ? pipe->write (msg_, &write_admission)
++                msg_, observer_, observer_userdata_, &write_admission, write_mode_)
++            : more ? pipe->write (msg_, &write_admission, write_mode_)
+                    : pipe->write_single_message_and_flush_no_recursive_hwm_check (
+                        msg_, &write_admission);
+         if (!ok) {
+@@ -572,8 +574,8 @@ int zlink::lb_t::sendpipe (
+             const bool ok =
+               observer_
+                 ? pipe->write_message_observed (
+-                    msg_, observer_, observer_userdata_, &write_admission)
+-                : more ? pipe->write (msg_, &write_admission)
++                    msg_, observer_, observer_userdata_, &write_admission, write_mode_)
++                : more ? pipe->write (msg_, &write_admission, write_mode_)
+                        : pipe
+                            ->write_single_message_and_flush_no_recursive_hwm_check (
+                              msg_, &write_admission);
+@@ -644,7 +646,7 @@ int zlink::lb_t::sendpipe (
+         pipe_message_admission_t write_admission =
+           pipe_message_admission_invalid;
+         const bool ok = more
+-                          ? _pipes[_current]->write (msg_, &write_admission)
++                          ? _pipes[_current]->write (msg_, &write_admission, write_mode_)
+                           : _pipes[_current]->write_and_flush (
+                               msg_, &write_admission);
+         if (ok) {
+diff --git a/core/src/runtime/sockets/internal/lb.hpp b/core/src/runtime/sockets/internal/lb.hpp
+index cffe80d4c3..e77c172a15 100644
+--- a/core/src/runtime/sockets/internal/lb.hpp
++++ b/core/src/runtime/sockets/internal/lb.hpp
+@@ -57,7 +57,8 @@ class lb_t
+     int sendpipe_to (pipe_t *pipe_, msg_t *msg_,
+                      pipe_message_admission_t *admission_out_ = NULL,
+                      pipe_write_observer_fn observer_ = NULL,
+-                     void *observer_userdata_ = NULL);
++                     void *observer_userdata_ = NULL,
++                     pipe_write_mode_t write_mode_ = pipe_write_incremental);
+ 
+     //  Sends a message and stores the pipe that was used in pipe_.
+     //  It is possible for this function to return success but keep pipe_
+@@ -66,7 +67,8 @@ class lb_t
+     int sendpipe (msg_t *msg_, pipe_t **pipe_,
+                   pipe_message_admission_t *admission_out_ = NULL,
+                   pipe_write_observer_fn observer_ = NULL,
+-                  void *observer_userdata_ = NULL);
++                  void *observer_userdata_ = NULL,
++                  pipe_write_mode_t write_mode_ = pipe_write_incremental);
+ 
+     //  Removes an unfinished multipart message and resets send sequencing.
+     void rollback ();
+diff --git a/core/src/runtime/sockets/pair/pair.cpp b/core/src/runtime/sockets/pair/pair.cpp
+index 8a51fd588a..60eaaa08dc 100644
+--- a/core/src/runtime/sockets/pair/pair.cpp
++++ b/core/src/runtime/sockets/pair/pair.cpp
+@@ -72,7 +72,8 @@ void zlink::pair_t::xwrite_activated (pipe_t *)
+ }
+ 
+ int zlink::pair_t::xsend (
+-  msg_t *msg_, pipe_message_admission_t *admission_out_)
++  msg_t *msg_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_invalid;
+@@ -86,8 +87,8 @@ int zlink::pair_t::xsend (
+     const bool more = (msg_->flags () & msg_t::more) != 0;
+     pipe_message_admission_t admission = pipe_message_admission_inactive;
+     const bool ok = _pipe
+-                      ? (more ? _pipe->write (msg_, &admission)
+-                              : _pipe->write_and_flush (msg_, &admission))
++                      ? (more ? _pipe->write (msg_, &admission, write_mode_)
++                              : _pipe->write_and_flush (msg_, &admission, write_mode_))
+                       : false;
+     if (!ok) {
+         const int failure_errno =
+diff --git a/core/src/runtime/sockets/pair/pair.hpp b/core/src/runtime/sockets/pair/pair.hpp
+index 9f8243c359..c17d88a12f 100644
+--- a/core/src/runtime/sockets/pair/pair.hpp
++++ b/core/src/runtime/sockets/pair/pair.hpp
+@@ -23,7 +23,8 @@ class pair_t ZLINK_FINAL : public socket_base_t
+     //  Overrides of functions from socket_base_t.
+     void xattach_pipe (zlink::pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_);
+     int xsend (zlink::msg_t *msg_,
+-               pipe_message_admission_t *admission_out_ = NULL);
++               pipe_message_admission_t *admission_out_ = NULL,
++               pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     bool xtry_send_complete_record (zlink::msg_t *parts_,
+                                     size_t part_count_) ZLINK_OVERRIDE;
+     int xrollback () ZLINK_OVERRIDE;
+diff --git a/core/src/runtime/sockets/pubsub/sub.cpp b/core/src/runtime/sockets/pubsub/sub.cpp
+index b9acfedae8..87e4e9aa3d 100644
+--- a/core/src/runtime/sockets/pubsub/sub.cpp
++++ b/core/src/runtime/sockets/pubsub/sub.cpp
+@@ -41,8 +41,10 @@ int zlink::sub_t::xsetsockopt (int option_, const void *optval_, size_t optvalle
+ }
+ 
+ int zlink::sub_t::xsend (
+-  msg_t *, pipe_message_admission_t *admission_out_)
++  msg_t *, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_invalid;
+     //  Override the XSUB's send.
+diff --git a/core/src/runtime/sockets/pubsub/sub.hpp b/core/src/runtime/sockets/pubsub/sub.hpp
+index f7d784e7f4..e29b69b769 100644
+--- a/core/src/runtime/sockets/pubsub/sub.hpp
++++ b/core/src/runtime/sockets/pubsub/sub.hpp
+@@ -21,7 +21,8 @@ class sub_t ZLINK_FINAL : public xsub_t
+   protected:
+     int xsetsockopt (int option_, const void *optval_, size_t optvallen_);
+     int xsend (zlink::msg_t *msg_,
+-               pipe_message_admission_t *admission_out_ = NULL);
++               pipe_message_admission_t *admission_out_ = NULL,
++               pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     bool xhas_out ();
+ 
+     ZLINK_NON_COPYABLE_NOR_MOVABLE (sub_t)
+diff --git a/core/src/runtime/sockets/pubsub/xpub.cpp b/core/src/runtime/sockets/pubsub/xpub.cpp
+index bc6cb4e01e..2e35b49795 100644
+--- a/core/src/runtime/sockets/pubsub/xpub.cpp
++++ b/core/src/runtime/sockets/pubsub/xpub.cpp
+@@ -279,8 +279,10 @@ void zlink::xpub_t::mark_last_pipe_as_matching (pipe_t *pipe_, xpub_t *self_)
+ }
+ 
+ int zlink::xpub_t::xsend (
+-  msg_t *msg_, pipe_message_admission_t *admission_out_)
++  msg_t *msg_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_ready;
+     const bool msg_more = (msg_->flags () & msg_t::more) != 0;
+diff --git a/core/src/runtime/sockets/pubsub/xpub.hpp b/core/src/runtime/sockets/pubsub/xpub.hpp
+index 88c42a93a2..09f3655cf5 100644
+--- a/core/src/runtime/sockets/pubsub/xpub.hpp
++++ b/core/src/runtime/sockets/pubsub/xpub.hpp
+@@ -34,7 +34,8 @@ class xpub_t : public socket_base_t
+                        bool subscribe_to_all_ = false,
+                        bool locally_initiated_ = false) ZLINK_OVERRIDE;
+     int xsend (zlink::msg_t *msg_,
+-               pipe_message_admission_t *admission_out_ = NULL) ZLINK_FINAL;
++               pipe_message_admission_t *admission_out_ = NULL,
++               pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_FINAL;
+     int xrollback () ZLINK_FINAL;
+     bool xhas_out () ZLINK_FINAL;
+     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
+diff --git a/core/src/runtime/sockets/pubsub/xsub.cpp b/core/src/runtime/sockets/pubsub/xsub.cpp
+index 0cfe16813e..faafba4ca7 100644
+--- a/core/src/runtime/sockets/pubsub/xsub.cpp
++++ b/core/src/runtime/sockets/pubsub/xsub.cpp
+@@ -169,8 +169,10 @@ int zlink::xsub_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_)
+     return -1;
+ }
+ 
+-int zlink::xsub_t::xsend (msg_t *msg_, pipe_message_admission_t *admission_out_)
++int zlink::xsub_t::xsend (msg_t *msg_, pipe_message_admission_t *admission_out_,
++                          pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_ready;
+     size_t size = msg_->size ();
+diff --git a/core/src/runtime/sockets/pubsub/xsub.hpp b/core/src/runtime/sockets/pubsub/xsub.hpp
+index d6e152496e..615bcf2b32 100644
+--- a/core/src/runtime/sockets/pubsub/xsub.hpp
++++ b/core/src/runtime/sockets/pubsub/xsub.hpp
+@@ -42,7 +42,8 @@ class xsub_t : public socket_base_t
+                        bool locally_initiated_) ZLINK_FINAL;
+     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_OVERRIDE;
+     int xgetsockopt (int option_, void *optval_, size_t *optvallen_) ZLINK_FINAL;
+-    int xsend (zlink::msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
++    int xsend (zlink::msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL,
++               pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
+     bool xhas_out () ZLINK_OVERRIDE;
+     int xrecv (zlink::msg_t *msg_) ZLINK_FINAL;
+     bool xhas_in () ZLINK_FINAL;
+diff --git a/core/src/runtime/sockets/router/router.hpp b/core/src/runtime/sockets/router/router.hpp
+index 5501dda31b..68a8a410ab 100644
+--- a/core/src/runtime/sockets/router/router.hpp
++++ b/core/src/runtime/sockets/router/router.hpp
+@@ -35,12 +35,14 @@ class router_t : public routing_socket_base_t
+     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_FINAL;
+     int xgetsockopt (int option_, void *optval_, size_t *optvallen_) ZLINK_FINAL;
+     int xsend (zlink::msg_t *msg_,
+-               pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
++               pipe_message_admission_t *admission_out_ = NULL,
++               pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
+     int xsend_pipe (
+       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
+       pipe_message_admission_t *admission_out_ = NULL,
+       pipe_write_observer_fn observer_ = NULL,
+-      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
++      void *observer_userdata_ = NULL,
++      pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
+     int xsend_routed (const zlink_routing_id_t *target_rid_,
+                       zlink::msg_t *msg_,
+                       uint64_t *connection_id_out_,
+@@ -54,7 +56,8 @@ class router_t : public routing_socket_base_t
+                       routed_send_attempt_identity_t
+                         *attempt_identity_out_ = NULL,
+                       uint64_t expected_route_incarnation_id_ = 0,
+-                      bool request_only_ = false)
++                      bool request_only_ = false,
++                      pipe_write_mode_t write_mode_ = pipe_write_incremental)
+       ZLINK_OVERRIDE;
+     int xselect_routed_submit_target (
+       const zlink_routing_id_t *router_rid_or_null_,
+@@ -148,7 +151,8 @@ class router_t : public routing_socket_base_t
+     int send_with_observer (zlink::msg_t *msg_,
+                             pipe_message_admission_t *admission_out_,
+                             pipe_write_observer_fn observer_,
+-                            void *observer_userdata_);
++                            void *observer_userdata_,
++                            pipe_write_mode_t write_mode_ = pipe_write_incremental);
+     struct route_discard_batch_t
+     {
+         route_discard_batch_t () :
+diff --git a/core/src/runtime/sockets/router/router_send_path.cpp b/core/src/runtime/sockets/router/router_send_path.cpp
+index c08beed28d..a481a2231a 100644
+--- a/core/src/runtime/sockets/router/router_send_path.cpp
++++ b/core/src/runtime/sockets/router/router_send_path.cpp
+@@ -79,14 +79,16 @@ void trace_xsend_routed_write_failed (unsigned rid_size_)
+ }
+ 
+ int zlink::router_t::xsend (
+-  msg_t *msg_, pipe_message_admission_t *admission_out_)
++  msg_t *msg_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
+-    return send_with_observer (msg_, admission_out_, NULL, NULL);
++    return send_with_observer (msg_, admission_out_, NULL, NULL, write_mode_);
+ }
+ 
+ int zlink::router_t::send_with_observer (
+   msg_t *msg_, pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_invalid;
+@@ -180,9 +182,9 @@ int zlink::router_t::send_with_observer (
+         const bool ok =
+           observer_
+             ? write_pipe->write_owner_started_message_observed (
+-                msg_, observer_, observer_userdata_, &write_admission)
++                msg_, observer_, observer_userdata_, &write_admission, write_mode_)
+             : write_pipe->write_owner_started_message (
+-                msg_, &write_admission);
++                msg_, &write_admission, write_mode_);
+         if (router_debug::enabled ())
+             fprintf (stderr, "router xsend write: pipe=%p ok=%d more=%d\\n",
+                      static_cast<void *> (write_pipe), ok ? 1 : 0,
+@@ -253,12 +255,13 @@ int zlink::router_t::send_with_observer (
+ int zlink::router_t::xsend_pipe (
+   msg_t *msg_, pipe_t **pipe_out_,
+   pipe_message_admission_t *admission_out_,
+-  pipe_write_observer_fn observer_, void *observer_userdata_)
++  pipe_write_observer_fn observer_, void *observer_userdata_,
++  pipe_write_mode_t write_mode_)
+ {
+     if (pipe_out_)
+         *pipe_out_ = NULL;
+     const int rc = send_with_observer (msg_, admission_out_, observer_,
+-                                       observer_userdata_);
++                                       observer_userdata_, write_mode_);
+     if (rc == 0 && pipe_out_) {
+         if (_current_out)
+             *pipe_out_ = _current_out;
+@@ -276,7 +279,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
+   pipe_message_admission_t *admission_out_,
+   pipe_write_observer_fn observer_, void *observer_userdata_,
+   routed_send_attempt_identity_t *attempt_identity_out_,
+-  uint64_t expected_route_incarnation_id_, bool request_only_)
++  uint64_t expected_route_incarnation_id_, bool request_only_,
++  pipe_write_mode_t write_mode_)
+ {
+     zlink_assert (!_more_out);
+     zlink_assert (!_current_out);
+@@ -485,8 +489,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
+         const bool ok =
+           observer_
+             ? write_pipe->write_message_observed (
+-                msg_, observer_, observer_userdata_, &write_admission)
+-            : write_more ? write_pipe->write (msg_, &write_admission)
++                msg_, observer_, observer_userdata_, &write_admission, write_mode_)
++            : write_more ? write_pipe->write (msg_, &write_admission, write_mode_)
+                          : write_pipe
+                             ->write_single_message_and_flush_no_recursive_hwm_check (
+                               msg_, &write_admission);
+diff --git a/core/src/runtime/sockets/stream/stream.cpp b/core/src/runtime/sockets/stream/stream.cpp
+index 8437332583..54f5da4b38 100644
+--- a/core/src/runtime/sockets/stream/stream.cpp
++++ b/core/src/runtime/sockets/stream/stream.cpp
+@@ -798,8 +798,10 @@ void zlink::stream_t::xread_activated (pipe_t *pipe_)
+ }
+ 
+ int zlink::stream_t::xsend (
+-  msg_t *msg_, pipe_message_admission_t *admission_out_)
++  msg_t *msg_, pipe_message_admission_t *admission_out_,
++  pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     if (admission_out_)
+         *admission_out_ = pipe_message_admission_invalid;
+     if (!_more_out && !(msg_->flags () & msg_t::more) && msg_->get_routing_id () != 0) {
+@@ -929,8 +931,10 @@ int zlink::stream_t::xsend_routed (
+   pipe_message_admission_t *admission_out_,
+   pipe_write_observer_fn observer_, void *observer_userdata_,
+   routed_send_attempt_identity_t *attempt_identity_out_,
+-  uint64_t expected_route_incarnation_id_, bool request_only_)
++  uint64_t expected_route_incarnation_id_, bool request_only_,
++  pipe_write_mode_t write_mode_)
+ {
++    LIBZLINK_UNUSED (write_mode_);
+     LIBZLINK_UNUSED (expected_connection_id_);
+     LIBZLINK_UNUSED (observer_);
+     LIBZLINK_UNUSED (observer_userdata_);
+diff --git a/core/src/runtime/sockets/stream/stream.hpp b/core/src/runtime/sockets/stream/stream.hpp
+index 21b41c0e84..3e60fd7075 100644
+--- a/core/src/runtime/sockets/stream/stream.hpp
++++ b/core/src/runtime/sockets/stream/stream.hpp
+@@ -32,7 +32,8 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
+                        bool subscribe_to_all_,
+                        bool locally_initiated_) ZLINK_FINAL;
+     int xsend (zlink::msg_t *msg_,
+-               pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
++               pipe_message_admission_t *admission_out_ = NULL,
++               pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
+     int xsend_routed (const zlink_routing_id_t *target_rid_,
+                       zlink::msg_t *msg_,
+                       uint64_t *connection_id_out_,
+@@ -46,7 +47,8 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
+                       routed_send_attempt_identity_t
+                         *attempt_identity_out_ = NULL,
+                       uint64_t expected_route_incarnation_id_ = 0,
+-                      bool request_only_ = false)
++                      bool request_only_ = false,
++                      pipe_write_mode_t write_mode_ = pipe_write_incremental)
+       ZLINK_OVERRIDE;
+     int xselect_routed_submit_target (
+       const zlink_routing_id_t *router_rid_or_null_,
+diff --git a/core/tests/CMakeLists.txt b/core/tests/CMakeLists.txt
+index 9e4f17dd48..0f15591036 100644
+--- a/core/tests/CMakeLists.txt
++++ b/core/tests/CMakeLists.txt
+@@ -154,6 +154,7 @@ set(tests
+   ${INTEGRATION_TEST_ROOT}/test_router_handover
+   ${INTEGRATION_TEST_ROOT}/test_connection_attempts
+   ${INTEGRATION_TEST_ROOT}/test_router_selected_route_contract
++  ${INTEGRATION_TEST_ROOT}/test_router_complete_record_hwm
+   ${INTEGRATION_TEST_ROOT}/test_router_reject_duplicate
+   ${INTEGRATION_TEST_ROOT}/test_router_reject_disconnected_without_app_recv
+   ${INTEGRATION_TEST_ROOT}/test_router_same_socket_reconnect_policy
+@@ -1039,6 +1040,9 @@ endif()
+ if(TARGET test_router_selected_route_contract)
+   set_tests_properties(test_router_selected_route_contract PROPERTIES LABELS "contract")
+ endif()
++if(TARGET test_router_complete_record_hwm)
++  set_property(TEST test_router_complete_record_hwm APPEND PROPERTY LABELS "contract")
++endif()
+ if(TARGET test_option_events)
+   set_property(TEST test_option_events APPEND PROPERTY LABELS "contract")
+ endif()
+diff --git a/core/tests/integration/test_phase3_request_reply_contract.cpp b/core/tests/integration/test_phase3_request_reply_contract.cpp
+index c84b8929af..521701a444 100644
+--- a/core/tests/integration/test_phase3_request_reply_contract.cpp
++++ b/core/tests/integration/test_phase3_request_reply_contract.cpp
+@@ -381,6 +381,53 @@ void test_dealer_router_public_request_reply_completion_and_token_consumption ()
+     test_context_socket_close_zero_linger (router);
+ }
+ 
++void test_dealer_multipart_reply_uses_complete_record_empty_exception ()
++{
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_ctx_set (get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_ENABLE, 0));
++    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
++    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
++    const uint64_t hwm = 16;
++    const int zero = 0;
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_set_option (router, ZLINK_OPT_SNDTIMEO, &zero, sizeof (zero)));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
++    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (router, "inproc://complete-reply-empty-hwm"));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
++                           zlink_connect (dealer, "inproc://complete-reply-empty-hwm"));
++    prime_router_dealer_route (dealer, router);
++    const zlink_completion_id_t request_id = send_public_request (dealer, "request", 2000);
++    const router_part_t request = receive_router_part_eventually (router);
++    TEST_ASSERT_NOT_EQUAL (0, request.reply_token);
++
++    const std::string head (6, 'h');
++    const std::string body (1024, 'b');
++    zlink_msg_t reply[2];
++    init_part (&reply[0], head.c_str ());
++    init_part (&reply[1], body.c_str ());
++    TEST_ASSERT_EQUAL_INT (
++      ZLINK_SUBMIT_OK, zlink_reply (router, &request.source_rid, request.reply_token, reply, 2));
++    assert_part_consumed (&reply[0]);
++    assert_part_consumed (&reply[1]);
++    zlink_completion_t completion = receive_completion_eventually (dealer);
++    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
++    TEST_ASSERT_EQUAL_UINT64 (request_id, completion.completion_id);
++    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
++    TEST_ASSERT_EQUAL_UINT64 (2, completion.reply_part_count);
++    TEST_ASSERT_EQUAL_STRING (head.c_str (), part_string (&completion.reply_parts[0]).c_str ());
++    TEST_ASSERT_EQUAL_STRING (body.c_str (), part_string (&completion.reply_parts[1]).c_str ());
++    zlink_completion_close (&completion);
++    test_context_socket_close_zero_linger (dealer);
++    test_context_socket_close_zero_linger (router);
++}
++
+ void test_dealer_router_reply_remains_on_application_fifo_and_accounting ()
+ {
+     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+@@ -1863,6 +1910,8 @@ int main ()
+       test_request_outputs_are_zeroed_and_parts_are_always_consumed);
+     RUN_PHASE3_REQUEST_TEST (
+       test_dealer_router_public_request_reply_completion_and_token_consumption);
++    RUN_PHASE3_REQUEST_TEST (
++      test_dealer_multipart_reply_uses_complete_record_empty_exception);
+     RUN_PHASE3_REQUEST_TEST (
+       test_dealer_router_reply_remains_on_application_fifo_and_accounting);
+     RUN_PHASE3_REQUEST_TEST (
+diff --git a/core/tests/unittest/unittest_router_pipe_contract.cpp b/core/tests/unittest/unittest_router_pipe_contract.cpp
+index 68fe1e7921..0df4906773 100644
+--- a/core/tests/unittest/unittest_router_pipe_contract.cpp
++++ b/core/tests/unittest/unittest_router_pipe_contract.cpp
+@@ -9,6 +9,7 @@
+ #include "sockets/internal/dist.hpp"
+ #include "sockets/internal/lb.hpp"
+ #include "sockets/dealer/dealer.hpp"
++#include "sockets/common/socket_runtime.hpp"
+ 
+ #include <unity.h>
+ #include <chrono>
+@@ -906,6 +907,121 @@ void test_empty_pipe_oversize_exception_applies_only_to_complete_message ()
+     close_sync_socket (owner_handle);
+ }
+ 
++void test_owner_held_complete_record_uses_one_empty_pipe_exception ()
++{
++    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
++    zlink::socket_base_t *socket = as_socket_handle (owner_handle).socket;
++    zlink::object_t *owner = static_cast<zlink::object_t *> (socket);
++    zlink::object_t *parents[] = {owner, owner};
++    const uint64_t hwms[] = {16, 16};
++    const bool conflate[] = {false, false};
++    zlink::pipe_t *pipes[2];
++    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
++    pipe_cleanup_sink_t cleanup_sink;
++    pipes[0]->set_event_sink (&cleanup_sink);
++    pipes[1]->set_event_sink (&cleanup_sink);
++
++    {
++        std::optional<zlink::socket_public_send_scope_t> scope;
++        TEST_ASSERT_TRUE (socket->begin_complete_send_scope (&scope));
++        TEST_ASSERT_TRUE (scope->acquired ());
++        const size_t sizes[] = {6, 512, 512};
++        zlink::msg_t parts[3];
++        for (size_t i = 0; i < 3; ++i) {
++            TEST_ASSERT_SUCCESS_ERRNO (parts[i].init_size (sizes[i]));
++            memset (parts[i].data (), 'a' + static_cast<int> (i), sizes[i]);
++            if (i != 2)
++                parts[i].set_flags (zlink::msg_t::more);
++        }
++        // PAIR's prechecked subset still delegates oversize admission to
++        // the generic path, which retains the complete-record scope.
++        TEST_ASSERT_FALSE (pipes[0]->try_write_complete_record_and_flush (parts, 3));
++        for (size_t i = 0; i < 3; ++i) {
++            if (i != 2) {
++                TEST_ASSERT_TRUE (
++                  pipes[0]->write (&parts[i], NULL, zlink::pipe_write_complete_record));
++                pipes[0]->flush ();
++                TEST_ASSERT_FALSE (pipes[1]->check_read ());
++            } else
++                TEST_ASSERT_TRUE (
++                  pipes[0]->write_and_flush (&parts[i], NULL, zlink::pipe_write_complete_record));
++            TEST_ASSERT_SUCCESS_ERRNO (parts[i].init ());
++        }
++        zlink::msg_t second;
++        TEST_ASSERT_SUCCESS_ERRNO (second.init_size (1024));
++        second.set_flags (zlink::msg_t::more);
++        TEST_ASSERT_FALSE (pipes[0]->write (&second, NULL, zlink::pipe_write_complete_record));
++        TEST_ASSERT_SUCCESS_ERRNO (second.close ());
++        for (size_t i = 0; i < 3; ++i) {
++            zlink::msg_t received;
++            TEST_ASSERT_SUCCESS_ERRNO (received.init ());
++            TEST_ASSERT_TRUE (pipes[1]->read (&received));
++            TEST_ASSERT_EQUAL_UINT64 (sizes[i], received.size ());
++            TEST_ASSERT_EQUAL_INT (i != 2, (received.flags () & zlink::msg_t::more) != 0);
++            TEST_ASSERT_EQUAL_INT ('a' + static_cast<int> (i),
++                                   *static_cast<char *> (received.data ()));
++            TEST_ASSERT_SUCCESS_ERRNO (received.close ());
++        }
++        TEST_ASSERT_FALSE (pipes[1]->check_read ());
++    }
++
++    pipes[0]->terminate (false);
++    pipes[1]->terminate (false);
++    process_socket_control_commands (owner_handle);
++    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
++    close_sync_socket (owner_handle);
++}
++
++void test_complete_record_empty_eligibility_is_fixed_before_first_frame ()
++{
++    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
++    zlink::socket_base_t *socket = as_socket_handle (owner_handle).socket;
++    zlink::object_t *owner = static_cast<zlink::object_t *> (socket);
++    zlink::object_t *parents[] = {owner, owner};
++    const uint64_t hwms[] = {512, 512};
++    const bool conflate[] = {false, false};
++    zlink::pipe_t *pipes[2];
++    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
++    pipe_cleanup_sink_t cleanup_sink;
++    pipes[0]->set_event_sink (&cleanup_sink);
++    pipes[1]->set_event_sink (&cleanup_sink);
++    {
++        std::optional<zlink::socket_public_send_scope_t> scope;
++        TEST_ASSERT_TRUE (socket->begin_complete_send_scope (&scope));
++        TEST_ASSERT_TRUE (scope->acquired ());
++        zlink::msg_t queued;
++        TEST_ASSERT_SUCCESS_ERRNO (queued.init_size (1));
++        TEST_ASSERT_TRUE (
++          pipes[0]->write_and_flush (&queued, NULL, zlink::pipe_write_complete_record));
++        TEST_ASSERT_SUCCESS_ERRNO (queued.init ());
++        zlink::msg_t prefix;
++        TEST_ASSERT_SUCCESS_ERRNO (prefix.init_size (6));
++        prefix.set_flags (zlink::msg_t::more);
++        TEST_ASSERT_TRUE (pipes[0]->write (&prefix, NULL, zlink::pipe_write_complete_record));
++        TEST_ASSERT_SUCCESS_ERRNO (prefix.init ());
++
++        // The reader drains the previous record after this record started.
++        zlink::msg_t received;
++        TEST_ASSERT_SUCCESS_ERRNO (received.init ());
++        TEST_ASSERT_TRUE (pipes[1]->read (&received));
++        TEST_ASSERT_SUCCESS_ERRNO (received.close ());
++        zlink::msg_t middle;
++        TEST_ASSERT_SUCCESS_ERRNO (middle.init_size (1024));
++        middle.set_flags (zlink::msg_t::more);
++        TEST_ASSERT_FALSE (pipes[0]->write (&middle, NULL, zlink::pipe_write_complete_record));
++        TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
++        TEST_ASSERT_SUCCESS_ERRNO (middle.close ());
++        pipes[0]->rollback ();
++        pipes[0]->flush ();
++        TEST_ASSERT_FALSE (pipes[1]->check_read ());
++    }
++    pipes[0]->terminate (false);
++    pipes[1]->terminate (false);
++    process_socket_control_commands (owner_handle);
++    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
++    close_sync_socket (owner_handle);
++}
++
+ void test_drained_pipe_oversize_multipart_uses_fresh_peer_credit ()
+ {
+     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+@@ -1918,6 +2034,8 @@ int main ()
+     RUN_TEST (test_pipe_rejects_multipart_before_partial_bytes_exceed_hwm);
+     RUN_TEST (test_empty_pipe_incomplete_multipart_stops_at_max_message_size);
+     RUN_TEST (test_empty_pipe_oversize_exception_applies_only_to_complete_message);
++    RUN_TEST (test_owner_held_complete_record_uses_one_empty_pipe_exception);
++    RUN_TEST (test_complete_record_empty_eligibility_is_fixed_before_first_frame);
+     RUN_TEST (test_drained_pipe_oversize_multipart_uses_fresh_peer_credit);
+     RUN_TEST (test_physical_queue_snapshot_accounts_multipart_once);
+     RUN_TEST (test_physical_queue_deferred_shrink_applies_on_drain);
+diff --git a/core/tests/integration/test_router_complete_record_hwm.cpp b/core/tests/integration/test_router_complete_record_hwm.cpp
+new file mode 100644
+index 0000000000..0ee7a5678e
+--- /dev/null
++++ b/core/tests/integration/test_router_complete_record_hwm.cpp
+@@ -0,0 +1,417 @@
++/* SPDX-License-Identifier: MPL-2.0 */
++
++#include "testutil.hpp"
++#include "testutil_unity.hpp"
++#include "completion_test_helpers.hpp"
++
++#include <atomic>
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <thread>
++#include <vector>
++
++namespace
++{
++void *active_poller = NULL;
++void *active_monitor = NULL;
++void *active_sender = NULL;
++}
++
++void setUp ()
++{
++    setup_test_context ();
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_ctx_set (get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_ENABLE, 0));
++}
++
++void tearDown ()
++{
++    // Unity can abort a case before close_pair. Release registrations before
++    // test-context teardown closes their sockets.
++    if (active_poller) {
++        (void) zlink_poller_remove (active_poller, active_sender);
++        (void) zlink_poller_destroy (&active_poller);
++    }
++    if (active_monitor)
++        (void) zlink_monitor_close (&active_monitor);
++    active_sender = NULL;
++    teardown_test_context ();
++}
++
++namespace
++{
++typedef std::vector<std::string> record_t;
++typedef std::chrono::steady_clock clock_type;
++
++struct router_pair_t
++{
++    void *sender;
++    void *receiver;
++    void *monitor;
++    void *poller;
++    zlink_routing_id_t target;
++};
++
++void wait_flow (const router_pair_t &pair_, bool paused_);
++
++void poll_socket (void *socket_, short events_)
++{
++    zlink_pollitem_t item = {socket_, 0, events_, 0};
++    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
++    TEST_ASSERT_TRUE (zlink_poll (&item, 1, 10, &error) >= 0);
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
++}
++
++router_pair_t make_pair (uint64_t hwm_, int64_t max_size_ = -1)
++{
++    router_pair_t pair = {};
++    pair.sender = test_context_socket (ZLINK_SOCKET_ROUTER);
++    pair.receiver = test_context_socket (ZLINK_SOCKET_ROUTER);
++    const int zero = 0;
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_set_option (pair.sender, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
++    TEST_ASSERT_EQUAL_INT (
++      ZLINK_CONFIG_OK, zlink_set_option (pair.receiver, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_set_option (pair.sender, ZLINK_OPT_SNDHWM, &hwm_, sizeof (hwm_)));
++    TEST_ASSERT_EQUAL_INT (
++      ZLINK_CONFIG_OK, zlink_set_option (pair.receiver, ZLINK_OPT_RCVHWM, &hwm_, sizeof (hwm_)));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (pair.receiver, ZLINK_OPT_MAXMSGSIZE,
++                                                              &max_size_, sizeof (max_size_)));
++    const char *name = "complete-record-target";
++    pair.target.size = static_cast<uint8_t> (strlen (name));
++    memcpy (pair.target.data, name, pair.target.size);
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                           zlink_set_routing_id (pair.receiver, name, pair.target.size));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_socket_set_receive_flow_state (
++                                              pair.receiver, ZLINK_RECEIVE_FLOW_PAUSED));
++
++    zlink_socket_monitor_open_options_t options = {};
++    options.events = ZLINK_SOCKET_MONITOR_EVENT_CONNECTION_READY;
++    pair.monitor = zlink_socket_monitor_open (pair.sender, &options);
++    TEST_ASSERT_NOT_NULL (pair.monitor);
++    active_monitor = pair.monitor;
++    pair.poller = zlink_poller_new ();
++    TEST_ASSERT_NOT_NULL (pair.poller);
++    active_poller = pair.poller;
++    active_sender = pair.sender;
++    TEST_ASSERT_EQUAL_INT (
++      ZLINK_CONFIG_OK,
++      zlink_poller_add (pair.poller, pair.sender, NULL, ZLINK_POLLOUT | ZLINK_POLLCOMPLETION));
++    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
++                           zlink_bind (pair.receiver, "inproc://router-complete-record-hwm"));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
++                           zlink_connect (pair.sender, "inproc://router-complete-record-hwm"));
++
++    bool ready = false;
++    const clock_type::time_point deadline = clock_type::now () + std::chrono::seconds (3);
++    while (!ready && clock_type::now () < deadline) {
++        poll_socket (pair.monitor, ZLINK_POLLIN);
++        zlink_monitor_event_t event = {};
++        if (zlink_socket_monitor_recv (pair.monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT)
++            == ZLINK_RECV_OK)
++            ready = event.event == ZLINK_SOCKET_MONITOR_EVENT_CONNECTION_READY;
++    }
++    TEST_ASSERT_TRUE_MESSAGE (ready, "ROUTER connection did not become ready");
++    wait_flow (pair, true);
++    return pair;
++}
++
++void wait_flow (const router_pair_t &pair_, bool paused_)
++{
++    const clock_type::time_point deadline = clock_type::now () + std::chrono::seconds (3);
++    do {
++        // Both inproc endpoint owners must process attach and flow controls.
++        void *sockets[] = {pair_.receiver, pair_.sender};
++        for (size_t i = 0; i < 2; ++i) {
++            int events = 0;
++            size_t size = sizeof (events);
++            TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
++                                   zlink_get_option (sockets[i], ZLINK_OPT_EVENTS, &events, &size));
++        }
++        zlink_poller_event_t event = {};
++        zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
++        TEST_ASSERT_TRUE (zlink_poller_wait (pair_.poller, &event, 1, 10, &error) >= 0);
++        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
++        zlink_monitor_status_t status = {};
++        status.abi_version = ZLINK_MONITOR_STATUS_ABI_VERSION;
++        status.struct_size = sizeof (status);
++        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_monitor_status (pair_.monitor, &status));
++        if ((status.flow_paused_connections != 0) == paused_)
++            return;
++    } while (clock_type::now () < deadline);
++    TEST_FAIL_MESSAGE ("remote receive-flow state was not applied");
++}
++
++zlink_submit_result_t
++submit (const router_pair_t &pair_, const record_t &record_, zlink_completion_id_t *token_)
++{
++    std::vector<zlink_msg_t> parts (record_.size ());
++    for (size_t i = 0; i < parts.size (); ++i)
++        init_part (&parts[i], record_[i]);
++    *token_ = 0;
++    const zlink_submit_result_t result =
++      zlink_send_rid (pair_.sender, &pair_.target, parts.data (), parts.size (),
++                      ZLINK_SEND_FLAGS_DONTWAIT, NULL, token_);
++    const int saved_errno = zlink_errno ();
++    // The public API consumes every input slot on success and refusal.
++    for (size_t i = 0; i < parts.size (); ++i)
++        assert_part_consumed (&parts[i]);
++    errno = saved_errno;
++    return result;
++}
++
++void wait_writable (const router_pair_t &pair_, zlink_completion_id_t token_)
++{
++    const clock_type::time_point deadline = clock_type::now () + std::chrono::seconds (3);
++    do {
++        zlink_completion_t completion;
++        init_empty_completion (&completion);
++        const zlink_recv_result_t result =
++          zlink_completion_recv (pair_.sender, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
++        if (result == ZLINK_RECV_OK) {
++            TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
++            TEST_ASSERT_EQUAL_UINT64 (token_, completion.completion_id);
++            TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
++            zlink_completion_close (&completion);
++            return;
++        }
++        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, result);
++        zlink_poller_event_t event = {};
++        zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
++        TEST_ASSERT_TRUE (zlink_poller_wait (pair_.poller, &event, 1, 10, &error) >= 0);
++        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
++    } while (clock_type::now () < deadline);
++    TEST_FAIL_MESSAGE ("no WRITABLE completion for the refused record");
++}
++
++void assert_no_record (const router_pair_t &pair_)
++{
++    zlink_msg_t parts[4];
++    size_t count = 0;
++    const zlink_routing_id_t *rid = NULL;
++    zlink_reply_token_t reply_token = 0;
++    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA,
++                           zlink_router_recv (pair_.receiver, &rid, &reply_token, parts, 4, &count,
++                                              ZLINK_RECV_FLAGS_DONTWAIT));
++    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
++    TEST_ASSERT_EQUAL_UINT64 (0, count);
++}
++
++void receive_record (const router_pair_t &pair_, const record_t &record_)
++{
++    zlink_pollitem_t item = {pair_.receiver, 0, ZLINK_POLLIN, 0};
++    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
++    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, 3000, &error));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
++    zlink_msg_t parts[4];
++    size_t count = 0;
++    const zlink_routing_id_t *rid = NULL;
++    zlink_reply_token_t reply_token = 0;
++    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
++                           zlink_router_recv (pair_.receiver, &rid, &reply_token, parts, 4, &count,
++                                              ZLINK_RECV_FLAGS_DONTWAIT));
++    TEST_ASSERT_NOT_NULL (rid);
++    TEST_ASSERT_EQUAL_UINT64 (record_.size (), count);
++    for (size_t i = 0; i < count; ++i) {
++        TEST_ASSERT_EQUAL_UINT64 (record_[i].size (), zlink_msg_size (&parts[i]));
++        TEST_ASSERT_EQUAL_MEMORY (record_[i].data (), zlink_msg_data (&parts[i]),
++                                  record_[i].size ());
++    }
++    zlink_multipart_close (parts, count);
++}
++
++void close_pair (router_pair_t &pair_)
++{
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_poller_remove (pair_.poller, pair_.sender));
++    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&pair_.poller));
++    active_poller = NULL;
++    active_sender = NULL;
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_monitor_close (&pair_.monitor));
++    active_monitor = NULL;
++    test_context_socket_close_zero_linger (pair_.sender);
++    test_context_socket_close_zero_linger (pair_.receiver);
++}
++
++void run_resume (const record_t &record_, uint64_t hwm_)
++{
++    router_pair_t pair = make_pair (hwm_);
++    zlink_completion_id_t token = 0;
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, submit (pair, record_, &token));
++    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
++    TEST_ASSERT_NOT_EQUAL (0, token);
++    assert_no_record (pair);
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_socket_set_receive_flow_state (
++                                              pair.receiver, ZLINK_RECEIVE_FLOW_RUNNING));
++    wait_writable (pair, token);
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit (pair, record_, &token));
++    TEST_ASSERT_EQUAL_UINT64 (0, token);
++    receive_record (pair, record_);
++    assert_no_record (pair);
++    fprintf (stderr, "resume hwm=%llu frames=%zu admitted; complete record received\n",
++             static_cast<unsigned long long> (hwm_), record_.size ());
++    close_pair (pair);
++}
++}
++
++void test_small_first_complete_record_resumes_at_hwm_16 ()
++{
++    run_resume ({std::string (6, 'h'), std::string (1024, 'b')}, 16);
++}
++
++void test_large_first_complete_record_resumes_at_hwm_16 ()
++{
++    run_resume ({std::string (1024, 'b'), std::string (4, 't')}, 16);
++}
++
++void test_three_part_complete_record_resumes_at_hwm_16 ()
++{
++    run_resume ({std::string (6, 'h'), std::string (512, 'm'), std::string (512, 't')}, 16);
++}
++
++void test_complete_record_resumes_at_hwm_2048 ()
++{
++    run_resume ({std::string (6, 'h'), std::string (1024, 'b')}, 2048);
++    run_resume ({std::string (1024, 'b'), std::string (4, 't')}, 2048);
++    run_resume ({std::string (6, 'h'), std::string (512, 'm'), std::string (512, 't')}, 2048);
++}
++
++void test_single_frame_resume_controls ()
++{
++    run_resume ({std::string (1024, 's')}, 16);
++    run_resume ({std::string (1024, 's')}, 2048);
++}
++
++void test_complete_record_exception_keeps_maxmsgsize_and_rolls_back ()
++{
++    // Each frame fits MAXMSGSIZE, but their complete payload does not.
++    router_pair_t pair = make_pair (16, 1024);
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_socket_set_receive_flow_state (
++                                              pair.receiver, ZLINK_RECEIVE_FLOW_RUNNING));
++    wait_flow (pair, false);
++    const record_t record = {std::string (6, 'h'), std::string (1024, 'b')};
++    zlink_completion_id_t token = 0;
++    const zlink_submit_result_t result = submit (pair, record, &token);
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_ARGUMENT, result);
++    TEST_ASSERT_EQUAL_INT (EMSGSIZE, errno);
++    TEST_ASSERT_EQUAL_UINT64 (0, token);
++    assert_no_record (pair);
++    // A later valid record proves the refused prefix was discarded.
++    const record_t valid = {std::string (6, 'v'), std::string (8, 't')};
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit (pair, valid, &token));
++    receive_record (pair, valid);
++    assert_no_record (pair);
++    close_pair (pair);
++}
++
++void test_second_oversize_record_waits_for_first_dequeue ()
++{
++    router_pair_t pair = make_pair (16);
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_socket_set_receive_flow_state (
++                                              pair.receiver, ZLINK_RECEIVE_FLOW_RUNNING));
++    wait_flow (pair, false);
++    const record_t first = {std::string (6, 'a'), std::string (1024, 'b')};
++    const record_t second = {std::string (1024, 'c'), std::string (4, 'd')};
++    zlink_completion_id_t token = 0;
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit (pair, first, &token));
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, submit (pair, second, &token));
++    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
++    TEST_ASSERT_NOT_EQUAL (0, token);
++    receive_record (pair, first);
++    assert_no_record (pair);
++    wait_writable (pair, token);
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit (pair, second, &token));
++    receive_record (pair, second);
++    assert_no_record (pair);
++    close_pair (pair);
++}
++
++void test_nonempty_queue_refuses_final_without_delivering_prefix ()
++{
++    router_pair_t pair = make_pair (2048);
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_socket_set_receive_flow_state (
++                                              pair.receiver, ZLINK_RECEIVE_FLOW_RUNNING));
++    wait_flow (pair, false);
++    const record_t first = {std::string (16, 'a')};
++    const record_t refused = {std::string (6, 'h'), std::string (4096, 'b')};
++    zlink_completion_id_t token = 0;
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit (pair, first, &token));
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, submit (pair, refused, &token));
++    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
++    receive_record (pair, first);
++    assert_no_record (pair);
++    wait_writable (pair, token);
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit (pair, refused, &token));
++    receive_record (pair, refused);
++    assert_no_record (pair);
++    close_pair (pair);
++}
++
++void test_concurrent_complete_records_share_one_empty_exception ()
++{
++    router_pair_t pair = make_pair (16);
++    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_socket_set_receive_flow_state (
++                                              pair.receiver, ZLINK_RECEIVE_FLOW_RUNNING));
++    wait_flow (pair, false);
++    const record_t records[] = {{std::string (6, 'a'), std::string (1024, 'b')},
++                                {std::string (1024, 'c'), std::string (4, 'd')}};
++    zlink_msg_t parts[2][2];
++    for (size_t i = 0; i < 2; ++i)
++        for (size_t j = 0; j < 2; ++j)
++            init_part (&parts[i][j], records[i][j]);
++    zlink_submit_result_t results[2];
++    zlink_completion_id_t tokens[2] = {0, 0};
++    int errors[2] = {0, 0};
++    std::atomic<unsigned> ready (0);
++    std::atomic<bool> go (false);
++    const auto send = [&] (size_t index_) {
++        ready.fetch_add (1, std::memory_order_release);
++        while (!go.load (std::memory_order_acquire))
++            std::this_thread::yield ();
++        results[index_] = zlink_send_rid (pair.sender, &pair.target, parts[index_], 2,
++                                          ZLINK_SEND_FLAGS_DONTWAIT, NULL, &tokens[index_]);
++        errors[index_] = zlink_errno ();
++    };
++    std::thread first (send, 0);
++    std::thread second (send, 1);
++    while (ready.load (std::memory_order_acquire) != 2)
++        std::this_thread::yield ();
++    go.store (true, std::memory_order_release);
++    first.join ();
++    second.join ();
++    const size_t winner = results[0] == ZLINK_SUBMIT_OK ? 0 : 1;
++    const size_t loser = 1 - winner;
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, results[winner]);
++    TEST_ASSERT_EQUAL_UINT64 (0, tokens[winner]);
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, results[loser]);
++    TEST_ASSERT_EQUAL_INT (EAGAIN, errors[loser]);
++    TEST_ASSERT_NOT_EQUAL (0, tokens[loser]);
++    for (size_t i = 0; i < 2; ++i)
++        for (size_t j = 0; j < 2; ++j)
++            assert_part_consumed (&parts[i][j]);
++    receive_record (pair, records[winner]);
++    assert_no_record (pair);
++    wait_writable (pair, tokens[loser]);
++    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit (pair, records[loser], &tokens[loser]));
++    receive_record (pair, records[loser]);
++    assert_no_record (pair);
++    close_pair (pair);
++}
++
++int main ()
++{
++    setup_test_environment ();
++    UNITY_BEGIN ();
++    RUN_TEST (test_small_first_complete_record_resumes_at_hwm_16);
++    RUN_TEST (test_large_first_complete_record_resumes_at_hwm_16);
++    RUN_TEST (test_three_part_complete_record_resumes_at_hwm_16);
++    RUN_TEST (test_complete_record_resumes_at_hwm_2048);
++    RUN_TEST (test_single_frame_resume_controls);
++    RUN_TEST (test_complete_record_exception_keeps_maxmsgsize_and_rolls_back);
++    RUN_TEST (test_second_oversize_record_waits_for_first_dequeue);
++    RUN_TEST (test_nonempty_queue_refuses_final_without_delivering_prefix);
++    RUN_TEST (test_concurrent_complete_records_share_one_empty_exception);
++    return UNITY_END ();
++}
+diff --git a/bindings/cpp/tests/contract/test_cpp_contract_multipart_resume.cpp b/bindings/cpp/tests/contract/test_cpp_contract_multipart_resume.cpp
+new file mode 100644
+index 0000000000..e29aeddb49
+--- /dev/null
++++ b/bindings/cpp/tests/contract/test_cpp_contract_multipart_resume.cpp
+@@ -0,0 +1,86 @@
++/* SPDX-License-Identifier: MPL-2.0 */
++
++#include "support.hpp"
++
++#include <array>
++#include <cstdio>
++
++namespace
++{
++using namespace std::chrono_literals;
++using clock_type = std::chrono::steady_clock;
++
++void run_multipart_resume (const std::vector<std::string> &payload_, bool explicit_sender_id_)
++{
++    zlink::context_t context;
++    context.options ().auto_hwm_enabled (false);
++    zlink::router_socket_t sender (context), receiver (context);
++    const auto target = zlink::routing_id_t::from ("multipart-resume-target");
++    receiver.set_routing_id (target);
++    if (explicit_sender_id_)
++        sender.set_routing_id (zlink::routing_id_t::from ("multipart-resume-sender"));
++    sender.options ().linger (0ms);
++    receiver.options ().linger (0ms);
++    sender.options ().send_hwm (zlink::byte_count_t::bytes (16));
++    receiver.options ().recv_hwm (zlink::byte_count_t::bytes (16));
++    receiver.set_receive_flow_state (zlink::receive_flow_state_t::paused);
++    const auto endpoint = zlink_cpp_contract::unique_inproc ("complete-multipart-resume");
++    receiver.bind (endpoint);
++    auto monitor = sender.monitor_open (zlink::monitor_event::connection_ready);
++    sender.connect (endpoint);
++    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
++      monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 3000));
++
++    zlink::poller_t poller;
++    poller.add (sender,
++                zlink::poll_event_flag_t::pollcompletion | zlink::poll_event_flag_t::pollout, 1);
++    poller.add (receiver, zlink::poll_event_flag_t::pollin, 2);
++    std::array<zlink::poll_event_t, 4> events;
++    const auto pause_deadline = clock_type::now () + 3s;
++    while (monitor.status ().flow_paused_connections == 0 && clock_type::now () < pause_deadline)
++        (void) poller.wait (events.data (), events.size (), 10ms);
++    assert (monitor.status ().flow_paused_connections == 1);
++
++    auto operation = sender.send (target).message (zlink::message_t::from (payload_[0]));
++    for (size_t i = 1; i < payload_.size (); ++i)
++        operation = std::move (operation).message (zlink::message_t::from (payload_[i]));
++    auto submission = std::move (operation).async ();
++    assert (submission.result == ZLINK_SUBMIT_BACKPRESSURED);
++    auto pending = std::move (submission.admitted).operator co_await ();
++    assert (!pending.await_ready ());
++    zlink::received_t message;
++    assert (receiver.recv (message, zlink::recv_flags_t::dontwait) != 0);
++    receiver.set_receive_flow_state (zlink::receive_flow_state_t::running);
++
++    bool received = false;
++    const auto deadline = clock_type::now () + 3s;
++    while ((!received || !pending.await_ready ()) && clock_type::now () < deadline) {
++        (void) poller.wait (events.data (), events.size (), 10ms);
++        if (!received && receiver.recv (message, zlink::recv_flags_t::dontwait) == 0) {
++            assert (message.parts ().size () == payload_.size ());
++            for (size_t i = 0; i < payload_.size (); ++i)
++                assert (message.parts ()[i].to_string () == payload_[i]);
++            message.close ();
++            received = true;
++        }
++    }
++    assert (pending.await_ready ());
++    pending.await_resume ();
++    assert (received);
++    assert (receiver.recv (message, zlink::recv_flags_t::dontwait) != 0);
++    std::fprintf (stderr,
++                  "multipart resume explicit_id=%d frames=%zu admitted; complete record received\n",
++                  explicit_sender_id_, payload_.size ());
++}
++}
++
++int main ()
++{
++    for (bool explicit_id : {false, true}) {
++        run_multipart_resume ({std::string (6, 'h'), std::string (1024, 'b')}, explicit_id);
++        run_multipart_resume ({std::string (1024, 'b'), std::string (4, 't')}, explicit_id);
++        run_multipart_resume (
++          {std::string (6, 'h'), std::string (512, 'm'), std::string (512, 't')}, explicit_id);
++    }
++    return 0;
++}

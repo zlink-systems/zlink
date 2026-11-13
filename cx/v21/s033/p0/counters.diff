@@ -1,0 +1,525 @@
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..ab8d37affa 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ // Source A: HTTP-triggered logical streams. The runner owns process isolation and settle.
+ #include "../common/bench_async.hpp"
+@@ -953,6 +954,7 @@ class framework_driver_t final : public driver_t
+             for (const size_t slot : completed_slots) {
+                 if (slot == admission_notification)
+                     continue;
++                ZLINK_PATH_COUNT(zlink::framework::path_counters::increment(zlink::framework::path_counters::app_completed);)
+                 auto &item = *pending[slot];
+                 const auto &result = item.task.result ();
+                 bool valid = static_cast<bool> (result);
+@@ -1199,6 +1201,7 @@ class source_t
+     void run_phase (const std::string &phase, int64_t duration, const json &trigger)
+     {
+         const bool active = phase == "active";
++        ZLINK_PATH_COUNT(zlink::framework::path_counters::active_phase.store(active ? 1u : 0u, std::memory_order_relaxed);)
+         if (!active) {
+             _warmup_throughput.clear ();
+             for (int segment = 0; segment < _options.warmup_segments; ++segment) {
+@@ -1354,6 +1357,7 @@ void source_signal (int)
+ 
+ int main (int argc, char **argv)
+ {
++    ZLINK_PATH_COUNT(zlink::framework::path_counters::dump_at_exit_t path_dump;)
+     try {
+         options_t options;
+         options.implementation = arg_value (argc, argv, "--implementation", "grpc-cpp");
+diff --git a/framework/bench/grpc/cpp/common/bench_async.hpp b/framework/bench/grpc/cpp/common/bench_async.hpp
+index 7f518a95db..6a88f88cbe 100644
+--- a/framework/bench/grpc/cpp/common/bench_async.hpp
++++ b/framework/bench/grpc/cpp/common/bench_async.hpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ // Completion notifications and single-threaded coroutine driving for C++ bench rows.
+ //
+@@ -43,8 +44,10 @@ class completion_signal_t
+                  std::vector<size_t> &completed,
+                  const std::shared_ptr<completion_signal_t> &self)
+     {
+-        if (task.await_ready ())
++        if (task.await_ready ()) {
++            ZLINK_PATH_COUNT(zlink::framework::path_counters::increment(zlink::framework::path_counters::app_immediate);)
+             completed.push_back (slot);
++        }
+         else
+             zlink::framework::detail::observe_task_completion (
+               task, [self, slot] (const auto &) { self->notify (slot); });
+@@ -56,6 +59,9 @@ class completion_signal_t
+             std::lock_guard<std::mutex> lock (_mutex);
+             _completed.push_back (slot);
+         }
++        ZLINK_PATH_COUNT(if(slot == std::numeric_limits<size_t>::max())
++            zlink::framework::path_counters::increment(zlink::framework::path_counters::app_admission_notify);
++            else zlink::framework::path_counters::application_notified();)
+         _ready.notify_one ();
+     }
+ 
+@@ -64,6 +70,9 @@ class completion_signal_t
+         std::lock_guard<std::mutex> lock (_mutex);
+         completed.assign (_completed.begin (), _completed.end ());
+         _completed.clear ();
++        ZLINK_PATH_COUNT(std::uint64_t count=0;
++            for(auto slot:completed) if(slot != std::numeric_limits<size_t>::max()) ++count;
++            zlink::framework::path_counters::sample(zlink::framework::path_counters::application_batch,count);)
+     }
+ 
+     void wait_until (std::chrono::steady_clock::time_point deadline)
+diff --git a/framework/bench/grpc/cpp/common/bench_stats_server.hpp b/framework/bench/grpc/cpp/common/bench_stats_server.hpp
+index 384a6a0297..d7de5aeeb0 100644
+--- a/framework/bench/grpc/cpp/common/bench_stats_server.hpp
++++ b/framework/bench/grpc/cpp/common/bench_stats_server.hpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #ifndef ZLINK_CPP_BENCH_STATS_SERVER_HPP
+ #define ZLINK_CPP_BENCH_STATS_SERVER_HPP
+@@ -33,6 +34,7 @@ class server_metrics_t
+ 
+     void reset ()
+     {
++        ZLINK_PATH_COUNT(zlink::framework::path_counters::active_phase.store(1u, std::memory_order_relaxed);)
+         std::lock_guard<std::mutex> lock (_gate);
+         _active_messages = 0;
+         _all_phase_messages = 0;
+diff --git a/framework/bench/grpc/cpp/framework/bench_framework_cpp_server.cpp b/framework/bench/grpc/cpp/framework/bench_framework_cpp_server.cpp
+index 7ff15dd088..1f01b33a29 100644
+--- a/framework/bench/grpc/cpp/framework/bench_framework_cpp_server.cpp
++++ b/framework/bench/grpc/cpp/framework/bench_framework_cpp_server.cpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ // Target B: public RouteMesh typed protobuf echo/count handlers.
+ #include "bench_metric_reader.hpp"
+@@ -40,6 +41,7 @@ struct command_handler_t
+ 
+ int main (int argc, char **argv)
+ {
++    ZLINK_PATH_COUNT(zlink::framework::path_counters::dump_at_exit_t path_dump;)
+     const auto endpoint = arg_value (argc, argv, "--endpoint", "tcp://127.0.0.1:5294");
+     const int port = std::stoi (arg_value (argc, argv, "--stats-port", "5295"));
+     try {
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index 80c6dc5137..10293413d4 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -24,6 +24,10 @@ include(GNUInstallDirs)
+ include(CMakePackageConfigHelpers)
+ find_package(Threads REQUIRED)
+ 
++option(ZLINK_FRAMEWORK_CPP_PATH_COUNTERS "Measurement-only C++ path counters" OFF)
++if(ZLINK_FRAMEWORK_CPP_PATH_COUNTERS)
++  add_compile_definitions(ZLINK_FRAMEWORK_CPP_PATH_COUNTERS)
++endif()
+ option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
+ option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
+ option(ZLINK_FRAMEWORK_CPP_TEST_PROBES "Enable creation probes for C++ framework tests (not installable)" OFF)
+@@ -249,6 +253,9 @@ include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-shared-library.cmake")
+ 
+ add_library(zlink_framework_provider_abstractions ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
+   framework/src/runtime/dispatch/provider_task_context.cpp)
++if(ZLINK_FRAMEWORK_CPP_PATH_COUNTERS)
++  target_compile_definitions(zlink_framework_provider_abstractions PUBLIC ZLINK_FRAMEWORK_CPP_PATH_COUNTERS)
++endif()
+ add_library(zlink::framework_provider_abstractions ALIAS
+   zlink_framework_provider_abstractions)
+ set_target_properties(zlink_framework_provider_abstractions PROPERTIES
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_binding_adapter.hpp b/framework/languages/cpp/framework/src/runtime/backend/raw_binding_adapter.hpp
+index 0064670b1e..933ee9d69e 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_binding_adapter.hpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_binding_adapter.hpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #pragma once
+ 
+@@ -56,7 +57,12 @@ struct request_submission_stages_t
+ 
+ template <typename TSubmit> request_submission_stages_t submit_request_once (TSubmit &&submit)
+ {
++    ZLINK_PATH_COUNT(path_counters::increment(path_counters::request_attempt);)
+     auto submission = std::forward<TSubmit> (submit) ();
++    ZLINK_PATH_COUNT(path_counters::sample(path_counters::request_pending,
++        submission.result == ZLINK_SUBMIT_BACKPRESSURED);
++        if(submission.result == ZLINK_SUBMIT_BACKPRESSURED)
++            path_counters::increment(path_counters::request_snapshot_pending);)
+     auto admission = take_submission_admission (submission);
+     return {std::move (admission), std::move (submission.reply)};
+ }
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+index 59c9cc0dd0..d35d2b1b08 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ 
+ #include "runtime/backend/raw_route_port.hpp"
+@@ -210,7 +211,10 @@ raw_send_submission_t raw_route_port_t::submit_send_impl (
+             for (std::size_t index = 1; index < parts.size (); ++index) {
+                 std::move (operation).message (take_part (parts[index]));
+             }
++            ZLINK_PATH_COUNT(path_counters::increment(path_counters::send_attempt);)
+             auto submission = std::move (operation).async ();
++            ZLINK_PATH_COUNT(path_counters::sample(path_counters::send_pending,
++                submission.result == ZLINK_SUBMIT_BACKPRESSURED);)
+             pending = take_submission_admission (submission);
+         }
+         if (!pending) {
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+index 59d8ae6570..1ab6d9efa3 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ 
+ #include "../utils/available_processor_count.hpp"
+@@ -104,6 +105,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
+         }
+         _queue.push (work_item_t{std::move (work), std::nullopt});
+     }
++    ZLINK_PATH_COUNT(if(_thread_name == "zlink-mesh-app") path_counters::increment(path_counters::worker_notify);)
+     _ready.notify_one ();
+     return true;
+ }
+@@ -165,6 +167,7 @@ bool offload_executor_t::try_submit_application (work_t work)
+         }
+         _queue.push (work_item_t{std::move (work), std::stop_source{}});
+     }
++    ZLINK_PATH_COUNT(if(_thread_name == "zlink-mesh-app") path_counters::increment(path_counters::worker_notify);)
+     _ready.notify_one ();
+     return true;
+ }
+@@ -177,6 +180,7 @@ bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
+             return false;
+         _roles.push (std::move (role));
+     }
++    ZLINK_PATH_COUNT(if(_thread_name == "zlink-mesh-app") path_counters::increment(path_counters::worker_notify);)
+     _ready.notify_one ();
+     return true;
+ }
+@@ -327,11 +331,14 @@ void offload_executor_t::worker_loop ()
+                       << " executor=" << this << std::endl;
+         }
+     };
++    ZLINK_PATH_COUNT(path_counters::wake_t path_wake(_thread_name == "zlink-mesh-app");)
+     while (true) {
+         work_item_t work;
+         std::shared_ptr<role_t> role;
+         {
+             std::unique_lock lock (_mutex);
++            ZLINK_PATH_COUNT(const bool path_wait = !_stopping && _roles.empty() && _queue.empty();
++                if(path_wait && path_wake.enabled) { path_wake.sleep(); path_counters::increment(path_counters::worker_wait); })
+             ++_idle_workers;
+             bool ready = false;
+             if (_idle_timeout.count () == 0) {
+@@ -343,6 +350,7 @@ void offload_executor_t::worker_loop ()
+                     return _stopping || !_roles.empty () || !_queue.empty ();
+                 });
+             }
++            ZLINK_PATH_COUNT(if(path_wait) path_wake.woke(ready);)
+             --_idle_workers;
+             if (!ready && _roles.empty () && _queue.empty ()) {
+                 if (_live_workers > _min_worker_count) {
+@@ -375,6 +383,7 @@ void offload_executor_t::worker_loop ()
+         if (role) {
+             role->run ();
+         } else {
++            ZLINK_PATH_COUNT(path_counters::turn_t path_turn(path_wake.enabled);)
+             run_application_turn ([&] {
+                 std::visit (
+                   [&] (auto &callback) {
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp b/framework/languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp
+index 36e98cc0cd..74d7e02955 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ 
+ #include "../utils/available_processor_count.hpp"
+@@ -76,6 +77,7 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
+         if (_context.stopped ())
+             throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                          registered_execution_context_shutting_down_message);
++        ZLINK_PATH_COUNT(path_counters::increment(path_counters::dispatcher_post);)
+         boost::asio::post (_context, std::forward<Work> (work));
+     }
+     std::size_t worker_count () const noexcept { return _workers.size (); }
+@@ -185,6 +187,8 @@ void dispatch_completion (std::function<void ()> work,
+     if (!dispatcher)
+         dispatcher = borrow_completion_dispatcher ();
+     dispatcher->post ([work = std::move (work), owner, dispatcher] {
++        ZLINK_PATH_COUNT(path_counters::increment(path_counters::dispatcher_run);
++            path_counters::completion_t path_completion;)
+         const completion_turn_scope_t scope{owner != nullptr ? owner : &process_completion_owner,
+                                             dispatcher};
+         work ();
+diff --git a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
+index 588ce8ca0f..293803b68d 100644
+--- a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
++++ b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ 
+ #include "runtime/foundation/operation_registry.hpp"
+@@ -278,8 +279,10 @@ void post_completions (operation_completion_chain_t completions) noexcept
+         const auto *owner = completion->drain_state.get ();
+         // The existing reservation owns the callback and drain lifetime.
+         // Capture one raw pointer; the independent turn immediately reclaims it.
++        ZLINK_PATH_COUNT(path_counters::increment(path_counters::registry_post);)
+         detail::dispatch_completion (
+           [item = completion.get ()] {
++              ZLINK_PATH_COUNT(path_counters::completed();)
+               // Keep the TLS drain identity valid through callback-capture destruction.
+               const auto drain_lifetime = item->drain_state;
+               const completion_item_ptr_t completion (item);
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index 0ffa2f992e..7239cd7ae1 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ 
+ #include "../utils/available_processor_count.hpp"
+@@ -2350,6 +2351,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+               accept_application_receive, next_application_receive, readiness))
+             .result ()
+             .value ();
++        ZLINK_PATH_COUNT(path_counters::sample(path_counters::rotation_activity,count);)
+         auto ready = mailbox.take_application_receive_turn ();
+         receive_turn.dismiss ();
+         application_permit.reset ();
+@@ -3356,6 +3358,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+             mesh::service_mailbox_t::application_ready_t submit_owner =
+               [this, executor = _application_dispatch, node,
+                registration] (const std::string &owner) {
++                  ZLINK_PATH_COUNT(path_counters::increment(path_counters::owner_post);)
+                   auto start = make_application_owner_work (node, registration, owner);
+                   if (!executor->try_submit_internal ([start] { start (false); }))
+                       start (true);
+@@ -3776,6 +3779,8 @@ void mesh_node_host_service_t::dispatch_application (
+   offload_executor_t *executor,
+   application_job_queue_t::permit_t application_permit)
+ {
++    ZLINK_PATH_COUNT(if(record.kind == host::record_kind_t::node_send ||
++        record.kind == host::record_kind_t::node_request) path_counters::record();)
+     const bool admitted = static_cast<bool> (application_permit);
+     if (record.retain_mailbox_reservation)
+         record.retain_mailbox_reservation ();
+@@ -3874,6 +3879,10 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+     auto owned_node = std::move (node);
+     auto owned_registration = std::move (registration);
+     auto &mailbox = owned_node->native_node ().transport ().mailbox ();
++    ZLINK_PATH_COUNT(struct path_drain_t {
++        std::uint64_t records=0;
++        ~path_drain_t() { path_counters::sample(path_counters::owner_drain,records); }
++    } path_drain;)
+     if (!mailbox.begin_application_drain (owner))
+         co_return;
+     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
+@@ -3881,6 +3890,7 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+         const mesh::service_mailbox_t::application_dispatch_t dispatch =
+           [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
+                std::vector<zlink::message_t> parts, application_job_queue_t::permit_t permit) {
++              ZLINK_PATH_COUNT(++path_drain.records;)
+               dispatch_application (owned_node, owned_registration, ready, record,
+                                     std::move (parts), reject_only, services, serializers, filters,
+                                     dispatch_options, {}, executor, std::move (permit));
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index 57d7d742cb..492cadbba7 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -1,3 +1,4 @@
++#include <zlink/framework/detail/path_counters.hpp>
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ 
+ #include "runtime/execution/task_result.hpp"
+@@ -7540,6 +7541,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
+           co_await _objects.application_owner_refs_async (std::move (local_node_id));
+     }
+     auto next_stateful_owner = stateful_owners.begin ();
++    ZLINK_PATH_COUNT(struct path_rotation_t {
++        std::uint64_t records=0;
++        ~path_rotation_t() { path_counters::sample(path_counters::rotation,records); }
++    } path_rotation;)
+     receive_batch_budget_t budget;
+     // One poll per receive turn; the turn then reads records until the ROUTER
+     // reports none or the budget ends (08-messaging-hot-path I2).
+@@ -7559,6 +7564,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
+           : receive_ready
+             ? _transport->receive_next (mesh::service_liveness_registry_t::clock_t::now ())
+             : mesh::raw_mesh_pump_result_t::no_data;
++        ZLINK_PATH_COUNT(if(pumped == mesh::raw_mesh_pump_result_t::application) ++path_rotation.records;)
+         budget.account (_transport->last_pump_bytes ());
+         trace_mesh_host ("pump", std::string ("result=") + pump_result_name (pumped) + " pending="
+                                    + std::to_string (_transport->mailbox ().pending_messages (
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/detail/path_counters.hpp b/framework/languages/cpp/framework/include/zlink/framework/detail/path_counters.hpp
+new file mode 100644
+index 0000000000..0f82aa350b
+--- /dev/null
++++ b/framework/languages/cpp/framework/include/zlink/framework/detail/path_counters.hpp
+@@ -0,0 +1,143 @@
++/* Measurement-only instrumentation for #1639 step 0. */
++#pragma once
++#ifdef ZLINK_FRAMEWORK_CPP_PATH_COUNTERS
++#include <array>
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <unistd.h>
++#include <sys/syscall.h>
++namespace zlink::framework::path_counters {
++// Only the existing bench phase boundary writes this selector; updates use loads only.
++inline std::atomic<unsigned> active_phase{0};
++inline unsigned phase() noexcept { return active_phase.load(std::memory_order_relaxed); }
++// Fixed sparse exact histograms: no allocation, synchronization, clock or I/O on update.
++struct histogram_t {
++    struct bucket_t { std::uint64_t value = 0, count = 0; };
++    std::array<bucket_t, 8192> buckets{};
++    std::uint64_t count = 0, sum = 0, maximum = 0, lost = 0;
++    void add(std::uint64_t value) noexcept {
++        ++count; sum += value; if (maximum < value) maximum = value;
++        auto slot = (value * 11400714819323198485ull) >> (64 - 13);
++        for (unsigned i = 0; i < buckets.size(); ++i) {
++            auto &b = buckets[(slot + i) & (buckets.size() - 1)];
++            if (!b.count || b.value == value) { b.value = value; ++b.count; return; }
++        }
++        ++lost;
++    }
++};
++enum metric_t { worker_turn, worker_wake, rotation, rotation_activity, owner_drain, dispatcher_turn,
++                application_batch, dispatcher_application, send_pending, request_pending, metric_count };
++enum total_t { worker_notify, worker_wait, worker_wait_ready, worker_records,
++               owner_post, dispatcher_post, dispatcher_run, registry_post, registry_run,
++               app_notify, app_admission_notify, app_immediate, app_completed,
++               request_snapshot_pending, request_attempt, send_attempt, worker_startup_records, total_count };
++inline constexpr const char *metric_names[] = {"worker_turn", "worker_wake", "rotation", "rotation_activity",
++    "owner_drain", "dispatcher_turn", "application_batch", "dispatcher_application", "send_pending", "request_pending"};
++inline constexpr const char *total_names[] = {"worker_notify", "worker_wait", "worker_wait_ready",
++    "worker_records", "owner_post", "dispatcher_post", "dispatcher_run", "registry_post",
++    "registry_run", "app_notify", "app_admission_notify", "app_immediate", "app_completed",
++    "request_snapshot_pending", "request_attempt", "send_attempt", "worker_startup_records"};
++struct counters_t {
++    std::array<std::array<histogram_t, metric_count>,2> hist{};
++    std::array<std::array<std::uint64_t, total_count>,2> totals{};
++    std::uint64_t *turn_records = nullptr, *wake_records = nullptr, *completion_records = nullptr, *completion_application = nullptr;
++    counters_t *next = nullptr;
++    long tid = 0;
++    void dump() const {
++        const auto *prefix = std::getenv("ZLINK_PATH_COUNTER_FILE");
++        if (!prefix || !*prefix) return;
++        char name[4096];
++        std::snprintf(name, sizeof(name), "%s.%ld.%ld.%p.json", prefix, long(getpid()), tid, static_cast<const void *>(this));
++        auto *f = std::fopen(name, "w"); if (!f) return;
++        std::fprintf(f, "{\"pid\":%ld,\"tid\":%ld,\"phases\":[",long(getpid()),tid);
++        for(unsigned phase=0;phase<2;++phase) {
++            std::fprintf(f,"%s{\"phase\":%u,\"totals\":{",phase?",":"",phase);
++            for (unsigned i=0;i<total_count;++i)
++                std::fprintf(f,"%s\"%s\":%llu",i?",":"",total_names[i],(unsigned long long)totals[phase][i]);
++            std::fputs("},\"histograms\":{",f);
++            for(unsigned i=0;i<metric_count;++i) {
++                const auto &h=hist[phase][i];
++                std::fprintf(f,"%s\"%s\":{\"count\":%llu,\"sum\":%llu,\"max\":%llu,\"lost\":%llu,\"bins\":[",i?",":"",metric_names[i],(unsigned long long)h.count,(unsigned long long)h.sum,(unsigned long long)h.maximum,(unsigned long long)h.lost);
++                bool comma=false;
++                for(const auto &b:h.buckets) if(b.count) {
++                    std::fprintf(f,"%s[%llu,%llu]",comma?",":"",(unsigned long long)b.value,(unsigned long long)b.count); comma=true;
++                }
++                std::fputs("]}",f);
++            }
++            std::fputs("}}",f);
++        }
++        std::fputs("]}\n",f); std::fclose(f);
++    }
++};
++// Linux TIDs address distinct slots. First touch allocates and publishes once; no
++// registry lock/RMW is needed. Retired threads retain their counters until all
++// bench hosts have stopped and joined. The dump guard is the first main local.
++inline std::array<counters_t *, 1u << 22> registry{};
++inline counters_t &local() {
++    static thread_local counters_t *counters = [] {
++        const long tid = long(syscall(SYS_gettid));
++        if(tid <= 0 || static_cast<unsigned long>(tid) >= registry.size()) std::abort();
++        auto *value = new counters_t;
++        value->tid = tid; value->next = registry[tid]; registry[tid] = value;
++        return value;
++    }();
++    return *counters;
++}
++struct dump_at_exit_t {
++    ~dump_at_exit_t() {
++        for(auto *&head:registry) while(head) {
++            auto *value=head; head=value->next;
++            value->dump(); delete value;
++        }
++    }
++};
++inline void increment(total_t key) noexcept { ++local().totals[phase()][key]; }
++inline void sample(metric_t key,std::uint64_t value) noexcept { local().hist[phase()][key].add(value); }
++struct turn_t {
++    std::uint64_t records=0; std::uint64_t *previous; bool enabled;
++    explicit turn_t(bool enabled):previous(nullptr),enabled(enabled) {
++        if(enabled) { previous=local().turn_records; local().turn_records=&records; }
++    }
++    ~turn_t() { if(enabled) { local().turn_records=previous; sample(worker_turn,records); } }
++};
++struct wake_t {
++    std::uint64_t records=0; bool active=false, enabled;
++    explicit wake_t(bool enabled):enabled(enabled) { if(enabled) local().wake_records=&records; }
++    void sleep() {
++        if(!enabled) return;
++        if(active) sample(worker_wake,records); else local().totals[phase()][worker_startup_records]+=records;
++        active=false; records=0;
++    }
++    void woke(bool ready) { if(enabled && ready) { increment(worker_wait_ready); active=true; } }
++    ~wake_t() { if(enabled) { sleep(); local().wake_records=nullptr; } }
++};
++struct completion_t {
++    std::uint64_t records=0, application=0; std::uint64_t *previous, *previous_application;
++    completion_t():previous(local().completion_records),previous_application(local().completion_application) {
++        local().completion_records=&records; local().completion_application=&application;
++    }
++    ~completion_t() {
++        local().completion_records=previous; local().completion_application=previous_application;
++        sample(dispatcher_turn,records); sample(dispatcher_application,application);
++    }
++};
++inline void record() noexcept {
++    auto &c=local(); ++c.totals[phase()][worker_records];
++    if(c.turn_records) ++*c.turn_records;
++    if(c.wake_records) ++*c.wake_records;
++}
++inline void application_notified() noexcept {
++    auto &c=local(); ++c.totals[phase()][app_notify];
++    if(c.completion_application) ++*c.completion_application;
++}
++inline void completed() noexcept {
++    auto &c=local(); ++c.totals[phase()][registry_run];
++    if(c.completion_records) ++*c.completion_records;
++}
++}
++#define ZLINK_PATH_COUNT(...) __VA_ARGS__
++#else
++#define ZLINK_PATH_COUNT(...)
++#endif
+diff --git a/framework/bench/grpc/cpp/CMakeUserPresets.json b/framework/bench/grpc/cpp/CMakeUserPresets.json
+new file mode 100644
+index 0000000000..856af1a170
+--- /dev/null
++++ b/framework/bench/grpc/cpp/CMakeUserPresets.json
+@@ -0,0 +1,4 @@
++{
++  "version": 4,
++  "include": ["../../../languages/cpp/CMakePresets.json"]
++}

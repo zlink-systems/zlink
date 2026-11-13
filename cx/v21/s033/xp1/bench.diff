@@ -1,0 +1,314 @@
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..7067fddc0d 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -20,6 +20,7 @@
+ 
+ #include <atomic>
+ #include <chrono>
++#include <cmath>
+ #include <cstdio>
+ #include <deque>
+ #include <functional>
+@@ -28,6 +29,7 @@
+ #include <memory>
+ #include <stdexcept>
+ #include <string>
++#include <thread>
+ #include <typeinfo>
+ #include <type_traits>
+ #include <vector>
+@@ -61,9 +63,38 @@ struct options_t
+     int drain_bound_ms = 30000;
+     int readiness_timeout_ms = 30000;
+     size_t latency_sample_limit = 200000;
++    double target_rate = 0;
++    std::string p2_variant = "off";
+     std::string output_file;
+ };
+ 
++class submission_pacer_t
++{
++  public:
++    explicit submission_pacer_t (double rate) : _rate (rate) {}
++
++    bool wait_until (clock_t_::time_point deadline)
++    {
++        if (_rate <= 0)
++            return clock_t_::now () < deadline;
++        const auto interval = std::chrono::duration_cast<clock_t_::duration> (
++          std::chrono::duration<double> (1.0 / _rate));
++        const auto now = clock_t_::now ();
++        const auto scheduled = std::max (now, _next);
++        if (scheduled >= deadline)
++            return false;
++        std::this_thread::sleep_until (scheduled);
++        if (clock_t_::now () >= deadline)
++            return false;
++        _next = scheduled + interval;
++        return true;
++    }
++
++  private:
++    double _rate;
++    clock_t_::time_point _next{};
++};
++
+ // ---------------------------------------------------------------------------
+ // per-cell measurement state
+ // ---------------------------------------------------------------------------
+@@ -441,7 +472,10 @@ class zlink_raw_driver_t : public driver_t
+     int request_window () const override { return _window; }
+ 
+     zlink_raw_driver_t (const options_t &options, int window, bool command_path) :
+-        _options (options), _window (window), _command_path (command_path)
++        _options (options),
++        _window (window),
++        _command_path (command_path),
++        _pacer (options.target_rate)
+     {
+         _socket = std::make_unique<zlink::router_socket_t> (_context);
+         const std::string client_rid =
+@@ -453,6 +487,12 @@ class zlink_raw_driver_t : public driver_t
+         _socket->connect (command_path ? options.raw_command_endpoint
+                                        : options.raw_request_endpoint);
+         _poller.add (*_socket, zlink::poll_event_flag_t::pollcompletion, 1);
++        if (options.p2_variant == "C1" || options.p2_variant == "C2")
++            _poller.modify (*_socket, zlink::poll_event_flag_t::pollcompletion
++                                        | zlink::poll_event_flag_t::pollin
++                                        | zlink::poll_event_flag_t::pollout
++                                        | zlink::poll_event_flag_t::pollroute
++                                        | zlink::poll_event_flag_t::pollconnect);
+     }
+ 
+ 
+@@ -551,7 +591,7 @@ class zlink_raw_driver_t : public driver_t
+               resumed != 0
+                 ? std::chrono::milliseconds (0)
+                 : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
+-            _poller.wait (events.data (), events.size (), wait);
++            wait_for_completions (events, wait);
+         }
+ 
+         close_window (deadline);
+@@ -559,6 +599,17 @@ class zlink_raw_driver_t : public driver_t
+ 
+ 
+   private:
++    void wait_for_completions (std::vector<zlink::poll_event_t> &events,
++                               std::chrono::milliseconds wait)
++    {
++        if (_options.p2_variant != "C2") {
++            _poller.wait (events.data (), events.size (), wait);
++            return;
++        }
++        std::thread completion_thread ([&] { _poller.wait (events.data (), events.size (), wait); });
++        completion_thread.join ();
++    }
++
+     void run_slots (clock_t_::time_point deadline,
+                     size_t payload_size,
+                     phase_t phase,
+@@ -597,7 +648,7 @@ class zlink_raw_driver_t : public driver_t
+               resumed != 0
+                 ? std::chrono::milliseconds (0)
+                 : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
+-            _poller.wait (events.data (), events.size (), wait);
++            wait_for_completions (events, wait);
+         }
+ 
+         // Anything still outstanding when the loop gives up was abandoned
+@@ -675,6 +726,8 @@ class zlink_raw_driver_t : public driver_t
+         co_await _ready.schedule ();
+         size_t submitted_since_progress = 0;
+         while (clock_t_::now () < _deadline) {
++            if (!_pacer.wait_until (_deadline))
++                co_return;
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -723,6 +776,8 @@ class zlink_raw_driver_t : public driver_t
+     {
+         co_await _ready.schedule ();
+         while (clock_t_::now () < _deadline) {
++            if (!_pacer.wait_until (_deadline))
++                co_return;
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -773,6 +828,7 @@ class zlink_raw_driver_t : public driver_t
+     const options_t &_options;
+     int _window;
+     bool _command_path;
++    submission_pacer_t _pacer;
+     uint32_t _run_id = static_cast<uint32_t> (now_ns ());
+     zlink::context_t _context;
+     std::unique_ptr<zlink::router_socket_t> _socket;
+@@ -800,6 +856,7 @@ class framework_driver_t final : public driver_t
+ 
+     framework_driver_t (const options_t &options, int window, bool command) :
+         _options (options),
++        _pacer (options.target_rate),
+         _window (window),
+         _command (command),
+         _host (std::vector<int>{}, bench_http_callback_t{})
+@@ -922,7 +979,7 @@ class framework_driver_t final : public driver_t
+             if (in_flight != 0 || !std::is_void_v<T>)
+                 completion_signal->take_completed (completed_slots);
+             // Admission sequences submits; the pattern window bounds replies.
+-            if (can_submit (clock_t_::now ())) {
++            if (can_submit (clock_t_::now ()) && _pacer.wait_until (deadline)) {
+                 uint64_t sent = 0;
+                 if constexpr (!std::is_void_v<T>)
+                     sent = now_ns ();
+@@ -999,6 +1056,7 @@ class framework_driver_t final : public driver_t
+     }
+ 
+     const options_t &_options;
++    submission_pacer_t _pacer;
+     int _window;
+     bool _command;
+     stats_http_server_t _host;
+@@ -1370,6 +1428,10 @@ int main (int argc, char **argv)
+         options.stats_port = std::stoi (arg_value (argc, argv, "--stats-port", "5281"));
+         options.target_stats_port =
+           std::stoi (arg_value (argc, argv, "--target-stats-port", "5283"));
++        options.target_rate = std::stod (arg_value (argc, argv, "--target-rate", "0"));
++        options.p2_variant = arg_value (argc, argv, "--p2-variant", "off");
++        if (!std::isfinite (options.target_rate) || options.target_rate < 0)
++            throw std::runtime_error ("target rate must be finite and non-negative");
+         options.warmup_seconds = std::stod (arg_value (argc, argv, "--warmup-seconds", "5"));
+         options.warmup_segments = std::stoi (arg_value (argc, argv, "--warmup-segments", "10"));
+         options.request_timeout_ms =
+diff --git a/framework/bench/grpc/cpp/zlink/bench_zlink_cpp_server.cpp b/framework/bench/grpc/cpp/zlink/bench_zlink_cpp_server.cpp
+index 3fcdfeef2e..b965923769 100644
+--- a/framework/bench/grpc/cpp/zlink/bench_zlink_cpp_server.cpp
++++ b/framework/bench/grpc/cpp/zlink/bench_zlink_cpp_server.cpp
+@@ -13,7 +13,10 @@
+ 
+ #include <atomic>
+ #include <csignal>
++#include <condition_variable>
+ #include <cstdio>
++#include <deque>
++#include <mutex>
+ #include <string>
+ #include <thread>
+ 
+@@ -34,13 +37,64 @@ zlink::routing_id_t make_routing_id (const std::string &value)
+ // The request echo loop. A ROUTER peer's request arrives with a reply token; the
+ // echo goes back through reply(). A DEALER peer (the legacy configuration kept
+ // reachable for comparison) arrives without one and is answered with send().
+-void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metrics_t &metrics)
++struct reply_job_t
+ {
+     zlink::received_t received;
++    zlink::message_t header;
++    zlink::message_t echo;
++};
++
++void request_loop (zlink::router_socket_t &router,
++                   zlink_cpp_bench::server_metrics_t &metrics,
++                   const std::string &variant)
++{
++    const bool use_poller = variant == "S1" || variant == "S2" || variant == "S3";
++    zlink::poller_t poller;
++    if (use_poller)
++        poller.add (router, zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollout
++                              | zlink::poll_event_flag_t::pollroute | zlink::poll_event_flag_t::pollconnect
++                              | zlink::poll_event_flag_t::pollcompletion,
++                    1);
++    std::mutex queue_mutex;
++    std::condition_variable queue_ready;
++    std::deque<reply_job_t> replies;
++    const bool deferred_reply = variant == "S2" || variant == "S3";
++    std::thread reply_thread;
++    if (deferred_reply) {
++        reply_thread = std::thread ([&] {
++            for (;;) {
++                reply_job_t job;
++                {
++                    std::unique_lock<std::mutex> lock (queue_mutex);
++                    queue_ready.wait (lock, [&] { return g_stop.load () || !replies.empty (); });
++                    if (replies.empty () && g_stop.load ())
++                        return;
++                    job = std::move (replies.front ());
++                    replies.pop_front ();
++                }
++                try {
++                    job.received.reply ().message (std::move (job.header)).message (std::move (job.echo)).submit ();
++                }
++                catch (const std::exception &error) {
++                    std::fprintf (stderr, "zlink-cpp deferred reply: %s\n", error.what ());
++                    metrics.record_error ();
++                }
++            }
++        });
++    }
++    zlink::received_t received;
++    size_t flow_count = 0;
+     while (!g_stop.load ()) {
+-        const int rc = router.recv (received, zlink::recv_flags_t::none);
++        if (use_poller) {
++            zlink::poll_event_t event;
++            if (poller.wait (&event, 1, std::chrono::milliseconds (50)) == 0)
++                continue;
++        }
++        const int rc = router.recv (received, use_poller ? zlink::recv_flags_t::dontwait
++                                                         : zlink::recv_flags_t::none);
+         if (rc != 0) {
+-            std::this_thread::sleep_for (std::chrono::microseconds (50));
++            if (!use_poller)
++                std::this_thread::sleep_for (std::chrono::microseconds (50));
+             continue;
+         }
+         try {
+@@ -63,7 +117,19 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
+             const std::string encoded = zlink_cpp_bench::encode_bench_payload (reply);
+             zlink::message_t echo = zlink::message_t::from (
+               std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));
+-            if (received.reply_token ())
++            if (variant == "S3" && ++flow_count % 200 == 0) {
++                router.set_receive_flow_state (zlink::receive_flow_state_t::paused);
++                router.set_receive_flow_state (zlink::receive_flow_state_t::running);
++            }
++            const bool has_reply_token = received.reply_token ().has_value ();
++            if (deferred_reply && has_reply_token) {
++                {
++                    std::lock_guard<std::mutex> lock (queue_mutex);
++                    replies.push_back ({std::move (received), std::move (header), std::move (echo)});
++                }
++                queue_ready.notify_one ();
++            }
++            else if (has_reply_token)
+                 received.reply ().message (header).message (echo).submit ();
+             else
+                 received.send ().message (header).message (echo).submit ();
+@@ -73,6 +139,10 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
+             metrics.record_error ();
+         }
+     }
++    if (reply_thread.joinable ()) {
++        queue_ready.notify_all ();
++        reply_thread.join ();
++    }
+ }
+ 
+ // The command loop. No reply: spec 2 measures the one-way path, and the
+@@ -115,6 +185,7 @@ int main (int argc, char **argv)
+     const std::string command_endpoint =
+       arg_value (argc, argv, "--command-endpoint", "tcp://127.0.0.1:5288");
+     const int stats_port = std::atoi (arg_value (argc, argv, "--stats-port", "5289").c_str ());
++    const std::string p2_variant = arg_value (argc, argv, "--p2-variant", "off");
+     const std::string request_rid =
+       arg_value (argc, argv, "--request-routing-id", "zlink-cpp-bench-request-server");
+     const std::string command_rid =
+@@ -141,7 +212,7 @@ int main (int argc, char **argv)
+                       request_endpoint.c_str (), command_endpoint.c_str (), stats_port);
+         std::fflush (stderr);
+ 
+-        std::thread request_thread ([&] { request_loop (request_router, metrics); });
++        std::thread request_thread ([&] { request_loop (request_router, metrics, p2_variant); });
+         std::thread command_thread ([&] { command_loop (command_router, metrics); });
+         while (!g_stop.load ())
+             std::this_thread::sleep_for (std::chrono::milliseconds (100));

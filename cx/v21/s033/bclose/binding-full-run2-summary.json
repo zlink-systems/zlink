@@ -1,0 +1,535 @@
+{
+  "total": {
+    "tests": 239,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 2
+  },
+  "suites": [
+    {
+      "path": "build/test-results/integrationTest/TEST-systems.zlink.integration.contract.AsyncSubmitTypedResultContractTest.xml",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/integrationTest/TEST-systems.zlink.integration.contract.DontWaitBackpressureContractTest.xml",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/integrationTest/TEST-systems.zlink.integration.contract.RawSocketIntegrationTest.xml",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/integrationTest/TEST-systems.zlink.integration.contract.RequestWaitTokenContractTest.xml",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/integrationTest/TEST-systems.zlink.integration.contract.SocketConcurrencyStressTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/integrationTest/TEST-systems.zlink.integration.contract.StreamDisconnectRidContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/integrationTest/TEST-systems.zlink.integration.contract.SubmitResultTerminalContractTest.xml",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.NativeContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.ReceivedContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.AwaitTerminatorContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.BoundaryValidationContractTest.xml",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.ByteBufferMessageContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.CompletionKindContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.ContextContractTest.xml",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.CoreResourceContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.ErrnoResultMappingContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.MessageCopyBufferContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.MessageCopyWrapContractTest.xml",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.MessageDiagnosticsContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.MessageMemoryContractTest.xml",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.MonitorBehaviorContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.MonitorConnectionIdentityContractTest.xml",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.MonitorContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.MonitorPollingContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.PollerRemovalCompletionContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.PollerWaitAllocationContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.PublishFlagsContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.PublisherAsyncCompletionSurfaceContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.PullCompletionContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.ReceiveBusyResultContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.ReceiveFlowStateContractTest.xml",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.ReceivedContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.RequestFailureErrnoContractTest.xml",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.RequestReplyTerminationContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.RequestResultMappingContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.RoutedMultipartAdmissionContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.SendCompletionSurfaceContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.SocketPollingContractTest.xml",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.contract.SocketSubscriptionContractTest.xml",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.messaging.RequestDefaultTimeoutContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.nativeapi.LibraryLoaderTest.xml",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.nativeapi.NativeLayoutsTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.nativeapi.NativeMessagePayloadViewTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.nativeapi.NativeSubmitErrorsTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.CompletionBatchContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.CompletionDrainOrderContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.CompletionOwnerLifecycleTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.CompletionOwnershipContractTest.xml",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.ConcurrentAdmissionContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.ContextCloseContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.EarlyCompletionJoinContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.NativeConnectionAttemptsTest.xml",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.PollerCloseBusyContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.PollerWaitBusyContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.ReceiveResultContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.RequestRetryCloseContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.RouterReceiveStorageContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.RouterSelectedRouteContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.SocketOptionsTypeMapTest.xml",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.SubmitCloseAdmissionContractTest.xml",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.SubmitCloseRaceContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.TargetRemovalResultContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.TokenlessBackpressureContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "build/test-results/test/TEST-systems.zlink.runtime.sockets.WritableTokenDeliveryContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "codec/zlink-ext-netty/build/test-results/test/TEST-systems.zlink.netty.NettyAdapterContractTest.xml",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "kotlin-contract-test/build/test-results/test/TEST-systems.zlink.contract.CompletionStageCoroutineContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "kotlin-contract-test/build/test-results/test/TEST-systems.zlink.contract.ReceiveFlowStateContractTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "kotlin-contract-test/build/test-results/test/TEST-systems.zlink.contract.UnsignedByteHwmContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "perf/multi/Zlink.BindingBench.Multi/build/test-results/test/TEST-systems.zlink.perf.multi.PerfArgsRegressionTest.xml",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "perf/multi/Zlink.BindingBench.Multi/build/test-results/test/TEST-systems.zlink.perf.multi.PerfConnectionReadyCountTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "perf/multi/Zlink.BindingBench.Multi/build/test-results/test/TEST-systems.zlink.perf.multi.PerfMultiDealerDealerRegressionTest.xml",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "perf/multi/Zlink.BindingBench.Multi/build/test-results/test/TEST-systems.zlink.perf.multi.PerfMultiRoutedRelayContractTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "perf/multi/Zlink.BindingBench.Multi/build/test-results/test/TEST-systems.zlink.perf.multi.PerfMultiRoutedReplyQueueTest.xml",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "perf/multi/Zlink.BindingBench.Multi/build/test-results/test/TEST-systems.zlink.perf.multi.PerfMultiRoutedSendCoordinatorTest.xml",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "perf/multi/Zlink.BindingBench.Multi/build/test-results/test/TEST-systems.zlink.perf.multi.PerfMultiSocketReqRepSourceGuardTest.xml",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+diff --git a/framework/bench/grpc/cpp/run_local.sh b/framework/bench/grpc/cpp/run_local.sh
+index edb5410cf2..ecda846f29 100755
+--- a/framework/bench/grpc/cpp/run_local.sh
++++ b/framework/bench/grpc/cpp/run_local.sh
+@@ -61,7 +61,7 @@ for run in $(seq 1 "${RUNS}"); do
+         mkdir -p "${cell_dir}"
+         log "cell=${cell_id} run=${run}: start target B then source A"
+ 
+-        setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -76,7 +76,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
++        setsid taskset -c 0-7 "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp b/framework/languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp
+index 36e98cc0cd..fb79611326 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp
+@@ -184,11 +184,10 @@ void dispatch_completion (std::function<void ()> work,
+     }
+     if (!dispatcher)
+         dispatcher = borrow_completion_dispatcher ();
+-    dispatcher->post ([work = std::move (work), owner, dispatcher] {
+-        const completion_turn_scope_t scope{owner != nullptr ? owner : &process_completion_owner,
+-                                            dispatcher};
+-        work ();
+-    });
++    // EXPERIMENT ONLY: deliberately discard the fresh-turn and ingress separation boundary.
++    const completion_turn_scope_t scope{owner != nullptr ? owner : &process_completion_owner,
++                                        dispatcher};
++    work ();
+ }
+ 
+ std::size_t completion_dispatcher_worker_count () noexcept
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index 70efbaaa46..0df7f7e8d3 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -3283,8 +3283,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+               [this, executor = _application_dispatch, node,
+                registration] (const std::string &owner) {
+                   auto start = make_application_owner_work (node, registration, owner);
+-                  if (!executor->try_submit_internal ([start] { start (false); }))
+-                      start (true);
++                  // EXPERIMENT ONLY: execute the existing owner drain on the receive resource.
++                  start (false);
+               };
+             auto role =
+               std::make_shared<node_receive_role_t> (*this, node, registration, receive_permit);

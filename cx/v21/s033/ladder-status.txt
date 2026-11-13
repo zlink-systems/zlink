@@ -1,0 +1,4 @@
+C++ L0 3칸 통과(serial 1K 0.986 · bp 1K 1.019 · bp 4K 1.016), send 1K는 guard 전 run 섞여 무효, send 4K·serial 4K는 run 하나씩 튀어 판정 불가
+.NET [잠정: 12:08 UTC 이전 측정] L0 수신 맞춤 뒤 4칸 통과(send 1K 1.010 · send 4K 1.016 · bp 1K 0.997 · bp 4K 0.966), serial 1K·4K는 편차 초과로 판정 불가
+Java [잠정: 12:08 UTC 이전 측정] L0~L2는 L 서버만 DONT_WAIT 연속 수신하던 상태로 잼 — 수신 맞춤 뒤 다시 측정
+Node [잠정: 12:08 UTC 이전 측정] L0 서버 모양을 raw와 맞춤(라우터 2개, L0 경로에 Framework·Nest require 없음) — serial 4K 0.980(5회 편차 5.3%)

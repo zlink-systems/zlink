@@ -1,0 +1,146 @@
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..a257f7a243 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -571,6 +571,10 @@ class zlink_raw_driver_t : public driver_t
+         _payload_size = payload_size;
+         _counters = &counters;
+         _latency = latency;
++        _pace_start = clock_t_::now ();
++        _pace_first = _seq;
++        const char *pace = std::getenv ("CSEND_PACE");
++        _pace_rate = pace ? std::stod (pace) : 0;
+ 
+         std::vector<task_t> slots;
+         slots.reserve (static_cast<size_t> (slot_count));
+@@ -724,6 +728,10 @@ class zlink_raw_driver_t : public driver_t
+         co_await _ready.schedule ();
+         while (clock_t_::now () < _deadline) {
+             const uint64_t seq = _seq++;
++            if (_pace_rate > 0 && (seq - _pace_first) % 64 == 0)
++                std::this_thread::sleep_until (
++                  _pace_start + std::chrono::duration_cast<clock_t_::duration> (
++                    std::chrono::duration<double> ((seq - _pace_first) / _pace_rate)));
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+@@ -780,6 +788,9 @@ class zlink_raw_driver_t : public driver_t
+     zlink::poller_t _poller;
+     ready_queue_t _ready;
+ 
++    clock_t_::time_point _pace_start{};
++    uint64_t _pace_first = 0;
++    double _pace_rate = 0;
+     clock_t_::time_point _deadline{};
+     phase_t _phase = phase_warmup;
+     size_t _payload_size = 1024;
+@@ -892,6 +903,10 @@ class framework_driver_t final : public driver_t
+                     counters_t &counters,
+                     latency_sampler_t *latency)
+     {
++        const char *pace = std::getenv ("CSEND_PACE");
++        const double pace_rate = pace ? std::stod (pace) : 0;
++        const auto pace_start = clock_t_::now ();
++        const uint64_t pace_first = _seq;
+         struct pending_t
+         {
+             pending_t (fw::task_t<T> task_, uint64_t sent_ns_, uint64_t seq_) :
+@@ -926,6 +941,10 @@ class framework_driver_t final : public driver_t
+                 uint64_t sent = 0;
+                 if constexpr (!std::is_void_v<T>)
+                     sent = now_ns ();
++                if (pace_rate > 0 && (_seq - pace_first) % 64 == 0)
++                    std::this_thread::sleep_until (
++                      pace_start + std::chrono::duration_cast<clock_t_::duration> (
++                        std::chrono::duration<double> ((_seq - pace_first) / pace_rate)));
+                 auto payload = make_payload (size, phase);
+                 counters.enter ();
+                 counters.submitted.fetch_add (1, std::memory_order_relaxed);
+diff --git a/framework/bench/grpc/cpp/run_local.sh b/framework/bench/grpc/cpp/run_local.sh
+index edb5410cf2..ecda846f29 100755
+--- a/framework/bench/grpc/cpp/run_local.sh
++++ b/framework/bench/grpc/cpp/run_local.sh
+@@ -61,7 +61,7 @@ for run in $(seq 1 "${RUNS}"); do
+         mkdir -p "${cell_dir}"
+         log "cell=${cell_id} run=${run}: start target B then source A"
+ 
+-        setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -76,7 +76,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
++        setsid taskset -c 0-7 "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/dotnet/run_local.sh b/framework/bench/grpc/dotnet/run_local.sh
+index 4874eb88a9..a1bf2e8534 100755
+--- a/framework/bench/grpc/dotnet/run_local.sh
++++ b/framework/bench/grpc/dotnet/run_local.sh
+@@ -62,7 +62,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -80,7 +80,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/java/run_local.sh b/framework/bench/grpc/java/run_local.sh
+index e9ab239086..11621d900b 100755
+--- a/framework/bench/grpc/java/run_local.sh
++++ b/framework/bench/grpc/java/run_local.sh
+@@ -70,7 +70,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -88,7 +88,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/node/run_local.sh b/framework/bench/grpc/node/run_local.sh
+index a04f4b1708..172a2ce554 100644
+--- a/framework/bench/grpc/node/run_local.sh
++++ b/framework/bench/grpc/node/run_local.sh
+@@ -68,7 +68,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run} starting target B then source A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -94,7 +94,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 

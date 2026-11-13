@@ -1,0 +1,746 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index a626b17e78..79e80b5490 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -1468,6 +1468,29 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+   add_executable(test_cpp_framework_mesh_shutdown_seal
+     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp)
+   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++    add_library(test_cpp_framework_reply_close_clock SHARED
++      tests/support/raw_reply_submit_clock_probe.cpp)
++    # The test interposes libc's clock only inside the native reply boundary.
++    set_property(TARGET test_cpp_framework_reply_close_clock PROPERTY LINK_OPTIONS "")
++    add_executable(test_cpp_framework_reply_close
++      tests/Zlink.Framework.ContractTests/test_cpp_framework_reply_close.cpp)
++    target_compile_features(test_cpp_framework_reply_close_clock PRIVATE cxx_std_20)
++    target_compile_features(test_cpp_framework_reply_close PRIVATE cxx_std_20)
++    target_include_directories(test_cpp_framework_reply_close PRIVATE
++      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
++    target_link_libraries(test_cpp_framework_reply_close PRIVATE
++      zlink_framework zlink::cpp Threads::Threads test_cpp_framework_reply_close_clock)
++    target_link_options(test_cpp_framework_reply_close PRIVATE
++      -Wl,--wrap=zlink_reply -Wl,--wrap=zlink_close -Wl,--wrap=zlink_socket)
++    foreach(mode race deterministic)
++      zlink_framework_cpp_add_test(
++        NAME test_cpp_framework_reply_close_${mode}
++        COMMAND test_cpp_framework_reply_close ${mode}
++        LABELS "framework-unit;framework-contract;raw-binding"
++        TIER unit
++        ENVIRONMENT "LD_PRELOAD=$<TARGET_FILE:test_cpp_framework_reply_close_clock>"
++        TIMEOUT 60)
++    endforeach()
+     add_executable(test_cpp_framework_close_failure
+       tests/Zlink.Framework.UnitTests/test_cpp_framework_close_failure.cpp)
+     target_compile_features(test_cpp_framework_close_failure PRIVATE cxx_std_20)
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/app.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/app.hpp
+index 4ac2585184..dbd7cbdc81 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/app.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/app.hpp
+@@ -97,7 +97,7 @@ class app_t
+     task_t<relocation_result_t> relocate (relocation_options_t options,
+                                           std::stop_token wait_cancellation = {});
+     task_t<termination_result_t>
+-    shutdown (std::chrono::milliseconds deadline = std::chrono::seconds (30),
++    shutdown (std::chrono::milliseconds deadline = detail::default_termination_deadline,
+               std::stop_token wait_cancellation = {});
+     framework_runtime_state_t runtime_state () const noexcept;
+     bool is_ready () const noexcept;
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/lifecycle.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/lifecycle.hpp
+index 5ace6439aa..f96c408276 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/lifecycle.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/lifecycle.hpp
+@@ -8,6 +8,11 @@
+ namespace zlink::framework
+ {
+ 
++namespace detail
++{
++inline constexpr auto default_termination_deadline = std::chrono::seconds (30);
++}
++
+ enum class framework_runtime_state_t : std::uint8_t
+ {
+     preparing = 0,
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+index 9abb5f987c..8280e6fff3 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+@@ -7,10 +7,12 @@
+ #include <zlink/Contracts/Messaging/received.hpp>
+ #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
+ 
++#include <algorithm>
+ #include <cerrno>
+ #include <exception>
+ #include <stdexcept>
+ #include <string>
++#include <thread>
+ #include <utility>
+ 
+ namespace zlink::framework::detail::backend
+@@ -113,6 +115,29 @@ observe_send_completion (zlink::async_result_t<void> pending,
+ 
+ }
+ 
++void close_route_socket (std::unique_ptr<zlink::router_socket_t> &socket,
++                         std::chrono::steady_clock::time_point deadline)
++{
++    if (!socket)
++        return;
++    for (;;) {
++        try {
++            socket->close ();
++            socket.reset ();
++            return;
++        }
++        catch (const zlink::close_error_t &error) {
++            if (error.result () != zlink::close_result_t::busy
++                || std::chrono::steady_clock::now () >= deadline)
++                throw;
++            std::this_thread::sleep_until (std::min (
++              deadline, std::chrono::steady_clock::now () + std::chrono::milliseconds (1)));
++            if (std::chrono::steady_clock::now () >= deadline)
++                throw;
++        }
++    }
++}
++
+ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
+                                     std::shared_ptr<std::mutex> shared_socket_mutex,
+                                     zlink::poll_event_flag_t receive_events,
+@@ -503,7 +528,7 @@ bool raw_route_port_t::reply (const raw_received_t &request, std::vector<zlink::
+     if (request.source_routing_id.empty () || !request.reply_token || messages.empty ()) {
+         throw std::invalid_argument ("raw route reply requires request context and message parts");
+     }
+-    std::lock_guard lock (*_socket_mutex);
++    std::unique_lock lock (*_socket_mutex);
+     if (_socket == nullptr)
+         return false;
+     auto operation =
+@@ -512,6 +537,9 @@ bool raw_route_port_t::reply (const raw_received_t &request, std::vector<zlink::
+         .message (messages[0]);
+     for (std::size_t index = 1; index < messages.size (); ++index)
+         operation = std::move (operation).message (messages[index]);
++    // The binding operation has captured its handle and weak runtime token.
++    // Core owns submit versus close after C++ socket access ends here.
++    lock.unlock ();
+     try {
+         std::move (operation).submit ();
+         return true;
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
+index 7c833d6083..eb8e7612eb 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.hpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #pragma once
+ #include <zlink/framework/contracts/dispatch/request_task.hpp>
++#include <zlink/framework/contracts/configuration/lifecycle.hpp>
+ 
+ #include <span>
+ 
+@@ -40,6 +41,14 @@ using raw_bytes_t = std::vector<std::uint8_t>;
+ using raw_message_t = std::vector<raw_bytes_t>;
+ using raw_send_stage_trace_t = std::function<void (std::string_view, std::string_view)>;
+ 
++// The owner first closes the port to reject new replies, then releases the socket.
++// Failed close retains ownership for the existing runtime cleanup path.
++// Owners pass one absolute deadline for all sockets in the same close call.
++void close_route_socket (
++  std::unique_ptr<zlink::router_socket_t> &socket,
++  std::chrono::steady_clock::time_point deadline =
++    std::chrono::steady_clock::now () + detail::default_termination_deadline);
++
+ inline void encode_route_connection_id (std::uint64_t value, std::span<std::uint8_t> result)
+ {
+     for (std::size_t index = 0; index < result.size (); ++index) {
+diff --git a/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp b/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
+index c3a231faf6..2db5c94117 100644
+--- a/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
+@@ -27,6 +27,7 @@
+ #include <random>
+ #include <stdexcept>
+ #include <string_view>
++#include <type_traits>
+ #include <utility>
+ 
+ namespace zlink::framework::runtime::client_server
+@@ -157,16 +158,23 @@ template <class Port, class Socket>
+ void close_client_server_resources (Port &port,
+                                     zlink::poller_t *transport_poller,
+                                     std::unique_ptr<zlink::socket_monitor_t> &monitor,
+-                                    Socket &socket)
++                                    Socket &socket,
++                                    std::chrono::steady_clock::time_point deadline =
++                                      std::chrono::steady_clock::now ()
++                                      + detail::default_termination_deadline)
+ {
+     runtime_failure_collector_t failures;
+-    failures.capture ([&] { runtime_failure_collector_t::close_resources (port); });
++    failures.close_resource (port);
+     // The monitor leaves the transport poller before it closes.
+     if (!monitor || !transport_poller
+         || failures.capture ([&] { (void) transport_poller->remove (*monitor); }))
+-        failures.capture ([&] { runtime_failure_collector_t::close_resources (monitor); });
+-    if (!port && !monitor)
+-        failures.capture ([&] { runtime_failure_collector_t::close_resources (socket); });
++        failures.close_resource (monitor);
++    if (!port && !monitor) {
++        if constexpr (std::is_same_v<typename Socket::element_type, zlink::router_socket_t>)
++            failures.capture ([&] { detail::backend::close_route_socket (socket, deadline); });
++        else
++            failures.close_resource (socket);
++    }
+     failures.rethrow_if_failed ();
+ }
+ }
+@@ -302,6 +310,7 @@ void raw_client_server_server_t::signal_activity () noexcept
+ 
+ void raw_client_server_server_t::close ()
+ {
++    const auto deadline = std::chrono::steady_clock::now () + detail::default_termination_deadline;
+     auto resources = _lane
+                        .run_checked ([this] {
+                            _receive_flow_registration.close ();
+@@ -314,7 +323,7 @@ void raw_client_server_server_t::close ()
+     std::exception_ptr failure;
+     try {
+         close_client_server_resources (std::get<0> (resources), _options.transport_poller,
+-                                       std::get<1> (resources), std::get<2> (resources));
++                                       std::get<1> (resources), std::get<2> (resources), deadline);
+     }
+     catch (const std::exception &) {
+         failure = std::current_exception ();
+diff --git a/framework/languages/cpp/framework/src/runtime/host/app.cpp b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+index 9632b6ec9a..5ffeecf218 100644
+--- a/framework/languages/cpp/framework/src/runtime/host/app.cpp
++++ b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+@@ -492,7 +492,7 @@ class app_state_t
+         bool started = false;
+         bool terminal = false;
+         termination_result_t result{};
+-        std::chrono::milliseconds deadline{30000};
++        std::chrono::milliseconds deadline{detail::default_termination_deadline};
+         std::optional<std::chrono::system_clock::time_point> deadline_at;
+         std::vector<std::shared_ptr<termination_waiter_t>> waiters;
+         std::thread worker;
+diff --git a/framework/languages/cpp/framework/src/runtime/host/runtime_failure_collector.hpp b/framework/languages/cpp/framework/src/runtime/host/runtime_failure_collector.hpp
+index 10bb791c43..cb2646d13e 100644
+--- a/framework/languages/cpp/framework/src/runtime/host/runtime_failure_collector.hpp
++++ b/framework/languages/cpp/framework/src/runtime/host/runtime_failure_collector.hpp
+@@ -42,17 +42,18 @@ class runtime_failure_collector_t
+             return false;
+         }
+     }
++    template <class Resource> void close_resource (Resource &resource)
++    {
++        if (resource)
++            capture ([&] {
++                resource->close ();
++                resource.reset ();
++            });
++    }
+     template <class... Resources> static void close_resources (Resources &...resources)
+     {
+         runtime_failure_collector_t failures;
+-        const auto close = [&failures] (auto &resource) {
+-            if (resource)
+-                failures.capture ([&] {
+-                    resource->close ();
+-                    resource.reset ();
+-                });
+-        };
+-        (close (resources), ...);
++        (failures.close_resource (resources), ...);
+         failures.rethrow_if_failed ();
+     }
+     template <class Close> void retain (Close close)
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+index fb52ea551a..4ab4c610db 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -64,6 +64,19 @@ namespace zlink::framework::runtime::mesh
+ 
+ namespace
+ {
++void close_mesh_transport (
++  std::shared_ptr<detail::backend::raw_route_port_t> &port,
++  std::unique_ptr<zlink::poller_t> &poller,
++  std::unique_ptr<zlink::router_socket_t> &router,
++  std::chrono::steady_clock::time_point deadline =
++    std::chrono::steady_clock::now () + detail::default_termination_deadline)
++{
++    runtime_failure_collector_t::close_resources (port);
++    runtime_failure_collector_t failures;
++    failures.close_resource (poller);
++    failures.capture ([&] { detail::backend::close_route_socket (router, deadline); });
++    failures.rethrow_if_failed ();
++}
+ 
+ detail::backend::raw_message_t request_failure_reply_parts (std::uint64_t correlation,
+                                                             zlink::request_result_t terminal)
+@@ -473,8 +486,7 @@ raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
+            port = std::move (_port)] () mutable {
+               (void) context;
+               (void) socket_mutex;
+-              runtime_failure_collector_t::close_resources (port);
+-              runtime_failure_collector_t::close_resources (poller, router);
++              close_mesh_transport (port, poller, router);
+           });
+     }
+ }
+@@ -641,6 +653,7 @@ void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
+ 
+ void raw_mesh_node_owner_t::close ()
+ {
++    const auto deadline = std::chrono::steady_clock::now () + detail::default_termination_deadline;
+     auto [resources, operations] =
+       _lane
+         .run ([this] {
+@@ -650,6 +663,7 @@ void raw_mesh_node_owner_t::close ()
+                 _mailbox.close ();
+                 _routes.clear ();
+                 operations = _operations;
++                _closed = true;
+             }
+             std::lock_guard lifecycle_lock (_lifecycle_mutex);
+             return std::pair{
+@@ -664,17 +678,15 @@ void raw_mesh_node_owner_t::close ()
+     std::exception_ptr failure;
+     try {
+         auto &[port, poller, router] = resources;
+-        runtime_failure_collector_t::close_resources (port);
+-        runtime_failure_collector_t::close_resources (poller, router);
++        close_mesh_transport (port, poller, router, deadline);
+     }
+     catch (const std::exception &) {
+         failure = std::current_exception ();
+     }
+     _lane
+-      .run ([this, &resources, &failure] {
++      .run ([this, &resources] {
+           std::lock_guard lifecycle_lock (_lifecycle_mutex);
+           std::tie (_port, _ingress_poller, _router) = std::move (resources);
+-          _closed = !failure;
+       })
+       .get ();
+     if (failure)
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_close_failure.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_close_failure.cpp
+index a36c059eb0..b9e73a9d40 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_close_failure.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_close_failure.cpp
+@@ -89,7 +89,7 @@ extern "C" zlink_close_result_t __wrap_zlink_close (void *handle)
+     if (check_close_lane && zlink::framework::runtime::state_lane_t::current ())
+         closed_on_lane = true;
+     if (std::exchange (fail_socket, false))
+-        return ZLINK_CLOSE_BUSY;
++        return ZLINK_CLOSE_INTERNAL_ERROR;
+     return __real_zlink_close (handle);
+ }
+ 
+@@ -820,6 +820,14 @@ int main (int argc, char **argv)
+     }
+     assert (failed);
+     assert (!node.started ()); // The receive port detached before the router close failure.
++    bool restart_rejected = false;
++    try {
++        node.start ();
++    }
++    catch (const std::logic_error &) {
++        restart_rejected = true;
++    }
++    assert (restart_rejected && socket_attempts == before + 1);
+     node.close ();
+     assert (!node.started ());
+     assert (socket_attempts == before + 2);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.ContractTests/test_cpp_framework_reply_close.cpp b/framework/languages/cpp/tests/Zlink.Framework.ContractTests/test_cpp_framework_reply_close.cpp
+new file mode 100644
+index 0000000000..3a8c00c52f
+--- /dev/null
++++ b/framework/languages/cpp/tests/Zlink.Framework.ContractTests/test_cpp_framework_reply_close.cpp
+@@ -0,0 +1,348 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "runtime/backend/raw_route_port.hpp"
++#include <zlink.hpp>
++#include <atomic>
++#include <cassert>
++#include <cerrno>
++#include <chrono>
++#include <cstdio>
++#include <future>
++#include <memory>
++#include <map>
++#include <cstdlib>
++#include <string_view>
++#include <thread>
++
++using namespace std::chrono_literals;
++namespace backend = zlink::framework::detail::backend;
++extern "C" void raw_reply_probe_arm ();
++extern "C" void raw_reply_probe_disarm ();
++extern "C" void raw_reply_probe_reset ();
++extern "C" bool raw_reply_probe_entered ();
++extern "C" void raw_reply_probe_release ();
++extern "C" zlink_submit_result_t __real_zlink_reply (
++  void *, const zlink_routing_id_t *, zlink_reply_token_t, zlink_msg_t *, size_t);
++extern "C" zlink_close_result_t __real_zlink_close (void *);
++extern "C" void *__real_zlink_socket (void *, zlink_socket_type_t);
++namespace
++{
++std::atomic<void *> reply_socket{nullptr};
++std::atomic_int close_attempts{0}, busy_attempts{0};
++std::atomic_bool reply_left{false}, release_on_busy{false};
++std::atomic_bool submit_entered{false}, allow_native_entry{false};
++std::atomic_int injected_failures{0};
++std::atomic_int injected_result{ZLINK_CLOSE_BUSY};
++std::atomic_int held_submit_result{-1};
++std::atomic<std::int64_t> busy_return_ns{0}, retry_gap_ns{0};
++zlink::router_socket_t *caller = nullptr;
++void *last_socket = nullptr;
++bool hold_reply = true;
++bool hold_native = true;
++std::map<int, std::uint64_t> submit_codes;
++std::chrono::steady_clock::time_point busy_until{};
++std::atomic_int allocated_messages{0}, released_messages{0};
++
++std::vector<zlink::message_t> reply_messages ()
++{
++    auto *data = new std::uint8_t[256]{};
++    ++allocated_messages;
++    std::vector<zlink::message_t> parts;
++    parts.push_back (zlink::advanced::external_message_t::from (
++      std::span<std::uint8_t> (data, 256), [] (void *data, void *) {
++          delete[] static_cast<std::uint8_t *> (data);
++          ++released_messages;
++      }));
++    return parts;
++}
++
++bool until (auto predicate)
++{
++    const auto end = std::chrono::steady_clock::now () + 3s;
++    while (std::chrono::steady_clock::now () < end) {
++        if (predicate ())
++            return true;
++        std::this_thread::yield ();
++    }
++    return predicate ();
++}
++}
++extern "C" void *__wrap_zlink_socket (void *context, zlink_socket_type_t type)
++{
++    last_socket = __real_zlink_socket (context, type);
++    return last_socket;
++}
++extern "C" zlink_submit_result_t __wrap_zlink_reply (
++  void *socket, const zlink_routing_id_t *rid, zlink_reply_token_t token,
++  zlink_msg_t *parts, size_t count)
++{
++    reply_socket = socket;
++    submit_entered.store (true, std::memory_order_release);
++    if (hold_reply) {
++        while (!allow_native_entry.load (std::memory_order_acquire))
++            std::this_thread::yield ();
++        if (hold_native)
++            raw_reply_probe_arm ();
++    }
++    const auto result = __real_zlink_reply (socket, rid, token, parts, count);
++    if (raw_reply_probe_entered ())
++        held_submit_result = static_cast<int> (result);
++    raw_reply_probe_disarm ();
++    ++submit_codes[static_cast<int> (result)];
++    return result;
++}
++extern "C" zlink_close_result_t __wrap_zlink_close (void *socket)
++{
++    if (socket != reply_socket.load ())
++        return __real_zlink_close (socket);
++    if (const auto previous = busy_return_ns.load (); previous != 0)
++        retry_gap_ns = std::chrono::duration_cast<std::chrono::nanoseconds> (
++                         std::chrono::steady_clock::now ().time_since_epoch ()).count () - previous;
++    ++close_attempts;
++    if (std::chrono::steady_clock::now () < busy_until) {
++        errno = EBUSY;
++        return ZLINK_CLOSE_BUSY;
++    }
++    if (injected_failures.load () != 0) {
++        if (injected_failures > 0)
++            --injected_failures;
++        errno = injected_result == ZLINK_CLOSE_BUSY ? EBUSY : EIO;
++        return static_cast<zlink_close_result_t> (injected_result.load ());
++    }
++    const auto result = __real_zlink_close (socket);
++    const int close_errno = errno;
++    if (result == ZLINK_CLOSE_BUSY) {
++        assert (close_errno == EBUSY);
++        ++busy_attempts;
++        if (release_on_busy.exchange (false)) {
++            // Leave the real admitted submit only after observing real Core BUSY.
++            raw_reply_probe_release ();
++            caller->set_receive_flow_state (zlink::receive_flow_state_t::running);
++            assert (until ([] { return reply_left.load (); }));
++        }
++        busy_return_ns = std::chrono::duration_cast<std::chrono::nanoseconds> (
++                           std::chrono::steady_clock::now ().time_since_epoch ()).count ();
++    }
++    errno = close_errno;
++    return result;
++}
++namespace
++{
++bool verify_race (bool destructor_only, int iteration, bool controlled = true,
++                  bool close_before_native = false)
++{
++    hold_reply = controlled;
++    hold_native = !close_before_native;
++    raw_reply_probe_reset ();
++    allocated_messages = released_messages = 0;
++    reply_left = false;
++    close_attempts = 0;
++    busy_attempts = 0;
++    reply_socket = nullptr;
++    submit_entered = false;
++    allow_native_entry = false;
++    held_submit_result = -1;
++    busy_return_ns = 0;
++    retry_gap_ns = 0;
++    zlink::context_t context;
++    context.options ().auto_hwm_enabled (false);
++    zlink::router_socket_t source (context);
++    auto target = std::make_unique<zlink::router_socket_t> (context);
++    const auto source_id = zlink::routing_id_t::from ("reply-close-source");
++    const auto target_id = zlink::routing_id_t::from ("reply-close-target");
++    source.set_routing_id (source_id);
++    target->set_routing_id (target_id);
++    source.options ().linger (0ms);
++    target->options ().linger (0ms);
++    target->options ().send_timeout (2s);
++    source.options ().recv_hwm (zlink::byte_count_t::bytes (1024));
++    target->options ().send_hwm (zlink::byte_count_t::bytes (1024));
++    target->bind ("inproc://framework-reply-close");
++    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
++    source.connect ("inproc://framework-reply-close");
++    zlink::poller_t events;
++    events.add (monitor, zlink::poll_event_flag_t::pollin, 1);
++    assert (until ([&] {
++        zlink::poll_event_t event;
++        (void) events.wait (&event, 1, 1ms);
++        const auto value = monitor.recv (zlink::recv_flags_t::dontwait);
++        return value && value->event == zlink::monitor_event::connection_ready;
++    }));
++    events.remove (monitor);
++    monitor.close ();
++    events.add (source, zlink::poll_event_flag_t::pollcompletion, 1);
++    backend::raw_route_port_t port (*target);
++    constexpr int count = 64;
++    std::vector<backend::raw_received_t> requests;
++    for (int index = 0; index < count; ++index) {
++        auto part = zlink::message_t::from ("request");
++        const auto submitted = source.request (target_id).message (part).timeout (3s).async ();
++        assert (submitted.result == ZLINK_SUBMIT_OK);
++        assert (until ([&] {
++            auto request = port.try_receive ();
++            if (!request)
++                return false;
++            requests.push_back (std::move (*request));
++            return true;
++        }));
++    }
++    if (controlled)
++        source.set_receive_flow_state (zlink::receive_flow_state_t::paused);
++    caller = &source;
++    std::exception_ptr reply_failure;
++    std::thread sender ([&] {
++        try {
++            for (const auto &request : requests) {
++                if (!port.reply (request, reply_messages ()))
++                    break;
++            }
++        }
++        catch (...) { reply_failure = std::current_exception (); }
++        reply_left = true;
++    });
++    const bool submitting = until ([] { return submit_entered.load (); });
++    if (!submitting) {
++        allow_native_entry = true;
++        raw_reply_probe_release ();
++        sender.join ();
++        assert (submitting);
++    }
++    // A captured operation can enter Core after the port seals its pointer.
++    // Detach the poller before holding Core's native send admission.
++    port.close ();
++    if (close_before_native)
++        backend::close_route_socket (target);
++    allow_native_entry = true;
++    const bool held = close_before_native || !controlled || until ([] { return raw_reply_probe_entered (); });
++    if (!held) {
++        raw_reply_probe_release ();
++        sender.join ();
++        std::fprintf (stderr, "reply never held in native submit, iteration=%d\n", iteration);
++        assert (held);
++    }
++    const auto native = reply_socket.load ();
++    if (destructor_only) {
++        // Mutation control: the prototype's RAII borrower destroys the binding
++        // wrapper while the admitted submit is still held. Both destructor close
++        // calls ignore BUSY, including socket.cpp:53.
++        target.reset ();
++        raw_reply_probe_release ();
++        source.set_receive_flow_state (zlink::receive_flow_state_t::running);
++    } else if (!close_before_native) {
++        release_on_busy = controlled;
++        backend::close_route_socket (target);
++    }
++    sender.join ();
++    assert (!reply_failure);
++    const auto native_calls = submit_codes;
++    assert (!port.reply (requests.front (), reply_messages ()));
++    assert (submit_codes == native_calls);
++    assert (!target);
++    // A public close probe also cleans a leaked handle so failed controls finish.
++    const auto after = __real_zlink_close (native);
++    std::printf ("iteration=%d close_attempts=%d busy=%d native_after_close=%d retry_gap_ns=%lld\n",
++                 iteration, close_attempts.load (), busy_attempts.load (), static_cast<int> (after),
++                 static_cast<long long> (retry_gap_ns.load ()));
++    std::fflush (stdout);
++    const bool closed = after == ZLINK_CLOSE_SHUTDOWN;
++    if (!destructor_only) {
++        assert (closed);
++        if (controlled && !close_before_native) {
++            assert (busy_attempts == 1);
++            assert (close_attempts == 2);
++            assert (held_submit_result >= 0);
++            assert (retry_gap_ns >= 1'000'000);
++        }
++    }
++    events.close ();
++    source.close ();
++    context.term ();
++    assert (allocated_messages == released_messages);
++    return closed;
++}
++void verify_failure_retention ()
++{
++    zlink::context_t context;
++    auto socket = std::make_unique<zlink::router_socket_t> (context);
++    reply_socket = last_socket;
++    close_attempts = 0;
++    injected_failures = -1;
++    const auto started = std::chrono::steady_clock::now ();
++    const auto deadline = started + 20ms;
++    bool failed = false;
++    try { backend::close_route_socket (socket, deadline); }
++    catch (const zlink::close_error_t &error) {
++        failed = error.result () == zlink::close_result_t::busy;
++    }
++    assert (failed && socket && socket->valid () && close_attempts >= 1);
++    assert (std::chrono::steady_clock::now () >= deadline);
++    const auto attempts = close_attempts.load ();
++    injected_failures = 0;
++    backend::close_route_socket (socket);
++    assert (!socket && close_attempts == attempts + 1);
++
++    // The same expired deadline is not renewed for the next socket.
++    reply_socket = nullptr;
++    auto second = std::make_unique<zlink::router_socket_t> (context);
++    reply_socket = last_socket;
++    close_attempts = 0;
++    injected_failures = -1;
++    failed = false;
++    try { backend::close_route_socket (second, deadline); }
++    catch (const zlink::close_error_t &error) {
++        failed = error.result () == zlink::close_result_t::busy;
++    }
++    assert (failed && second && second->valid () && close_attempts == 1);
++    injected_failures = 0;
++    backend::close_route_socket (second);
++    assert (!second && close_attempts == 2);
++
++    reply_socket = nullptr;
++    socket = std::make_unique<zlink::router_socket_t> (context);
++    reply_socket = last_socket;
++    close_attempts = 0;
++    injected_failures = 1;
++    injected_result = ZLINK_CLOSE_INTERNAL_ERROR;
++    failed = false;
++    try { backend::close_route_socket (socket); }
++    catch (const zlink::close_error_t &error) {
++        failed = error.result () == zlink::close_result_t::internal_error;
++    }
++    assert (failed && socket && socket->valid () && close_attempts == 1);
++    backend::close_route_socket (socket);
++    assert (!socket && close_attempts == 2);
++    injected_result = ZLINK_CLOSE_BUSY;
++    socket = std::make_unique<zlink::router_socket_t> (context);
++    reply_socket = last_socket;
++    close_attempts = 0;
++    busy_until = std::chrono::steady_clock::now () + 25ms;
++    backend::close_route_socket (socket);
++    assert (!socket && std::chrono::steady_clock::now () >= busy_until);
++    std::printf ("BUSY lasting 25 ms: close succeeded, attempts=%d\n", close_attempts.load ());
++    std::printf ("BUSY deadline: 20 ms, attempts=%d, retained then cleaned; "
++                 "shared expired deadline: one attempt; non-BUSY: no retry\n", attempts);
++}
++
++}
++int main (int argc, char **argv)
++{
++    const std::string_view mode = argc > 1 ? argv[1] : "deterministic";
++    const int repetitions = argc > 2 ? std::atoi (argv[2])
++      : mode == "race" || mode == "destructor-control" ? 100 : 1;
++    assert (repetitions > 0);
++    int leaks = 0;
++    for (int iteration = 0; iteration < repetitions; ++iteration)
++        leaks += !verify_race (mode == "destructor-control", iteration, mode != "race");
++    if (mode == "deterministic")
++        leaks += !verify_race (false, 1, true, true);
++    for (const auto &[code, count] : submit_codes)
++        std::printf ("submit_result=%d count=%llu\n", code,
++                     static_cast<unsigned long long> (count));
++    std::printf ("message ownership: all %d iterations consumed or released\n",
++                 repetitions + (mode == "deterministic" ? 1 : 0));
++    if (leaks) {
++        std::fprintf (stderr, "native sockets left open through binding destruction: %d/%d\n",
++                      leaks, repetitions);
++        return 1;
++    }
++    verify_failure_retention ();
++}
+diff --git a/framework/languages/cpp/tests/support/raw_reply_submit_clock_probe.cpp b/framework/languages/cpp/tests/support/raw_reply_submit_clock_probe.cpp
+new file mode 100644
+index 0000000000..662912c7a1
+--- /dev/null
++++ b/framework/languages/cpp/tests/support/raw_reply_submit_clock_probe.cpp
+@@ -0,0 +1,30 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++// Linux test interposition: stop a backpressured reply before its native wait
++// releases admission. The test verifies BUSY through the real public close API.
++#include <atomic>
++#include <ctime>
++#include <sys/syscall.h>
++#include <unistd.h>
++#include <sched.h>
++
++namespace
++{
++thread_local int reply_clocks = -1;
++std::atomic_bool entered{false};
++std::atomic_bool released{false};
++}
++#define PROBE_EXPORT extern "C" __attribute__((visibility("default")))
++PROBE_EXPORT void raw_reply_probe_arm () { reply_clocks = 0; }
++PROBE_EXPORT void raw_reply_probe_disarm () { reply_clocks = -1; }
++PROBE_EXPORT void raw_reply_probe_reset () { entered = false; released = false; }
++PROBE_EXPORT bool raw_reply_probe_entered () { return entered.load (std::memory_order_acquire); }
++PROBE_EXPORT void raw_reply_probe_release () { released.store (true, std::memory_order_release); }
++PROBE_EXPORT int clock_gettime (clockid_t clock, timespec *value) noexcept
++{
++    if (clock == CLOCK_MONOTONIC && reply_clocks >= 0 && ++reply_clocks == 2) {
++        entered.store (true, std::memory_order_release);
++        while (!released.load (std::memory_order_acquire))
++            sched_yield ();
++    }
++    return static_cast<int> (syscall (SYS_clock_gettime, clock, value));
++}

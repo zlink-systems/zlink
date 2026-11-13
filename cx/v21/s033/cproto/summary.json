@@ -1,0 +1,420 @@
+{
+  "main": {
+    "request-backpressure": {
+      "n": 3,
+      "median": {
+        "caller_us": 17.918036644798267,
+        "req_s": 51400.452532,
+        "submit_cores": 0.916561,
+        "source_us": 82.18439791774807,
+        "non_submit_us": 64.26636127294981,
+        "latency_mean_us": 10749.741,
+        "latency_p95_us": 16878.489999999998,
+        "latency_p99_us": 18557.651
+      },
+      "runs": [
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/main/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 18.151046421608186,
+          "req_s": 51400.452532,
+          "submit_cores": 0.932972,
+          "source_us": 82.82839528211335,
+          "non_submit_us": 64.67734886050516,
+          "latency_mean_us": 10595.32,
+          "latency_p95_us": 16878.489999999998,
+          "latency_p99_us": 18338.387000000002,
+          "completed": 257565
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/main/run2/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.436354246751286,
+          "req_s": 52551.295244,
+          "submit_cores": 0.916303,
+          "source_us": 79.89043810446029,
+          "non_submit_us": 62.454083857708994,
+          "latency_mean_us": 10749.741,
+          "latency_p95_us": 16448.319000000003,
+          "latency_p99_us": 18876.348,
+          "completed": 263431
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/main/run3/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.918036644798267,
+          "req_s": 51152.981667,
+          "submit_cores": 0.916561,
+          "source_us": 82.18439791774807,
+          "non_submit_us": 64.26636127294981,
+          "latency_mean_us": 10904.628,
+          "latency_p95_us": 17064.663,
+          "latency_p99_us": 18557.651,
+          "completed": 256411
+        }
+      ]
+    },
+    "request-serial": {
+      "n": 3,
+      "median": {
+        "caller_us": 19.356412070906753,
+        "req_s": 7494.364114,
+        "submit_cores": 0.145064,
+        "source_us": 87.68028748062507,
+        "non_submit_us": 68.32387540971833,
+        "latency_mean_us": 133.198,
+        "latency_p95_us": 166.776,
+        "latency_p99_us": 194.518
+      },
+      "runs": [
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/main/run1/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 19.356412070906753,
+          "req_s": 7494.364114,
+          "submit_cores": 0.145064,
+          "source_us": 87.68028748062507,
+          "non_submit_us": 68.32387540971833,
+          "latency_mean_us": 133.198,
+          "latency_p95_us": 168.019,
+          "latency_p99_us": 194.518,
+          "completed": 37473
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/main/run2/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 19.0095447151401,
+          "req_s": 7370.718347,
+          "submit_cores": 0.140114,
+          "source_us": 90.45631220888653,
+          "non_submit_us": 71.44676749374642,
+          "latency_mean_us": 135.42499999999998,
+          "latency_p95_us": 166.776,
+          "latency_p99_us": 196.18099999999998,
+          "completed": 36855
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/main/run3/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 19.68610191656515,
+          "req_s": 7919.394132,
+          "submit_cores": 0.155902,
+          "source_us": 81.04092172994528,
+          "non_submit_us": 61.35481981338013,
+          "latency_mean_us": 126.033,
+          "latency_p95_us": 155.546,
+          "latency_p99_us": 181.143,
+          "completed": 39598
+        }
+      ]
+    }
+  },
+  "step2": {
+    "request-backpressure": {
+      "n": 3,
+      "median": {
+        "caller_us": 17.637015379457782,
+        "req_s": 51638.167732,
+        "submit_cores": 0.908736,
+        "source_us": 81.8336106128884,
+        "non_submit_us": 64.1965756438644,
+        "latency_mean_us": 10729.696,
+        "latency_p95_us": 17328.609,
+        "latency_p99_us": 19237.763000000003
+      },
+      "runs": [
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/step2/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.826678219443217,
+          "req_s": 51638.167732,
+          "submit_cores": 0.920537,
+          "source_us": 82.28791195793701,
+          "non_submit_us": 64.46121437297322,
+          "latency_mean_us": 10729.696,
+          "latency_p95_us": 17328.609,
+          "latency_p99_us": 19237.763000000003,
+          "completed": 258952
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/step2/run2/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.637015379457782,
+          "req_s": 51047.582634,
+          "submit_cores": 0.900327,
+          "source_us": 81.8336106128884,
+          "non_submit_us": 64.1965756438644,
+          "latency_mean_us": 11178.779999999999,
+          "latency_p95_us": 17490.457,
+          "latency_p99_us": 19443.391,
+          "completed": 255929
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/step2/run3/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.392590905698686,
+          "req_s": 52248.454812,
+          "submit_cores": 0.908736,
+          "source_us": 81.05814832685353,
+          "non_submit_us": 63.66555742115484,
+          "latency_mean_us": 10545.764000000001,
+          "latency_p95_us": 17204.712,
+          "latency_p99_us": 18499.574,
+          "completed": 261743
+        }
+      ]
+    }
+  },
+  "step4": {
+    "request-backpressure": {
+      "n": 3,
+      "median": {
+        "caller_us": 17.576014362777453,
+        "req_s": 51865.342232,
+        "submit_cores": 0.911586,
+        "source_us": 80.12342772966512,
+        "non_submit_us": 62.54741336688766,
+        "latency_mean_us": 10693.724,
+        "latency_p95_us": 16695.915,
+        "latency_p99_us": 18271.724
+      },
+      "runs": [
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/step4/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.576014362777453,
+          "req_s": 51865.342232,
+          "submit_cores": 0.911586,
+          "source_us": 80.12342772966512,
+          "non_submit_us": 62.54741336688766,
+          "latency_mean_us": 10530.199,
+          "latency_p95_us": 16538.225000000002,
+          "latency_p99_us": 18155.622,
+          "completed": 259913
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/step4/run2/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.525588559569446,
+          "req_s": 52158.99009,
+          "submit_cores": 0.914117,
+          "source_us": 79.39996523809229,
+          "non_submit_us": 61.87437667852284,
+          "latency_mean_us": 10693.724,
+          "latency_p95_us": 16695.915,
+          "latency_p99_us": 18271.724,
+          "completed": 261552
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/step4/run3/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.691540956648755,
+          "req_s": 50794.162148,
+          "submit_cores": 0.898627,
+          "source_us": 81.84554728724257,
+          "non_submit_us": 64.1540063305938,
+          "latency_mean_us": 11804.959,
+          "latency_p95_us": 17133.739999999998,
+          "latency_p99_us": 18726.612,
+          "completed": 254704
+        }
+      ]
+    }
+  },
+  "final": {
+    "request-backpressure": {
+      "n": 3,
+      "median": {
+        "caller_us": 17.563384634091893,
+        "req_s": 51798.516988,
+        "submit_cores": 0.902197,
+        "source_us": 79.82661456843196,
+        "non_submit_us": 62.26322993434007,
+        "latency_mean_us": 10774.680999999999,
+        "latency_p95_us": 16927.490999999998,
+        "latency_p99_us": 18361.65
+      },
+      "runs": [
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.563384634091893,
+          "req_s": 50620.19756,
+          "submit_cores": 0.889062,
+          "source_us": 79.82661456843196,
+          "non_submit_us": 62.26322993434007,
+          "latency_mean_us": 11582.110999999999,
+          "latency_p95_us": 17182.59,
+          "latency_p99_us": 18679.385,
+          "completed": 253698
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final/run2/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.064265235081475,
+          "req_s": 52870.544824,
+          "submit_cores": 0.902197,
+          "source_us": 79.1289557148824,
+          "non_submit_us": 62.06469047980091,
+          "latency_mean_us": 10635.695,
+          "latency_p95_us": 16699.892,
+          "latency_p99_us": 18361.65,
+          "completed": 264735
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final/run3/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.66349797643747,
+          "req_s": 51798.516988,
+          "submit_cores": 0.914943,
+          "source_us": 81.96447016009307,
+          "non_submit_us": 64.30097218365559,
+          "latency_mean_us": 10774.680999999999,
+          "latency_p95_us": 16927.490999999998,
+          "latency_p99_us": 18168.855,
+          "completed": 259312
+        }
+      ]
+    },
+    "request-serial": {
+      "n": 3,
+      "median": {
+        "caller_us": 18.421216647230363,
+        "req_s": 7940.19216,
+        "submit_cores": 0.145189,
+        "source_us": 88.5963251451978,
+        "non_submit_us": 69.74506886316459,
+        "latency_mean_us": 125.696,
+        "latency_p95_us": 157.6,
+        "latency_p99_us": 182.977
+      },
+      "runs": [
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final/run1/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 18.279527141028602,
+          "req_s": 7942.710929,
+          "submit_cores": 0.145189,
+          "source_us": 88.5963251451978,
+          "non_submit_us": 70.3169239057674,
+          "latency_mean_us": 125.671,
+          "latency_p95_us": 155.847,
+          "latency_p99_us": 180.47199999999998,
+          "completed": 39715
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final/run2/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 19.213931730611215,
+          "req_s": 7390.31459,
+          "submit_cores": 0.141997,
+          "source_us": 88.95900059377581,
+          "non_submit_us": 69.74506886316459,
+          "latency_mean_us": 135.074,
+          "latency_p95_us": 168.33,
+          "latency_p99_us": 197.333,
+          "completed": 36953
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final/run3/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 18.421216647230363,
+          "req_s": 7940.19216,
+          "submit_cores": 0.146268,
+          "source_us": 81.14413190725601,
+          "non_submit_us": 62.72291526002565,
+          "latency_mean_us": 125.696,
+          "latency_p95_us": 157.6,
+          "latency_p99_us": 182.977,
+          "completed": 39702
+        }
+      ]
+    }
+  },
+  "final-shared-writer": {
+    "request-backpressure": {
+      "n": 3,
+      "median": {
+        "caller_us": 17.47638740072146,
+        "req_s": 51213.155588,
+        "submit_cores": 0.897739,
+        "source_us": 81.43071740295512,
+        "non_submit_us": 63.82363989236163,
+        "latency_mean_us": 11515.216,
+        "latency_p95_us": 17502.019,
+        "latency_p99_us": 19132.588
+      },
+      "runs": [
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final-shared-writer/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.41960648299251,
+          "req_s": 51536.124015,
+          "submit_cores": 0.897739,
+          "source_us": 81.19225261841802,
+          "non_submit_us": 63.77264613542552,
+          "latency_mean_us": 11435.729,
+          "latency_p95_us": 17268.759,
+          "latency_p99_us": 19132.588,
+          "completed": 258268
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final-shared-writer/run2/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.47638740072146,
+          "req_s": 51079.549768,
+          "submit_cores": 0.892686,
+          "source_us": 81.90663424016735,
+          "non_submit_us": 64.43026641675235,
+          "latency_mean_us": 12043.265,
+          "latency_p95_us": 17844.128,
+          "latency_p99_us": 19546.7,
+          "completed": 255845
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final-shared-writer/run3/zlink-framework-cpp-request-backpressure-1024/results.json",
+          "caller_us": 17.607077510593488,
+          "req_s": 51213.155588,
+          "submit_cores": 0.901714,
+          "source_us": 81.43071740295512,
+          "non_submit_us": 63.82363989236163,
+          "latency_mean_us": 11515.216,
+          "latency_p95_us": 17502.019,
+          "latency_p99_us": 19066.778,
+          "completed": 256671
+        }
+      ]
+    },
+    "request-serial": {
+      "n": 3,
+      "median": {
+        "caller_us": 19.083097874412108,
+        "req_s": 7823.733456,
+        "submit_cores": 0.156122,
+        "source_us": 87.9410204547523,
+        "non_submit_us": 68.90277571716973,
+        "latency_mean_us": 127.576,
+        "latency_p95_us": 158.712,
+        "latency_p99_us": 179.601
+      },
+      "runs": [
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final-shared-writer/run1/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 19.083097874412108,
+          "req_s": 8294.932041,
+          "submit_cores": 0.158293,
+          "source_us": 82.99139722873589,
+          "non_submit_us": 63.90817879878517,
+          "latency_mean_us": 120.321,
+          "latency_p95_us": 149.505,
+          "latency_p99_us": 175.673,
+          "completed": 41476
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final-shared-writer/run2/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 19.954923167822194,
+          "req_s": 7823.733456,
+          "submit_cores": 0.156122,
+          "source_us": 92.71609316440905,
+          "non_submit_us": 72.76116999658686,
+          "latency_mean_us": 127.576,
+          "latency_p95_us": 158.712,
+          "latency_p99_us": 179.601,
+          "completed": 39120
+        },
+        {
+          "path": "/root/jobs/fx/cx/v21/s033/cproto/log/final-shared-writer/run3/zlink-framework-cpp-request-serial-1024/results.json",
+          "caller_us": 19.038244737582573,
+          "req_s": 7351.518059,
+          "submit_cores": 0.13996,
+          "source_us": 87.9410204547523,
+          "non_submit_us": 68.90277571716973,
+          "latency_mean_us": 135.79,
+          "latency_p95_us": 167.659,
+          "latency_p99_us": 192.524,
+          "completed": 36759
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,658 @@
+{
+  "measurements": {
+    "raw-api/zlink-cpp-run-01": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-api/zlink-cpp-run-01",
+      "request_ok_bpf": 165662,
+      "completed_stats_delta": 545462,
+      "roles": {
+        "source": {
+          "pid": 3580543,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 5.763361466059964,
+            "ZLINKbg/IO/0": 4.781402055505241,
+            "ZLINKbg/IO/1": 0.0021443968599095813,
+            "ZLINKbg/IO/3": 0.002128898071726353
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "comp_result": {
+            "201": 2586,
+            "0": 165451
+          },
+          "comp_record": {
+            "2": 165451
+          },
+          "event_mask": {
+            "32": 2586
+          },
+          "requests_per_completion_drain": 63.97950502706883
+        },
+        "target": {
+          "pid": 3580502,
+          "io_us_per_request": {
+            "ZLINKbg/IO/0": 3.3949523853174006,
+            "ZLINKbg/IO/2": 0.0020948187041443765,
+            "ZLINKbg/IO/3": 0.0021016661105631557,
+            "ZLINKbg/IO/1": 7.371161573125167
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "router_enter": {
+            "0": 165428
+          },
+          "router_result": {
+            "201": 2,
+            "0": 165425
+          }
+        }
+      }
+    },
+    "raw-api/zlink-framework-cpp-run-02": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-api/zlink-framework-cpp-run-02",
+      "request_ok_bpf": 68161,
+      "completed_stats_delta": 177093,
+      "roles": {
+        "source": {
+          "pid": 3581452,
+          "io_us_per_request": {
+            "ZLINKbg/IO/0": 18.3097863326049,
+            "ZLINKbg/IO/3": 0.006033756274951579,
+            "ZLINKbg/IO/2": 15.259657174478948,
+            "ZLINKbg/IO/1": 0.006691664831472729
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "comp_result": {
+            "201": 26869,
+            "0": 68364
+          },
+          "comp_record": {
+            "3": 199,
+            "2": 68165
+          },
+          "event_mask": {
+            "34": 38,
+            "32": 26831
+          },
+          "requests_per_completion_drain": 2.5369384792883993
+        },
+        "target": {
+          "pid": 3581411,
+          "io_us_per_request": {
+            "ZLINKbg/IO/1": 18.15942193084989,
+            "ZLINKbg/IO/3": 0.0035614959371629597,
+            "ZLINKbg/IO/2": 0.003577803752830434,
+            "ZLINKbg/IO/0": 14.358311960382398
+          },
+          "io_tid_count": 4,
+          "io_union_missing_endpoint": [],
+          "event_mask": {
+            "0": 1,
+            "1": 18340
+          },
+          "router_enter": {
+            "1": 86343
+          },
+          "router_result": {
+            "201": 18184,
+            "0": 68159
+          }
+        }
+      }
+    },
+    "raw-cpu/zlink-cpp-run-01": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-cpu/zlink-cpp-run-01",
+      "request_ok_bpf": 0,
+      "completed_stats_delta": 1385964,
+      "roles": {
+        "source": {
+          "pid": 3582560,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 3.2594722034627166,
+            "ZLINKbg/IO/3": 0.0014270118127166363,
+            "ZLINKbg/IO/1": 0.0015643191309442379,
+            "ZLINKbg/IO/0": 2.896514037161138
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        },
+        "target": {
+          "pid": 3582519,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 0.0014367602621713118,
+            "ZLINKbg/IO/3": 0.0015104678043585547,
+            "ZLINKbg/IO/1": 3.8607107594425254,
+            "ZLINKbg/IO/0": 2.1943195984888497
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        }
+      }
+    },
+    "raw-cpu/zlink-framework-cpp-run-02": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-cpu/zlink-framework-cpp-run-02",
+      "request_ok_bpf": 0,
+      "completed_stats_delta": 270781,
+      "roles": {
+        "source": {
+          "pid": 3583473,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 14.277165731716776,
+            "ZLINKbg/IO/3": 0.007108091040361029,
+            "ZLINKbg/IO/0": 16.466167655780872,
+            "ZLINKbg/IO/1": 0.006953571336245896
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        },
+        "target": {
+          "pid": 3583435,
+          "io_us_per_request": {
+            "ZLINKbg/IO/0": 13.84159494203803,
+            "ZLINKbg/IO/1": 17.514646910233733,
+            "ZLINKbg/IO/3": 0.004092842555423017,
+            "ZLINKbg/IO/2": 0.004104390633020781
+          },
+          "io_tid_count": 4,
+          "io_union_missing_endpoint": []
+        }
+      }
+    },
+    "raw-cpu-matched/zlink-cpp-run-01": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-cpu-matched/zlink-cpp-run-01",
+      "request_ok_bpf": 0,
+      "completed_stats_delta": 236851,
+      "roles": {
+        "source": {
+          "pid": 3592606,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.006093763589767407,
+            "ZLINKbg/IO/2": 4.813066885932505,
+            "ZLINKbg/IO/0": 6.912714698270221,
+            "ZLINKbg/IO/1": 0.006193986936935035
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        },
+        "target": {
+          "pid": 3592563,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.005769551321294823,
+            "ZLINKbg/IO/0": 6.101690607174974,
+            "ZLINKbg/IO/1": 5.589176237381307,
+            "ZLINKbg/IO/2": 0.00557880692925088
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        }
+      }
+    },
+    "raw-light/zlink-cpp-run-01": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-light/zlink-cpp-run-01",
+      "request_ok_bpf": 278608,
+      "completed_stats_delta": 719882,
+      "roles": {
+        "source": {
+          "pid": 3578650,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.001635354127482004,
+            "ZLINKbg/IO/2": 3.5264182560475192,
+            "ZLINKbg/IO/0": 5.023562554696464,
+            "ZLINKbg/IO/1": 0.0015276753690188114
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 20785,
+            "per_request": 0.07460302647447309
+          }
+        },
+        "target": {
+          "pid": 3578609,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.001412010579511642,
+            "ZLINKbg/IO/2": 0.0013481306658591269,
+            "ZLINKbg/IO/0": 4.61365899133469,
+            "ZLINKbg/IO/1": 4.993646642088565
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 40599,
+            "per_request": 0.145720869465342
+          }
+        }
+      }
+    },
+    "raw-light/zlink-framework-cpp-run-02": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-light/zlink-framework-cpp-run-02",
+      "request_ok_bpf": 76012,
+      "completed_stats_delta": 186133,
+      "roles": {
+        "source": {
+          "pid": 3579590,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 15.763177657911278,
+            "ZLINKbg/IO/3": 0.006313012738203328,
+            "ZLINKbg/IO/0": 18.446679481875865,
+            "ZLINKbg/IO/1": 0.006276973991715601
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 144110,
+            "per_request": 1.895884860285218
+          }
+        },
+        "target": {
+          "pid": 3579548,
+          "io_us_per_request": {
+            "ZLINKbg/IO/0": 18.392428972831254,
+            "ZLINKbg/IO/3": 0.003143225543025686,
+            "ZLINKbg/IO/1": 18.26104435000779,
+            "ZLINKbg/IO/2": 0.003810323800723139
+          },
+          "io_tid_count": 4,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 55648,
+            "per_request": 0.7320949323790981
+          }
+        }
+      }
+    },
+    "raw-light-matched/zlink-cpp-run-01": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-light-matched/zlink-cpp-run-01",
+      "request_ok_bpf": 72247,
+      "completed_stats_delta": 166861,
+      "roles": {
+        "source": {
+          "pid": 3591713,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 7.316065785294347,
+            "ZLINKbg/IO/3": 0.005014808733017302,
+            "ZLINKbg/IO/1": 0.005434793031325475,
+            "ZLINKbg/IO/0": 9.720195330244936
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 75538,
+            "per_request": 1.0455520644455825
+          }
+        },
+        "target": {
+          "pid": 3591672,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.005407488867979935,
+            "ZLINKbg/IO/0": 8.614629541954082,
+            "ZLINKbg/IO/1": 8.366283835048334,
+            "ZLINKbg/IO/2": 0.005404582257088235
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 37079,
+            "per_request": 0.5132254626489682
+          }
+        }
+      }
+    },
+    "raw-stacks/zlink-cpp-run-01": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-stacks/zlink-cpp-run-01",
+      "request_ok_bpf": 134464,
+      "completed_stats_delta": 549273,
+      "roles": {
+        "source": {
+          "pid": 3576837,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.002547494597404205,
+            "ZLINKbg/IO/2": 4.931052225396114,
+            "ZLINKbg/IO/0": 5.870541823464834,
+            "ZLINKbg/IO/1": 0.002502078201550049
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 8418,
+            "per_request": 0.06260411708710138
+          },
+          "reads": {
+            "count": 4203,
+            "per_request": 0.03125743693479296
+          },
+          "writes": {
+            "count": 2100,
+            "per_request": 0.015617563065207044
+          }
+        },
+        "target": {
+          "pid": 3576795,
+          "io_us_per_request": {
+            "ZLINKbg/IO/0": 5.398816958051825,
+            "ZLINKbg/IO/3": 0.0022794475606847595,
+            "ZLINKbg/IO/2": 0.0022467534359052787,
+            "ZLINKbg/IO/1": 5.964917583788026
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 7125,
+            "per_request": 0.052988160399809615
+          }
+        }
+      }
+    },
+    "raw-stacks/zlink-framework-cpp-run-02": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-stacks/zlink-framework-cpp-run-02",
+      "request_ok_bpf": 49494,
+      "completed_stats_delta": 164059,
+      "roles": {
+        "source": {
+          "pid": 3577769,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.0075578359004992105,
+            "ZLINKbg/IO/0": 18.781784876172598,
+            "ZLINKbg/IO/1": 0.00756367526316752,
+            "ZLINKbg/IO/2": 19.923400581498118
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 81589,
+            "per_request": 1.648462439891704
+          },
+          "reads": {
+            "count": 62416,
+            "per_request": 1.2610821513718835
+          },
+          "writes": {
+            "count": 26950,
+            "per_request": 0.5445104457105912
+          }
+        },
+        "target": {
+          "pid": 3577724,
+          "io_us_per_request": {
+            "ZLINKbg/IO/1": 19.425815090912415,
+            "ZLINKbg/IO/0": 20.648930329942278,
+            "ZLINKbg/IO/2": 0.0044269195838082635,
+            "ZLINKbg/IO/3": 0.003681401203225669
+          },
+          "io_tid_count": 4,
+          "io_union_missing_endpoint": [],
+          "send": {
+            "count": 36589,
+            "per_request": 0.7392613246050026
+          },
+          "reads": {
+            "count": 99352,
+            "per_request": 2.007354426799208
+          },
+          "writes": {
+            "count": 33841,
+            "per_request": 0.683739443164828
+          }
+        }
+      }
+    },
+    "raw-syscalls/zlink-cpp-run-01": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-syscalls/zlink-cpp-run-01",
+      "request_ok_bpf": 268391,
+      "completed_stats_delta": 959826,
+      "roles": {
+        "source": {
+          "pid": 3584333,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.0018452896670854927,
+            "ZLINKbg/IO/0": 4.766627819000527,
+            "ZLINKbg/IO/2": 4.357917298552029,
+            "ZLINKbg/IO/1": 0.0017729484302363137
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        },
+        "target": {
+          "pid": 3584292,
+          "io_us_per_request": {
+            "ZLINKbg/IO/0": 4.511600654701998,
+            "ZLINKbg/IO/1": 5.341385076045033,
+            "ZLINKbg/IO/2": 0.00169929653916439,
+            "ZLINKbg/IO/3": 0.0017055122490951483
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        }
+      }
+    },
+    "raw-syscalls/zlink-framework-cpp-run-02": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-syscalls/zlink-framework-cpp-run-02",
+      "request_ok_bpf": 83882,
+      "completed_stats_delta": 277780,
+      "roles": {
+        "source": {
+          "pid": 3585192,
+          "io_us_per_request": {
+            "ZLINKbg/IO/1": 0.005324645402836777,
+            "ZLINKbg/IO/2": 14.58966442868457,
+            "ZLINKbg/IO/3": 0.005674497804017568,
+            "ZLINKbg/IO/0": 17.92878463892289
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        },
+        "target": {
+          "pid": 3585153,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 0.0029342753257973935,
+            "ZLINKbg/IO/3": 0.003423061415508676,
+            "ZLINKbg/IO/0": 15.72990998632011,
+            "ZLINKbg/IO/1": 18.026899269205845
+          },
+          "io_tid_count": 4,
+          "io_union_missing_endpoint": []
+        }
+      }
+    },
+    "raw-wakeperf/zlink-cpp-run-01": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-wakeperf/zlink-cpp-run-01",
+      "request_ok_bpf": 0,
+      "completed_stats_delta": 1356002,
+      "roles": {
+        "source": {
+          "pid": 3589876,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 2.7153831248036506,
+            "ZLINKbg/IO/0": 2.5788500326695685,
+            "ZLINKbg/IO/1": 0.0013882287784236307,
+            "ZLINKbg/IO/3": 0.0015337145520434336
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        },
+        "target": {
+          "pid": 3589835,
+          "io_us_per_request": {
+            "ZLINKbg/IO/3": 0.0014077147378838675,
+            "ZLINKbg/IO/1": 3.626804984800907,
+            "ZLINKbg/IO/2": 0.0013300363863770113,
+            "ZLINKbg/IO/0": 2.3193111514584785
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        }
+      }
+    },
+    "raw-wakeperf/zlink-framework-cpp-run-02": {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-wakeperf/zlink-framework-cpp-run-02",
+      "request_ok_bpf": 0,
+      "completed_stats_delta": 236628,
+      "roles": {
+        "source": {
+          "pid": 3590759,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 19.270202727487874,
+            "ZLINKbg/IO/1": 0.00908854404381561,
+            "ZLINKbg/IO/0": 19.473656874926046,
+            "ZLINKbg/IO/3": 0.008429019389083286
+          },
+          "io_tid_count": 8,
+          "io_union_missing_endpoint": []
+        },
+        "target": {
+          "pid": 3590720,
+          "io_us_per_request": {
+            "ZLINKbg/IO/2": 0.0050336054904745004,
+            "ZLINKbg/IO/3": 0.004370501377689876,
+            "ZLINKbg/IO/0": 16.75741998411008,
+            "ZLINKbg/IO/1": 19.39784299406664
+          },
+          "io_tid_count": 4,
+          "io_union_missing_endpoint": []
+        }
+      }
+    }
+  },
+  "validation": [
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-api/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "rps": 164356.780926,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-api/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+      "rps": 41817.333413,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-cpu/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "rps": 235828.095069,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-cpu/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+      "rps": 45179.843933,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-cpu-matched/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "rps": 41892.45451,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-light/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "rps": 192273.766923,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-light/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+      "rps": 44213.362734,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-light-matched/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "rps": 38889.727866,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-stacks/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "rps": 156627.555732,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-stacks/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+      "rps": 37681.767169,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-syscalls/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "rps": 180680.138472,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-syscalls/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+      "rps": 45810.343099,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-wakeperf/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "rps": 231048.934346,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    },
+    {
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560b/raw-wakeperf/run1/zlink-framework-cpp-request-backpressure-1024/results.json",
+      "rps": 39317.096682,
+      "errors": 0,
+      "abandoned": 0,
+      "header_validation_failures": 0,
+      "server_rejected_count": 0,
+      "contaminated": false,
+      "drain_bound_hit": false
+    }
+  ]
+}

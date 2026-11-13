@@ -1,0 +1,109 @@
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+index 59d8ae6570..ce90916bdc 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+@@ -373,7 +373,27 @@ void offload_executor_t::worker_loop ()
+         // A receive role is deliberately outside the application exception
+         // boundary.
+         if (role) {
+-            role->run ();
++            while (auto turn = role->run ()) {
++                {
++                    std::lock_guard lock (_mutex);
++                    // Each queued role reserves one idle worker. Workers take
++                    // roles before application work under this same mutex, so
++                    // the reservation cannot be consumed by the work queue.
++                    if (!_stopping && _idle_workers > _roles.size ()) {
++                        _roles.push (std::move (role));
++                        --_role_active;
++                    } else {
++                        _queue.push (work_item_t{std::move (turn), std::nullopt});
++                    }
++                }
++                _ready.notify_one ();
++                if (!role) {
++                    // This worker's existing active credit now covers the
++                    // owner turn, including destruction of its captures.
++                    run_application_turn (turn);
++                    break;
++                }
++            }
+         } else {
+             run_application_turn ([&] {
+                 std::visit (
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
+index 008ee473d8..916c6bbc15 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
+@@ -26,7 +26,9 @@ class offload_executor_t
+       public:
+         virtual ~role_t () = default;
+         // Exceptions preserve the dedicated receive thread's terminate policy.
+-        virtual void run () = 0;
++        // Return one owner turn only after the receive rotation has unwound.
++        // An empty turn ends the role. The executor owns its next placement.
++        virtual std::function<void ()> run () = 0;
+     };
+ 
+     template <typename Work> static void run_application_turn (Work &&work) noexcept
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index 70efbaaa46..c68c9b264a 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -2085,16 +2085,22 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+     {
+     }
+ 
+-    void run () override
++    std::function<void ()> run () override
+     {
+         std::optional<zlink::poll_event_flag_t> readiness;
+-        while (!host._stop.load (std::memory_order_acquire))
+-            readiness = rotate (readiness);
++        while (!host._stop.load (std::memory_order_acquire)) {
++            std::function<void ()> application_turn;
++            readiness = rotate (readiness, application_turn);
++            if (application_turn)
++                return application_turn;
++        }
+         supply.close ();
++        return {};
+     }
+ 
+     std::optional<zlink::poll_event_flag_t>
+-    rotate (std::optional<zlink::poll_event_flag_t> readiness)
++    rotate (std::optional<zlink::poll_event_flag_t> readiness,
++            std::function<void ()> &application_turn)
+     {
+         auto &application_permit = *receive_permit;
+         auto &mailbox = node->native_node ().transport ().mailbox ();
+@@ -2325,6 +2331,12 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+             readiness = node->native_node ().wait_for_dispatch_activity (
+               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
+         }
++        if (ready && !ready->first.empty ()) {
++            auto owner = std::move (ready->first.front ());
++            ready->first.pop_front ();
++            auto start = host.make_application_owner_work (node, registration, std::move (owner));
++            application_turn = [start = std::move (start)] { start (false); };
++        }
+         mesh::service_mailbox_t::notify_application_ready (ready);
+         return readiness;
+     }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
+index 8f72695aee..79b39e9b12 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
+@@ -64,7 +64,11 @@ template <typename T> void await (std::future<T> &future)
+ struct test_role_t final : rt::offload_executor_t::role_t
+ {
+     std::function<void ()> execute;
+-    void run () override { execute (); }
++    std::function<void ()> run () override
++    {
++        execute ();
++        return {};
++    }
+ };
+ 
+ #ifdef ZLINK_TEST_WRAP_NOTIFY_ONE

@@ -1,0 +1,808 @@
+diff --git a/framework/bench/grpc/cpp/CMakeLists.txt b/framework/bench/grpc/cpp/CMakeLists.txt
+index eeceb8a42c..f4604ef394 100644
+--- a/framework/bench/grpc/cpp/CMakeLists.txt
++++ b/framework/bench/grpc/cpp/CMakeLists.txt
+@@ -93,6 +93,14 @@ foreach(option_name IN ITEMS ZLINK_FRAMEWORK_CPP_BUILD_TESTS
+     ZLINK_STREAM_CONNECTOR_BUILD_GODOT ZLINK_STREAM_CONNECTOR_BUILD_AXMOL)
+   set(${option_name} OFF CACHE BOOL "Bench builds only its required libraries" FORCE)
+ endforeach()
++option(ZLINK_BENCH_BUILD_FRAMEWORK_TESTS "Build Framework unit and contract tests with the bench" OFF)
++if(ZLINK_BENCH_BUILD_FRAMEWORK_TESTS)
++  enable_testing()
++  set(ZLINK_FRAMEWORK_CPP_BUILD_TESTS ON CACHE BOOL "" FORCE)
++  set(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS ON CACHE BOOL "" FORCE)
++  set(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT ON CACHE BOOL "" FORCE)
++  set(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL ON CACHE BOOL "" FORCE)
++endif()
+ add_subdirectory("${BENCH_REPO_ROOT}/framework/languages/cpp"
+   "${CMAKE_CURRENT_BINARY_DIR}/framework" EXCLUDE_FROM_ALL)
+ find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS sdk)
+@@ -173,3 +181,51 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   target_link_options(bench_cpp_framework_completion_test PRIVATE -Wl,--wrap=pthread_mutex_lock)
+ endif()
+ add_test(NAME bench_cpp_framework_completion COMMAND bench_cpp_framework_completion_test)
++
++if(ZLINK_BENCH_BUILD_FRAMEWORK_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
++  add_executable(creply_prototype_close_control
++    "${BENCH_REPO_ROOT}/framework/languages/cpp/tests/Zlink.Framework.ContractTests/test_cpp_framework_reply_close.cpp"
++    measurement/raw_route_port_prototype.cpp
++    measurement/prototype_close_compat.cpp)
++  target_compile_features(creply_prototype_close_control PRIVATE cxx_std_20)
++  target_compile_options(creply_prototype_close_control PRIVATE -UNDEBUG)
++  target_include_directories(creply_prototype_close_control PRIVATE
++    "${BENCH_REPO_ROOT}/framework/languages/cpp/framework/src")
++  target_link_libraries(creply_prototype_close_control PRIVATE
++    zlink_framework zlink::cpp Threads::Threads test_cpp_framework_reply_close_clock)
++  target_link_options(creply_prototype_close_control PRIVATE
++    -Wl,--wrap=zlink_reply -Wl,--wrap=zlink_close -Wl,--wrap=zlink_socket
++      -Wl,--wrap=__cxa_throw)
++endif()
++
++# Keep the remaining large test compilations within the shared build memory
++# budget. These GCC parameters control compiler garbage collection only.
++if(ZLINK_BENCH_BUILD_FRAMEWORK_TESTS AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
++  foreach(target
++      test_cpp_framework_actor_gateway
++      test_cpp_framework_m6c_runtime
++      test_cpp_framework_spot_close_conformance
++      test_cpp_framework_opaque_store_providers
++      test_cpp_stream_connector
++      test_cpp_framework_location_runtime
++      test_cpp_framework_raw_send_sync
++      test_cpp_framework_store_location_resolvers)
++    target_compile_options(${target} PRIVATE
++      --param=ggc-min-expand=20 --param=ggc-min-heapsize=65536)
++  endforeach()
++endif()
++
++# Full template type debug information dominates memory for these pending test
++# objects; line/function debug information is sufficient for their diagnostics.
++if(ZLINK_BENCH_BUILD_FRAMEWORK_TESTS AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
++  foreach(target
++      test_cpp_framework_actor_gateway
++      test_cpp_framework_spot_close_conformance
++      test_cpp_framework_opaque_store_providers
++      test_cpp_stream_connector
++      test_cpp_framework_location_runtime
++      test_cpp_framework_raw_send_sync
++      test_cpp_framework_store_location_resolvers)
++    target_compile_options(${target} PRIVATE -g1)
++  endforeach()
++endif()
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..a09fc3cafb 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -21,6 +21,7 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cstdio>
++#include <cstdlib>
+ #include <deque>
+ #include <functional>
+ #include <limits>
+@@ -435,6 +436,12 @@ bool grpc_driver_t::validate<google::protobuf::Empty> (
+ // typed protobuf `BenchPayload`, serialized for every message (Issue #66).
+ // ---------------------------------------------------------------------------
+ 
++static uint64_t measurement_request_rate ()
++{
++    const char *value = std::getenv ("ZLINK_CPP_BENCH_REQUEST_RATE");
++    return value && *value ? std::stoull (value) : 0;
++}
++
+ class zlink_raw_driver_t : public driver_t
+ {
+   public:
+@@ -674,7 +681,17 @@ class zlink_raw_driver_t : public driver_t
+     {
+         co_await _ready.schedule ();
+         size_t submitted_since_progress = 0;
++        const auto rate = measurement_request_rate ();
++        const auto interval = rate ? std::chrono::nanoseconds (1000000000 / rate) : std::chrono::nanoseconds (0);
++        auto next_submission = clock_t_::now ();
+         while (clock_t_::now () < _deadline) {
++            if (rate) {
++                if (clock_t_::now () < next_submission) {
++                    co_await _ready.schedule ();
++                    continue;
++                }
++                next_submission += interval;
++            }
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -903,6 +920,9 @@ class framework_driver_t final : public driver_t
+             uint64_t sent_ns;
+             uint64_t seq;
+         };
++        const auto rate = measurement_request_rate ();
++        const auto interval = rate ? std::chrono::nanoseconds (1000000000 / rate) : std::chrono::nanoseconds (0);
++        auto next_submission = clock_t_::now ();
+         std::vector<std::optional<pending_t>> pending;
+         std::vector<size_t> free_slots;
+         std::vector<size_t> completed_slots;
+@@ -912,7 +932,7 @@ class framework_driver_t final : public driver_t
+         auto completion_signal = std::make_shared<completion_signal_t> ();
+         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
+         const auto can_submit = [&] (clock_t_::time_point now) {
+-            return can_submit_framework_task<T> (now, deadline, in_flight, _window, [&] {
++            return (!rate || now >= next_submission) && can_submit_framework_task<T> (now, deadline, in_flight, _window, [&] {
+                 return !preceding_admission || preceding_admission->await_ready ();
+             });
+         };
+@@ -923,6 +943,8 @@ class framework_driver_t final : public driver_t
+                 completion_signal->take_completed (completed_slots);
+             // Admission sequences submits; the pattern window bounds replies.
+             if (can_submit (clock_t_::now ())) {
++                if (rate)
++                    next_submission += interval;
+                 uint64_t sent = 0;
+                 if constexpr (!std::is_void_v<T>)
+                     sent = now_ns ();
+@@ -992,7 +1014,9 @@ class framework_driver_t final : public driver_t
+             const auto now = clock_t_::now ();
+             if (now >= hard_stop)
+                 break;
+-            if (in_flight != 0 && !can_submit (now))
++            if (rate && now < deadline && now < next_submission)
++                continue;
++            else if (in_flight != 0 && !can_submit (now))
+                 completion_signal->wait_until (now < deadline ? deadline : hard_stop);
+         } while (clock_t_::now () < deadline || in_flight != 0);
+         close_window (deadline);
+diff --git a/framework/bench/grpc/cpp/run_local.sh b/framework/bench/grpc/cpp/run_local.sh
+index edb5410cf2..ecda846f29 100755
+--- a/framework/bench/grpc/cpp/run_local.sh
++++ b/framework/bench/grpc/cpp/run_local.sh
+@@ -61,7 +61,7 @@ for run in $(seq 1 "${RUNS}"); do
+         mkdir -p "${cell_dir}"
+         log "cell=${cell_id} run=${run}: start target B then source A"
+ 
+-        setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -76,7 +76,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
++        setsid taskset -c 0-7 "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/dotnet/run_local.sh b/framework/bench/grpc/dotnet/run_local.sh
+index 4874eb88a9..a1bf2e8534 100755
+--- a/framework/bench/grpc/dotnet/run_local.sh
++++ b/framework/bench/grpc/dotnet/run_local.sh
+@@ -62,7 +62,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -80,7 +80,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/java/run_local.sh b/framework/bench/grpc/java/run_local.sh
+index e9ab239086..11621d900b 100755
+--- a/framework/bench/grpc/java/run_local.sh
++++ b/framework/bench/grpc/java/run_local.sh
+@@ -70,7 +70,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -88,7 +88,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/node/run_local.sh b/framework/bench/grpc/node/run_local.sh
+index a04f4b1708..172a2ce554 100644
+--- a/framework/bench/grpc/node/run_local.sh
++++ b/framework/bench/grpc/node/run_local.sh
+@@ -68,7 +68,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run} starting target B then source A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -94,7 +94,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/cpp/measurement/raw_route_port_prototype.cpp b/framework/bench/grpc/cpp/measurement/raw_route_port_prototype.cpp
+new file mode 100644
+index 0000000000..67cbed3ac1
+--- /dev/null
++++ b/framework/bench/grpc/cpp/measurement/raw_route_port_prototype.cpp
+@@ -0,0 +1,541 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++
++#include "runtime/backend/raw_route_port.hpp"
++#include "runtime/backend/raw_binding_adapter.hpp"
++
++#include <zlink/Contracts/Messaging/operation_contracts.hpp>
++#include <zlink/Contracts/Messaging/received.hpp>
++#include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
++
++#include <cerrno>
++#include <exception>
++#include <stdexcept>
++#include <string>
++#include <utility>
++
++namespace zlink::framework::detail::backend
++{
++namespace
++{
++const char *submit_result_name (zlink::submit_result_t result) noexcept
++{
++    switch (result) {
++        case zlink::submit_result_t::ok:
++            return "ok";
++        case zlink::submit_result_t::backpressured:
++            return "backpressured";
++        case zlink::submit_result_t::not_connected:
++            return "not_connected";
++        case zlink::submit_result_t::not_found:
++            return "not_found";
++        case zlink::submit_result_t::terminated:
++            return "terminated";
++        case zlink::submit_result_t::invalid_handle:
++            return "invalid_handle";
++        case zlink::submit_result_t::invalid_argument:
++            return "invalid_argument";
++        case zlink::submit_result_t::not_supported:
++            return "not_supported";
++        case zlink::submit_result_t::invalid_state:
++            return "invalid_state";
++        case zlink::submit_result_t::thread_violation:
++            return "thread_violation";
++        case zlink::submit_result_t::out_of_memory:
++            return "out_of_memory";
++        case zlink::submit_result_t::seq_exhausted:
++            return "seq_exhausted";
++        case zlink::submit_result_t::internal_error:
++            return "internal_error";
++        case zlink::submit_result_t::not_admitted:
++            return "not_admitted";
++    }
++    return "unknown";
++}
++
++binding_completion_observer_t
++observe_send_completion (zlink::async_result_t<void> pending,
++                         raw_send_stage_trace_t trace,
++                         std::shared_ptr<task_completion_source_t<zlink::submit_result_t>> source)
++{
++    try {
++        co_await std::move (pending);
++        if (trace) {
++            try {
++                trace ("router_admission_submit", "admitted");
++                trace ("router_admission_complete", "ok");
++            }
++            catch (const std::exception &error) {
++                source->complete (result_t<zlink::submit_result_t>::failure (
++                  framework_error_kind_t::internal_failure,
++                  std::string ("raw route send completion trace failed: ") + error.what ()));
++                co_return;
++            }
++            catch (...) {
++                source->complete (result_t<zlink::submit_result_t>::failure (
++                  framework_error_kind_t::internal_failure,
++                  "raw route send completion trace failed"));
++                co_return;
++            }
++        }
++        source->complete (result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok));
++    }
++    catch (const zlink::submit_error_t &error) {
++        if (trace) {
++            try {
++                trace ("router_admission_submit", submit_result_name (error.result ()));
++                trace ("router_admission_complete", submit_result_name (error.result ()));
++            }
++            catch (const std::exception &trace_error) {
++                source->complete (result_t<zlink::submit_result_t>::failure (
++                  framework_error_kind_t::internal_failure,
++                  std::string ("raw route send completion trace failed: ") + trace_error.what ()));
++                co_return;
++            }
++            catch (...) {
++                source->complete (result_t<zlink::submit_result_t>::failure (
++                  framework_error_kind_t::internal_failure,
++                  "raw route send completion trace failed"));
++                co_return;
++            }
++        }
++        source->complete (result_t<zlink::submit_result_t>::success (
++          runtime::messaging::map_submit_completion_result (error.result ())));
++    }
++    catch (const std::exception &error) {
++        source->complete (result_t<zlink::submit_result_t>::failure (
++          framework_error_kind_t::internal_failure, error.what ()));
++    }
++    catch (...) {
++        source->complete (result_t<zlink::submit_result_t>::failure (
++          framework_error_kind_t::internal_failure, "raw route send completion failed"));
++    }
++}
++
++}
++
++raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
++                                    std::shared_ptr<std::mutex> shared_socket_mutex,
++                                    zlink::poll_event_flag_t receive_events,
++                                    zlink::poller_t *shared_poller,
++                                    std::uintptr_t poller_slot) :
++    _owned_poller (shared_poller == nullptr ? std::make_unique<zlink::poller_t> () : nullptr),
++    _poller (shared_poller != nullptr ? shared_poller : _owned_poller.get ()),
++    _poller_slot (poller_slot == 0 ? 1 : poller_slot),
++    _socket (&socket),
++    _socket_mutex (shared_socket_mutex ? std::move (shared_socket_mutex)
++                                       : std::make_shared<std::mutex> ()),
++    _receive_events (receive_events)
++{
++    _poller->add (socket,
++                  _receive_events | zlink::poll_event_flag_t::pollout
++                    | zlink::poll_event_flag_t::pollcompletion,
++                  _poller_slot);
++    _wake_timer.attach (*_poller);
++}
++
++raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_routing_id,
++                                                     raw_message_t parts,
++                                                     raw_send_stage_trace_t trace)
++{
++    return submit_send_impl (target_routing_id, std::move (parts), std::move (trace));
++}
++
++raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_routing_id,
++                                                     std::vector<zlink::message_t> parts,
++                                                     raw_send_stage_trace_t trace)
++{
++    return submit_send_impl (target_routing_id, std::move (parts), std::move (trace));
++}
++
++template <typename Parts>
++raw_send_submission_t raw_route_port_t::submit_send_impl (const raw_bytes_t &target_routing_id,
++                                                          Parts parts,
++                                                          raw_send_stage_trace_t trace)
++{
++    // The binding owns DONTWAIT backpressure retry and its payload snapshot.
++    // Submit under the socket lock. Its terminal observer deliberately has no
++    // handler-executor scheduler, so completion classification stays on the
++    // binding completion resource.
++    try {
++        if (target_routing_id.empty () || parts.empty ())
++            throw std::invalid_argument ("raw route send requires a target and message parts");
++        if (trace) {
++            try {
++                trace ("router_admission_submit", "begin");
++            }
++            catch (const std::exception &error) {
++                return {raw_send_submission_state_t::immediate,
++                        result_t<zlink::submit_result_t>::failure (
++                          framework_error_kind_t::internal_failure,
++                          std::string ("raw route send submission trace failed: ") + error.what ()),
++                        {}};
++            }
++            catch (...) {
++                return {raw_send_submission_state_t::immediate,
++                        result_t<zlink::submit_result_t>::failure (
++                          framework_error_kind_t::internal_failure,
++                          "raw route send submission trace failed"),
++                        {}};
++            }
++        }
++        std::optional<zlink::async_result_t<void>> pending;
++        {
++            std::lock_guard lock (*_socket_mutex);
++            if (_socket == nullptr) {
++                if (trace)
++                    trace ("router_admission_submit", "terminated");
++                return {
++                  raw_send_submission_state_t::immediate,
++                  result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated),
++                  {}};
++            }
++            auto operation =
++              std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
++                .message (materialize_binding_part (std::move (parts[0])));
++            for (std::size_t index = 1; index < parts.size (); ++index) {
++                operation = std::move (operation).message (
++                  materialize_binding_part (std::move (parts[index])));
++            }
++            auto submission = std::move (operation).async ();
++            pending = take_submission_admission (submission);
++        }
++        if (!pending) {
++            if (trace) {
++                try {
++                    trace ("router_admission_submit", "admitted");
++                    trace ("router_admission_complete", "ok");
++                }
++                catch (const std::exception &error) {
++                    return {
++                      raw_send_submission_state_t::immediate,
++                      result_t<zlink::submit_result_t>::failure (
++                        framework_error_kind_t::internal_failure,
++                        std::string ("raw route send completion trace failed: ") + error.what ()),
++                      {}};
++                }
++                catch (...) {
++                    return {raw_send_submission_state_t::immediate,
++                            result_t<zlink::submit_result_t>::failure (
++                              framework_error_kind_t::internal_failure,
++                              "raw route send completion trace failed"),
++                            {}};
++                }
++            }
++            return {raw_send_submission_state_t::immediate,
++                    result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok),
++                    {}};
++        }
++        auto source = std::make_shared<task_completion_source_t<zlink::submit_result_t>> ();
++        auto result = std::make_shared<task_t<zlink::submit_result_t>> (source->task ());
++        observe_send_completion (std::move (*pending), std::move (trace), source);
++        return {raw_send_submission_state_t::pending_backpressure, std::nullopt,
++                std::move (result)};
++    }
++    catch (const zlink::submit_error_t &error) {
++        if (trace) {
++            try {
++                trace ("router_admission_submit", submit_result_name (error.result ()));
++                trace ("router_admission_complete", submit_result_name (error.result ()));
++            }
++            catch (const std::exception &trace_error) {
++                return {
++                  raw_send_submission_state_t::immediate,
++                  result_t<zlink::submit_result_t>::failure (
++                    framework_error_kind_t::internal_failure,
++                    std::string ("raw route send submission trace failed: ") + trace_error.what ()),
++                  {}};
++            }
++            catch (...) {
++                return {raw_send_submission_state_t::immediate,
++                        result_t<zlink::submit_result_t>::failure (
++                          framework_error_kind_t::internal_failure,
++                          "raw route send submission trace failed"),
++                        {}};
++            }
++        }
++        return {raw_send_submission_state_t::immediate,
++                result_t<zlink::submit_result_t>::success (error.result ()),
++                {}};
++    }
++    catch (const std::exception &error) {
++        if (trace) {
++            try {
++                trace ("router_admission_submit", "exception");
++            }
++            catch (const std::exception &trace_error) {
++                return {
++                  raw_send_submission_state_t::immediate,
++                  result_t<zlink::submit_result_t>::failure (
++                    framework_error_kind_t::internal_failure,
++                    std::string ("raw route send submission trace failed: ") + trace_error.what ()),
++                  {}};
++            }
++            catch (...) {
++                return {raw_send_submission_state_t::immediate,
++                        result_t<zlink::submit_result_t>::failure (
++                          framework_error_kind_t::internal_failure,
++                          "raw route send submission trace failed"),
++                        {}};
++            }
++        }
++        return {raw_send_submission_state_t::immediate,
++                result_t<zlink::submit_result_t>::failure (framework_error_kind_t::internal_failure,
++                                                           error.what ()),
++                {}};
++    }
++    catch (...) {
++        return {raw_send_submission_state_t::immediate,
++                result_t<zlink::submit_result_t>::failure (framework_error_kind_t::internal_failure,
++                                                           "raw route send submission failed"),
++                {}};
++    }
++}
++
++task_t<zlink::submit_result_t> raw_route_port_t::send_result (const raw_bytes_t &target_routing_id,
++                                                              raw_message_t parts,
++                                                              raw_send_stage_trace_t trace)
++{
++    auto submission = submit_send (target_routing_id, std::move (parts), std::move (trace));
++    if (submission.state == raw_send_submission_state_t::immediate)
++        co_return std::move (*submission.immediate_result);
++    co_return co_await *submission.pending_completion;
++}
++
++task_t<bool> raw_route_port_t::send (const raw_bytes_t &target_routing_id, raw_message_t parts)
++{
++    co_return co_await send_result (target_routing_id, std::move (parts))
++      == zlink::submit_result_t::ok;
++}
++
++task_t<raw_request_completion_t>
++raw_route_port_t::request (const raw_bytes_t &target_routing_id,
++                           raw_message_t parts,
++                           std::chrono::milliseconds timeout,
++                           runtime::mesh::service_liveness_registry_t::connection_t admission,
++                           std::shared_ptr<task_completion_source_t<void>> admitted)
++{
++    auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
++    auto result = source->task ();
++    request (
++      target_routing_id, std::move (parts), timeout,
++      [source] (result_t<raw_request_completion_t> completion) {
++          source->complete (std::move (completion));
++      },
++      std::move (admission), std::move (admitted));
++    return result;
++}
++
++void raw_route_port_t::request (std::span<const std::uint8_t> target_routing_id,
++                                raw_message_t &&parts,
++                                std::chrono::milliseconds timeout,
++                                raw_request_callback_t completion,
++                                runtime::mesh::service_liveness_registry_t::connection_t admission,
++                                std::shared_ptr<task_completion_source_t<void>> admitted)
++{
++    return request_impl (target_routing_id, std::move (parts), timeout, std::move (completion),
++                         std::move (admission), std::move (admitted));
++}
++
++void raw_route_port_t::request (std::span<const std::uint8_t> target_routing_id,
++                                std::vector<zlink::message_t> &&parts,
++                                std::chrono::milliseconds timeout,
++                                raw_request_callback_t completion,
++                                runtime::mesh::service_liveness_registry_t::connection_t admission,
++                                std::shared_ptr<task_completion_source_t<void>> admitted)
++{
++    return request_impl (target_routing_id, std::move (parts), timeout, std::move (completion),
++                         std::move (admission), std::move (admitted));
++}
++
++template <typename Parts>
++void raw_route_port_t::request_impl (
++  std::span<const std::uint8_t> target_routing_id,
++  Parts &&parts,
++  std::chrono::milliseconds timeout,
++  raw_request_callback_t completion,
++  runtime::mesh::service_liveness_registry_t::connection_t admission,
++  std::shared_ptr<task_completion_source_t<void>> admitted)
++{
++    auto finish = [completion = std::move (completion),
++                   admitted] (result_t<raw_request_completion_t> result) mutable {
++        if (admitted && (!result || result.value ().terminal != zlink::request_result_t::ok))
++            admitted->complete (raw_request_admission_failure (result));
++        completion (std::move (result));
++    };
++    // Route selection happens synchronously inside .async(). Keep that initial
++    // admission boundary separate from the pending terminal: the same errno
++    // has different meaning after Core has issued a WRITABLE wait token.
++    try {
++        if (target_routing_id.empty () || parts.empty ()
++            || timeout <= std::chrono::milliseconds::zero ()) {
++            throw std::invalid_argument ("raw route request requires target, parts and timeout");
++        }
++        std::optional<request_submission_stages_t> stages;
++        {
++            std::lock_guard lock (*_socket_mutex);
++            if (_socket == nullptr) {
++                finish (result_t<raw_request_completion_t>::success (
++                  raw_request_completion_t{zlink::request_result_t::terminated, {}}));
++                return;
++            }
++            if (!admission && _request_receive_source)
++                admission = _request_receive_source (target_routing_id);
++            auto operation = std::move (_socket->request (zlink::routing_id_t::from (
++                                          target_routing_id.data (), target_routing_id.size ())))
++                               .message (materialize_binding_part (std::move (parts[0])));
++            for (std::size_t index = 1; index < parts.size (); ++index) {
++                operation = std::move (operation).message (
++                  materialize_binding_part (std::move (parts[index])));
++            }
++            stages.emplace (submit_request_once (
++              [&] { return std::move (operation).timeout (timeout).async (); }));
++        }
++        observe_request_completion (std::move (*stages), finish, std::move (admission), admitted);
++    }
++    catch (const std::exception &error) {
++        finish (raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission));
++    }
++    catch (...) {
++        finish (result_t<raw_request_completion_t>::failure (
++          framework_error_kind_t::internal_failure, "raw route request submission failed"));
++    }
++}
++
++std::optional<zlink::poll_event_flag_t> raw_route_port_t::poll (std::chrono::milliseconds timeout,
++                                                                bool accept_application_receive)
++{
++    std::lock_guard lock (_poller_mutex);
++    if (_socket == nullptr)
++        return std::nullopt;
++    zlink::poll_event_t events[3];
++    const auto completion_events =
++      zlink::poll_event_flag_t::pollout | zlink::poll_event_flag_t::pollcompletion;
++    // Without a supply permit only ordinary receive (pollin) is withheld;
++    // route observation and completion progress stay armed.
++    const auto armed_without_receive = static_cast<zlink::poll_event_flag_t> (
++      static_cast<short> (_receive_events)
++      & ~static_cast<short> (zlink::poll_event_flag_t::pollin));
++    if (!accept_application_receive)
++        _poller->modify (*_socket, armed_without_receive | completion_events);
++    std::size_t count;
++    try {
++        count = _poller->wait (events, 3, timeout);
++    }
++    catch (...) {
++        if (!accept_application_receive)
++            _poller->modify (*_socket, _receive_events | completion_events);
++        throw;
++    }
++    if (!accept_application_receive)
++        _poller->modify (*_socket, _receive_events | completion_events);
++    auto readiness = zlink::poll_event_flag_t::none;
++    bool wake = false;
++    for (int index = 0; index < count; ++index) {
++        if (_wake_timer.is_event (events[index])) {
++            _wake_timer.consume ();
++            wake = true;
++        } else if (events[index].slot == _poller_slot) {
++            readiness = static_cast<zlink::poll_event_flag_t> (
++              static_cast<short> (readiness)
++              | (static_cast<short> (events[index].revents)
++                 & static_cast<short> (_receive_events
++                                       | zlink::poll_event_flag_t::pollcompletion)));
++        } else {
++            // Other shared-poller sources wake management;
++            // their owner drains them without claiming ordinary records.
++            wake = true;
++        }
++    }
++    if (readiness != zlink::poll_event_flag_t::none || wake || count != 0)
++        return readiness;
++    return std::nullopt;
++}
++
++void raw_route_port_t::signal_activity () noexcept
++{
++    _wake_timer.signal ();
++}
++
++std::optional<raw_received_t> raw_route_port_t::receive_if_ready (zlink::poll_event_flag_t revents)
++{
++    std::lock_guard lock (*_socket_mutex);
++    if (_socket == nullptr
++        || (static_cast<short> (revents) & static_cast<short> (zlink::poll_event_flag_t::pollin))
++             == 0) {
++        return std::nullopt;
++    }
++    const int result = _socket->recv (_received, zlink::recv_flags_t::dontwait);
++    if (result == static_cast<int> (zlink::recv_result_t::no_data)) {
++        return std::nullopt;
++    }
++    if (result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
++        return std::nullopt;
++    }
++    if (result != 0) {
++        throw std::runtime_error ("raw route receive failed with result " + std::to_string (result)
++                                  + " and errno " + std::to_string (errno));
++    }
++    if (!_received.routing_id ()) {
++        throw std::runtime_error ("raw ROUTER receive omitted source routing id");
++    }
++    auto source_routing_id = _received.routing_id ()->to_bytes ();
++    auto reply_token = _received.reply_token ();
++    const auto route_generation = _received.route_generation ();
++    auto parts = std::move (_received.parts ());
++    _received.close ();
++    return raw_received_t{std::move (source_routing_id), std::move (reply_token), std::move (parts),
++                          route_generation};
++}
++
++std::optional<raw_received_t> raw_route_port_t::try_receive ()
++{
++    return receive_if_ready (
++      poll (std::chrono::milliseconds::zero ()).value_or (zlink::poll_event_flag_t::none));
++}
++
++bool raw_route_port_t::reply (const raw_received_t &request, raw_message_t parts)
++{
++    return reply (request, materialize_binding_parts (std::move (parts)));
++}
++
++bool raw_route_port_t::reply (const raw_received_t &request, std::vector<zlink::message_t> messages)
++{
++    if (request.source_routing_id.empty () || !request.reply_token || messages.empty ()) {
++        throw std::invalid_argument ("raw route reply requires request context and message parts");
++    }
++    std::unique_lock lock (*_socket_mutex);
++    if (_socket == nullptr)
++        return false;
++    auto operation =
++      std::move (_socket->reply (zlink::routing_id_t::from (request.source_routing_id),
++                                 *request.reply_token))
++        .message (messages[0]);
++    for (std::size_t index = 1; index < messages.size (); ++index)
++        operation = std::move (operation).message (messages[index]);
++    // The binding operation has captured its handle and weak runtime token.
++    // Core owns submit versus close after C++ socket access ends here.
++    lock.unlock ();
++    try {
++        std::move (operation).submit ();
++        return true;
++    }
++    catch (const zlink::submit_error_t &) {
++        return false;
++    }
++}
++
++void raw_route_port_t::close ()
++{
++    _wake_timer.signal ();
++    std::scoped_lock lock (_poller_mutex, *_socket_mutex);
++    _wake_timer.detach ();
++    auto *socket = _socket;
++    if (_owned_poller) {
++        _owned_poller->close ();
++    } else if (socket != nullptr) {
++        _poller->remove (*socket);
++    }
++    _socket = nullptr;
++}
++
++} // namespace zlink::framework::detail::backend
+diff --git a/framework/bench/grpc/cpp/measurement/prototype_close_compat.cpp b/framework/bench/grpc/cpp/measurement/prototype_close_compat.cpp
+new file mode 100644
+index 0000000000..e43ac77e4c
+--- /dev/null
++++ b/framework/bench/grpc/cpp/measurement/prototype_close_compat.cpp
+@@ -0,0 +1,14 @@
++// Measurement-only link compatibility for the unselected positive test branch.
++// The negative control uses binding destruction, not this function.
++#include "runtime/backend/raw_route_port.hpp"
++#include <zlink.hpp>
++namespace zlink::framework::detail::backend {
++void close_route_socket (std::unique_ptr<zlink::router_socket_t> &socket,
++                         std::chrono::steady_clock::time_point)
++{
++    if (socket) {
++        socket->close ();
++        socket.reset ();
++    }
++}
++}

@@ -1,0 +1,3212 @@
+{
+  "zlink-cpp-request-backpressure-1024": {
+    "directory": "/root/jobs/fx/cx/v21/s033/cthin/none/run1/zlink-cpp-request-backpressure-1024",
+    "messages": 2950309,
+    "seconds": 12.019072741037235,
+    "capture_rate": 245468.93621224485,
+    "result": {
+      "abandoned": 0,
+      "active_elapsed_ms": 20000.063701,
+      "bandwidth_mb_s": 254.359356,
+      "client_cores": 2.378947,
+      "client_cpu_percent": 14.86842,
+      "client_error_other_count": 0,
+      "client_error_summary": [],
+      "client_memory_mb": 37.023438,
+      "client_parallelism_ceiling": 1.0,
+      "client_saturation_metric": "submit_thread_cores",
+      "client_threads": 44,
+      "completed": 4968059,
+      "completed_at_close": 4967972,
+      "contaminated": false,
+      "contamination_reason": null,
+      "drain_bound_hit": false,
+      "drain_ms": 711.766725,
+      "errors": 0,
+      "header_validation_failures": 0,
+      "implementation": "zlink-cpp",
+      "latency_mean_ms": 3.058552,
+      "latency_p95_ms": 0.563968,
+      "latency_p99_ms": 0.626954,
+      "logical_cores": 16,
+      "non_submit_cores": 1.379788,
+      "pattern": "request-backpressure",
+      "payload_size": 1024,
+      "peak_in_flight": 6188,
+      "request_window": 0,
+      "role": "source",
+      "server_cpu_percent": 15.985963,
+      "server_memory_mb": 166.863281,
+      "server_received_at_close": 4968059,
+      "server_rejected_count": 0,
+      "streams": {
+        "count": 1,
+        "implementation": "one application thread; coroutine slots and binding completion poller",
+        "inFlightPerStream": null
+      },
+      "submit_thread_cores": 0.999159,
+      "submitted": 4968059,
+      "throughput_per_second": 248397.808841,
+      "trigger": {
+        "cellId": "zlink-cpp-request-backpressure-1024",
+        "durationMs": 20000,
+        "endpoint": "http://127.0.0.1:5285/bench/start",
+        "pattern": "request-backpressure",
+        "payloadBytes": 1024,
+        "receivedAtUnixMs": 1793927529058,
+        "runId": "cthin-none-run1",
+        "warmup": 30000
+      },
+      "warmup_segment_throughput": [
+        272980.870863,
+        282405.810239,
+        281136.571507,
+        285304.402344,
+        281626.101319,
+        293036.128727,
+        280626.835608,
+        288184.26792,
+        276088.286277,
+        283954.574249
+      ],
+      "target_stats": {
+        "received": 4968059,
+        "errors": 0,
+        "rejected": 0,
+        "drainMs": 711.766725
+      },
+      "source_drain_ms": 120.766725,
+      "runner_settle_ms": 591.0
+    },
+    "roles": {
+      "source": {
+        "cpu_us": 9.716089692300027,
+        "groups_us": {
+          "auxiliary": 0.038151596324317215,
+          "Core I/O": 5.569781636770928,
+          "caller": 4.108156459204782
+        },
+        "threads": {
+          "360341": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1161741,
+            "switches": 121,
+            "cpu_us": 0.00039376926281281044,
+            "cores": 9.665812205574046e-05,
+            "role": "auxiliary"
+          },
+          "360344": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360345": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360346": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360347": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360348": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360349": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360350": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360351": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360352": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 87884091,
+            "switches": 11464,
+            "cpu_us": 0.029788097111183947,
+            "cores": 0.007312052509669368,
+            "role": "auxiliary"
+          },
+          "360353": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360354": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360355": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360356": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360357": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360358": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360359": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360360": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360361": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1767794,
+            "switches": 121,
+            "cpu_us": 0.0005991894408348414,
+            "cores": 0.00014708239463133833,
+            "role": "auxiliary"
+          },
+          "360362": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360363": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 1683454,
+            "switches": 121,
+            "cpu_us": 0.0005706026046763237,
+            "cores": 0.00014006521436983328,
+            "role": "Core I/O"
+          },
+          "360364": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1739701,
+            "switches": 121,
+            "cpu_us": 0.0005896673873821353,
+            "cores": 0.00014474502629974642,
+            "role": "Core I/O"
+          },
+          "360366": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1753799,
+            "switches": 122,
+            "cpu_us": 0.000594445869907186,
+            "cores": 0.00014591799532187943,
+            "role": "Core I/O"
+          },
+          "360367": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1661626,
+            "switches": 121,
+            "cpu_us": 0.000563204057608881,
+            "cores": 0.0001382491008916719,
+            "role": "Core I/O"
+          },
+          "360368": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 482499,
+            "switches": 7,
+            "cpu_us": 0.00016354185273474746,
+            "cores": 4.014444461697806e-05,
+            "role": "auxiliary"
+          },
+          "360369": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 507636,
+            "switches": 7,
+            "cpu_us": 0.00017206197723696062,
+            "cores": 4.223587051493221e-05,
+            "role": "auxiliary"
+          },
+          "360370": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 487477,
+            "switches": 8,
+            "cpu_us": 0.00016522913362634217,
+            "cores": 4.055861966252907e-05,
+            "role": "auxiliary"
+          },
+          "360371": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 518776,
+            "switches": 7,
+            "cpu_us": 0.0001758378529164233,
+            "cores": 4.316273070123961e-05,
+            "role": "auxiliary"
+          },
+          "360372": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 451519,
+            "switches": 6,
+            "cpu_us": 0.00015304125771232777,
+            "cores": 3.756687472722911e-05,
+            "role": "auxiliary"
+          },
+          "360373": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 464284,
+            "switches": 6,
+            "cpu_us": 0.0001573679231565236,
+            "cores": 3.8628936691162145e-05,
+            "role": "auxiliary"
+          },
+          "360374": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 423727,
+            "switches": 6,
+            "cpu_us": 0.00014362122747142757,
+            "cores": 3.525454992490816e-05,
+            "role": "auxiliary"
+          },
+          "360375": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 535617,
+            "switches": 7,
+            "cpu_us": 0.0001815460685643436,
+            "cores": 4.456392032400469e-05,
+            "role": "auxiliary"
+          },
+          "360376": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360377": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 4176865,
+            "switches": 53,
+            "cpu_us": 0.0014157381481058424,
+            "cores": 0.0003475197371706347,
+            "role": "auxiliary"
+          },
+          "360379": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 12324489,
+            "switches": 107,
+            "cpu_us": 0.0041773553210867065,
+            "cores": 0.0010254109668477143,
+            "role": "auxiliary"
+          },
+          "360381": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1372483,
+            "switches": 121,
+            "cpu_us": 0.0004651997468739715,
+            "cores": 0.00011419208699135938,
+            "role": "auxiliary"
+          },
+          "360382": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360383": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 7644505536,
+            "switches": 311214,
+            "cpu_us": 2.5910864034919734,
+            "cores": 0.6360312230991861,
+            "role": "Core I/O"
+          },
+          "360384": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1569782,
+            "switches": 121,
+            "cpu_us": 0.0005320737590537127,
+            "cores": 0.00013060757962136515,
+            "role": "Core I/O"
+          },
+          "360385": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 8778143876,
+            "switches": 315930,
+            "cpu_us": 2.9753303386187686,
+            "cores": 0.7303511731007674,
+            "role": "Core I/O"
+          },
+          "360386": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1519117,
+            "switches": 121,
+            "cpu_us": 0.0005149009815582029,
+            "cores": 0.00012639219619773278,
+            "role": "Core I/O"
+          },
+          "360387": {
+            "comm": "zlink-req-time",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "361897": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "361898": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 12120330975,
+            "switches": 1837,
+            "cpu_us": 4.108156459204782,
+            "cores": 1.0084247958344603,
+            "role": "caller"
+          }
+        },
+        "hottest_cpu_us": 4.108156459204782
+      },
+      "target": {
+        "cpu_us": 11.110546081105403,
+        "groups_us": {
+          "auxiliary": 1.9359324199600787,
+          "Core I/O": 5.727113813502246,
+          "receive": 3.4474998476430767
+        },
+        "threads": {
+          "360281": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 1083160,
+            "switches": 121,
+            "cpu_us": 0.000367134425580507,
+            "cores": 9.012009689414062e-05,
+            "role": "auxiliary"
+          },
+          "360284": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360285": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360286": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360287": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360288": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360289": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360290": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360291": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360292": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 82734097,
+            "switches": 11462,
+            "cpu_us": 0.028042519275099657,
+            "cores": 0.006883567375170086,
+            "role": "auxiliary"
+          },
+          "360293": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360294": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360295": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360296": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360297": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360298": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360299": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360300": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360301": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1600150,
+            "switches": 121,
+            "cpu_us": 0.0005423669181770452,
+            "cores": 0.00013313423044163293,
+            "role": "auxiliary"
+          },
+          "360302": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360303": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 1624741,
+            "switches": 121,
+            "cpu_us": 0.000550701977318308,
+            "cores": 0.00013518022854230486,
+            "role": "Core I/O"
+          },
+          "360304": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1453676,
+            "switches": 121,
+            "cpu_us": 0.0004927199151004183,
+            "cores": 0.00012094743341028729,
+            "role": "Core I/O"
+          },
+          "360305": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1585257,
+            "switches": 121,
+            "cpu_us": 0.0005373189723517096,
+            "cores": 0.00013189511654983078,
+            "role": "Core I/O"
+          },
+          "360306": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1579349,
+            "switches": 121,
+            "cpu_us": 0.0005353164702409137,
+            "cores": 0.00013140356448693093,
+            "role": "Core I/O"
+          },
+          "360307": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 730562578,
+            "switches": 23,
+            "cpu_us": 0.24762239412888615,
+            "cores": 0.060783605669146916,
+            "role": "auxiliary"
+          },
+          "360308": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 741919292,
+            "switches": 19,
+            "cpu_us": 0.2514717244871639,
+            "cores": 0.061728496697322846,
+            "role": "auxiliary"
+          },
+          "360309": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 758928307,
+            "switches": 23,
+            "cpu_us": 0.2572368884072821,
+            "cores": 0.06314366535188348,
+            "role": "auxiliary"
+          },
+          "360310": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 740238155,
+            "switches": 16,
+            "cpu_us": 0.2509019072239552,
+            "cores": 0.061588624259887634,
+            "role": "auxiliary"
+          },
+          "360311": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 626875522,
+            "switches": 9,
+            "cpu_us": 0.21247792078728026,
+            "cores": 0.05215672918424331,
+            "role": "auxiliary"
+          },
+          "360312": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 656379680,
+            "switches": 12,
+            "cpu_us": 0.22247828278326104,
+            "cores": 0.054611507405134076,
+            "role": "auxiliary"
+          },
+          "360313": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 667305290,
+            "switches": 10,
+            "cpu_us": 0.2261814914980092,
+            "cores": 0.05552053010891523,
+            "role": "auxiliary"
+          },
+          "360314": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 685650469,
+            "switches": 12,
+            "cpu_us": 0.2323995449290227,
+            "cores": 0.05704686906993701,
+            "role": "auxiliary"
+          },
+          "360315": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 3673937,
+            "switches": 53,
+            "cpu_us": 0.001245271935922644,
+            "cores": 0.0003056755774058942,
+            "role": "auxiliary"
+          },
+          "360317": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1385379,
+            "switches": 121,
+            "cpu_us": 0.0004695708144468935,
+            "cores": 0.00011526504829859638,
+            "role": "auxiliary"
+          },
+          "360318": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "360319": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 6502504520,
+            "switches": 247434,
+            "cpu_us": 2.204007959844206,
+            "cores": 0.5410154893062773,
+            "role": "Core I/O"
+          },
+          "360320": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 10385388999,
+            "switches": 60838,
+            "cpu_us": 3.5201021313360736,
+            "cores": 0.8640757255375219,
+            "role": "Core I/O"
+          },
+          "360321": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1313214,
+            "switches": 121,
+            "cpu_us": 0.00044511066467953014,
+            "cores": 0.00010926084135560951,
+            "role": "Core I/O"
+          },
+          "360322": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1305672,
+            "switches": 121,
+            "cpu_us": 0.00044255432227607345,
+            "cores": 0.00010863333870523873,
+            "role": "Core I/O"
+          },
+          "360323": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 10170875154,
+            "switches": 55988,
+            "cpu_us": 3.447393189662506,
+            "cores": 0.8462279389717933,
+            "role": "receive"
+          },
+          "360324": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 314674,
+            "switches": 24,
+            "cpu_us": 0.00010665798057084867,
+            "cores": 2.6181221029272503e-05,
+            "role": "receive"
+          },
+          "361859": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 13262826,
+            "switches": 107,
+            "cpu_us": 0.004495402345991555,
+            "cores": 0.001103481631716577,
+            "role": "auxiliary"
+          }
+        },
+        "hottest_cpu_us": 3.5201021313360736
+      }
+    }
+  },
+  "zlink-cpp-send-saturation-1024": {
+    "directory": "/root/jobs/fx/cx/v21/s033/cthin/none/run1/zlink-cpp-send-saturation-1024",
+    "messages": 7474411,
+    "seconds": 12.1327836480923,
+    "capture_rate": 616050.7940133953,
+    "result": {
+      "abandoned": 0,
+      "active_elapsed_ms": 20000.00365,
+      "bandwidth_mb_s": 603.563256,
+      "client_cores": 1.757447,
+      "client_cpu_percent": 10.984041,
+      "client_error_other_count": 0,
+      "client_error_summary": [],
+      "client_memory_mb": 23.75,
+      "client_parallelism_ceiling": 1.0,
+      "client_saturation_metric": "submit_thread_cores",
+      "client_threads": 43,
+      "completed": 11788877,
+      "completed_at_close": 11788877,
+      "contaminated": false,
+      "contamination_reason": null,
+      "drain_bound_hit": false,
+      "drain_ms": 697.777799,
+      "errors": 0,
+      "header_validation_failures": 0,
+      "implementation": "zlink-cpp",
+      "latency_mean_ms": 1.559639,
+      "latency_p95_ms": 5.896671,
+      "latency_p99_ms": 10.320633,
+      "logical_cores": 16,
+      "non_submit_cores": 0.961613,
+      "pattern": "send-saturation",
+      "payload_size": 1024,
+      "peak_in_flight": 8,
+      "request_window": 8,
+      "role": "source",
+      "server_cpu_percent": 12.39699,
+      "server_memory_mb": 163.714844,
+      "server_received_at_close": 11788347,
+      "server_rejected_count": 0,
+      "streams": {
+        "count": 8,
+        "implementation": "one application thread; coroutine slots and binding completion poller",
+        "inFlightPerStream": 1
+      },
+      "submit_thread_cores": 0.795834,
+      "submitted": 11788877,
+      "throughput_per_second": 589417.242431,
+      "trigger": {
+        "cellId": "zlink-cpp-send-saturation-1024",
+        "durationMs": 20000,
+        "endpoint": "http://127.0.0.1:5285/bench/start",
+        "pattern": "send-saturation",
+        "payloadBytes": 1024,
+        "receivedAtUnixMs": 1793927581105,
+        "runId": "cthin-none-run1",
+        "warmup": 30000
+      },
+      "warmup_segment_throughput": [
+        630653.637512,
+        622366.687844,
+        622978.079198,
+        611599.538254,
+        532211.198274,
+        596294.08926,
+        608661.997326,
+        619176.62932,
+        630998.588379,
+        618925.776919
+      ],
+      "target_stats": {
+        "received": 11788877,
+        "errors": 0,
+        "rejected": 0,
+        "drainMs": 697.777799
+      },
+      "source_drain_ms": 96.777799,
+      "runner_settle_ms": 601.0
+    },
+    "roles": {
+      "source": {
+        "cpu_us": 2.9459342840526164,
+        "groups_us": {
+          "auxiliary": 0.012884195691138738,
+          "Core I/O": 1.5481770706748665,
+          "caller": 1.384873017686611
+        },
+        "threads": {
+          "362576": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1057412,
+            "switches": 122,
+            "cpu_us": 0.00014147094667392522,
+            "cores": 8.715328902829832e-05,
+            "role": "auxiliary"
+          },
+          "362579": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362580": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362581": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362582": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362583": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362584": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362585": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362586": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362587": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 74224116,
+            "switches": 11557,
+            "cpu_us": 0.009930430103455642,
+            "cores": 0.006117649350128373,
+            "role": "auxiliary"
+          },
+          "362588": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362589": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362590": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362591": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362592": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362593": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362594": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362595": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362596": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1655334,
+            "switches": 122,
+            "cpu_us": 0.00022146681524470624,
+            "cores": 0.0001364348073791192,
+            "role": "auxiliary"
+          },
+          "362598": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362599": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 1786084,
+            "switches": 122,
+            "cpu_us": 0.0002389598324202402,
+            "cores": 0.00014721139449979685,
+            "role": "Core I/O"
+          },
+          "362600": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1655501,
+            "switches": 122,
+            "cpu_us": 0.00022148915814236065,
+            "cores": 0.00013644857173895976,
+            "role": "Core I/O"
+          },
+          "362601": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1638622,
+            "switches": 122,
+            "cpu_us": 0.00021923092000158942,
+            "cores": 0.0001350573823392663,
+            "role": "Core I/O"
+          },
+          "362602": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1768491,
+            "switches": 123,
+            "cpu_us": 0.0002366060683577609,
+            "cores": 0.0001457613562801863,
+            "role": "Core I/O"
+          },
+          "362603": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 416064,
+            "switches": 6,
+            "cpu_us": 5.566512197415957e-05,
+            "cores": 3.42925425910335e-05,
+            "role": "auxiliary"
+          },
+          "362604": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 408679,
+            "switches": 6,
+            "cpu_us": 5.467708425453189e-05,
+            "cores": 3.368386116934169e-05,
+            "role": "auxiliary"
+          },
+          "362605": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 450448,
+            "switches": 6,
+            "cpu_us": 6.026535067445448e-05,
+            "cores": 3.712651713449339e-05,
+            "role": "auxiliary"
+          },
+          "362606": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 479711,
+            "switches": 7,
+            "cpu_us": 6.418044177661625e-05,
+            "cores": 3.953841211661492e-05,
+            "role": "auxiliary"
+          },
+          "362607": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 479370,
+            "switches": 7,
+            "cpu_us": 6.413481945266323e-05,
+            "cores": 3.951030644771893e-05,
+            "role": "auxiliary"
+          },
+          "362608": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 411915,
+            "switches": 6,
+            "cpu_us": 5.511002806776347e-05,
+            "cores": 3.395057654924618e-05,
+            "role": "auxiliary"
+          },
+          "362609": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 438135,
+            "switches": 6,
+            "cpu_us": 5.861799678931223e-05,
+            "cores": 3.6111663465530454e-05,
+            "role": "auxiliary"
+          },
+          "362610": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 428066,
+            "switches": 6,
+            "cpu_us": 5.7270867229538214e-05,
+            "cores": 3.5281763230592764e-05,
+            "role": "auxiliary"
+          },
+          "362611": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362612": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 3650018,
+            "switches": 50,
+            "cpu_us": 0.0004883352012620125,
+            "cores": 0.000300839288482154,
+            "role": "auxiliary"
+          },
+          "362614": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 10991534,
+            "switches": 101,
+            "cpu_us": 0.0014705552049519353,
+            "cores": 0.0009059367016511711,
+            "role": "auxiliary"
+          },
+          "362616": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1210972,
+            "switches": 122,
+            "cpu_us": 0.00016201570933147775,
+            "cores": 9.980990637630033e-05,
+            "role": "auxiliary"
+          },
+          "362617": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362618": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 11560563961,
+            "switches": 202887,
+            "cpu_us": 1.5466856132208946,
+            "cores": 0.9528369001138273,
+            "role": "Core I/O"
+          },
+          "362619": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1509506,
+            "switches": 122,
+            "cpu_us": 0.00020195651536957228,
+            "cores": 0.00012441547164960347,
+            "role": "Core I/O"
+          },
+          "362620": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1274130,
+            "switches": 122,
+            "cpu_us": 0.00017046560591864698,
+            "cores": 0.000105015471878157,
+            "role": "Core I/O"
+          },
+          "362621": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1515432,
+            "switches": 122,
+            "cpu_us": 0.00020274935376178804,
+            "cores": 0.0001249039003706523,
+            "role": "Core I/O"
+          },
+          "364174": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "364175": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 10351110117,
+            "switches": 5911,
+            "cpu_us": 1.384873017686611,
+            "cores": 0.8531521221535635,
+            "role": "caller"
+          }
+        },
+        "hottest_cpu_us": 1.5466856132208946
+      },
+      "target": {
+        "cpu_us": 3.6060052417508217,
+        "groups_us": {
+          "auxiliary": 0.8542265527009419,
+          "Core I/O": 1.448336347706863,
+          "receive": 1.3034423413430167
+        },
+        "threads": {
+          "362529": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 1065778,
+            "switches": 122,
+            "cpu_us": 0.00014259023219354675,
+            "cores": 8.784282576138889e-05,
+            "role": "auxiliary"
+          },
+          "362532": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362533": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362534": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362535": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362536": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362537": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362538": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362539": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362540": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 77093061,
+            "switches": 11550,
+            "cpu_us": 0.01031426569933069,
+            "cores": 0.006354111573737799,
+            "role": "auxiliary"
+          },
+          "362541": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362542": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362543": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362544": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362545": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362546": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362547": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362548": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362549": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1624056,
+            "switches": 122,
+            "cpu_us": 0.0002172821376828221,
+            "cores": 0.00013385683344443043,
+            "role": "auxiliary"
+          },
+          "362550": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362551": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 1529392,
+            "switches": 122,
+            "cpu_us": 0.0002046170594579292,
+            "cores": 0.0001260545019477434,
+            "role": "Core I/O"
+          },
+          "362552": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1497468,
+            "switches": 122,
+            "cpu_us": 0.0002003459536811663,
+            "cores": 0.00012342328384265343,
+            "role": "Core I/O"
+          },
+          "362553": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1492630,
+            "switches": 122,
+            "cpu_us": 0.00019969867859821999,
+            "cores": 0.00012302452951385925,
+            "role": "Core I/O"
+          },
+          "362554": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1616336,
+            "switches": 122,
+            "cpu_us": 0.0002162492803780793,
+            "cores": 0.0001332205408817411,
+            "role": "Core I/O"
+          },
+          "362555": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 865117916,
+            "switches": 19,
+            "cpu_us": 0.11574395842026883,
+            "cores": 0.07130415748706002,
+            "role": "auxiliary"
+          },
+          "362556": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 746683309,
+            "switches": 18,
+            "cpu_us": 0.09989861528888364,
+            "cores": 0.061542621269555474,
+            "role": "auxiliary"
+          },
+          "362557": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 749855556,
+            "switches": 24,
+            "cpu_us": 0.10032302960059328,
+            "cores": 0.061804082043274845,
+            "role": "auxiliary"
+          },
+          "362558": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 756819601,
+            "switches": 13,
+            "cpu_us": 0.10125474783230412,
+            "cores": 0.062378067799717066,
+            "role": "auxiliary"
+          },
+          "362559": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 771755077,
+            "switches": 21,
+            "cpu_us": 0.10325296227354905,
+            "cores": 0.06360906939285504,
+            "role": "auxiliary"
+          },
+          "362560": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 769443886,
+            "switches": 16,
+            "cpu_us": 0.10294374847730478,
+            "cores": 0.06341857798815885,
+            "role": "auxiliary"
+          },
+          "362561": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 778446424,
+            "switches": 32,
+            "cpu_us": 0.1041481962926577,
+            "cores": 0.06416057902115473,
+            "role": "auxiliary"
+          },
+          "362562": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 850103633,
+            "switches": 12,
+            "cpu_us": 0.11373520040575773,
+            "cores": 0.07006666051723968,
+            "role": "auxiliary"
+          },
+          "362563": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 3217533,
+            "switches": 50,
+            "cpu_us": 0.0004304731168783734,
+            "cores": 0.0002651933054543431,
+            "role": "auxiliary"
+          },
+          "362565": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1255920,
+            "switches": 122,
+            "cpu_us": 0.00016802929354567205,
+            "cores": 0.00010351457970632113,
+            "role": "auxiliary"
+          },
+          "362566": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "362567": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 10815350613,
+            "switches": 246676,
+            "cpu_us": 1.44698366372949,
+            "cores": 0.891415434964964,
+            "role": "Core I/O"
+          },
+          "362568": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1527295,
+            "switches": 123,
+            "cpu_us": 0.0002043365022340891,
+            "cores": 0.0001258816644472305,
+            "role": "Core I/O"
+          },
+          "362569": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1198810,
+            "switches": 122,
+            "cpu_us": 0.0001603885577070889,
+            "cores": 9.880749832611539e-05,
+            "role": "Core I/O"
+          },
+          "362570": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1248585,
+            "switches": 122,
+            "cpu_us": 0.00016704794531636005,
+            "cores": 0.00010291001935044985,
+            "role": "Core I/O"
+          },
+          "362571": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 311739,
+            "switches": 24,
+            "cpu_us": 4.1707500430468696e-05,
+            "cores": 2.569393875650427e-05,
+            "role": "receive"
+          },
+          "362572": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 9742152035,
+            "switches": 416002,
+            "cpu_us": 1.3034006338425863,
+            "cores": 0.8029609953962881,
+            "role": "receive"
+          },
+          "364154": {
+            "comm": "bench_cpp_zlink",
+            "runtime_ns": 12358592,
+            "switches": 104,
+            "cpu_us": 0.0016534536299917144,
+            "cores": 0.0010186114216207264,
+            "role": "auxiliary"
+          }
+        },
+        "hottest_cpu_us": 1.44698366372949
+      }
+    }
+  },
+  "zlink-framework-cpp-request-backpressure-1024": {
+    "directory": "/root/jobs/fx/cx/v21/s033/cthin/none/run1/zlink-framework-cpp-request-backpressure-1024",
+    "messages": 601084,
+    "seconds": 11.991296404972672,
+    "capture_rate": 50126.69020096413,
+    "result": {
+      "abandoned": 0,
+      "active_elapsed_ms": 20000.01465,
+      "bandwidth_mb_s": 51.432462,
+      "client_cores": 4.201524,
+      "client_cpu_percent": 26.259523,
+      "client_error_other_count": 0,
+      "client_error_summary": [],
+      "client_memory_mb": 44.246094,
+      "client_parallelism_ceiling": 1.0,
+      "client_saturation_metric": "submit_thread_cores",
+      "client_threads": 50,
+      "completed": 1005226,
+      "completed_at_close": 1004541,
+      "contaminated": false,
+      "contamination_reason": null,
+      "drain_bound_hit": false,
+      "drain_ms": 549.2821739999999,
+      "errors": 0,
+      "header_validation_failures": 0,
+      "implementation": "zlink-framework-cpp",
+      "latency_mean_ms": 9.998777,
+      "latency_p95_ms": 16.754593,
+      "latency_p99_ms": 19.221412,
+      "logical_cores": 16,
+      "non_submit_cores": 3.27037,
+      "pattern": "request-backpressure",
+      "payload_size": 1024,
+      "peak_in_flight": 1181,
+      "request_window": 0,
+      "role": "source",
+      "server_cpu_percent": 19.920431,
+      "server_memory_mb": 50.878906,
+      "server_received_at_close": 1005226,
+      "server_rejected_count": 0,
+      "streams": {
+        "count": 1,
+        "implementation": "one application thread; Framework task completion notifications",
+        "inFlightPerStream": null
+      },
+      "submit_thread_cores": 0.931153,
+      "submitted": 1005226,
+      "throughput_per_second": 50227.013209,
+      "trigger": {
+        "cellId": "zlink-framework-cpp-request-backpressure-1024",
+        "durationMs": 20000,
+        "endpoint": "http://127.0.0.1:5292/bench/start",
+        "pattern": "request-backpressure",
+        "payloadBytes": 1024,
+        "receivedAtUnixMs": 1793927632785,
+        "runId": "cthin-none-run1",
+        "warmup": 30000
+      },
+      "warmup_segment_throughput": [
+        49288.927743,
+        49108.417497,
+        48885.282657,
+        48912.556822,
+        48815.431981,
+        48257.521868,
+        49559.831384,
+        48188.151372,
+        48468.067714,
+        49356.719074
+      ],
+      "target_stats": {
+        "received": 1005226,
+        "errors": 0,
+        "rejected": 0,
+        "drainMs": 549.2821739999999
+      },
+      "source_drain_ms": 82.282174,
+      "runner_settle_ms": 467.0
+    },
+    "roles": {
+      "source": {
+        "cpu_us": 84.03285846071431,
+        "groups_us": {
+          "auxiliary": 35.9833572329325,
+          "Core I/O": 29.39149649300264,
+          "caller": 18.658004734779166
+        },
+        "threads": {
+          "365115": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1115157,
+            "switches": 120,
+            "cpu_us": 0.0018552431939629068,
+            "cores": 9.299720083122584e-05,
+            "role": "auxiliary"
+          },
+          "365118": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 7520306,
+            "switches": 9,
+            "cpu_us": 0.012511239693620193,
+            "cores": 0.0006271470361521047,
+            "role": "auxiliary"
+          },
+          "365119": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 10110680,
+            "switches": 6,
+            "cpu_us": 0.016820743856099978,
+            "cores": 0.0008431682162244944,
+            "role": "auxiliary"
+          },
+          "365120": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 3456934,
+            "switches": 8,
+            "cpu_us": 0.00575116622635106,
+            "cores": 0.00028828692772254745,
+            "role": "auxiliary"
+          },
+          "365121": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 7605758,
+            "switches": 9,
+            "cpu_us": 0.012653402852180393,
+            "cores": 0.0006342732047592424,
+            "role": "auxiliary"
+          },
+          "365122": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 7966754,
+            "switches": 10,
+            "cpu_us": 0.013253977813417092,
+            "cores": 0.0006643780397836105,
+            "role": "auxiliary"
+          },
+          "365123": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 7719942,
+            "switches": 9,
+            "cpu_us": 0.012843366318185145,
+            "cores": 0.000643795444569164,
+            "role": "auxiliary"
+          },
+          "365124": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 11744112,
+            "switches": 8,
+            "cpu_us": 0.019538220947488204,
+            "cores": 0.000979386348512729,
+            "role": "auxiliary"
+          },
+          "365125": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 6619342,
+            "switches": 7,
+            "cpu_us": 0.011012341037192805,
+            "cores": 0.0005520122075587277,
+            "role": "auxiliary"
+          },
+          "365126": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 84373391,
+            "switches": 11352,
+            "cpu_us": 0.14036871884794805,
+            "cores": 0.007036219283597326,
+            "role": "auxiliary"
+          },
+          "365127": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1499344993,
+            "switches": 111576,
+            "cpu_us": 2.4944017691370926,
+            "cores": 0.12503610471827187,
+            "role": "auxiliary"
+          },
+          "365128": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1497448853,
+            "switches": 111580,
+            "cpu_us": 2.4912472349954413,
+            "cores": 0.12487797836262497,
+            "role": "auxiliary"
+          },
+          "365129": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1508981473,
+            "switches": 111352,
+            "cpu_us": 2.510433604953717,
+            "cores": 0.12583972758560452,
+            "role": "auxiliary"
+          },
+          "365130": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1501188629,
+            "switches": 111532,
+            "cpu_us": 2.4974689544223434,
+            "cores": 0.12518985256485463,
+            "role": "auxiliary"
+          },
+          "365131": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1506123680,
+            "switches": 111359,
+            "cpu_us": 2.5056792062340705,
+            "cores": 0.12560140531389294,
+            "role": "auxiliary"
+          },
+          "365132": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1504822381,
+            "switches": 111482,
+            "cpu_us": 2.5035142858568853,
+            "cores": 0.12549288502083603,
+            "role": "auxiliary"
+          },
+          "365133": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1503336097,
+            "switches": 111532,
+            "cpu_us": 2.5010416131522386,
+            "cores": 0.12536893812220182,
+            "role": "auxiliary"
+          },
+          "365134": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1504929419,
+            "switches": 111564,
+            "cpu_us": 2.503692360801485,
+            "cores": 0.12550181132841656,
+            "role": "auxiliary"
+          },
+          "365135": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1359825,
+            "switches": 120,
+            "cpu_us": 0.002262287800041259,
+            "cores": 0.00011340099969808886,
+            "role": "auxiliary"
+          },
+          "365136": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365137": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 1327553,
+            "switches": 120,
+            "cpu_us": 0.0022085981327069097,
+            "cores": 0.00011070971437662711,
+            "role": "Core I/O"
+          },
+          "365138": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1373154,
+            "switches": 122,
+            "cpu_us": 0.0022844627373212398,
+            "cores": 0.00011451255590934826,
+            "role": "Core I/O"
+          },
+          "365139": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1385899,
+            "switches": 120,
+            "cpu_us": 0.002305666096585502,
+            "cores": 0.0001155754101304077,
+            "role": "Core I/O"
+          },
+          "365140": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1352267,
+            "switches": 120,
+            "cpu_us": 0.0022497138503104392,
+            "cores": 0.00011277070921532956,
+            "role": "Core I/O"
+          },
+          "365142": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 2491203,
+            "switches": 204,
+            "cpu_us": 0.004144517238855135,
+            "cores": 0.0002077509316646466,
+            "role": "auxiliary"
+          },
+          "365143": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 2427287,
+            "switches": 207,
+            "cpu_us": 0.00403818268328553,
+            "cores": 0.00020242073233995184,
+            "role": "auxiliary"
+          },
+          "365144": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 2886647,
+            "switches": 210,
+            "cpu_us": 0.004802401993731325,
+            "cores": 0.0002407285169602626,
+            "role": "auxiliary"
+          },
+          "365145": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 2429993,
+            "switches": 214,
+            "cpu_us": 0.004042684549913157,
+            "cores": 0.0002026463960137209,
+            "role": "auxiliary"
+          },
+          "365146": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 2408352,
+            "switches": 199,
+            "cpu_us": 0.004006681262519049,
+            "cores": 0.00020084167038030018,
+            "role": "auxiliary"
+          },
+          "365147": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 2650313,
+            "switches": 207,
+            "cpu_us": 0.004409222338308789,
+            "cores": 0.0002210197221795753,
+            "role": "auxiliary"
+          },
+          "365148": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 2714250,
+            "switches": 191,
+            "cpu_us": 0.004515591830759095,
+            "cores": 0.0002263516727744656,
+            "role": "auxiliary"
+          },
+          "365149": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 2240215,
+            "switches": 199,
+            "cpu_us": 0.0037269582953464078,
+            "cores": 0.0001868200838627427,
+            "role": "auxiliary"
+          },
+          "365150": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365151": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 6082883,
+            "switches": 77,
+            "cpu_us": 0.010119855128401354,
+            "cores": 0.0005072748429000127,
+            "role": "auxiliary"
+          },
+          "365153": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 17634509,
+            "switches": 162,
+            "cpu_us": 0.02933784462737321,
+            "cores": 0.0014706090488003569,
+            "role": "auxiliary"
+          },
+          "365155": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 84530131,
+            "switches": 11351,
+            "cpu_us": 0.1406294810708653,
+            "cores": 0.007049290430761614,
+            "role": "auxiliary"
+          },
+          "365156": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1393890,
+            "switches": 120,
+            "cpu_us": 0.0023189604115231815,
+            "cores": 0.0001162418101367228,
+            "role": "auxiliary"
+          },
+          "365157": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365158": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 9815787123,
+            "switches": 143449,
+            "cpu_us": 16.33014208163917,
+            "cores": 0.8185759730640542,
+            "role": "Core I/O"
+          },
+          "365159": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1379517,
+            "switches": 120,
+            "cpu_us": 0.0022950486121740056,
+            "cores": 0.00011504319077859904,
+            "role": "Core I/O"
+          },
+          "365160": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 7842708792,
+            "switches": 260467,
+            "cpu_us": 13.047608640389697,
+            "cores": 0.654033436180237,
+            "role": "Core I/O"
+          },
+          "365161": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1443973,
+            "switches": 120,
+            "cpu_us": 0.002402281544675952,
+            "cores": 0.00012041842276546502,
+            "role": "Core I/O"
+          },
+          "365162": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 9314986024,
+            "switches": 172368,
+            "cpu_us": 15.496978831577616,
+            "cores": 0.7768122569413901,
+            "role": "auxiliary"
+          },
+          "365163": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1366190,
+            "switches": 121,
+            "cpu_us": 0.0022728770022159965,
+            "cores": 0.00011393180135497731,
+            "role": "auxiliary"
+          },
+          "365165": {
+            "comm": "zlink-timer",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365166": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 5148661,
+            "switches": 125,
+            "cpu_us": 0.008565626434907601,
+            "cores": 0.00042936650267980206,
+            "role": "auxiliary"
+          },
+          "365167": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1862025,
+            "switches": 172,
+            "cpu_us": 0.0030977783471195374,
+            "cores": 0.00015528137551731576,
+            "role": "auxiliary"
+          },
+          "366762": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "366763": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 11215028118,
+            "switches": 46498,
+            "cpu_us": 18.658004734779166,
+            "cores": 0.935264023108397,
+            "role": "caller"
+          },
+          "366764": {
+            "comm": "zlink-req-time",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          }
+        },
+        "hottest_cpu_us": 18.658004734779166
+      },
+      "target": {
+        "cpu_us": 65.05382772624125,
+        "groups_us": {
+          "auxiliary": 3.729390942031397,
+          "Core I/O": 28.759619994875926,
+          "receive": 13.901355467788195,
+          "application worker": 18.663461321545743
+        },
+        "threads": {
+          "365071": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 1246094,
+            "switches": 120,
+            "cpu_us": 0.0020730779724630836,
+            "cores": 0.00010391653728809982,
+            "role": "auxiliary"
+          },
+          "365074": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365075": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365076": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365077": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365078": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365079": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365080": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365081": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365082": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 88185769,
+            "switches": 11371,
+            "cpu_us": 0.14671122338974255,
+            "cores": 0.0073541480438620655,
+            "role": "auxiliary"
+          },
+          "365083": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365084": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365085": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365086": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365087": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365088": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365089": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365090": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365091": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1620978,
+            "switches": 121,
+            "cpu_us": 0.0026967578574708362,
+            "cores": 0.00013517954566845636,
+            "role": "auxiliary"
+          },
+          "365092": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365093": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 7631564961,
+            "switches": 262023,
+            "cpu_us": 12.696336886358646,
+            "cores": 0.6364253457895732,
+            "role": "Core I/O"
+          },
+          "365094": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 9652105029,
+            "switches": 168501,
+            "cpu_us": 16.05783056777422,
+            "cores": 0.8049258981703902,
+            "role": "Core I/O"
+          },
+          "365095": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1568620,
+            "switches": 121,
+            "cpu_us": 0.002609651895575327,
+            "cores": 0.0001308132121018632,
+            "role": "Core I/O"
+          },
+          "365096": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1708815,
+            "switches": 121,
+            "cpu_us": 0.0028428888474822155,
+            "cores": 0.00014250460853351696,
+            "role": "Core I/O"
+          },
+          "365098": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 8355882350,
+            "switches": 252007,
+            "cpu_us": 13.901355467788195,
+            "cores": 0.6968289389072976,
+            "role": "receive"
+          },
+          "365099": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 283872895,
+            "switches": 21,
+            "cpu_us": 0.47226826034298036,
+            "cores": 0.023673244777960848,
+            "role": "auxiliary"
+          },
+          "365100": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 282965255,
+            "switches": 21,
+            "cpu_us": 0.47075825508581165,
+            "cores": 0.023597553212232926,
+            "role": "auxiliary"
+          },
+          "365101": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 288985540,
+            "switches": 22,
+            "cpu_us": 0.48077396836382263,
+            "cores": 0.024099607768861466,
+            "role": "auxiliary"
+          },
+          "365102": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 247715531,
+            "switches": 26,
+            "cpu_us": 0.4121146645061256,
+            "cores": 0.020657944114972824,
+            "role": "auxiliary"
+          },
+          "365103": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 243729430,
+            "switches": 24,
+            "cpu_us": 0.40548314378689165,
+            "cores": 0.02032552793031851,
+            "role": "auxiliary"
+          },
+          "365104": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 244882855,
+            "switches": 17,
+            "cpu_us": 0.40740205195945994,
+            "cores": 0.020421716445808938,
+            "role": "auxiliary"
+          },
+          "365105": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 258690245,
+            "switches": 16,
+            "cpu_us": 0.43037286801844665,
+            "cores": 0.021573167426061097,
+            "role": "auxiliary"
+          },
+          "365106": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 267659445,
+            "switches": 20,
+            "cpu_us": 0.44529457613245405,
+            "cores": 0.022321143265961157,
+            "role": "auxiliary"
+          },
+          "365108": {
+            "comm": "zlink-timer",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "365110": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 7010037,
+            "switches": 121,
+            "cpu_us": 0.011662325066047342,
+            "cores": 0.0005845937556086936,
+            "role": "auxiliary"
+          },
+          "365111": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 5525517,
+            "switches": 77,
+            "cpu_us": 0.009192587059379387,
+            "cores": 0.0004607939636709024,
+            "role": "auxiliary"
+          },
+          "365943": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 4345671704,
+            "switches": 51681,
+            "cpu_us": 7.229724471122172,
+            "cores": 0.36240215880227034,
+            "role": "application worker"
+          },
+          "366747": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 19587634,
+            "switches": 159,
+            "cpu_us": 0.032587182490300855,
+            "cores": 0.0016334876012135935,
+            "role": "auxiliary"
+          },
+          "366766": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 5479720847,
+            "switches": 70106,
+            "cpu_us": 9.116397786332692,
+            "cores": 0.45697484758425405,
+            "role": "application worker"
+          },
+          "366985": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 1392915434,
+            "switches": 19797,
+            "cpu_us": 2.3173390640908758,
+            "cores": 0.11616053735627549,
+            "role": "application worker"
+          }
+        },
+        "hottest_cpu_us": 16.05783056777422
+      }
+    }
+  },
+  "zlink-framework-cpp-send-saturation-1024": {
+    "directory": "/root/jobs/fx/cx/v21/s033/cthin/none/run1/zlink-framework-cpp-send-saturation-1024",
+    "messages": 2002595,
+    "seconds": 12.038582853972912,
+    "capture_rate": 166348.06806509735,
+    "result": {
+      "abandoned": 0,
+      "active_elapsed_ms": 20000.001596000002,
+      "bandwidth_mb_s": 174.527986,
+      "client_cores": 1.696976,
+      "client_cpu_percent": 10.606102,
+      "client_error_other_count": 0,
+      "client_error_summary": [],
+      "client_memory_mb": 30.90625,
+      "client_parallelism_ceiling": 1.0,
+      "client_saturation_metric": "submit_thread_cores",
+      "client_threads": 49,
+      "completed": 3408797,
+      "completed_at_close": 3408797,
+      "contaminated": false,
+      "contamination_reason": null,
+      "drain_bound_hit": false,
+      "drain_ms": 743.218574,
+      "errors": 0,
+      "header_validation_failures": 0,
+      "implementation": "zlink-framework-cpp",
+      "latency_mean_ms": 3.751867,
+      "latency_p95_ms": 5.4613,
+      "latency_p99_ms": 9.254721,
+      "logical_cores": 16,
+      "non_submit_cores": 0.889173,
+      "pattern": "send-saturation",
+      "payload_size": 1024,
+      "peak_in_flight": 8,
+      "request_window": 8,
+      "role": "source",
+      "server_cpu_percent": 16.251643,
+      "server_memory_mb": 133.527344,
+      "server_received_at_close": 3408750,
+      "server_rejected_count": 0,
+      "streams": {
+        "count": 8,
+        "implementation": "one application thread; Framework task completion notifications",
+        "inFlightPerStream": 1
+      },
+      "submit_thread_cores": 0.807803,
+      "submitted": 3408797,
+      "throughput_per_second": 170437.486399,
+      "trigger": {
+        "cellId": "zlink-framework-cpp-send-saturation-1024",
+        "durationMs": 20000,
+        "endpoint": "http://127.0.0.1:5292/bench/start",
+        "pattern": "send-saturation",
+        "payloadBytes": 1024,
+        "receivedAtUnixMs": 1793927684312,
+        "runId": "cthin-none-run1",
+        "warmup": 30000
+      },
+      "warmup_segment_throughput": [
+        176970.651722,
+        172694.439258,
+        176435.182952,
+        174124.4612,
+        176985.542364,
+        176281.411587,
+        176247.39989,
+        175449.158527,
+        171349.937457,
+        175658.838452
+      ],
+      "target_stats": {
+        "received": 3408797,
+        "errors": 0,
+        "rejected": 0,
+        "drainMs": 743.218574
+      },
+      "source_drain_ms": 113.218574,
+      "runner_settle_ms": 630.0
+    },
+    "roles": {
+      "source": {
+        "cpu_us": 10.181354390178742,
+        "groups_us": {
+          "auxiliary": 0.4733200896836353,
+          "Core I/O": 4.86380233596908,
+          "caller": 4.844231964526027
+        },
+        "threads": {
+          "367473": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1088213,
+            "switches": 123,
+            "cpu_us": 0.0005434014366359648,
+            "cores": 9.039377916819116e-05,
+            "role": "auxiliary"
+          },
+          "367476": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 326936,
+            "switches": 4,
+            "cpu_us": 0.00016325617511279115,
+            "cores": 2.7157349329710037e-05,
+            "role": "auxiliary"
+          },
+          "367477": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 315353,
+            "switches": 4,
+            "cpu_us": 0.00015747217984664897,
+            "cores": 2.6195192891489615e-05,
+            "role": "auxiliary"
+          },
+          "367478": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 309553,
+            "switches": 5,
+            "cpu_us": 0.00015457593772080726,
+            "cores": 2.5713408609207097e-05,
+            "role": "auxiliary"
+          },
+          "367479": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 322786,
+            "switches": 4,
+            "cpu_us": 0.00016118386393654233,
+            "cores": 2.6812624369111334e-05,
+            "role": "auxiliary"
+          },
+          "367480": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 357722,
+            "switches": 4,
+            "cpu_us": 0.00017862922857592273,
+            "cores": 2.971462707356343e-05,
+            "role": "auxiliary"
+          },
+          "367481": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 390544,
+            "switches": 4,
+            "cpu_us": 0.0001950189628956429,
+            "cores": 3.2441027713749105e-05,
+            "role": "auxiliary"
+          },
+          "367482": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 329610,
+            "switches": 5,
+            "cpu_us": 0.00016459144260322234,
+            "cores": 2.737946849709339e-05,
+            "role": "auxiliary"
+          },
+          "367483": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 303380,
+            "switches": 4,
+            "cpu_us": 0.00015149343726514845,
+            "cores": 2.5200640613598477e-05,
+            "role": "auxiliary"
+          },
+          "367484": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 76893757,
+            "switches": 11530,
+            "cpu_us": 0.038397058316833904,
+            "cores": 0.006387276470388199,
+            "role": "auxiliary"
+          },
+          "367485": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 52923698,
+            "switches": 4535,
+            "cpu_us": 0.026427559241883655,
+            "cores": 0.004396173423563255,
+            "role": "auxiliary"
+          },
+          "367486": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 52850147,
+            "switches": 4515,
+            "cpu_us": 0.02639083139626335,
+            "cores": 0.004390063817400124,
+            "role": "auxiliary"
+          },
+          "367487": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 53360613,
+            "switches": 4541,
+            "cpu_us": 0.0266457336605754,
+            "cores": 0.0044324663166138535,
+            "role": "auxiliary"
+          },
+          "367488": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 53315807,
+            "switches": 4522,
+            "cpu_us": 0.026623359690801186,
+            "cores": 0.004428744449966965,
+            "role": "auxiliary"
+          },
+          "367489": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 53561074,
+            "switches": 4545,
+            "cpu_us": 0.026745834280021672,
+            "cores": 0.004449117861270859,
+            "role": "auxiliary"
+          },
+          "367490": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 53213505,
+            "switches": 4521,
+            "cpu_us": 0.026572274973222242,
+            "cores": 0.004420246605890057,
+            "role": "auxiliary"
+          },
+          "367491": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 52770076,
+            "switches": 4541,
+            "cpu_us": 0.026350847775011923,
+            "cores": 0.0043834126192507025,
+            "role": "auxiliary"
+          },
+          "367492": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 53699364,
+            "switches": 4525,
+            "cpu_us": 0.026814889680639373,
+            "cores": 0.004460605093753075,
+            "role": "auxiliary"
+          },
+          "367493": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1415105,
+            "switches": 123,
+            "cpu_us": 0.0007066356402567668,
+            "cores": 0.0001175474735826563,
+            "role": "auxiliary"
+          },
+          "367494": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367495": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 1297751,
+            "switches": 122,
+            "cpu_us": 0.0006480346750091755,
+            "cores": 0.0001077993162269696,
+            "role": "Core I/O"
+          },
+          "367496": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1164571,
+            "switches": 122,
+            "cpu_us": 0.0005815309635747617,
+            "cores": 9.673655231069612e-05,
+            "role": "Core I/O"
+          },
+          "367497": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1385637,
+            "switches": 122,
+            "cpu_us": 0.0006919207328491282,
+            "cores": 0.00011509967716363883,
+            "role": "Core I/O"
+          },
+          "367498": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1227185,
+            "switches": 122,
+            "cpu_us": 0.0006127973953794951,
+            "cores": 0.00010193766283670264,
+            "role": "Core I/O"
+          },
+          "367499": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 472909,
+            "switches": 7,
+            "cpu_us": 0.00023614809784304865,
+            "cores": 3.9282779853438724e-05,
+            "role": "auxiliary"
+          },
+          "367500": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 477279,
+            "switches": 7,
+            "cpu_us": 0.0002383302664792432,
+            "cores": 3.9645779390261935e-05,
+            "role": "auxiliary"
+          },
+          "367501": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 500070,
+            "switches": 7,
+            "cpu_us": 0.00024971099997752916,
+            "cores": 4.153894242086555e-05,
+            "role": "auxiliary"
+          },
+          "367502": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 494671,
+            "switches": 7,
+            "cpu_us": 0.000247014998040043,
+            "cores": 4.109046770706497e-05,
+            "role": "auxiliary"
+          },
+          "367504": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 520529,
+            "switches": 8,
+            "cpu_us": 0.0002599272444003905,
+            "cores": 4.323839494348936e-05,
+            "role": "auxiliary"
+          },
+          "367505": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 507486,
+            "switches": 8,
+            "cpu_us": 0.00025341419508188124,
+            "cores": 4.215496177214265e-05,
+            "role": "auxiliary"
+          },
+          "367506": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 500290,
+            "switches": 8,
+            "cpu_us": 0.0002498208574374749,
+            "cores": 4.155721699709006e-05,
+            "role": "auxiliary"
+          },
+          "367507": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 461928,
+            "switches": 8,
+            "cpu_us": 0.0002306647125354852,
+            "cores": 3.837062930106901e-05,
+            "role": "auxiliary"
+          },
+          "367508": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367509": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 4030820,
+            "switches": 59,
+            "cpu_us": 0.0020127983940836764,
+            "cores": 0.0003348251242603501,
+            "role": "auxiliary"
+          },
+          "367511": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 12135011,
+            "switches": 120,
+            "cpu_us": 0.006059643113060804,
+            "cores": 0.001008009925021637,
+            "role": "auxiliary"
+          },
+          "367513": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 76765529,
+            "switches": 11530,
+            "cpu_us": 0.03833302739695245,
+            "cores": 0.006376625050569489,
+            "role": "auxiliary"
+          },
+          "367514": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1144588,
+            "switches": 122,
+            "cpu_us": 0.0005715524107470556,
+            "cores": 9.50766393257217e-05,
+            "role": "auxiliary"
+          },
+          "367515": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367516": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 9617685495,
+            "switches": 9865,
+            "cpu_us": 4.802611359261358,
+            "cores": 0.7989051212806182,
+            "role": "Core I/O"
+          },
+          "367517": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 1465878,
+            "switches": 122,
+            "cpu_us": 0.0007319892439559671,
+            "cores": 0.00012176499657650639,
+            "role": "Core I/O"
+          },
+          "367518": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 114575163,
+            "switches": 4982,
+            "cpu_us": 0.05721334718203131,
+            "cores": 0.00951732977126859,
+            "role": "Core I/O"
+          },
+          "367519": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1424559,
+            "switches": 122,
+            "cpu_us": 0.0007113565149218889,
+            "cores": 0.0001183327819627768,
+            "role": "Core I/O"
+          },
+          "367520": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1240366,
+            "switches": 122,
+            "cpu_us": 0.0006193793552865158,
+            "cores": 0.00010303255915131744,
+            "role": "auxiliary"
+          },
+          "367521": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 333463295,
+            "switches": 12360,
+            "cpu_us": 0.16651559351741116,
+            "cores": 0.027699547284334398,
+            "role": "auxiliary"
+          },
+          "367523": {
+            "comm": "zlink-timer",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367524": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 6362255,
+            "switches": 122,
+            "cpu_us": 0.003177005335577089,
+            "cores": 0.000528488699805755,
+            "role": "auxiliary"
+          },
+          "367525": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 1044176,
+            "switches": 92,
+            "cpu_us": 0.0005214114686194662,
+            "cores": 8.673579047183335e-05,
+            "role": "auxiliary"
+          },
+          "369076": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "369077": {
+            "comm": "bench_cpp_clien",
+            "runtime_ns": 9701034711,
+            "switches": 3303,
+            "cpu_us": 4.844231964526027,
+            "cores": 0.8058286285580959,
+            "role": "caller"
+          }
+        },
+        "hottest_cpu_us": 4.844231964526027
+      },
+      "target": {
+        "cpu_us": 16.54473528846322,
+        "groups_us": {
+          "auxiliary": 2.543601421655403,
+          "Core I/O": 4.031711529290745,
+          "receive": 4.164583683171085,
+          "application worker": 5.8048386543459864
+        },
+        "threads": {
+          "367412": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 1210704,
+            "switches": 122,
+            "cpu_us": 0.0006045675735732887,
+            "cores": 0.00010056864787872017,
+            "role": "auxiliary"
+          },
+          "367415": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367416": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367417": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367418": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367419": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367420": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367421": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367422": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367423": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 80447793,
+            "switches": 11523,
+            "cpu_us": 0.04017177362372322,
+            "cores": 0.006682496933054794,
+            "role": "auxiliary"
+          },
+          "367424": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367426": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367427": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367428": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367429": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367430": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367431": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367432": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367435": {
+            "comm": "ZLINKbg/Reaper",
+            "runtime_ns": 1615019,
+            "switches": 121,
+            "cpu_us": 0.000806463114109443,
+            "cores": 0.000134153580997868,
+            "role": "auxiliary"
+          },
+          "367436": {
+            "comm": "ZLINKbg/core-ct",
+            "runtime_ns": 0,
+            "switches": 0,
+            "cpu_us": 0.0,
+            "cores": 0.0,
+            "role": "auxiliary"
+          },
+          "367437": {
+            "comm": "ZLINKbg/IO/0",
+            "runtime_ns": 7929801268,
+            "switches": 271726,
+            "cpu_us": 3.9597628417128776,
+            "cores": 0.6586988987148972,
+            "role": "Core I/O"
+          },
+          "367438": {
+            "comm": "ZLINKbg/IO/1",
+            "runtime_ns": 140889709,
+            "switches": 4981,
+            "cpu_us": 0.0703535707419623,
+            "cores": 0.011703180574406587,
+            "role": "Core I/O"
+          },
+          "367439": {
+            "comm": "ZLINKbg/IO/2",
+            "runtime_ns": 1615112,
+            "switches": 121,
+            "cpu_us": 0.0008065095538538746,
+            "cores": 0.00013416130615963564,
+            "role": "Core I/O"
+          },
+          "367440": {
+            "comm": "ZLINKbg/IO/3",
+            "runtime_ns": 1579261,
+            "switches": 121,
+            "cpu_us": 0.0007886072820515381,
+            "cores": 0.0001311832978313407,
+            "role": "Core I/O"
+          },
+          "367441": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 8339974461,
+            "switches": 190273,
+            "cpu_us": 4.164583683171085,
+            "cores": 0.6927704499909376,
+            "role": "receive"
+          },
+          "367443": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 663834941,
+            "switches": 40,
+            "cpu_us": 0.3314873656430781,
+            "cores": 0.05514228286271457,
+            "role": "auxiliary"
+          },
+          "367444": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 679892954,
+            "switches": 35,
+            "cpu_us": 0.33950596800651156,
+            "cores": 0.05647616187445396,
+            "role": "auxiliary"
+          },
+          "367445": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 699865309,
+            "switches": 21,
+            "cpu_us": 0.3494792052312125,
+            "cores": 0.05813519061913787,
+            "role": "auxiliary"
+          },
+          "367446": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 546917570,
+            "switches": 19,
+            "cpu_us": 0.27310443199948065,
+            "cores": 0.04543039464312936,
+            "role": "auxiliary"
+          },
+          "367447": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 565353381,
+            "switches": 16,
+            "cpu_us": 0.28231039276538694,
+            "cores": 0.04696178843122095,
+            "role": "auxiliary"
+          },
+          "367448": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 587129346,
+            "switches": 33,
+            "cpu_us": 0.29318426641432743,
+            "cores": 0.048770636305106176,
+            "role": "auxiliary"
+          },
+          "367449": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 607308466,
+            "switches": 18,
+            "cpu_us": 0.3032607521740542,
+            "cores": 0.05044684024412219,
+            "role": "auxiliary"
+          },
+          "367450": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 634957685,
+            "switches": 19,
+            "cpu_us": 0.3170674474868858,
+            "cores": 0.05274355733577516,
+            "role": "auxiliary"
+          },
+          "367452": {
+            "comm": "zlink-timer",
+            "runtime_ns": 765396,
+            "switches": 168,
+            "cpu_us": 0.00038220209278461197,
+            "cores": 6.357857974515728e-05,
+            "role": "auxiliary"
+          },
+          "367453": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 6339701,
+            "switches": 122,
+            "cpu_us": 0.0031657429485242895,
+            "cores": 0.0005266152234777205,
+            "role": "auxiliary"
+          },
+          "367454": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 4112380,
+            "switches": 59,
+            "cpu_us": 0.002053525550598099,
+            "cores": 0.0003416000080643091,
+            "role": "auxiliary"
+          },
+          "367535": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 5879393837,
+            "switches": 28178,
+            "cpu_us": 2.9358876043333777,
+            "cores": 0.48837923103712433,
+            "role": "application worker"
+          },
+          "369058": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 14052844,
+            "switches": 118,
+            "cpu_us": 0.0070173170311520795,
+            "cores": 0.0011673171311324532,
+            "role": "auxiliary"
+          },
+          "369079": {
+            "comm": "bench_cpp_frame",
+            "runtime_ns": 5745347028,
+            "switches": 21948,
+            "cpu_us": 2.8689510500126087,
+            "cores": 0.47724446454293,
+            "role": "application worker"
+          }
+        },
+        "hottest_cpu_us": 4.164583683171085
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+--- /tmp/f4328-with-instrumentation.cpp	2026-11-12 14:37:04.444375281 +0900
++++ core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp	2026-11-12 14:37:04.445375241 +0900
+@@ -66,7 +66,7 @@
+ 
+ const int sample_count = 20;
+ const int reconnect_ivl_ms = 50;
+-const int disconnect_limit_ms = 200;
++const int disconnect_limit_ms = -1;
+ const int reconnect_limit_ms = reconnect_ivl_ms + 200;
+ const int event_timeout_ms = 3000;
+ 

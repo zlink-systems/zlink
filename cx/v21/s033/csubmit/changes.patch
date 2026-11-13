@@ -1,0 +1,695 @@
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+index e9fb2fd447..b9ae463b4f 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+@@ -677,12 +677,33 @@ class route_send_call_t
+      * returned task with the public Framework result. */
+     using submit_fn_t = std::function<task_t<void> (const std::string &, const metadata_map_t &)>;
+ 
+-    route_send_call_t (std::string packet_name, submit_fn_t submit);
++    struct submission_t
++    {
++        virtual ~submission_t () = default;
++        virtual task_t<void> submit (const std::string &, const metadata_map_t &) = 0;
++        detail::submit_once_t once;
++    };
++
++    template <typename TSubmit> struct bound_submission_t final : submission_t
++    {
++        explicit bound_submission_t (TSubmit submit) : invoke (std::move (submit)) {}
++        task_t<void> submit (const std::string &packet, const metadata_map_t &metadata) override
++        {
++            return invoke (packet, metadata);
++        }
++        TSubmit invoke;
++    };
++
++    template <typename TSubmit>
++    route_send_call_t (std::string packet_name, TSubmit submit) :
++        _packet_name (std::move (packet_name)),
++        _submit (std::make_shared<bound_submission_t<TSubmit>> (std::move (submit)))
++    {
++    }
+ 
+     std::string _packet_name;
+     metadata_map_t _metadata;
+-    submit_fn_t _submit;
+-    std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
++    std::shared_ptr<submission_t> _submit;
+ };
+ 
+ namespace detail
+@@ -815,16 +836,15 @@ class route_client_t
+                                     TMessage message)
+     {
+         auto state = _state;
+-        auto message_value = std::make_shared<TMessage> (std::move (message));
+         return route_send_call_t (
+           detail::message_name<TMessage> (),
+           [state, router_channel_id = std::move (router_channel_id),
+-           target_node_rid = std::move (target_node_rid),
+-           message_value] (const std::string &packet_name,
+-                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
+-              auto encode_payload = [message_value] (serializer_registry_t &serializers) {
++           target_node_rid = std::move (target_node_rid), message_value = std::move (message)] (
++            const std::string &packet_name,
++            const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
++              auto encode_payload = [&message_value] (serializer_registry_t &serializers) {
+                   return serializers.template get<TMessage> ().serialize_with_content_type (
+-                    *message_value);
++                    message_value);
+               };
+               // Erased submit consumes this encoder before its first suspension.
+               return submit_send_erased (state, router_channel_id, target_node_rid, packet_name,
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
+index d7c1f6fe8f..56dca35ae0 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
+@@ -31,12 +31,17 @@ template <typename... TArgs> class request_callback_t
+ {
+   public:
+     request_callback_t () = default;
++    request_callback_t (std::nullptr_t) {}
+     template <typename TCallback>
+         requires (!std::is_same_v<std::decay_t<TCallback>, request_callback_t>)
+-    request_callback_t (TCallback &&callback) :
+-        request_callback_t (from_shared (
+-          std::make_shared<std::decay_t<TCallback>> (std::forward<TCallback> (callback))))
++    request_callback_t (TCallback &&callback)
+     {
++        if constexpr (requires { static_cast<bool> (callback); }) {
++            if (!callback)
++                return;
++        }
++        *this = from_shared (
++          std::make_shared<std::decay_t<TCallback>> (std::forward<TCallback> (callback)));
+     }
+ 
+     template <typename TOwner, typename TInvoke>
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/task.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/task.hpp
+index 77f6569052..877543050c 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/task.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/task.hpp
+@@ -12,6 +12,7 @@
+ #endif
+ 
+ #include <atomic>
++#include <cassert>
+ #include <chrono>
+ #include <condition_variable>
+ #include <coroutine>
+@@ -729,6 +730,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+                               std::unique_ptr<std::optional<TCallback>, decltype (reset_callback)>
+                                 callback_lifetime (&this->callback, reset_callback);
+                               const auto ambient_guard = enter_ambient_context (ambient);
++                              assert (this->callback.has_value ());
+                               if (cancelled) {
+                                   const auto failure = result_t<T>::failure (
+                                     framework_error_kind_t::shutting_down,
+@@ -740,6 +742,10 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
+                           std::move (scheduler))
+                     {
+                     }
++                    observer_t (const observer_t &) = delete;
++                    observer_t &operator= (const observer_t &) = delete;
++                    observer_t (observer_t &&) = delete;
++                    observer_t &operator= (observer_t &&) = delete;
+                     std::weak_ptr<task_shared_state_t<T>> owner;
+                     std::optional<TCallback> callback;
+                     // Destroy the stop registration before its callable captures.
+@@ -1024,8 +1030,24 @@ template <typename T> class task_completion_source_t
+         _state (std::make_shared<detail::application_task_shared_state_t<T>> ())
+     {
+     }
+-    task_completion_source_t (task_completion_source_t &&) noexcept = default;
+-    task_completion_source_t &operator= (task_completion_source_t &&) noexcept = default;
++    task_completion_source_t (task_completion_source_t &&other) noexcept
++    {
++        *this = std::move (other);
++    }
++    task_completion_source_t &operator= (task_completion_source_t &&other) noexcept
++    {
++        if (this != &other) {
++            // A combined source borrows its enclosing state. Moving either end
++            // would detach that borrow from the allocation that owns it.
++            const auto borrowed = [] (const auto &state) {
++                return state && state.use_count () == 0;
++            };
++            if (borrowed (_state) || borrowed (other._state))
++                std::terminate ();
++            _state = std::move (other._state);
++        }
++        return *this;
++    }
+     task_completion_source_t (const task_completion_source_t &) = delete;
+     task_completion_source_t &operator= (const task_completion_source_t &) = delete;
+ 
+@@ -1054,6 +1076,10 @@ template <typename T> std::shared_ptr<task_completion_source_t<T>> make_task_com
+     struct shared_source_t final : application_task_shared_state_t<T>
+     {
+         shared_source_t () : source (this) {}
++        shared_source_t (const shared_source_t &) = delete;
++        shared_source_t &operator= (const shared_source_t &) = delete;
++        shared_source_t (shared_source_t &&) = delete;
++        shared_source_t &operator= (shared_source_t &&) = delete;
+         task_completion_source_t<T> source;
+     };
+     auto storage = std::make_shared<shared_source_t> ();
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+index e1c423cc30..7608d424b6 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+@@ -1403,11 +1403,6 @@ publisher_t::publisher_t (message_bus_t bus) : _bus (std::move (bus))
+ {
+ }
+ 
+-route_send_call_t::route_send_call_t (std::string packet_name, submit_fn_t submit) :
+-    _packet_name (std::move (packet_name)), _submit (std::move (submit))
+-{
+-}
+-
+ route_send_call_t &route_send_call_t::metadata (std::string key, std::string value)
+ {
+     _metadata[std::move (key)] = std::move (value);
+@@ -1416,17 +1411,18 @@ route_send_call_t &route_send_call_t::metadata (std::string key, std::string val
+ 
+ task_t<void> route_send_call_t::async ()
+ {
+-    if (!_submission->try_claim ()) {
+-        return task_t<void> (result_t<void>::failure (
+-          framework_error_kind_t::protocol_error, "route send call has already been submitted"));
+-    }
+     if (!_submit) {
+         return task_t<void> (
+           result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                    "route send call is not bound to a route client"));
+     }
+-    // The bound transport boundary completes this task with the public result.
+-    return _submit (_packet_name, _metadata);
++    const auto submission = _submit;
++    if (!submission->once.try_claim ()) {
++        return task_t<void> (result_t<void>::failure (
++          framework_error_kind_t::protocol_error, "route send call has already been submitted"));
++    }
++    // Copies share the callable and its single-use decision, without a second allocation.
++    return submission->submit (_packet_name, _metadata);
+ }
+ 
+ route_client_t::route_client_t () = default;
+diff --git a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
+index 3aab7197de..ad7e208455 100644
+--- a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
++++ b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
+@@ -20,11 +20,31 @@
+ namespace zlink::framework::runtime::foundation
+ {
+ 
++void completion_sink_t::operator() (operation_terminal_t terminal,
++                                    result_t<zlink::message_t> payload) const
++{
++    if (_admitted && terminal != operation_terminal_t::completed) {
++        if (terminal == operation_terminal_t::cancelled)
++            _admitted->complete (detail::result_access_t::failure<void> (
++              detail::make_cancellation_exception ("request was cancelled")));
++        else
++            _admitted->complete (detail::boundary_failure<void> (
++              terminal == operation_terminal_t::timed_out  ? detail::boundary_error_t::timed_out
++              : terminal == operation_terminal_t::shutdown ? detail::boundary_error_t::shutdown
++                                                           : detail::boundary_error_t::disconnected,
++              "request ended before admission"));
++    }
++    _complete (terminal, std::move (payload));
++}
++
++struct operation_completion_item_t;
++struct operation_registry_drain_state_t;
++
+ class operation_registry_state_t : public std::enable_shared_from_this<operation_registry_state_t>
+ {
+   public:
+     using clock_t = std::chrono::steady_clock;
+-    using callback_t = std::function<void (operation_terminal_t, result_t<zlink::message_t>)>;
++    using callback_t = operation_registry_t::callback_t;
+     using before_dispatch_t = std::function<void ()>;
+     // The management budget reads this clock; tests inject a deterministic one.
+     using now_t = clock_t::time_point (*) ();
+diff --git a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.hpp b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.hpp
+index c1ea76d296..9cc5163180 100644
+--- a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.hpp
++++ b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.hpp
+@@ -7,7 +7,7 @@
+ #include "runtime/diagnostics/mesh_request_metrics.hpp"
+ 
+ #include <zlink/Contracts/Messaging/message.hpp>
+-#include <zlink/framework/contracts/dispatch/task.hpp>
++#include <zlink/framework/contracts/dispatch/request_task.hpp>
+ 
+ #include <chrono>
+ #include <array>
+@@ -35,16 +35,44 @@ namespace zlink::framework::runtime::foundation
+ {
+ 
+ using call_id_t = runtime::call_id_t;
+-struct operation_completion_item_t;
+-struct operation_registry_drain_state_t;
+-
+ struct operation_registry_state_t;
+ 
++// The pending entry carries the receiver and its admission phase together.
++// Copies share receiver ownership; synchronous codec projections add no task state.
++class completion_sink_t
++{
++  public:
++    completion_sink_t () = default;
++    completion_sink_t (std::nullptr_t) {}
++    template <typename TCallback>
++        requires (!std::is_same_v<std::decay_t<TCallback>, completion_sink_t>)
++    completion_sink_t (TCallback &&callback) : _complete (std::forward<TCallback> (callback))
++    {
++    }
++
++    template <typename TOwner, typename TInvoke>
++    completion_sink_t (std::shared_ptr<TOwner> owner, TInvoke invoke) :
++        _complete (std::move (owner), invoke)
++    {
++    }
++    explicit operator bool () const noexcept { return bool (_complete); }
++    completion_sink_t with_admission (std::shared_ptr<task_completion_source_t<void>> admitted) &&
++    {
++        _admitted = std::move (admitted);
++        return std::move (*this);
++    }
++    void operator() (operation_terminal_t terminal, result_t<zlink::message_t> payload) const;
++
++  private:
++    detail::request_callback_t<operation_terminal_t, result_t<zlink::message_t>> _complete;
++    std::shared_ptr<task_completion_source_t<void>> _admitted;
++};
++
+ class operation_registry_t
+ {
+   public:
+     using clock_t = std::chrono::steady_clock;
+-    using callback_t = std::function<void (operation_terminal_t, result_t<zlink::message_t>)>;
++    using callback_t = completion_sink_t;
+     using before_dispatch_t = std::function<void ()>;
+     // The management budget reads this clock; tests inject a deterministic one.
+     using now_t = clock_t::time_point (*) ();
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+index c2783ea2dd..4b2482572d 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -221,30 +221,6 @@ void observe_infrastructure_request (
+     }
+ }
+ 
+-foundation::operation_registry_t::callback_t
+-request_admission_completion (foundation::operation_registry_t::callback_t callback,
+-                              std::shared_ptr<task_completion_source_t<void>> admitted)
+-{
+-    return [callback = std::move (callback), admitted = std::move (admitted)] (
+-             foundation::operation_terminal_t terminal,
+-             ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+-        if (terminal != foundation::operation_terminal_t::completed) {
+-            if (terminal == foundation::operation_terminal_t::cancelled)
+-                admitted->complete (detail::result_access_t::failure<void> (
+-                  detail::make_cancellation_exception ("request was cancelled")));
+-            else
+-                admitted->complete (detail::boundary_failure<void> (
+-                  terminal == foundation::operation_terminal_t::timed_out
+-                    ? detail::boundary_error_t::timed_out
+-                  : terminal == foundation::operation_terminal_t::shutdown
+-                    ? detail::boundary_error_t::shutdown
+-                    : detail::boundary_error_t::disconnected,
+-                  "request ended before admission"));
+-        }
+-        callback (terminal, std::move (completion_payload));
+-    };
+-}
+-
+ template <typename Parts>
+ bool start_admitted_request (const std::shared_ptr<detail::backend::raw_route_port_t> &port,
+                              const admitted_peer_t *peer,
+@@ -1549,11 +1525,7 @@ try {
+         if (!target_claimed && !peer && !_expected_peers.contains (target_routing_id))
+             return std::optional<request_start_t>{};
+         auto encoded_payload = protocol::encode_application_payload_message (application_payload);
+-        std::shared_ptr<detail::backend::raw_route_port_t> port;
+-        {
+-            std::lock_guard lifecycle_lock (_lifecycle_mutex);
+-            port = _port;
+-        }
++        const auto &port = _port;
+         if (!port)
+             return std::optional<request_start_t>{};
+         request_start_t value;
+@@ -1569,8 +1541,7 @@ try {
+         if (request && request->operation == foundation::call_id_t{})
+             request->operation = value.operation;
+         value.registered = _operations->register_operation (
+-          value.operation, deadline,
+-          request_admission_completion (std::move (callback), value.admitted),
++          value.operation, deadline, std::move (callback).with_admission (value.admitted),
+           peer && peer->ready
+             ? std::vector<std::uint8_t>{}
+             : std::vector<std::uint8_t> (target_routing_id.begin (), target_routing_id.end ()),
+@@ -1986,10 +1957,7 @@ raw_mesh_node_owner_t::prepare_relocation_ready_reply (const service_mailbox_rec
+ {
+     if (request.source_routing_id.empty () || !request.reply_token)
+         co_return std::function<bool ()>{};
+-    auto port = co_await _lane.run_task ([this] {
+-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+-        return _port;
+-    });
++    auto port = co_await _lane.run_task ([this] { return _port; });
+     if (!port)
+         co_return std::function<bool ()>{};
+     co_return std::function<bool ()>{[port = std::move (port), source = request.source_routing_id,
+@@ -2005,12 +1973,7 @@ bool raw_mesh_node_owner_t::reply_relocation_failed (const service_mailbox_recor
+ {
+     if (request.source_routing_id.empty () || !request.reply_token)
+         return false;
+-    const auto port = _lane
+-                        .run ([this] {
+-                            std::lock_guard lifecycle_lock (_lifecycle_mutex);
+-                            return _port;
+-                        })
+-                        .get ();
++    const auto port = _lane.run ([this] { return _port; }).get ();
+     if (!port)
+         return false;
+     detail::backend::raw_message_t parts{protocol::encode_relocation_control (failure)};
+@@ -2027,10 +1990,7 @@ bool raw_mesh_node_owner_t::reply (const service_mailbox_record_t &request,
+     if (!request.correlation) {
+         throw std::invalid_argument ("raw mesh reply requires a request mailbox record");
+     }
+-    const auto port = _lane.run_sync ([this] {
+-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+-        return _port;
+-    });
++    const auto port = _lane.run_sync ([this] { return _port; });
+     if (!port)
+         return false;
+     std::vector<zlink::message_t> parts;
+@@ -2057,10 +2017,7 @@ bool raw_mesh_node_owner_t::reply_failure (const service_mailbox_record_t &reque
+     }
+     if (!request.reply_token)
+         return false;
+-    const auto port = _lane.run_sync ([this] {
+-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+-        return _port;
+-    });
++    const auto port = _lane.run_sync ([this] { return _port; });
+     if (!port)
+         return false;
+     std::vector<zlink::message_t> parts;
+@@ -2871,8 +2828,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
+     const auto id = operation_id (local.lifecycle_generation, correlation);
+     auto admitted = std::make_shared<task_completion_source_t<void>> ();
+     if (!_operations->register_operation (
+-          id, deadline, request_admission_completion (std::move (callback), admitted),
+-          target_routing_id,
++          id, deadline, std::move (callback).with_admission (admitted), target_routing_id,
+           mesh_request_metric_t (_request_metrics, mesh_request_surface_t::instance_spot), {},
+           detail::current_wait_owner ())) {
+         co_return false;
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+index de481abd77..153d9e641b 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+@@ -5,7 +5,7 @@
+ #include "runtime/messaging/client_call_codec.hpp"
+ 
+ #include <atomic>
+-#include <ctime>
++#include <array>
+ 
+ namespace zlink::framework::runtime::messaging
+ {
+@@ -28,23 +28,34 @@ std::string next_correlation_id ()
+     return std::string (buffer + index);
+ }
+ 
++
++} // namespace
++
+ std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
+ {
+-    const auto seconds = std::chrono::time_point_cast<std::chrono::seconds> (deadline);
+-    const std::time_t time = std::chrono::system_clock::to_time_t (seconds);
+-    std::tm tm{};
+-#if defined(_WIN32)
+-    gmtime_s (&tm, &time);
+-#else
+-    gmtime_r (&time, &tm);
+-#endif
+-    char output[64];
+-    const auto size = std::strftime (output, sizeof (output), "%Y-%m-%dT%H:%M:%SZ", &tm);
+-    return std::string (output, size);
++    using namespace std::chrono;
++    // Match the former time_point_cast/to_time_t truncation before splitting UTC fields.
++    const auto seconds = time_point_cast<std::chrono::seconds> (deadline);
++    const auto day = floor<days> (seconds);
++    const year_month_day date (day);
++    const hh_mm_ss clock (seconds - day);
++    std::array<char, 20> output{'0', '0', '0', '0', '-', '0', '0', '-', '0', '0',
++                                'T', '0', '0', ':', '0', '0', ':', '0', '0', 'Z'};
++    const auto write = [&] (std::size_t offset, std::size_t width, unsigned value) {
++        while (width != 0) {
++            output[offset + --width] = static_cast<char> ('0' + value % 10);
++            value /= 10;
++        }
++    };
++    write (0, 4, static_cast<unsigned> (static_cast<int> (date.year ())));
++    write (5, 2, static_cast<unsigned> (date.month ()));
++    write (8, 2, static_cast<unsigned> (date.day ()));
++    write (11, 2, static_cast<unsigned> (clock.hours ().count ()));
++    write (14, 2, static_cast<unsigned> (clock.minutes ().count ()));
++    write (17, 2, static_cast<unsigned> (clock.seconds ().count ()));
++    return std::string (output.data (), output.size ());
+ }
+ 
+-} // namespace
+-
+ message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header_t &header,
+                                                            encoded_payload_t payload,
+                                                            const std::string &content_type) const
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+index c69630550a..174bc10e36 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+@@ -9,13 +9,14 @@
+ 
+ #include <chrono>
+ #include <optional>
+-#include <sstream>
+ #include <string>
+ #include <typeindex>
+ 
+ namespace zlink::framework::runtime::messaging
+ {
+ 
++std::string format_utc_deadline (std::chrono::system_clock::time_point deadline);
++
+ class client_call_codec_t
+ {
+   public:
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+index d0affc1f87..56eb800c6d 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+@@ -12,6 +12,7 @@
+ #include "runtime/mesh/service_mailbox.hpp"
+ #include "runtime/messaging/envelope_codec.hpp"
+ #include <cstdlib>
++#include <ctime>
+ #include <new>
+ #include <optional>
+ #include <string>
+@@ -476,3 +477,37 @@ TEST (EnvelopeAllocations, ClientKeepsOneOwningJsonDefault)
+     EXPECT_FALSE (header->deadline);
+ }
+ } // namespace
++
++TEST (EnvelopeDeadline, IntegerUtcMatchesCalendarBoundaries)
++{
++    using namespace std::chrono;
++    // Reference the original formatter over the full system_clock date range,
++    // including leap centuries and negative fractional epochs.
++#if defined(_WIN32)
++    constexpr int first_year = 1970; // gmtime_s rejects negative time_t values.
++#else
++    constexpr int first_year = 1680;
++#endif
++    for (int year = first_year; year <= 2260; ++year) {
++        for (unsigned month = 1; month <= 12; ++month) {
++            for (int day : {1, 28}) {
++                for (int offset : {-1, 0, 1, 86399, 86400}) {
++                    const auto value = sys_days (std::chrono::year (year) / month / day)
++                                       + seconds (offset) + milliseconds (123);
++                    const auto truncated = time_point_cast<seconds> (value);
++                    const auto time = system_clock::to_time_t (truncated);
++                    std::tm utc{};
++#if defined(_WIN32)
++                    gmtime_s (&utc, &time);
++#else
++                    gmtime_r (&time, &utc);
++#endif
++                    char expected[64];
++                    const auto size =
++                      std::strftime (expected, sizeof (expected), "%Y-%m-%dT%H:%M:%SZ", &utc);
++                    ASSERT_EQ (msg::format_utc_deadline (value), std::string (expected, size));
++                }
++            }
++        }
++    }
++}
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp
+index 9cdbf8cabf..e106f4b76a 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp
+@@ -397,6 +397,37 @@ void verify_completion_callbacks_use_dispatcher ()
+     assert (registry.shutdown () == 0);
+ }
+ 
++void verify_completion_outlives_deadline_index ()
++{
++    using namespace std::chrono_literals;
++    injected_now = {};
++    injected_step = {};
++    foundation::operation_registry_t registry (&read_injected_clock);
++    std::latch entered (1), release (1);
++    auto captured = std::make_shared<int> (42);
++    std::weak_ptr<int> weak = captured;
++    assert (registry.register_operation (
++      {1010, 1}, injected_now + 30s, [captured, &entered, &release] (auto terminal, auto payload) {
++          entered.count_down ();
++          release.wait ();
++          assert (terminal == foundation::operation_terminal_t::completed);
++          assert (*captured == 42 && payload.value ().size () == 1024);
++      }));
++    captured.reset ();
++    assert (registry.complete ({1010, 1}, zlink::message_t::allocate (1024)));
++    entered.wait ();
++    assert (!registry.contains ({1010, 1}) && registry.size () == 0);
++    // Reuse the id while its original callback is blocked and its index still exists.
++    assert (registry.register_operation ({1010, 1}, injected_now + 30s, [] (auto, auto) {}));
++    injected_now += 256ms;
++    assert (registry.expire (injected_now).result ().value () == 0);
++    assert (registry.contains ({1010, 1}) && registry.index_size () == 1);
++    assert (!weak.expired ());
++    release.count_down ();
++    assert (registry.shutdown () == 1);
++    assert (weak.expired ());
++}
++
+ void verify_request_deadline_index_contract ()
+ {
+     using namespace std::chrono_literals;
+@@ -893,6 +924,7 @@ int main (int argc, char **argv)
+         return 0;
+     }
+     zlink::framework::completion_owner_t owner;
++    verify_completion_outlives_deadline_index ();
+     verify_completion_callbacks_use_dispatcher ();
+     verify_shutdown_waits_for_callback_capture_destruction ();
+     verify_independent_completion_turns (1);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
+index c7867c0ee0..6814bc6593 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
+@@ -200,6 +200,30 @@ TEST (RequestCallAllocations, CompletionObserverReleasesCapturesBeforeDeliverySt
+     EXPECT_EQ (calls, 1);
+     EXPECT_TRUE (weak.expired ());
+     EXPECT_TRUE (delivery);
++    delivery ();
++    EXPECT_EQ (calls, 1);
++}
++
++TEST (RequestCallAllocations, SharedAdmissionSourceCannotMoveAfterRegistration)
++{
++    auto source = fw::detail::make_task_completion_source<int> ();
++    auto task = source->task ();
++    fw::detail::observe_task_completion (task, [] (const auto &) {});
++    EXPECT_DEATH ({ fw::task_completion_source_t<int> moved (std::move (*source)); }, "");
++    EXPECT_DEATH (
++      {
++          fw::task_completion_source_t<int> destination;
++          destination = std::move (*source);
++      },
++      "");
++    EXPECT_DEATH (
++      {
++          fw::task_completion_source_t<int> replacement;
++          *source = std::move (replacement);
++      },
++      "");
++    EXPECT_TRUE (source->complete (fw::result_t<int>::success (42)));
++    EXPECT_EQ (task.result ().value (), 42);
+ }
+ 
+ TEST (RequestCallAllocations, InlineRawCallbackCopiesAndMovesWithoutAllocating)
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
+index 1f7f5b40a4..097790d517 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
+@@ -10,6 +10,8 @@
+ #include "scope_exit.hpp"
+ 
+ #include <array>
++#include <barrier>
++#include <thread>
+ #include <condition_variable>
+ #include <cstdio>
+ #include <mutex>
+@@ -146,6 +148,50 @@ struct route_payload_t
+     int value = 7;
+ };
+ 
++TEST (SendAllocations, CopiedNodeCallsShareOneInlineSubmissionClaim)
++{
++    fw::serializer_registry_t serializers;
++    serializers.add<route_payload_t> (
++      [] (const auto &) { return fw::encoded_payload_t::from_string ("7"); },
++      [] (const auto &) { return route_payload_t{}; }, "x/y");
++    auto builder = fw::test::runtime_failure_builder ();
++    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
++    runtime.bind_serializers (serializers);
++    std::atomic<unsigned> submitted{0};
++    runtime.bind_mesh_node_transport (
++      "m",
++      [&] (const auto &, auto) {
++          ++submitted;
++          return fw::task_t<fw::result_t<void>> (
++            fw::result_t<fw::result_t<void>>::success (fw::result_t<void>::success ()));
++      },
++      {});
++    auto client = builder.route_client (serializers);
++    auto call = client.send_to_node ("m", zlink::routing_id_t::from ("n"), route_payload_t{});
++    const fw::route_send_call_t::metadata_map_t metadata;
++    const auto field_copies = fw::tests::count_allocations ([&] {
++        const auto copy = metadata;
++        (void) copy;
++    });
++    std::optional<fw::route_send_call_t> copied;
++    EXPECT_EQ (fw::tests::count_allocations ([&] { copied.emplace (call); }), field_copies);
++    std::barrier start (3);
++    std::array<bool, 2> succeeded{};
++    std::thread first ([&] {
++        start.arrive_and_wait ();
++        succeeded[0] = bool (call.async ().result ());
++    });
++    std::thread second ([&] {
++        start.arrive_and_wait ();
++        succeeded[1] = bool (copied->async ().result ());
++    });
++    start.arrive_and_wait ();
++    first.join ();
++    second.join ();
++    EXPECT_EQ (submitted.load (), 1u);
++    EXPECT_NE (succeeded[0], succeeded[1]);
++}
++
+ TEST (SendAllocations, SynchronousNodeSendAddsNoStorageBeyondEncoding)
+ {
+     fw::serializer_registry_t serializers;

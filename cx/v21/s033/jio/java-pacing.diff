@@ -1,0 +1,76 @@
+diff --git a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
+index 2ebc4da40e..23b9cf5be8 100644
+--- a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
++++ b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
+@@ -232,10 +232,28 @@ public final class BenchDrivers {
+             throws InterruptedException {
+         long deadline = source.activeDeadline;
+         long sequence = 0;
++        boolean paceRequests =
++                options.requestRate != 0
++                        && options.runsImplementation("zlink-java")
++                        && "request-backpressure".equals(trigger.pattern());
++        long requestIntervalNs =
++                paceRequests ? Math.max(1L, 1_000_000_000L / options.requestRate) : 0;
++        long nextSubmissionNs = BenchMetricHeader.nowNs();
+         long cpuStart = resources.beginSubmit();
+         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+         CompletableFuture<Void> admissionPending = null;
+         while (BenchMetricHeader.nowNs() < deadline) {
++            if (requestIntervalNs != 0) {
++                long remaining;
++                while ((remaining = nextSubmissionNs - BenchMetricHeader.nowNs()) > 0
++                        && BenchMetricHeader.nowNs() < deadline) {
++                    LockSupport.parkNanos(remaining);
++                }
++                if (BenchMetricHeader.nowNs() >= deadline) {
++                    break;
++                }
++                nextSubmissionNs += requestIntervalNs;
++            }
+             if (admissionPending != null) {
+                 try {
+                     if (!operation.await(
+diff --git a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchOptions.java b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchOptions.java
+index 893fce4072..c99002c53f 100644
+--- a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchOptions.java
++++ b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchOptions.java
+@@ -19,6 +19,7 @@ public final class BenchOptions {
+     public final int drainBoundMs;
+     public final int requestTimeoutMs;
+     public final int routeReadyMs;
++    public final long requestRate;
+     public final String triggerUrl;
+     public final String statsUrl;
+     public final String targetEndpoint;
+@@ -42,6 +43,7 @@ public final class BenchOptions {
+         drainBoundMs = Args.integer(argv, "--drain-bound-ms", 30_000);
+         requestTimeoutMs = Args.integer(argv, "--request-timeout-ms", 30_000);
+         routeReadyMs = Args.integer(argv, "--route-ready-ms", 30_000);
++        requestRate = requestRateFromEnvironment();
+         triggerUrl = Args.value(argv, "--trigger-url", "");
+         statsUrl = Args.value(argv, "--stats-url", "");
+         targetEndpoint = Args.value(argv, "--target-endpoint", "");
+@@ -83,6 +85,22 @@ public final class BenchOptions {
+         }
+     }
+ 
++    private static long requestRateFromEnvironment() {
++        String value = System.getenv("ZLINK_JAVA_BENCH_REQUEST_RATE");
++        if (value == null || value.isBlank()) {
++            return 0;
++        }
++        try {
++            long rate = Long.parseLong(value);
++            if (rate > 0) {
++                return rate;
++            }
++        } catch (NumberFormatException ignored) {
++            // Report malformed benchmark configuration below.
++        }
++        throw new IllegalArgumentException("ZLINK_JAVA_BENCH_REQUEST_RATE must be a positive integer");
++    }
++
+     public boolean runsImplementation(String name) {
+         return implementation.equals(name);
+     }

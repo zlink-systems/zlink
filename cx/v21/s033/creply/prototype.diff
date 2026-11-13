@@ -1,0 +1,21 @@
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+@@ -503,7 +503,7 @@
+     if (request.source_routing_id.empty () || !request.reply_token || messages.empty ()) {
+         throw std::invalid_argument ("raw route reply requires request context and message parts");
+     }
+-    std::lock_guard lock (*_socket_mutex);
++    std::unique_lock lock (*_socket_mutex);
+     if (_socket == nullptr)
+         return false;
+     auto operation =
+@@ -512,6 +512,9 @@
+         .message (messages[0]);
+     for (std::size_t index = 1; index < messages.size (); ++index)
+         operation = std::move (operation).message (messages[index]);
++    // The binding operation has captured its handle and weak runtime token.
++    // Core owns submit versus close after C++ socket access ends here.
++    lock.unlock ();
+     try {
+         std::move (operation).submit ();
+         return true;

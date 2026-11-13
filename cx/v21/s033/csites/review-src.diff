@@ -1,0 +1,3538 @@
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
+index 3bc75fd0cb..d4c7c2dcb5 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
+@@ -306,9 +306,28 @@ class serializer_registry_t
+         if (const auto cached = cached_serializer (type)) {
+             return *std::static_pointer_cast<const serializer_t<T>> (cached);
+         }
+ 
+-        serializer_t<T> selected = [&] {
++        auto selected = make_serializer<T> ();
++        auto candidate = std::make_shared<const serializer_t<T>> (std::move (selected));
++        const auto resolved = cache_serializer (type, candidate);
++        return *std::static_pointer_cast<const serializer_t<T>> (resolved);
++    }
++
++    encoded_payload_t serialize (std::type_index type, const void *value) const;
++    void deserialize (std::type_index type, const encoded_payload_t &payload, void *out) const;
++    bool contains (std::type_index type) const;
++    std::string content_type (std::type_index type) const;
++
++  private:
++    friend struct detail::serializer_registry_access_t;
++    friend struct detail::serializer_registry_test_access_t;
++    friend class codec_registration_context_t;
++
++    template <typename T> serializer_t<T> make_serializer () const
++    {
++        const auto type = std::type_index (typeid (T));
++        return [&] {
+             auto registered = erased_serializer (type);
+             if (!registered) {
+                 if constexpr (requires { detail::service_packet_codec_t<T>::make_serializer (); }) {
+                     return detail::service_packet_codec_t<T>::make_serializer ();
+@@ -361,23 +380,10 @@ class serializer_registry_t
+                   return value;
+               },
+               std::move (registered->content_type));
+         }();
+-        auto candidate = std::make_shared<const serializer_t<T>> (std::move (selected));
+-        const auto resolved = cache_serializer (type, candidate);
+-        return *std::static_pointer_cast<const serializer_t<T>> (resolved);
+     }
+ 
+-    encoded_payload_t serialize (std::type_index type, const void *value) const;
+-    void deserialize (std::type_index type, const encoded_payload_t &payload, void *out) const;
+-    bool contains (std::type_index type) const;
+-    std::string content_type (std::type_index type) const;
+-
+-  private:
+-    friend struct detail::serializer_registry_access_t;
+-    friend struct detail::serializer_registry_test_access_t;
+-    friend class codec_registration_context_t;
+-
+     explicit serializer_registry_t (std::shared_ptr<detail::serializer_registry_state_t> state) :
+         _state (std::move (state))
+     {
+     }
+@@ -435,22 +441,64 @@ struct serializer_registry_access_t
+         return serializer_registry_t (registry._state);
+     }
+ 
+     static void freeze (serializer_registry_t &registry) noexcept { registry.freeze (); }
++    static bool frozen (const serializer_registry_t &registry) noexcept;
++    template <typename T> static serializer_t<T> bind (const serializer_registry_t &registry)
++    {
++        return registry.make_serializer<T> ();
++    }
+ };
+ 
+ template <typename TPayload>
+-TPayload deserialize_typed_payload (serializer_registry_t &serializers,
++TPayload deserialize_typed_payload (const serializer_t<TPayload> &serializer,
+                                     const zlink::message_t &message,
+                                     std::string_view content_type)
+ {
+-    const auto serializer = serializers.get<TPayload> ();
+-    if (!content_type.empty () && content_type != serializer.content_type ()) {
++    if (!content_type.empty () && content_type != serializer.content_type ())
+         throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                      "inbound content type does not match the typed handler codec");
+-    }
+     return serializer.deserialize (encoded_payload_from_raw (message));
+ }
+ 
++// A handler's immutable construction plan retains descriptors from its registry.
++// Standalone invocations before host startup retain the ordinary registry path.
++template <typename TRequest, typename TReply = void> struct handler_codec_plan_t
++{
++    std::optional<serializer_t<TRequest>> request;
++    using reply_t =
++      std::conditional_t<std::is_void_v<TReply>, std::monostate, serializer_t<TReply>>;
++    std::optional<reply_t> reply;
++    void bind (serializer_registry_t &serializers)
++    {
++        if (!serializer_registry_access_t::frozen (serializers))
++            return;
++        request = serializer_registry_access_t::bind<TRequest> (serializers);
++        if constexpr (!std::is_void_v<TReply>)
++            reply = serializer_registry_access_t::bind<TReply> (serializers);
++    }
++    TRequest deserialize (serializer_registry_t &serializers,
++                          const zlink::message_t &message,
++                          std::string_view wire_type) const
++    {
++        return request
++                 ? deserialize_typed_payload (*request, message, wire_type)
++                 : deserialize_typed_payload (serializers.get<TRequest> (), message, wire_type);
++    }
++    template <typename TValue>
++    encoded_payload_t serialize (serializer_registry_t &serializers, const TValue &value) const
++    {
++        return reply ? reply->serialize (value) : serializers.get<TValue> ().serialize (value);
++    }
++};
++
++template <typename TPayload>
++TPayload deserialize_typed_payload (serializer_registry_t &serializers,
++                                    const zlink::message_t &message,
++                                    std::string_view content_type)
++{
++    return deserialize_typed_payload (serializers.get<TPayload> (), message, content_type);
++}
++
+ } // namespace detail
+ 
+ } // namespace zlink::framework
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/mesh_node.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/mesh_node.hpp
+index b889d44713..d32366db3d 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/mesh_node.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/configuration/mesh_node.hpp
+@@ -44,8 +44,9 @@ struct mesh_handler_registration_t
+     std::type_index owner_type{typeid (void)};
+     std::type_index message_type{typeid (void)};
+     std::type_index reply_type{typeid (void)};
+     mesh_handler_invoker_t invoke;
++    std::function<void (serializer_registry_t &)> bind_codecs;
+ };
+ 
+ void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> state,
+                                  service_collection_t &services);
+@@ -566,47 +567,48 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool
+         } else {
+             return static_cast<task_t<void> (THandler::*) (const TMessage &)> (&THandler::handle);
+         }
+     }();
+-    auto invoke = []<typename TResult, typename... TArgs> (
++    auto codecs = std::make_shared<detail::handler_codec_plan_t<TMessage>> ();
++    auto invoke = [codecs]<typename TResult, typename... TArgs> (
+                     TResult (THandler::*target) (TArgs...)) -> detail::mesh_handler_invoker_t {
+         if constexpr (std::is_void_v<TResult>) {
+-            return
+-              [target] (service_provider_t &services, serializer_registry_t &serializers,
+-                        const zlink::message_t &message, const route_message_context_t &context,
+-                        detail::handler_start_callback_ref_t before_application_handler)
+-                -> task_t<zlink::message_t> {
+-                  try {
+-                      auto &owner = services.get_required<THandler> ();
+-                      auto payload = detail::deserialize_typed_payload<TMessage> (
+-                        serializers, message, context.content_type.value_or (""));
+-                      if constexpr (std::is_invocable_v<decltype (target), THandler &,
+-                                                        const TMessage &,
+-                                                        const route_message_context_t &>) {
+-                          detail::invoke_prepared_handler (before_application_handler, target,
+-                                                           owner, payload, context);
+-                      } else {
+-                          detail::invoke_prepared_handler (before_application_handler, target,
+-                                                           owner, payload);
+-                      }
+-                      return task_t<zlink::message_t> (
+-                        result_t<zlink::message_t>::success (zlink::message_t{}));
+-                  }
+-                  catch (...) {
+-                      return task_t<zlink::message_t> (
+-                        detail::current_exception_result<zlink::message_t> ());
+-                  }
+-              };
++            return [target, codecs] (
++                     service_provider_t &services, serializer_registry_t &serializers,
++                     const zlink::message_t &message, const route_message_context_t &context,
++                     detail::handler_start_callback_ref_t before_application_handler)
++                     -> task_t<zlink::message_t> {
++                try {
++                    auto &owner = services.get_required<THandler> ();
++                    auto payload = codecs->deserialize (serializers, message,
++                                                        context.content_type.value_or (""));
++                    if constexpr (std::is_invocable_v<decltype (target), THandler &,
++                                                      const TMessage &,
++                                                      const route_message_context_t &>) {
++                        detail::invoke_prepared_handler (before_application_handler, target, owner,
++                                                         payload, context);
++                    } else {
++                        detail::invoke_prepared_handler (before_application_handler, target, owner,
++                                                         payload);
++                    }
++                    return task_t<zlink::message_t> (
++                      result_t<zlink::message_t>::success (zlink::message_t{}));
++                }
++                catch (...) {
++                    return task_t<zlink::message_t> (
++                      detail::current_exception_result<zlink::message_t> ());
++                }
++            };
+         } else {
+-            return [target] (service_provider_t &services, serializer_registry_t &serializers,
+-                             const zlink::message_t &message,
+-                             const route_message_context_t &context,
+-                             detail::handler_start_callback_ref_t before_application_handler)
++            return [target, codecs] (
++                     service_provider_t &services, serializer_registry_t &serializers,
++                     const zlink::message_t &message, const route_message_context_t &context,
++                     detail::handler_start_callback_ref_t before_application_handler)
+                      -> task_t<zlink::message_t> {
+                 try {
+                     auto &owner = services.get_required<THandler> ();
+-                    auto payload = detail::deserialize_typed_payload<TMessage> (
+-                      serializers, message, context.content_type.value_or (""));
++                    auto payload = codecs->deserialize (serializers, message,
++                                                        context.content_type.value_or (""));
+                     if constexpr (std::is_invocable_v<decltype (target), THandler &,
+                                                       const TMessage &,
+                                                       const route_message_context_t &>) {
+                         co_await detail::invoke_prepared_handler (before_application_handler,
+@@ -624,27 +626,30 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool
+         }
+     }(method);
+     return add_handler_registration (detail::mesh_handler_registration_t{
+       request, _channel_name, std::move (packet_name), std::type_index (typeid (THandler)),
+-      std::type_index (typeid (TMessage)), std::type_index (typeid (void)), std::move (invoke)});
++      std::type_index (typeid (TMessage)), std::type_index (typeid (void)), std::move (invoke),
++      [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); }});
+ }
+ 
+ template <typename THandler, typename TRequest, typename TReply>
+ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool request,
+                                                                            std::string packet_name)
+ {
+     detail::register_mesh_handler_service_for<THandler> (_state);
++    auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
+     return add_handler_registration (detail::mesh_handler_registration_t{
+       request, _channel_name, std::move (packet_name), std::type_index (typeid (THandler)),
+       std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)),
+-      [] (service_provider_t &services, serializer_registry_t &serializers,
+-          const zlink::message_t &message, const route_message_context_t &context,
+-          detail::handler_start_callback_ref_t before_application_handler)
++      [codecs] (service_provider_t &services, serializer_registry_t &serializers,
++                const zlink::message_t &message, const route_message_context_t &context,
++                detail::handler_start_callback_ref_t before_application_handler)
+         -> task_t<zlink::message_t> {
++          const auto plan = codecs;
+           try {
+               auto &owner = services.get_required<THandler> ();
+-              auto payload = detail::deserialize_typed_payload<TRequest> (
+-                serializers, message, context.content_type.value_or (""));
++              auto payload =
++                plan->deserialize (serializers, message, context.content_type.value_or (""));
+               if constexpr (requires {
+                                 static_cast<TReply (THandler::*) (
+                                   const TRequest &, const route_message_context_t &)> (
+                                   &THandler::handle);
+@@ -654,9 +659,9 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool
+                     static_cast<TReply (THandler::*) (
+                       const TRequest &, const route_message_context_t &)> (&THandler::handle),
+                     owner, payload, context);
+                   co_return result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
++                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+               } else if constexpr (requires {
+                                        static_cast<task_t<TReply> (THandler::*) (
+                                          const TRequest &, const route_message_context_t &)> (
+                                          &THandler::handle);
+@@ -666,9 +671,9 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool
+                     static_cast<task_t<TReply> (THandler::*) (
+                       const TRequest &, const route_message_context_t &)> (&THandler::handle),
+                     owner, payload, context);
+                   co_return result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
++                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+               } else if constexpr (requires {
+                                        static_cast<TReply (THandler::*) (const TRequest &)> (
+                                          &THandler::handle);
+                                    }) {
+@@ -676,23 +681,24 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool
+                     before_application_handler,
+                     static_cast<TReply (THandler::*) (const TRequest &)> (&THandler::handle), owner,
+                     payload);
+                   co_return result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
++                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+               } else {
+                   auto reply = co_await detail::invoke_prepared_handler (
+                     before_application_handler,
+                     static_cast<task_t<TReply> (THandler::*) (const TRequest &)> (
+                       &THandler::handle),
+                     owner, payload);
+                   co_return result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
++                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+               }
+           }
+           catch (...) {
+               co_return detail::current_exception_result<zlink::message_t> ();
+           }
+-      }});
++      },
++      [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); }});
+ }
+ 
+ template <typename THandler, typename TMessage>
+ mesh_node_builder_t &mesh_node_builder_t::add_handler (bool request, std::string packet_name)
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/detail/handler_invocation.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/detail/handler_invocation.hpp
+index 077e2f4a9f..057816c56d 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/detail/handler_invocation.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/detail/handler_invocation.hpp
+@@ -92,5 +92,20 @@ task_t<zlink::message_t> serialize_handler_result (TResult &&result,
+           encoded_payload_to_raw (serializers.get<result_type> ().serialize (result)));
+     }
+ }
+ 
++template <typename TResult, typename TPlan>
++task_t<zlink::message_t> serialize_handler_result (TResult result,
++                                                   serializer_registry_t &serializers,
++                                                   std::shared_ptr<TPlan> codecs)
++{
++    if constexpr (is_task_v<TResult>) {
++        auto value = co_await result;
++        co_return result_t<zlink::message_t>::success (
++          encoded_payload_to_raw (codecs->serialize (serializers, value)));
++    } else {
++        co_return result_t<zlink::message_t>::success (
++          encoded_payload_to_raw (codecs->serialize (serializers, result)));
++    }
++}
++
+ } // namespace zlink::framework::detail
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
+index 6644f3bea2..7c91139fa0 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
+@@ -126,8 +126,14 @@ class request_capture_storage_t
+             _captures = capture->next;
+             capture->destroy (capture);
+         }
+     }
++    std::pmr::memory_resource *resource () noexcept { return &_resource; }
++    // One C1 completion travels from registration to its independent delivery turn.
++    // It has explicit destruction ownership and does not consume capture arena space.
++    static constexpr std::size_t completion_storage_size = 512;
++    void *completion_storage () noexcept { return _completion.data (); }
++
+     template <bool Callable = true, typename T> auto *store (T value)
+     {
+         using stored_t = stored_capture_t<T, Callable>;
+ #if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+@@ -143,8 +149,9 @@ class request_capture_storage_t
+         return capture;
+     }
+ 
+   private:
++    alignas (std::max_align_t) std::array<std::byte, completion_storage_size> _completion;
+     alignas (std::max_align_t) std::array<std::byte, 640> _buffer;
+     std::pmr::monotonic_buffer_resource _resource{_buffer.data (), _buffer.size ()};
+     capture_t *_captures = nullptr;
+     void (*_release_project) (request_capture_storage_t *) noexcept;
+@@ -227,8 +234,17 @@ template <typename... TArgs> class request_callback_t
+         return std::shared_ptr<TValue> (_owner, std::addressof (*stored->value));
+     }
+ 
+     bool has_request_storage () const noexcept { return _storage != nullptr; }
++    std::shared_ptr<void> completion_storage () const noexcept
++    {
++        return _storage ? std::shared_ptr<void> (_owner, _storage->completion_storage ())
++                        : std::shared_ptr<void>{};
++    }
++    std::pmr::memory_resource *resource () const noexcept
++    {
++        return _storage ? _storage->resource () : std::pmr::get_default_resource ();
++    }
+ 
+     template <typename TOwner, typename TCallback>
+     static request_callback_t from_storage (const std::shared_ptr<TOwner> &owner,
+                                             request_capture_storage_t *storage,
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/handlers/handler_registry.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/handlers/handler_registry.hpp
+index 8803bb02c9..1b4c9b3109 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/handlers/handler_registry.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/handlers/handler_registry.hpp
+@@ -93,28 +93,31 @@ class handler_registry_t
+                                     TReply (TOwner::*method) (const TRequest &),
+                                     handler_options_t options = {})
+     {
+         const auto packet = options.packet_name.value_or (detail::message_name<TRequest> ());
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
+         return add_handler (
+           {std::move (channel_name), std::move (topic), packet, handler_kind_t::request,
+            options.execution, std::type_index (typeid (TOwner)),
+            std::type_index (typeid (TRequest))},
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
++          [method,
++           codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto request = detail::deserialize_typed_payload<TRequest> (
+-                    serializers, message, inbound.message.content_type.value_or (""));
++                  auto request = codecs->deserialize (serializers, message,
++                                                      inbound.message.content_type.value_or (""));
+                   auto reply = (owner.*method) (request);
+                   return task_t<zlink::message_t> (result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply))));
++                    detail::encoded_payload_to_raw (codecs->serialize (serializers, reply))));
+               }
+               catch (...) {
+                   return task_t<zlink::message_t> (
+                     detail::current_exception_result<zlink::message_t> ());
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TRequest, typename TReply>
+     handler_registry_t &on_request (std::string channel_name,
+@@ -122,27 +125,31 @@ class handler_registry_t
+                                     task_t<TReply> (TOwner::*method) (const TRequest &),
+                                     handler_options_t options = {})
+     {
+         const auto packet = options.packet_name.value_or (detail::message_name<TRequest> ());
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
+         return add_handler (
+           {std::move (channel_name), std::move (topic), packet, handler_kind_t::request,
+            options.execution, std::type_index (typeid (TOwner)),
+            std::type_index (typeid (TRequest))},
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
++          [method,
++           codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
++              const auto plan = codecs;
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto request = detail::deserialize_typed_payload<TRequest> (
+-                    serializers, message, inbound.message.content_type.value_or (""));
++                  auto request = plan->deserialize (serializers, message,
++                                                    inbound.message.content_type.value_or (""));
+                   auto reply = co_await (owner.*method) (request);
+                   co_return result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
++                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+               }
+               catch (...) {
+                   co_return detail::current_exception_result<zlink::message_t> ();
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TRequest, typename TReply>
+     handler_registry_t &on_request (std::string channel_name,
+@@ -158,26 +165,29 @@ class handler_registry_t
+                                         handler_kind_t::request,
+                                         options.execution,
+                                         std::type_index (typeid (TOwner)),
+                                         std::type_index (typeid (TRequest))};
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
+         return add_handler (
+           std::move (descriptor),
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
++          [method,
++           codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto request = detail::deserialize_typed_payload<TRequest> (
+-                    serializers, message, inbound.message.content_type.value_or (""));
++                  auto request = codecs->deserialize (serializers, message,
++                                                      inbound.message.content_type.value_or (""));
+                   auto reply = (owner.*method) (request, inbound.message);
+                   return task_t<zlink::message_t> (result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply))));
++                    detail::encoded_payload_to_raw (codecs->serialize (serializers, reply))));
+               }
+               catch (...) {
+                   return task_t<zlink::message_t> (
+                     detail::current_exception_result<zlink::message_t> ());
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TRequest, typename TReply>
+     handler_registry_t &on_request (std::string channel_name,
+@@ -193,25 +203,29 @@ class handler_registry_t
+                                         handler_kind_t::request,
+                                         options.execution,
+                                         std::type_index (typeid (TOwner)),
+                                         std::type_index (typeid (TRequest))};
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
+         return add_handler (
+           std::move (descriptor),
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
++          [method,
++           codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
++              const auto plan = codecs;
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto request = detail::deserialize_typed_payload<TRequest> (
+-                    serializers, message, inbound.message.content_type.value_or (""));
++                  auto request = plan->deserialize (serializers, message,
++                                                    inbound.message.content_type.value_or (""));
+                   auto reply = co_await (owner.*method) (request, inbound.message);
+                   co_return result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
++                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+               }
+               catch (...) {
+                   co_return detail::current_exception_result<zlink::message_t> ();
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TRequest, typename TReply>
+     handler_registry_t &request (std::string channel_name,
+@@ -407,27 +421,30 @@ class handler_registry_t
+                                                  void (TOwner::*method) (const TPayload &),
+                                                  handler_options_t options)
+     {
+         const auto packet = options.packet_name.value_or (detail::message_name<TPayload> ());
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TPayload, void>> ();
+         return add_handler (
+           {std::move (channel_name), std::move (topic), packet, kind, options.execution,
+            std::type_index (typeid (TOwner)), std::type_index (typeid (TPayload))},
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
++          [method,
++           codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto payload = detail::deserialize_typed_payload<TPayload> (
+-                    serializers, message, inbound.message.content_type.value_or (""));
++                  auto payload = codecs->deserialize (serializers, message,
++                                                      inbound.message.content_type.value_or (""));
+                   (owner.*method) (payload);
+                   return task_t<zlink::message_t> (
+                     result_t<zlink::message_t>::success (zlink::message_t{}));
+               }
+               catch (...) {
+                   return task_t<zlink::message_t> (
+                     detail::current_exception_result<zlink::message_t> ());
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TPayload>
+     handler_registry_t &add_task_member_handler (std::string channel_name,
+@@ -436,25 +453,28 @@ class handler_registry_t
+                                                  task_t<void> (TOwner::*method) (const TPayload &),
+                                                  handler_options_t options)
+     {
+         const auto packet = options.packet_name.value_or (detail::message_name<TPayload> ());
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TPayload, void>> ();
+         return add_handler (
+           {std::move (channel_name), std::move (topic), packet, kind, options.execution,
+            std::type_index (typeid (TOwner)), std::type_index (typeid (TPayload))},
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
++          [method,
++           codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto payload = detail::deserialize_typed_payload<TPayload> (
+-                    serializers, message, inbound.message.content_type.value_or (""));
++                  auto payload = codecs->deserialize (serializers, message,
++                                                      inbound.message.content_type.value_or (""));
+                   co_await (owner.*method) (payload);
+                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
+               }
+               catch (...) {
+                   co_return detail::current_exception_result<zlink::message_t> ();
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     /// Projects the exact context type the handler declared out of the inbound carrier so the
+     /// public context structs never have to be downcast.
+@@ -483,26 +503,29 @@ class handler_registry_t
+                                         kind,
+                                         options.execution,
+                                         std::type_index (typeid (TOwner)),
+                                         std::type_index (typeid (TPayload))};
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TPayload, void>> ();
+         return add_handler (
+           std::move (descriptor),
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
++          [method,
++           codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto payload = detail::deserialize_typed_payload<TPayload> (
+-                    serializers, message, inbound.message.content_type.value_or (""));
++                  auto payload = codecs->deserialize (serializers, message,
++                                                      inbound.message.content_type.value_or (""));
+                   (owner.*method) (payload, project_context<TContext> (inbound));
+                   return task_t<zlink::message_t> (
+                     result_t<zlink::message_t>::success (zlink::message_t{}));
+               }
+               catch (...) {
+                   return task_t<zlink::message_t> (
+                     detail::current_exception_result<zlink::message_t> ());
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TPayload, typename TContext>
+     handler_registry_t &add_context_task_member_handler (
+@@ -519,27 +542,35 @@ class handler_registry_t
+                                         kind,
+                                         options.execution,
+                                         std::type_index (typeid (TOwner)),
+                                         std::type_index (typeid (TPayload))};
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TPayload, void>> ();
+         return add_handler (
+           std::move (descriptor),
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
++          [method,
++           codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto payload = detail::deserialize_typed_payload<TPayload> (
+-                    serializers, message, inbound.message.content_type.value_or (""));
++                  auto payload = codecs->deserialize (serializers, message,
++                                                      inbound.message.content_type.value_or (""));
+                   co_await (owner.*method) (payload, project_context<TContext> (inbound));
+                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
+               }
+               catch (...) {
+                   co_return detail::current_exception_result<zlink::message_t> ();
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+-    handler_registry_t &add_handler (handler_descriptor_t descriptor, invoker_t invoker);
++    handler_registry_t &
++    add_handler (handler_descriptor_t descriptor,
++                 invoker_t invoker,
++                 std::function<void (serializer_registry_t &)> bind_codecs = {});
++    void bind_codecs (serializer_registry_t &serializers);
++    friend class app_t;
+     void emit_failure (const handler_descriptor_t &descriptor,
+                        const framework_exception_t &error) const;
+ 
+     friend class detail::route_handler_invoker_t;
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.cpp
+index be38c3f9d9..4270eee85d 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.cpp
+@@ -10,20 +10,20 @@ namespace zlink::framework::detail
+ {
+ 
+ runtime::messaging::envelope_header_t channel_reply_writer_t::create_reply_header (
+   runtime::messaging::message_kind_t kind,
+-  std::string channel_name,
++  std::string_view channel_name,
+   const runtime::messaging::envelope_header_t &request) const
+ {
+     return {.kind = kind,
+-            .channel_name = std::move (channel_name),
+-            .message_name = request.message_name,
+-            .content_type = request.content_type,
+-            .correlation_id = request.correlation_id};
++            .channel_name = runtime::messaging::header_text_t::view (channel_name),
++            .message_name = runtime::messaging::header_text_t::view (request.message_name),
++            .content_type = runtime::messaging::header_text_t::view (request.content_type),
++            .correlation_id = runtime::messaging::header_text_t::view (request.correlation_id)};
+ }
+ 
+ runtime::messaging::envelope_header_t
+-channel_reply_writer_t::create_error_header (std::string channel_name,
++channel_reply_writer_t::create_error_header (std::string_view channel_name,
+                                              const runtime::messaging::envelope_header_t &request,
+                                              const framework_exception_t &error) const
+ {
+     auto header = create_reply_header (runtime::messaging::message_kind_t::error,
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.hpp b/framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.hpp
+index 16cb99adbb..3cf9ab79c7 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.hpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.hpp
+@@ -14,13 +14,13 @@ class channel_reply_writer_t
+ {
+   public:
+     runtime::messaging::envelope_header_t
+     create_reply_header (runtime::messaging::message_kind_t kind,
+-                         std::string channel_name,
++                         std::string_view channel_name,
+                          const runtime::messaging::envelope_header_t &request) const;
+ 
+     runtime::messaging::envelope_header_t
+-    create_error_header (std::string channel_name,
++    create_error_header (std::string_view channel_name,
+                          const runtime::messaging::envelope_header_t &request,
+                          const framework_exception_t &error) const;
+ 
+     runtime::messaging::message_parts_t
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/route_handler_invoker.cpp b/framework/languages/cpp/framework/src/runtime/channels/route_handler_invoker.cpp
+index 060061599c..f79d01a835 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/route_handler_invoker.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/route_handler_invoker.cpp
+@@ -63,13 +63,25 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
+     // Reply encoding/submission and scope cleanup belong to this completing turn.
+     // Frame-local terminal ownership follows scope, payload and callback cleanup.
+     auto completed = result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
+     try {
+-        completed = complete ? complete (result)
+-                    : result
+-                      ? result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt)
+-                      : propagate_failure<std::optional<route_dispatch_reply_t>> (
+-                          result, "routed handler failed");
++        completed = std::visit (
++          [&] (const auto &completion) {
++              using completion_type = std::decay_t<decltype (completion)>;
++              if constexpr (std::is_same_v<completion_type, route_request_completion_t>)
++                  return completion (result, context);
++              else {
++                  if constexpr (std::is_same_v<completion_type, callback_completion_t>) {
++                      if (completion)
++                          return completion (result);
++                  }
++                  return result
++                           ? result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt)
++                           : propagate_failure<std::optional<route_dispatch_reply_t>> (
++                               result, "routed handler failed");
++              }
++          },
++          complete);
+     }
+     catch (...) {
+         completed = current_exception_result<std::optional<route_dispatch_reply_t>> ();
+     }
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/route_handler_invoker.hpp b/framework/languages/cpp/framework/src/runtime/channels/route_handler_invoker.hpp
+index a572cabeea..0fd13c89a4 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/route_handler_invoker.hpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/route_handler_invoker.hpp
+@@ -1,20 +1,36 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #pragma once
++#include "runtime/diagnostics/dispatch_options_access.hpp"
+ #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
+ 
+ #include "runtime/channels/route_handler_registry.hpp"
+ #include "runtime/channels/route_packet.hpp"
+ #include <zlink/framework/contracts/handlers/handler_registry.hpp>
+ 
+ namespace zlink::framework::detail
+ {
++struct route_request_completion_t
++{
++    retained_dispatch_options_t options;
++    std::shared_ptr<void> registration;
++    std::function<result_t<void> (route_dispatch_reply_t &&)> submit_reply;
++    route_received_packet_t received;
++    runtime::messaging::envelope_header_t header;
++    result_t<std::optional<route_dispatch_reply_t>>
++    operator() (const result_t<zlink::message_t> &reply,
++                const framework::route_message_context_t &context) const;
++};
++
+ class route_handler_invoker_t
+ {
+   public:
+-    using completion_t = std::function<result_t<std::optional<route_dispatch_reply_t>> (
++    using callback_completion_t = std::function<result_t<std::optional<route_dispatch_reply_t>> (
+       const result_t<zlink::message_t> &)>;
+ 
++    using completion_t =
++      std::variant<std::monostate, callback_completion_t, route_request_completion_t>;
++
+     static task_t<std::optional<route_dispatch_reply_t>>
+     invoke (const route_handler_registry_t::entry_t &handler,
+             const handler_registry_t &filters,
+             handler_dispatch_kind_t dispatch_kind,
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/route_handler_registry.cpp b/framework/languages/cpp/framework/src/runtime/channels/route_handler_registry.cpp
+index 3eb53b9187..a3b0da3239 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/route_handler_registry.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/route_handler_registry.cpp
+@@ -7,20 +7,30 @@
+ namespace zlink::framework::detail
+ {
+ 
+ route_handler_registry_t &
+-route_handler_registry_t::add_handler (route_handler_descriptor_t descriptor, invoker_t invoker)
++route_handler_registry_t::add_handler (route_handler_descriptor_t descriptor,
++                                       invoker_t invoker,
++                                       std::function<void (serializer_registry_t &)> bind_codecs)
+ {
+     key_t key{descriptor.router_channel_id, descriptor.kind, descriptor.packet_name};
+     const auto [_, inserted] =
+-      _handlers.emplace (std::move (key), entry_t{std::move (descriptor), std::move (invoker)});
++      _handlers.emplace (std::move (key), entry_t{std::move (descriptor), std::move (invoker),
++                                                  std::move (bind_codecs)});
+     if (!inserted) {
+         throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                      "duplicate routed handler registration");
+     }
+     return *this;
+ }
+ 
++void route_handler_registry_t::bind_codecs (serializer_registry_t &serializers)
++{
++    for (auto &[_, entry] : _handlers)
++        if (entry.bind_codecs)
++            entry.bind_codecs (serializers);
++}
++
+ const route_handler_descriptor_t *
+ route_handler_registry_t::find (std::string_view router_channel_id,
+                                 runtime::messaging::message_kind_t kind,
+                                 std::string_view packet_name) const
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/route_handler_registry.hpp b/framework/languages/cpp/framework/src/runtime/channels/route_handler_registry.hpp
+index 864551907a..ee362f1cd8 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/route_handler_registry.hpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/route_handler_registry.hpp
+@@ -44,8 +44,9 @@ class route_handler_registry_t
+     struct entry_t
+     {
+         route_handler_descriptor_t descriptor;
+         invoker_t invoker;
++        std::function<void (serializer_registry_t &)> bind_codecs;
+     };
+ 
+     const entry_t *resolve (std::string_view router_channel_id,
+                             runtime::messaging::message_kind_t kind,
+@@ -58,31 +59,33 @@ class route_handler_registry_t
+              void (TOwner::*method) (const TMessage &, const framework::route_message_context_t &))
+     {
+         const auto packet = packet_name.empty () ? framework::detail::message_name<TMessage> ()
+                                                  : std::move (packet_name);
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TMessage, void>> ();
+         return add_handler (
+           route_handler_descriptor_t{
+             runtime::messaging::message_kind_t::command, std::move (router_channel_id), packet,
+             std::type_index (typeid (TOwner)), std::type_index (typeid (TMessage)),
+             std::type_index (typeid (void))},
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
+-                    const zlink::message_t &message,
+-                    const framework::route_message_context_t &context,
+-                    detail::handler_start_callback_ref_t before_application_handler)
++          [method, codecs] (service_provider_t &services, serializer_registry_t &serializers,
++                            const zlink::message_t &message,
++                            const framework::route_message_context_t &context,
++                            detail::handler_start_callback_ref_t before_application_handler)
+             -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto payload = detail::deserialize_typed_payload<TMessage> (
+-                    serializers, message, context.content_type.value_or (""));
++                  auto payload =
++                    codecs->deserialize (serializers, message, context.content_type.value_or (""));
+                   detail::invoke_prepared_handler (before_application_handler, method, owner,
+                                                    payload, context);
+                   return task_t<zlink::message_t> (
+                     result_t<zlink::message_t>::success (zlink::message_t{}));
+               }
+               catch (...) {
+                   return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TMessage>
+     route_handler_registry_t &on_send (
+@@ -91,30 +94,32 @@ class route_handler_registry_t
+       task_t<void> (TOwner::*method) (const TMessage &, const framework::route_message_context_t &))
+     {
+         const auto packet = packet_name.empty () ? framework::detail::message_name<TMessage> ()
+                                                  : std::move (packet_name);
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TMessage, void>> ();
+         return add_handler (
+           route_handler_descriptor_t{
+             runtime::messaging::message_kind_t::command, std::move (router_channel_id), packet,
+             std::type_index (typeid (TOwner)), std::type_index (typeid (TMessage)),
+             std::type_index (typeid (void))},
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
+-                    const zlink::message_t &message,
+-                    const framework::route_message_context_t &context,
+-                    detail::handler_start_callback_ref_t before_application_handler)
++          [method, codecs] (service_provider_t &services, serializer_registry_t &serializers,
++                            const zlink::message_t &message,
++                            const framework::route_message_context_t &context,
++                            detail::handler_start_callback_ref_t before_application_handler)
+             -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto payload = detail::deserialize_typed_payload<TMessage> (
+-                    serializers, message, context.content_type.value_or (""));
++                  auto payload =
++                    codecs->deserialize (serializers, message, context.content_type.value_or (""));
+                   co_await detail::invoke_prepared_handler (before_application_handler, method,
+                                                             owner, payload, context);
+                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
+               }
+               catch (...) {
+                   co_return current_exception_result<zlink::message_t> ();
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TRequest, typename TReply>
+     route_handler_registry_t &on_request (
+@@ -123,31 +128,33 @@ class route_handler_registry_t
+       TReply (TOwner::*method) (const TRequest &, const framework::route_message_context_t &))
+     {
+         const auto packet = packet_name.empty () ? framework::detail::message_name<TRequest> ()
+                                                  : std::move (packet_name);
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
+         return add_handler (
+           route_handler_descriptor_t{
+             runtime::messaging::message_kind_t::request, std::move (router_channel_id), packet,
+             std::type_index (typeid (TOwner)), std::type_index (typeid (TRequest)),
+             std::type_index (typeid (TReply))},
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
+-                    const zlink::message_t &message,
+-                    const framework::route_message_context_t &context,
+-                    detail::handler_start_callback_ref_t before_application_handler)
++          [method, codecs] (service_provider_t &services, serializer_registry_t &serializers,
++                            const zlink::message_t &message,
++                            const framework::route_message_context_t &context,
++                            detail::handler_start_callback_ref_t before_application_handler)
+             -> task_t<zlink::message_t> {
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto request = detail::deserialize_typed_payload<TRequest> (
+-                    serializers, message, context.content_type.value_or (""));
++                  auto request =
++                    codecs->deserialize (serializers, message, context.content_type.value_or (""));
+                   return serialize_handler_result (
+                     detail::invoke_prepared_handler (before_application_handler, method, owner,
+                                                      request, context),
+-                    serializers);
++                    serializers, codecs);
+               }
+               catch (...) {
+                   return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+     template <typename TOwner, typename TRequest, typename TReply>
+     route_handler_registry_t &
+@@ -157,35 +164,41 @@ class route_handler_registry_t
+                                                   const framework::route_message_context_t &))
+     {
+         const auto packet = packet_name.empty () ? framework::detail::message_name<TRequest> ()
+                                                  : std::move (packet_name);
++        auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
+         return add_handler (
+           route_handler_descriptor_t{
+             runtime::messaging::message_kind_t::request, std::move (router_channel_id), packet,
+             std::type_index (typeid (TOwner)), std::type_index (typeid (TRequest)),
+             std::type_index (typeid (TReply))},
+-          [method] (service_provider_t &services, serializer_registry_t &serializers,
+-                    const zlink::message_t &message,
+-                    const framework::route_message_context_t &context,
+-                    detail::handler_start_callback_ref_t before_application_handler)
++          [method, codecs] (service_provider_t &services, serializer_registry_t &serializers,
++                            const zlink::message_t &message,
++                            const framework::route_message_context_t &context,
++                            detail::handler_start_callback_ref_t before_application_handler)
+             -> task_t<zlink::message_t> {
++              const auto plan = codecs;
+               try {
+                   auto &owner = services.get_required<TOwner> ();
+-                  auto request = detail::deserialize_typed_payload<TRequest> (
+-                    serializers, message, context.content_type.value_or (""));
++                  auto request =
++                    plan->deserialize (serializers, message, context.content_type.value_or (""));
+                   auto reply = co_await detail::invoke_prepared_handler (
+                     before_application_handler, method, owner, request, context);
+                   co_return result_t<zlink::message_t>::success (
+-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
++                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+               }
+               catch (...) {
+                   co_return current_exception_result<zlink::message_t> ();
+               }
+-          });
++          },
++          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
+     }
+ 
+-    route_handler_registry_t &add_handler (route_handler_descriptor_t descriptor,
+-                                           invoker_t invoker);
++    route_handler_registry_t &
++    add_handler (route_handler_descriptor_t descriptor,
++                 invoker_t invoker,
++                 std::function<void (serializer_registry_t &)> bind_codecs = {});
++    void bind_codecs (serializer_registry_t &serializers);
+ 
+     const route_handler_descriptor_t *find (std::string_view router_channel_id,
+                                             runtime::messaging::message_kind_t kind,
+                                             std::string_view packet_name) const;
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/route_packet_dispatcher.cpp b/framework/languages/cpp/framework/src/runtime/channels/route_packet_dispatcher.cpp
+index 8168bb4548..3426f8929d 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/route_packet_dispatcher.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/route_packet_dispatcher.cpp
+@@ -126,9 +126,9 @@ route_packet_dispatcher_t::route_packet_dispatcher_t (
+   service_provider_t &services,
+   serializer_registry_t &serializers,
+   const route_handler_registry_t &handlers,
+   const route_internal_packet_dispatcher_t &internal_packets,
+-  dispatch_options_t dispatch_options,
++  retained_dispatch_options_t dispatch_options,
+   const handler_registry_t *filters,
+   handler_dispatch_kind_t send_dispatch_kind,
+   handler_dispatch_kind_t request_dispatch_kind,
+   std::function<void ()> before_application_handler,
+@@ -340,9 +340,10 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
+         return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
+     };
+     return _invoker.invoke (*handler, filters, _send_dispatch_kind, *_services, *_serializers,
+                             std::move (body.value ()), std::move (context), std::move (before),
+-                            std::move (complete), std::move (terminal), executor);
++                            route_handler_invoker_t::callback_completion_t (std::move (complete)),
++                            std::move (terminal), executor);
+ }
+ 
+ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatch_request (
+   const route_received_packet_t &received,
+@@ -411,45 +412,48 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
+                                   dispatch_message_kind_t::request,
+                                   route_received_packet_t{source, {}, {}, {}}, header);
+             }
+         };
+-    auto complete = [options = _dispatch_options, router = _router_channel_id,
+-                     registration = _registration, submit_reply = _submit_reply,
+-                     received = route_received_packet_t{received.source_node_rid,
+-                                                        received.request_seq,
+-                                                        {},
+-                                                        received.source_session_rid},
+-                     header = std::move (header)] (const result_t<zlink::message_t> &reply)
+-      -> result_t<std::optional<route_dispatch_reply_t>> {
+-        if (!reply) {
+-            framework_exception_t error (reply.error_kind (), reply.error ()
+-                                                                ? reply.error ()->what ()
+-                                                                : "routed request handler failed");
+-            return reply_route_error (options, router, submit_reply, received, header, error);
+-        }
+-        if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::replied)) {
+-            trace_route_flow (options, router, message_flow_outcome_t::replied,
+-                              dispatch_message_kind_t::response, received, header);
+-        }
+-        channel_reply_writer_t writer;
+-        auto response =
+-          route_dispatch_reply_t{received.source_node_rid, received.request_seq,
+-                                 writer.reply_raw_envelope (
+-                                   writer.create_reply_header (
+-                                     runtime::messaging::message_kind_t::response, router, header),
+-                                   reply.value ())};
+-        if (submit_reply) {
+-            auto submitted = submit_reply (std::move (response));
+-            if (!submitted)
+-                return propagate_failure<std::optional<route_dispatch_reply_t>> (
+-                  submitted, "MeshNode reply submit failed");
+-            return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
+-        }
+-        return result_t<std::optional<route_dispatch_reply_t>>::success (std::move (response));
+-    };
++    route_request_completion_t complete{
++      _dispatch_options, _registration, _submit_reply,
++      route_received_packet_t{
++        received.source_node_rid, received.request_seq, {}, received.source_session_rid},
++      std::move (header)};
+     return _invoker.invoke (*handler, filters, _request_dispatch_kind, *_services, *_serializers,
+                             std::move (body.value ()), std::move (context), std::move (before),
+                             std::move (complete), std::move (terminal), executor);
+ }
+ 
++result_t<std::optional<route_dispatch_reply_t>>
++route_request_completion_t::operator() (const result_t<zlink::message_t> &reply,
++                                        const framework::route_message_context_t &context) const
++{
++    if (!reply) {
++        framework_exception_t error (reply.error_kind (), reply.error ()
++                                                            ? reply.error ()->what ()
++                                                            : "routed request handler failed");
++        return reply_route_error (options, *context.mesh_name, submit_reply, received, header,
++                                  error);
++    }
++    if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::replied)) {
++        trace_route_flow (options, *context.mesh_name, message_flow_outcome_t::replied,
++                          dispatch_message_kind_t::response, received, header);
++    }
++    channel_reply_writer_t writer;
++    auto response = route_dispatch_reply_t{
++      received.source_node_rid, received.request_seq,
++      writer.reply_raw_envelope (
++        writer.create_reply_header (runtime::messaging::message_kind_t::response,
++                                    *context.mesh_name, header),
++        reply.value ())};
++    if (submit_reply) {
++        auto submitted = submit_reply (std::move (response));
++        if (!submitted)
++            return propagate_failure<std::optional<route_dispatch_reply_t>> (
++              submitted, "MeshNode reply submit failed");
++        return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
++    }
++    return result_t<std::optional<route_dispatch_reply_t>>::success (std::move (response));
++}
++
+ 
+ } // namespace zlink::framework::detail
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/route_packet_dispatcher.hpp b/framework/languages/cpp/framework/src/runtime/channels/route_packet_dispatcher.hpp
+index f2b736adb6..f0b900f8f1 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/route_packet_dispatcher.hpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/route_packet_dispatcher.hpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #pragma once
++#include "runtime/diagnostics/dispatch_options_access.hpp"
+ 
+ #include "runtime/channels/route_handler_invoker.hpp"
+ #include "runtime/channels/route_internal_packet_dispatcher.hpp"
+ #include "runtime/channels/route_packet.hpp"
+@@ -26,9 +27,9 @@ class route_packet_dispatcher_t
+       service_provider_t &services,
+       serializer_registry_t &serializers,
+       const route_handler_registry_t &handlers,
+       const route_internal_packet_dispatcher_t &internal_packets,
+-      dispatch_options_t dispatch_options = {},
++      retained_dispatch_options_t dispatch_options = {},
+       const handler_registry_t *filters = nullptr,
+       handler_dispatch_kind_t send_dispatch_kind = handler_dispatch_kind_t::node_direct_send,
+       handler_dispatch_kind_t request_dispatch_kind = handler_dispatch_kind_t::node_direct_request,
+       std::function<void ()> before_application_handler = {},
+@@ -63,9 +64,9 @@ class route_packet_dispatcher_t
+     const route_handler_registry_t *_handlers = nullptr;
+     const handler_registry_t *_filters = nullptr;
+     const route_internal_packet_dispatcher_t *_internal_packets = nullptr;
+     route_handler_invoker_t _invoker;
+-    dispatch_options_t _dispatch_options;
++    retained_dispatch_options_t _dispatch_options;
+     handler_dispatch_kind_t _send_dispatch_kind = handler_dispatch_kind_t::node_direct_send;
+     handler_dispatch_kind_t _request_dispatch_kind = handler_dispatch_kind_t::node_direct_request;
+     std::function<void ()> _before_application_handler;
+     std::shared_ptr<void> _registration;
+diff --git a/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp b/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
+index 20e4aac993..c3a231faf6 100644
+--- a/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
+@@ -857,9 +857,10 @@ raw_client_server_server_t::next_liveness_activity_owned () const
+ 
+ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
+                                                 const protocol::application_payload_t &payload)
+ {
+-    return reply (request, zlink::message_t::from (payload.payload_bytes ()), payload.content_type);
++    return reply (request, zlink::message_t::from (payload.payload_bytes ()),
++                  payload.content_type ());
+ }
+ 
+ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
+                                                 zlink::message_t body,
+@@ -1534,9 +1535,9 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
+ task_t<zlink::submit_result_t>
+ raw_client_server_client_t::send (const protocol::application_payload_t &payload,
+                                   std::map<std::string, std::string> metadata)
+ {
+-    return send (payload.packet_name, payload.content_type,
++    return send (payload.packet_name (), payload.content_type (),
+                  zlink::message_t::from (payload.payload_bytes ()), std::move (metadata));
+ }
+ 
+ task_t<zlink::submit_result_t>
+@@ -1594,9 +1595,9 @@ request_task_t<client_server_request_completion_t>
+ raw_client_server_client_t::request (const protocol::application_payload_t &payload,
+                                      std::chrono::milliseconds timeout,
+                                      std::map<std::string, std::string> metadata)
+ {
+-    return request (payload.packet_name, payload.content_type,
++    return request (payload.packet_name (), payload.content_type (),
+                     zlink::message_t::from (payload.payload_bytes ()), timeout,
+                     std::move (metadata));
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/codecs/serializer.cpp b/framework/languages/cpp/framework/src/runtime/codecs/serializer.cpp
+index fe6bdfabd7..d6a40f6a54 100644
+--- a/framework/languages/cpp/framework/src/runtime/codecs/serializer.cpp
++++ b/framework/languages/cpp/framework/src/runtime/codecs/serializer.cpp
+@@ -223,8 +223,13 @@ void serializer_registry_t::set_resolved_serializer_cache_capacity_for_tests (
+ {
+     _state->resolved_serializer_cache_capacity.store (capacity, std::memory_order_release);
+ }
+ 
++bool detail::serializer_registry_access_t::frozen (const serializer_registry_t &registry) noexcept
++{
++    return registry._state->frozen.load (std::memory_order_acquire);
++}
++
+ void serializer_registry_t::freeze () noexcept
+ {
+     _state->frozen.store (true, std::memory_order_release);
+ }
+diff --git a/framework/languages/cpp/framework/src/runtime/codecs/serializer_test_access.hpp b/framework/languages/cpp/framework/src/runtime/codecs/serializer_test_access.hpp
+index 3798c70c4c..3954c35a47 100644
+--- a/framework/languages/cpp/framework/src/runtime/codecs/serializer_test_access.hpp
++++ b/framework/languages/cpp/framework/src/runtime/codecs/serializer_test_access.hpp
+@@ -7,8 +7,14 @@ namespace zlink::framework::detail
+ {
+ 
+ struct serializer_registry_test_access_t
+ {
++    template <typename T>
++    static bool has_resolved_serializer (const serializer_registry_t &registry)
++    {
++        return static_cast<bool> (registry.cached_serializer (std::type_index (typeid (T))));
++    }
++
+     static void set_resolved_serializer_cache_capacity (serializer_registry_t &registry,
+                                                         std::size_t capacity) noexcept
+     {
+         registry.set_resolved_serializer_cache_capacity_for_tests (capacity);
+diff --git a/framework/languages/cpp/framework/src/runtime/diagnostics/dispatch_options_access.hpp b/framework/languages/cpp/framework/src/runtime/diagnostics/dispatch_options_access.hpp
+index fad59fc5fd..6ed5eed778 100644
+--- a/framework/languages/cpp/framework/src/runtime/diagnostics/dispatch_options_access.hpp
++++ b/framework/languages/cpp/framework/src/runtime/diagnostics/dispatch_options_access.hpp
+@@ -6,15 +6,38 @@
+ #include "runtime/diagnostics/dispatch_events.hpp"
+ #include "runtime/diagnostics/process_telemetry_delivery.hpp"
+ 
+ #include <functional>
++#include <variant>
+ #include <optional>
+ #include <type_traits>
+ #include <utility>
+ 
+ namespace zlink::framework::detail
+ {
+ 
++// Hosted dispatch borrows one immutable configuration. Standalone dispatchers
++// retain their value configuration in the same invocation frame.
++class retained_dispatch_options_t
++{
++  public:
++    retained_dispatch_options_t () = default;
++    retained_dispatch_options_t (dispatch_options_t value) : _value (std::move (value)) {}
++    explicit retained_dispatch_options_t (std::shared_ptr<const dispatch_options_t> value) :
++        _value (std::move (value))
++    {
++    }
++    operator const dispatch_options_t & () const noexcept
++    {
++        if (const auto *shared = std::get_if<std::shared_ptr<const dispatch_options_t>> (&_value))
++            return **shared;
++        return std::get<dispatch_options_t> (_value);
++    }
++
++  private:
++    std::variant<dispatch_options_t, std::shared_ptr<const dispatch_options_t>> _value;
++};
++
+ class dispatch_options_access_t
+ {
+   public:
+     static const std::optional<logger_t<>> &logger (const dispatch_options_t &options) noexcept
+diff --git a/framework/languages/cpp/framework/src/runtime/execution/serial_application_record.hpp b/framework/languages/cpp/framework/src/runtime/execution/serial_application_record.hpp
+index 2e4a7f6e2a..46899481bb 100644
+--- a/framework/languages/cpp/framework/src/runtime/execution/serial_application_record.hpp
++++ b/framework/languages/cpp/framework/src/runtime/execution/serial_application_record.hpp
+@@ -173,13 +173,9 @@ struct serial_application_record_t
+             auto &owned = *std::get<frozen_t> (native.identity);
+             // The accepted routing identity survives; the invocation is the sole body owner.
+             owned.payload = std::vector<std::uint8_t>{};
+             const auto discard_body = [] (protocol::application_payload_t &application) {
+-                application = protocol::application_payload_t{std::move (application.packet_name),
+-                                                              std::move (application.content_type),
+-                                                              {},
+-                                                              std::move (application.flow_id),
+-                                                              application.flow_origin};
++                application.release_body ();
+             };
+             if (owned.application_record) {
+                 std::visit ([&] (auto &value) { discard_body (value.application); },
+                             owned.application_record->body);
+diff --git a/framework/languages/cpp/framework/src/runtime/fanout/fanout_location_runtime.cpp b/framework/languages/cpp/framework/src/runtime/fanout/fanout_location_runtime.cpp
+index 1e60f64993..a58f89937e 100644
+--- a/framework/languages/cpp/framework/src/runtime/fanout/fanout_location_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/fanout/fanout_location_runtime.cpp
+@@ -682,14 +682,14 @@ void fanout_location_runtime_t::pump ()
+                     permit->release_for_handler_entry ();
+                     permit.reset ();
+                 };
+                 inbound.message.channel_name = subscriber.channel_name;
+-                inbound.message.packet_name = received->payload.packet_name;
+-                inbound.message.content_type = received->payload.content_type;
++                inbound.message.packet_name = received->payload.packet_name ();
++                inbound.message.content_type = received->payload.content_type ();
+                 inbound.topic = received->topic;
+                 auto retained = std::move (received->retained);
+                 auto runtime = _channel_runtime;
+-                auto packet_name = received->payload.packet_name;
++                auto packet_name = received->payload.packet_name ();
+                 auto channel_name = subscriber.channel_name;
+                 auto topic = received->topic;
+                 const auto finish_dispatch = [active = subscriber.active_dispatches,
+                                               progress = _dispatch_progress] {
+diff --git a/framework/languages/cpp/framework/src/runtime/fanout/raw_fanout_owner.cpp b/framework/languages/cpp/framework/src/runtime/fanout/raw_fanout_owner.cpp
+index f42ea8521f..80b78c77fa 100644
+--- a/framework/languages/cpp/framework/src/runtime/fanout/raw_fanout_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/fanout/raw_fanout_owner.cpp
+@@ -108,10 +108,10 @@ task_t<void> raw_fanout_publisher_t::publish (std::string channel_name,
+      * carries no correlation id in the shared dialect. */
+     messaging::envelope_header_t header;
+     header.kind = messaging::message_kind_t::publish;
+     header.channel_name = std::move (channel_name);
+-    header.message_name = payload.packet_name;
+-    header.content_type = payload.content_type;
++    header.message_name = payload.packet_name ();
++    header.content_type = payload.content_type ();
+     header.topic = topic;
+     auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
+       header, zlink::message_t::from (std::move (payload.payload_bytes ())));
+     auto items = std::move (parts).take_items ();
+diff --git a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
+index 6fe6be1814..588ce8ca0f 100644
+--- a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
++++ b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
+@@ -37,8 +37,14 @@ void completion_sink_t::operator() (operation_terminal_t terminal,
+     _complete (terminal, std::move (payload));
+ }
+ 
+ struct operation_completion_item_t;
++struct completion_item_delete_t
++{
++    void operator() (operation_completion_item_t *item) const noexcept;
++};
++using completion_item_ptr_t =
++  std::unique_ptr<operation_completion_item_t, completion_item_delete_t>;
+ struct operation_registry_drain_state_t;
+ 
+ class operation_registry_state_t : public std::enable_shared_from_this<operation_registry_state_t>
+ {
+@@ -101,9 +107,9 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
+     static constexpr auto deadline_tick_duration = std::chrono::milliseconds (1);
+ 
+     struct pending_t
+     {
+-        std::unique_ptr<operation_completion_item_t> completion;
++        completion_item_ptr_t completion;
+         std::vector<std::uint8_t> target_routing_id;
+         call_id_t id;
+         clock_t::time_point deadline;
+         std::size_t deadline_slot = deadline_slot_count;
+@@ -119,16 +125,16 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
+           begin, end, [] (const auto &entry) { return bool (entry.second.completion); });
+         return found == end ? pending.end () : found;
+     }
+     // C1's single terminal take; an empty completion is the only settled marker.
+-    std::unique_ptr<operation_completion_item_t> take_completion (pending_t &pending)
++    completion_item_ptr_t take_completion (pending_t &pending)
+     {
+         auto completion = std::exchange (pending.completion, {});
+         if (completion)
+             --_pending_count;
+         return completion;
+     }
+-    bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
++    bool take (const call_id_t &id, completion_item_ptr_t &completion);
+     bool index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
+     void unindex_deadline (pending_t &pending) noexcept;
+     void clear_deadlines () noexcept;
+     void reserve_deadline_visit (std::weak_ptr<operation_registry_state_t> self);
+@@ -209,21 +215,34 @@ struct operation_completion_item_t
+     {
+         request_metric.complete (terminal);
+     }
+ 
++    std::shared_ptr<void> storage_owner;
+     std::optional<std::stop_callback<operation_cancellation_t>> cancellation;
+     detail::completion_dispatcher_borrow_t dispatcher{};
+     operation_registry_state_t::callback_t callback;
+     std::shared_ptr<operation_registry_drain_state_t> drain_state;
+     operation_terminal_t terminal = operation_terminal_t::transport_failed;
+     std::optional<result_t<zlink::message_t>> payload;
+-    std::unique_ptr<operation_completion_item_t> next;
++    completion_item_ptr_t next;
+     mesh_request_metric_t request_metric;
+ };
+ 
++static_assert (sizeof (operation_completion_item_t)
++               <= detail::request_capture_storage_t::completion_storage_size);
++static_assert (alignof (operation_completion_item_t) <= alignof (std::max_align_t));
++
++void completion_item_delete_t::operator() (operation_completion_item_t *item) const noexcept
++{
++    if (auto owner = std::move (item->storage_owner))
++        std::destroy_at (item);
++    else
++        delete item;
++}
++
+ struct operation_completion_chain_t
+ {
+-    void append (std::unique_ptr<operation_completion_item_t> completion,
++    void append (completion_item_ptr_t completion,
+                  operation_terminal_t terminal,
+                  result_t<zlink::message_t> payload = result_t<zlink::message_t>::success ({}),
+                  std::optional<operation_terminal_t> request_terminal = {}) noexcept
+     {
+@@ -238,9 +257,9 @@ struct operation_completion_chain_t
+         tail = next_tail;
+         ++size;
+     }
+ 
+-    std::unique_ptr<operation_completion_item_t> head;
++    completion_item_ptr_t head;
+     operation_completion_item_t *tail = nullptr;
+     std::size_t size = 0;
+ };
+ 
+@@ -262,9 +281,9 @@ void post_completions (operation_completion_chain_t completions) noexcept
+         detail::dispatch_completion (
+           [item = completion.get ()] {
+               // Keep the TLS drain identity valid through callback-capture destruction.
+               const auto drain_lifetime = item->drain_state;
+-              const std::unique_ptr<operation_completion_item_t> completion (item);
++              const completion_item_ptr_t completion (item);
+               try {
+                   completion->callback (completion->terminal, std::move (*completion->payload));
+               }
+               catch (...) {
+@@ -348,9 +367,9 @@ void operation_registry_state_t::clear_deadlines () noexcept
+ 
+ 
+ namespace
+ {
+-void notify (std::unique_ptr<operation_completion_item_t> completion,
++void notify (completion_item_ptr_t completion,
+              operation_terminal_t terminal,
+              result_t<zlink::message_t> payload,
+              std::optional<operation_terminal_t> request_terminal = {}) noexcept
+ {
+@@ -378,10 +397,17 @@ bool operation_registry_state_t::register_operation (call_id_t id,
+     prepared.target_routing_id = std::move (target_routing_id);
+     prepared.request = std::move (request);
+     prepared.id = id;
+     prepared.deadline = deadline;
+-    prepared.completion = std::make_unique<operation_completion_item_t> (
+-      callback_t{}, _drain_state, detail::borrow_completion_dispatcher ());
++    auto storage = callback.completion_storage ();
++    auto *completion =
++      storage
++        ? std::construct_at (static_cast<operation_completion_item_t *> (storage.get ()),
++                             callback_t{}, _drain_state, detail::borrow_completion_dispatcher ())
++        : new operation_completion_item_t (callback_t{}, _drain_state,
++                                           detail::borrow_completion_dispatcher ());
++    prepared.completion.reset (completion);
++    completion->storage_owner = std::move (storage);
+     prepared.completion->request_metric = std::move (request_metric);
+     if (cancellation.stop_possible ())
+         prepared.completion->cancellation.emplace (cancellation,
+                                                    operation_cancellation_t{this, id});
+@@ -509,10 +535,9 @@ void operation_registry_state_t::unindex_deadline (pending_t &pending) noexcept
+       begin, end, [&pending] (const auto &entry) { return &entry.second == &pending; });
+     _entries.erase (found);
+ }
+ 
+-bool operation_registry_state_t::take (const call_id_t &id,
+-                                       std::unique_ptr<operation_completion_item_t> &completion)
++bool operation_registry_state_t::take (const call_id_t &id, completion_item_ptr_t &completion)
+ {
+     {
+         std::lock_guard lock (_mutex);
+         const auto found = find_pending (_entries, id);
+@@ -533,9 +558,9 @@ bool operation_registry_state_t::complete (const call_id_t &id,
+                                            result_t<zlink::message_t> payload,
+                                            before_dispatch_t before_dispatch,
+                                            operation_terminal_t request_terminal)
+ {
+-    std::unique_ptr<operation_completion_item_t> completion;
++    completion_item_ptr_t completion;
+     if (!take (id, completion)) {
+         return false;
+     }
+     try {
+@@ -554,9 +579,9 @@ bool operation_registry_state_t::complete (const call_id_t &id,
+ }
+ 
+ namespace
+ {
+-task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_t> completion,
++task_t<void> finish_completion_async (completion_item_ptr_t completion,
+                                       std::function<task_t<void> ()> before_dispatch)
+ {
+     const auto prepared = co_await runtime::await_result (before_dispatch ());
+     notify (std::move (completion),
+@@ -567,9 +592,9 @@ task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_
+ 
+ bool operation_registry_state_t::complete_async (const call_id_t &id,
+                                                  std::function<task_t<void> ()> before_dispatch)
+ {
+-    std::unique_ptr<operation_completion_item_t> completion;
++    completion_item_ptr_t completion;
+     if (!take (id, completion))
+         return false;
+     // The existing completion reservation retains the drain until preparation ends.
+     (void) finish_completion_async (std::move (completion), std::move (before_dispatch));
+@@ -577,9 +602,9 @@ bool operation_registry_state_t::complete_async (const call_id_t &id,
+ }
+ 
+ bool operation_registry_state_t::cancel (const call_id_t &id)
+ {
+-    std::unique_ptr<operation_completion_item_t> completion;
++    completion_item_ptr_t completion;
+     if (!take (id, completion)) {
+         return false;
+     }
+     notify (std::move (completion), operation_terminal_t::cancelled,
+@@ -602,9 +627,9 @@ bool operation_registry_state_t::fail (const call_id_t &id,
+ {
+     if (terminal == operation_terminal_t::completed) {
+         throw std::invalid_argument ("failure terminal cannot be completed");
+     }
+-    std::unique_ptr<operation_completion_item_t> completion;
++    completion_item_ptr_t completion;
+     if (!take (id, completion)) {
+         return false;
+     }
+     try {
+@@ -621,9 +646,9 @@ bool operation_registry_state_t::fail (const call_id_t &id,
+ }
+ 
+ bool operation_registry_state_t::unregister (const call_id_t &id)
+ {
+-    std::unique_ptr<operation_completion_item_t> completion;
++    completion_item_ptr_t completion;
+     if (!take (id, completion))
+         return false;
+     completion.reset ();
+     return true;
+@@ -721,9 +746,9 @@ std::size_t operation_registry_state_t::expire_on_owner (clock_t::time_point now
+             if (_now () - started >= runtime::dispatch_limits::receive_batch_time)
+                 break;
+             auto *current = _deadline_cursor;
+             _deadline_cursor = current->deadline_next;
+-            std::unique_ptr<operation_completion_item_t> completion;
++            completion_item_ptr_t completion;
+             if (current->completion && current->deadline <= now)
+                 completion = take_completion (*current);
+             const bool live = bool (current->completion);
+             if (completion)
+diff --git a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.hpp b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.hpp
+index 4fa3542441..8c7017f3e6 100644
+--- a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.hpp
++++ b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.hpp
+@@ -55,8 +55,12 @@ class completion_sink_t
+         _complete (std::move (owner), invoke)
+     {
+     }
+     explicit operator bool () const noexcept { return bool (_complete); }
++    std::shared_ptr<void> completion_storage () const noexcept
++    {
++        return _complete.completion_storage ();
++    }
+     completion_sink_t &&with_admission (std::shared_ptr<task_completion_source_t<void>> admitted) &&
+     {
+         _admitted = std::move (admitted);
+         return std::move (*this);
+diff --git a/framework/languages/cpp/framework/src/runtime/handlers/handler_registry.cpp b/framework/languages/cpp/framework/src/runtime/handlers/handler_registry.cpp
+index c93d89691f..9bdadc1430 100644
+--- a/framework/languages/cpp/framework/src/runtime/handlers/handler_registry.cpp
++++ b/framework/languages/cpp/framework/src/runtime/handlers/handler_registry.cpp
+@@ -169,8 +169,9 @@ namespace detail
+ struct handler_entry_t
+ {
+     handler_descriptor_t descriptor;
+     handler_registry_t::invoker_t invoker;
++    std::function<void (serializer_registry_t &)> bind_codecs;
+ };
+ 
+ struct handler_key_t
+ {
+@@ -535,10 +536,19 @@ handler_registry_t::invoke_on_handler_executor (std::string channel_name,
+         emit_failure (entry->descriptor, *result.error ());
+     co_return result;
+ }
+ 
+-handler_registry_t &handler_registry_t::add_handler (handler_descriptor_t descriptor,
+-                                                     invoker_t invoker)
++void handler_registry_t::bind_codecs (serializer_registry_t &serializers)
++{
++    for (auto &[_, entry] : _state->handlers)
++        if (entry.bind_codecs)
++            entry.bind_codecs (serializers);
++}
++
++handler_registry_t &
++handler_registry_t::add_handler (handler_descriptor_t descriptor,
++                                 invoker_t invoker,
++                                 std::function<void (serializer_registry_t &)> bind_codecs)
+ {
+     const auto duplicate_packet =
+       std::any_of (_state->handlers.begin (), _state->handlers.end (), [&] (const auto &entry) {
+           const auto &existing = entry.second.descriptor;
+@@ -555,9 +565,10 @@ handler_registry_t &handler_registry_t::add_handler (handler_descriptor_t descri
+     }
+     const auto key = detail::make_handler_key (descriptor.channel_name, descriptor.topic,
+                                                descriptor.packet_name, descriptor.kind);
+     const auto [_, inserted] = _state->handlers.emplace (
+-      key, detail::handler_entry_t{std::move (descriptor), std::move (invoker)});
++      key, detail::handler_entry_t{std::move (descriptor), std::move (invoker),
++                                   std::move (bind_codecs)});
+     if (!inserted) {
+         throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                      "duplicate handler registration");
+     }
+diff --git a/framework/languages/cpp/framework/src/runtime/host/app.cpp b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+index f0591681e9..e8db2e32cc 100644
+--- a/framework/languages/cpp/framework/src/runtime/host/app.cpp
++++ b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+@@ -3373,8 +3373,9 @@ try {
+     const auto completion_dispatcher = detail::borrow_completion_dispatcher ();
+     _apply_zlink_framework ();
+     _state->config.load_cli (argc, argv);
+     detail::serializer_registry_access_t::freeze (_state->serializers);
++    _state->handlers.bind_codecs (_state->serializers);
+     _state->config.model ().set ("host.signal_handlers", "installed");
+     g_stop_signal_requested = 0;
+     std::signal (SIGINT, handle_process_signal);
+     std::signal (SIGTERM, handle_process_signal);
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index 197d33b82f..aed8a0f8b3 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -112,13 +112,14 @@ dispatch_error_surface_t application_dispatch_surface (host::record_kind_t kind)
+              : dispatch_error_surface_t::route_mesh_channel;
+ }
+ }
+ 
++template <bool BorrowHeader>
+ result_t<std::optional<messaging::envelope_header_t>>
+-decode_mesh_record_header (const host::receive_record_t &record,
+-                           std::vector<zlink::message_t> &parts,
+-                           bool capture_flow,
+-                           const dispatch_options_t &dispatch_options)
++decode_mesh_record_header_impl (const host::receive_record_t &record,
++                                std::vector<zlink::message_t> &parts,
++                                bool capture_flow,
++                                const dispatch_options_t &dispatch_options)
+ {
+     using kind_t = host::record_kind_t;
+     using header_result_t = result_t<std::optional<messaging::envelope_header_t>>;
+     switch (record.kind) {
+@@ -142,9 +143,11 @@ decode_mesh_record_header (const host::receive_record_t &record,
+                                                   record.kind == kind_t::actor_send
+                                                     ? detail::stream_message_kind_t::send
+                                                     : detail::stream_message_kind_t::request,
+                                                   capture_flow)
+-            : messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
++      : BorrowHeader
++        ? messaging::envelope_codec_t{}.decode_header_view (encoded, capture_flow, &rejected_header)
++        : messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
+     parts = std::move (encoded).take_items ();
+     if (decoded)
+         return header_result_t::success (std::move (decoded.value ()));
+ 
+@@ -222,8 +225,26 @@ struct mesh_node_host_service_t::actor_destroy_callback_gate_t
+         changed.wait (lock, [this] { return active == 0; });
+     }
+ };
+ 
++result_t<std::optional<messaging::envelope_header_t>>
++decode_mesh_record_header (const host::receive_record_t &record,
++                           std::vector<zlink::message_t> &parts,
++                           bool capture_flow,
++                           const dispatch_options_t &dispatch_options)
++{
++    return decode_mesh_record_header_impl<false> (record, parts, capture_flow, dispatch_options);
++}
++
++result_t<std::optional<messaging::envelope_header_t>>
++decode_mesh_record_header_view (const host::receive_record_t &record,
++                                std::vector<zlink::message_t> &parts,
++                                bool capture_flow,
++                                const dispatch_options_t &dispatch_options)
++{
++    return decode_mesh_record_header_impl<true> (record, parts, capture_flow, dispatch_options);
++}
++
+ application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
+   std::shared_ptr<detail::mesh_node_runtime_t> node,
+   std::function<void ()> complete_stateful_dispatch,
+   host::mailbox_callback_t release_mailbox_reservation,
+@@ -359,9 +380,9 @@ decode_actor_creation_intent (const std::vector<std::byte> &stored)
+         bytes.reserve (stored.size ());
+         for (const auto value : stored)
+             bytes.push_back (std::to_integer<std::uint8_t> (value));
+         const auto application = protocol::decode_application_payload (bytes);
+-        if (application.packet_name != framework_creation_packet_name)
++        if (application.packet_name () != framework_creation_packet_name)
+             return std::nullopt;
+         const auto body = application.payload_bytes ();
+         std::vector<std::byte> result;
+         result.reserve (body.size ());
+@@ -472,10 +493,10 @@ actor_terminal_envelope (terminal_codec::request_terminal_result_t terminal_resu
+         terminal.creation = std::move (creation);
+     }
+     if (reply) {
+         terminal.applicationPayload = terminal_codec::application_payload_envelope_v1_t{
+-          terminal_codec::packet_name_t{reply->packet_name},
+-          terminal_codec::content_type_t{reply->content_type},
++          terminal_codec::packet_name_t{reply->packet_name ()},
++          terminal_codec::content_type_t{reply->content_type ()},
+           terminal_codec::application_payload_bytes_t{reply->payload_bytes ()}};
+     }
+     const terminal_codec::codec_context_t context{1024 * 1024, 1024 * 1024};
+     terminal_codec::writer_t writer;
+@@ -784,9 +805,9 @@ mesh_node_host_service_t::mesh_node_host_service_t (
+     hosted_service_lifecycle_t (std::move (failures)),
+     _registrations (std::move (registrations)),
+     _serializers (&serializers),
+     _filters (&filters),
+-    _dispatch_options (std::move (dispatch_options)),
++    _dispatch_options (std::make_shared<const dispatch_options_t> (std::move (dispatch_options))),
+     _application_dispatch (std::make_shared<offload_executor_t> (
+       _registrations.size () + 1,
+       _registrations.size ()
+         + std::max<std::size_t> (2, ::zlink::framework::runtime::available_processor_count ()),
+@@ -2151,9 +2172,9 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+           [&mailbox] { mailbox.end_application_receive_turn (); });
+ 
+         const auto count =
+           std::move (
+-            node->dispatch_ready (
++            node->dispatch_hosted_ready (
+               [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
+                    std::vector<zlink::message_t> parts, application_job_queue_t::permit_t permit) {
+                   auto accepted_record = record;
+                   accepted_record.received_at = std::chrono::system_clock::now ();
+@@ -2208,9 +2229,9 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+                   if (framework_object_dispatch && transfer_dispatch) {
+                       bool handled = false;
+                       try {
+                           run_direct ([&] {
+-                              const auto header = decode_mesh_record_header (
++                              const auto header = decode_mesh_record_header_view (
+                                 record, parts,
+                                 detail::message_flow_tracer_t (host._dispatch_options)
+                                   .flow_tracing (),
+                                 host._dispatch_options);
+@@ -2257,9 +2278,9 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+                       release_guard.dismiss ();
+                       return;
+                   }
+                   run_direct ([&] {
+-                      auto decoded_header = decode_mesh_record_header (
++                      auto decoded_header = decode_mesh_record_header_view (
+                         record, parts,
+                         detail::message_flow_tracer_t (host._dispatch_options).flow_tracing (),
+                         host._dispatch_options);
+                       if (!decoded_header)
+@@ -2335,9 +2356,9 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+         // A pump may consume the wake for supply delivered after this turn's
+         // take. Recheck its owner state before waiting for the next rotation.
+         if (!local_pending && !ready && !host._stop.load (std::memory_order_acquire)
+             && !supply.has_supply ()) {
+-            readiness = node->native_node ().wait_for_dispatch_activity (
++            readiness = node->native_node ().wait_for_hosted_dispatch_activity (
+               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
+         }
+         mesh::service_mailbox_t::notify_application_ready (ready);
+         return readiness;
+@@ -2602,8 +2623,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+     std::exception_ptr failure;
+     try {
+         _completion_dispatcher = detail::borrow_completion_dispatcher ();
+         _services = &services;
++        for (const auto &registration : _registrations)
++            registration->handlers.bind_codecs (*_serializers);
+         const auto actor_gateway = services.get<detail::actor_gateway_runtime_t> ();
+         if (actor_gateway) {
+             actor_gateway->get ().bind_serializers (*_serializers);
+         }
+@@ -2898,10 +2921,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+                         }
+                         auto running = std::make_shared<task_t<zlink::message_t>> (
+                           detail::spot_node_runtime_t (registration->spot_state)
+                             .dispatch_instance_activation (
+-                              spot_id_t (request.target.spot_id), application.packet_name,
+-                              application.content_type, application.payload_bytes (),
++                              spot_id_t (request.target.spot_id), application.packet_name (),
++                              application.content_type (), application.payload_bytes (),
+                               std::move (decoded), request.request,
+                               std::to_string (request.operation.high) + ":"
+                                 + std::to_string (request.operation.low),
+                               services, *_serializers, std::move (accept_activation),
+@@ -2927,9 +2950,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+                               }
+                               std::optional<protocol::application_payload_t> response;
+                               if (original_command->activation.request) {
+                                   response = protocol::application_payload_t{
+-                                    original_command->application_payload.packet_name,
++                                    original_command->application_payload.packet_name (),
+                                     "application/octet-stream", reply.value ().to_bytes ()};
+                                   if (detail::message_flow_tracer_t (_dispatch_options)
+                                         .flow_tracing ()) {
+                                       response->flow_id =
+@@ -3691,9 +3714,9 @@ void mesh_node_host_service_t::dispatch_application (
+   bool reject_only,
+   service_provider_t *services,
+   serializer_registry_t *serializers,
+   const handler_registry_t *filters,
+-  const dispatch_options_t &dispatch_options,
++  const detail::retained_dispatch_options_t &dispatch_options,
+   serial_execution_queue_t::async_completion_t application_completed,
+   offload_executor_t *executor,
+   application_job_queue_t::permit_t application_permit)
+ {
+@@ -3702,9 +3725,8 @@ void mesh_node_host_service_t::dispatch_application (
+         record.retain_mailbox_reservation ();
+     application_dispatch_terminal_owner_t terminal (
+       node, record.complete_stateful_dispatch, record.release_mailbox_reservation,
+       handler_entry_t (record.before_application_handler, std::move (application_permit)));
+-    std::shared_ptr<application_dispatch_terminal_owner_t> deferred_terminal;
+     try {
+         // A draining runtime admits no new application work, whatever the target
+         // authority state is (Spot address messaging §9).
+         if (reject_only
+@@ -3716,54 +3738,48 @@ void mesh_node_host_service_t::dispatch_application (
+             if (application_completed)
+                 application_completed ([] {});
+             return;
+         }
+-        deferred_terminal =
+-          std::make_shared<application_dispatch_terminal_owner_t> (std::move (terminal));
+         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
+         bool terminal_deferred = false;
+-        auto decoded_header = decode_mesh_record_header (
++        auto decoded_header = decode_mesh_record_header_view (
+           record, parts, detail::message_flow_tracer_t (dispatch_options).flow_tracing (),
+           dispatch_options);
+         if (!decoded_header) {
+-            if (deferred_terminal)
+-                deferred_terminal->settle ();
++            terminal.settle ();
+             if (application_completed)
+                 application_completed ([] {});
+             return;
+         }
+         handler_entry_t before;
+         if (owner.owner_kind == host::owner_kind_t::spot
+             || owner.owner_kind == host::owner_kind_t::actor)
+-            before = deferred_terminal->take_application_entry ();
++            before = terminal.take_application_entry ();
+         const auto handled = application_spot_runtime.dispatch_mesh_record (
+-          owner, record, parts, decoded_header.value (), *services, *serializers,
+-          [deferred_terminal] { deferred_terminal->settle (); }, &terminal_deferred,
+-          std::move (before), application_completed);
++          owner, record, parts, decoded_header.value (), *services, *serializers, {},
++          &terminal_deferred, std::move (before), application_completed, &terminal);
+         trace_mesh_application ("framework-dispatch", record, parts.size (),
+                                 handled ? "handled" : "not-handled");
+         if (!handled && decoded_header.value ()
+             && (owner.owner_kind == host::owner_kind_t::node
+                 || owner.owner_kind == host::owner_kind_t::channel)) {
+             // Callers always pass an empty application_completed for node and channel owners.
+             // The native claim still owns settlement. Transfer its existing release
+             // callback to the bounded pipeline handoff, leaving physical work retained.
+-            terminal_callback_guard_t prefix (deferred_terminal->take_mailbox_reservation ());
++            terminal_callback_guard_t prefix (terminal.take_mailbox_reservation ());
+             detail::mesh_record_dispatcher_t dispatcher (*services, *serializers,
+                                                          registration->handlers, *filters,
+                                                          dispatch_options, {}, registration);
+-            auto invocation_terminal = std::move (*deferred_terminal);
+-            deferred_terminal.reset ();
++            auto invocation_terminal = std::move (terminal);
+             terminal_deferred = true;
+             auto pending =
+               dispatcher.dispatch (record, std::move (parts), std::move (*decoded_header.value ()),
+                                    std::move (invocation_terminal), executor);
+             trace_mesh_application ("route-dispatch", record, 0,
+                                     pending.await_ready () ? "ready" : "pending");
+         }
+         if (!terminal_deferred) {
+-            if (deferred_terminal)
+-                deferred_terminal->settle ();
++            terminal.settle ();
+             if (application_completed)
+                 application_completed ([] {});
+         }
+     }
+@@ -3779,10 +3795,9 @@ void mesh_node_host_service_t::dispatch_application (
+               .action = dispatch_error_action_t::drop,
+               .source_rid = record.source_node_rid.to_string (),
+               .exception = error};
+         });
+-        if (deferred_terminal)
+-            deferred_terminal->settle ();
++        terminal.settle ();
+         if (application_completed)
+             application_completed ([] {});
+     }
+ }
+@@ -3794,9 +3809,9 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+   bool reject_only,
+   service_provider_t *services,
+   serializer_registry_t *serializers,
+   const handler_registry_t *filters,
+-  dispatch_options_t dispatch_options,
++  detail::retained_dispatch_options_t dispatch_options,
+   offload_executor_t *executor)
+ {
+     offload_executor_t::retained_work_t physical_work;
+     // Move parameter dependencies into locals so they are destroyed before credit.
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
+index d92c08e702..5c10f4de24 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #pragma once
++#include "runtime/diagnostics/dispatch_options_access.hpp"
+ 
+ #include "runtime/dispatch/offload_executor.hpp"
+ #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
+ #include "runtime/execution/serial_execution_queue.hpp"
+@@ -37,8 +38,14 @@ decode_mesh_record_header (const host::receive_record_t &record,
+                            std::vector<zlink::message_t> &parts,
+                            bool capture_flow,
+                            const dispatch_options_t &dispatch_options = {});
+ 
++result_t<std::optional<messaging::envelope_header_t>>
++decode_mesh_record_header_view (const host::receive_record_t &record,
++                                std::vector<zlink::message_t> &parts,
++                                bool capture_flow,
++                                const dispatch_options_t &dispatch_options = {});
++
+ 
+ class mesh_node_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
+ {
+   public:
+@@ -142,9 +149,9 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
+                           bool reject_only,
+                           service_provider_t *services,
+                           serializer_registry_t *serializers,
+                           const handler_registry_t *filters,
+-                          const dispatch_options_t &dispatch_options,
++                          const detail::retained_dispatch_options_t &dispatch_options,
+                           serial_execution_queue_t::async_completion_t application_completed = {},
+                           offload_executor_t *executor = nullptr,
+                           application_job_queue_t::permit_t application_permit = {});
+     static task_t<void>
+@@ -154,15 +161,15 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
+                              bool reject_only,
+                              service_provider_t *services,
+                              serializer_registry_t *serializers,
+                              const handler_registry_t *filters,
+-                             dispatch_options_t dispatch_options,
++                             detail::retained_dispatch_options_t dispatch_options,
+                              offload_executor_t *executor);
+ 
+     std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> _registrations;
+     serializer_registry_t *_serializers;
+     handler_registry_t *_filters;
+-    dispatch_options_t _dispatch_options;
++    detail::retained_dispatch_options_t _dispatch_options;
+     service_provider_t *_services = nullptr;
+     std::shared_ptr<location_repository_t> _location_store;
+     location_runtime_t *_location_runtime = nullptr;
+     std::vector<mesh_node_descriptor_key_t> _published_mesh_nodes;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
+index 77a5e6121f..18ae7cafb1 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
+@@ -225,10 +225,10 @@ canonical_actor_join_application_reply (const std::optional<message_t> &reply,
+ 
+ std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply_impl (
+   const runtime::protocol::application_payload_t &payload)
+ {
+-    if (payload.packet_name != runtime::protocol::framework_multipart_packet_name
+-        || payload.content_type != runtime::protocol::framework_multipart_content_type)
++    if (payload.packet_name () != runtime::protocol::framework_multipart_packet_name
++        || payload.content_type () != runtime::protocol::framework_multipart_content_type)
+         return payload.payload_bytes ();
+ 
+     const auto &encoded = payload.payload_bytes ();
+     std::size_t offset = 0;
+@@ -3624,9 +3624,9 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
+             if (spot_runtime.actor_transfer_marker_enabled ()) {
+                 spot_runtime.emit_actor_transfer_marker (
+                   "message_follow_relay", actor,
+                   header.correlation_id.empty () ? std::string (actor.actor_id ().value ())
+-                                                 : header.correlation_id,
++                                                 : std::string (header.correlation_id),
+                   follow_target.route.spot_id, follow_target.route.node_rid);
+             }
+             spot_inbound_message_t metadata{.received_at = received_at};
+             metadata.content_type = header.content_type;
+@@ -4413,11 +4413,11 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
+     try {
+         completion = runtime::foundation::operation_registry_t::callback_t (
+           receiver.complete.template capture<runtime::foundation::operation_terminal_t,
+                                              result_t<zlink::message_t>> (
+-            [host = _node,
+-             receiver = receiver.borrow ()] (runtime::foundation::operation_terminal_t terminal,
+-                                             result_t<zlink::message_t> payload) mutable {
++            [host = _node, complete = receiver.complete.borrow (),
++             admitted = receiver.admitted] (runtime::foundation::operation_terminal_t terminal,
++                                            result_t<zlink::message_t> payload) mutable {
+                 try {
+                     if (!payload)
+                         payload.value ();
+                     auto record = host
+@@ -4427,26 +4427,25 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
+                     if (const auto failure =
+                           request_completion_failure (record, "MeshNode request"))
+                         std::rethrow_exception (failure);
+                     auto views = runtime::protocol::decode_application_part_views (
+-                      runtime::protocol::message_bytes (payload.value ()), host->capture_flow ());
+-                    receiver.complete (result_t<node_reply_t>::success (
++                      runtime::protocol::message_bytes (payload.value ()), host->capture_flow (),
++                      complete.resource ());
++                    complete (result_t<node_reply_t>::success (
+                       node_reply_t::success (runtime::messaging::message_parts_t::borrow (views))));
+                 }
+                 catch (const runtime::protocol::service_wire_error_t &) {
+                     auto failure = result_access_t::failure<runtime::messaging::message_parts_t> (
+                       runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
+                         static_cast<std::uint32_t> (zlink::request_result_t::protocol_error), 0,
+                         "MeshNode request"));
+-                    receiver.admitted->complete (
+-                      result_access_t::failure<void> (failure.exception ()));
+-                    receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
++                    admitted->complete (result_access_t::failure<void> (failure.exception ()));
++                    complete (result_t<node_reply_t>::success (std::move (failure)));
+                 }
+                 catch (...) {
+                     auto failure = current_exception_result<runtime::messaging::message_parts_t> ();
+-                    receiver.admitted->complete (
+-                      result_access_t::failure<void> (failure.exception ()));
+-                    receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
++                    admitted->complete (result_access_t::failure<void> (failure.exception ()));
++                    complete (result_t<node_reply_t>::success (std::move (failure)));
+                 }
+             }));
+         // The stored callback now owns this receiver, including submission failures
+         // before registration. Keep no independent physical fallback after transfer.
+@@ -4664,8 +4663,25 @@ task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
+         return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
+     }
+ }
+ 
++task_t<std::size_t> mesh_node_runtime_t::dispatch_hosted_ready (
++  runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
++  bool accept_application_receive,
++  std::function<bool ()> next_application_receive,
++  std::optional<zlink::poll_event_flag_t> waited)
++{
++    try {
++        if (!dispatch)
++            throw configuration_error ("MeshNode dispatch callback is required");
++        return _node->dispatch_hosted_ready (std::move (dispatch), accept_application_receive,
++                                             std::move (next_application_receive), waited);
++    }
++    catch (...) {
++        return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
++    }
++}
++
+ host::node_status_t mesh_node_runtime_t::status () const
+ {
+     if (!_node) {
+         throw configuration_error ("MeshNode has not started");
+@@ -5126,9 +5142,10 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler_regist
+                                                   registration.message_type,
+                                                   registration.reply_type};
+     _state->lane
+       .run ([&] {
+-          _state->handlers.add_handler (std::move (descriptor), std::move (registration.invoke));
++          _state->handlers.add_handler (std::move (descriptor), std::move (registration.invoke),
++                                        std::move (registration.bind_codecs));
+       })
+       .get ();
+     return *this;
+ }
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
+index 674f9c5596..bef23aae47 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
+@@ -432,8 +432,13 @@ class mesh_node_runtime_t
+     dispatch_ready (runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
+                     bool accept_application_receive = true,
+                     std::function<bool ()> next_application_receive = {},
+                     std::optional<zlink::poll_event_flag_t> readiness = {});
++    task_t<std::size_t>
++    dispatch_hosted_ready (runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
++                           bool accept_application_receive = true,
++                           std::function<bool ()> next_application_receive = {},
++                           std::optional<zlink::poll_event_flag_t> readiness = {});
+     host::node_status_t status () const;
+     task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
+     monitoring_configuration_async () const;
+     task_t<std::pair<std::size_t, std::size_t>> monitoring_counts_async () const;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.cpp
+index 9574145ea4..ad6e3441fc 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.cpp
+@@ -14,9 +14,9 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
+   service_provider_t &services,
+   serializer_registry_t &serializers,
+   const route_handler_registry_t &handlers,
+   const handler_registry_t &filters,
+-  dispatch_options_t dispatch_options,
++  retained_dispatch_options_t dispatch_options,
+   std::function<void ()> before_application_handler,
+   std::shared_ptr<void> registration) :
+     _services (&services),
+     _serializers (&serializers),
+@@ -42,11 +42,13 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
+             framework_error_kind_t::protocol_error,
+             "record kind is not node or ChannelName messaging"));
+     }
+ 
++    if (!parts.empty ())
++        header.retained_header.message = std::move (parts.front ());
+     runtime::messaging::message_parts_t message_parts (std::move (parts));
+     const std::string dispatch_channel =
+-      record.channel_name.empty () ? header.channel_name : record.channel_name;
++      record.channel_name.empty () ? std::string (header.channel_name) : record.channel_name;
+     const auto channel_dispatch =
+       record.kind == record_kind_t::channel_send || record.kind == record_kind_t::channel_request;
+     route_packet_dispatcher_t dispatcher (
+       dispatch_channel, *_services, *_serializers, *_handlers, _no_internal_packets,
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.hpp
+index 5a67b68fe3..c960b096d1 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_record_dispatcher.hpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #pragma once
++#include "runtime/diagnostics/dispatch_options_access.hpp"
+ #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
+ #include "runtime/dispatch/application_record.hpp"
+ 
+ #include "runtime/channels/route_handler_registry.hpp"
+@@ -31,9 +32,9 @@ class mesh_record_dispatcher_t
+     mesh_record_dispatcher_t (service_provider_t &services,
+                               serializer_registry_t &serializers,
+                               const route_handler_registry_t &handlers,
+                               const handler_registry_t &filters,
+-                              dispatch_options_t dispatch_options = {},
++                              retained_dispatch_options_t dispatch_options = {},
+                               std::function<void ()> before_application_handler = {},
+                               std::shared_ptr<void> registration = {});
+ 
+     task_t<std::optional<route_dispatch_reply_t>>
+@@ -47,9 +48,9 @@ class mesh_record_dispatcher_t
+     service_provider_t *_services;
+     serializer_registry_t *_serializers;
+     const route_handler_registry_t *_handlers;
+     const handler_registry_t *_filters;
+-    dispatch_options_t _dispatch_options;
++    retained_dispatch_options_t _dispatch_options;
+     no_route_internal_packet_dispatcher_t _no_internal_packets;
+     std::function<void ()> _before_application_handler;
+     std::shared_ptr<void> _registration;
+ };
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+index 214050b6e0..f7b2077fd6 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -2696,10 +2696,10 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
+             request.target_spot.owner_lease_generation},
+            payload
+              ? std::optional<
+                  protocol::
+-                   service_wire_pilot_application_payload_envelope_v1>{{payload->packet_name,
+-                                                                        payload->content_type,
++                   service_wire_pilot_application_payload_envelope_v1>{{payload->packet_name (),
++                                                                        payload->content_type (),
+                                                                         payload->payload_bytes ()}}
+              : std::nullopt});
+     }
+     catch (const std::invalid_argument &) {
+@@ -3242,10 +3242,10 @@ raw_mesh_node_owner_t::enqueue_received (service_mailbox_record_t record,
+         if (wire.kind == protocol::command::channelSend
+             || wire.kind == protocol::command::channelRequest) {
+             const auto payload = protocol::decode_application_payload (
+               protocol::message_bytes (record.parts[1]), true);
+-            if (payload.packet_name == protocol::framework_multipart_packet_name
+-                && payload.content_type == protocol::framework_multipart_content_type) {
++            if (payload.packet_name () == protocol::framework_multipart_packet_name
++                && payload.content_type () == protocol::framework_multipart_content_type) {
+                 auto parts = protocol::decode_application_parts (payload);
+                 messaging::message_parts_t encoded (std::move (parts));
+                 auto decoded = messaging::envelope_codec_t{}.decode_header (encoded, true);
+                 if (decoded) {
+@@ -4194,11 +4194,26 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
+ 
+ std::optional<zlink::poll_event_flag_t>
+ raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout,
+                                           bool accept_application_receive) noexcept
++{
++    return wait_for_activity_impl<false> (timeout, accept_application_receive);
++}
++
++std::optional<zlink::poll_event_flag_t>
++raw_mesh_node_owner_t::wait_for_hosted_activity (std::chrono::milliseconds timeout,
++                                                 bool accept_application_receive) noexcept
++{
++    return wait_for_activity_impl<true> (timeout, accept_application_receive);
++}
++
++template <bool Hosted>
++std::optional<zlink::poll_event_flag_t>
++raw_mesh_node_owner_t::wait_for_activity_impl (std::chrono::milliseconds timeout,
++                                               bool accept_application_receive) noexcept
+ {
+     if (_mailbox.pending_messages (service_mailbox_domain_t::infrastructure) != 0
+-        || (accept_application_receive && !_mailbox.has_application_dispatch ()
++        || (accept_application_receive && !Hosted && !_mailbox.has_application_dispatch ()
+             && _mailbox.pending_messages (service_mailbox_domain_t::application) != 0))
+         return zlink::poll_event_flag_t::none;
+ 
+     std::shared_ptr<detail::backend::raw_route_port_t> port;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+index fe098b8375..33a08d28ef 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+@@ -480,8 +480,15 @@ class raw_mesh_node_owner_t
+      * turning an idle node into a timed polling loop. */
+     std::optional<zlink::poll_event_flag_t>
+     wait_for_activity (std::chrono::milliseconds timeout,
+                        bool accept_application_receive = true) noexcept;
++    std::optional<zlink::poll_event_flag_t>
++    wait_for_hosted_activity (std::chrono::milliseconds timeout,
++                              bool accept_application_receive = true) noexcept;
++    template <bool Hosted>
++    std::optional<zlink::poll_event_flag_t>
++    wait_for_activity_impl (std::chrono::milliseconds timeout,
++                            bool accept_application_receive) noexcept;
+     void signal_activity () noexcept;
+     std::size_t last_pump_bytes () const;
+     // A rotation with no probe, timeout or admission retry due returns at once (spec 08
+     // section 4.2); the liveness registry owns that decision.
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+index 153d9e641b..f8312cc975 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+@@ -30,9 +30,9 @@ std::string next_correlation_id ()
+ 
+ 
+ } // namespace
+ 
+-std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
++static std::array<char, 20> deadline_bytes (std::chrono::system_clock::time_point deadline)
+ {
+     using namespace std::chrono;
+     // Match the former time_point_cast/to_time_t truncation before splitting UTC fields.
+     const auto seconds = time_point_cast<std::chrono::seconds> (deadline);
+@@ -52,14 +52,20 @@ std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
+     write (8, 2, static_cast<unsigned> (date.day ()));
+     write (11, 2, static_cast<unsigned> (clock.hours ().count ()));
+     write (14, 2, static_cast<unsigned> (clock.minutes ().count ()));
+     write (17, 2, static_cast<unsigned> (clock.seconds ().count ()));
+-    return std::string (output.data (), output.size ());
++    return output;
++}
++
++std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
++{
++    const auto text = deadline_bytes (deadline);
++    return std::string (text.data (), text.size ());
+ }
+ 
+ message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header_t &header,
+                                                            encoded_payload_t payload,
+-                                                           const std::string &content_type) const
++                                                           std::string_view content_type) const
+ {
+     auto body = detail::encoded_payload_to_raw (std::move (payload));
+     return message_parts_t (_codec.encode_header (header, content_type), std::move (body));
+ }
+@@ -79,11 +85,12 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
+       .channel_name = std::move (channel_name),
+       .message_name = std::move (message_name),
+       .content_type = std::move (content_type),
+       .correlation_id = kind == message_kind_t::request ? next_correlation_id () : std::string{},
+-      .deadline = timeout.count () > 0 ? std::optional<std::string>{format_utc_deadline (
+-                                           std::chrono::system_clock::now () + timeout)}
+-                                       : std::nullopt,
++      .deadline = timeout.count () > 0
++                    ? std::optional<header_text_t>{header_text_t (
++                        deadline_bytes (std::chrono::system_clock::now () + timeout))}
++                    : std::nullopt,
+       .topic = std::move (topic),
+       .source = std::move (source)};
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+index 174bc10e36..294acbca54 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+@@ -37,9 +37,9 @@ class client_call_codec_t
+     }
+ 
+     message_parts_t encode_payload_parts (const envelope_header_t &header,
+                                           encoded_payload_t payload,
+-                                          const std::string &content_type) const;
++                                          std::string_view content_type) const;
+ 
+     template <typename TEncodePayload>
+     message_parts_t encode_node_send_parts (const std::string &channel_name,
+                                             const std::string &packet_name,
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+index 013f26bd2c..1c087eebfa 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+@@ -225,9 +225,9 @@ class header_writer_t
+         const auto result = std::to_chars (buffer, buffer + sizeof (buffer), value);
+         append (std::string_view (buffer, result.ptr - buffer));
+     }
+ 
+-    void string (const std::string &value)
++    void string (std::string_view value)
+     {
+         if (!_output && !valid_utf8 (value)) {
+             // Keep the JSON library's strict UTF-8 exception and diagnostic.
+             // Only malformed input takes this path; valid headers have no DOM.
+@@ -274,9 +274,9 @@ class header_writer_t
+         append (std::string_view (value).substr (start));
+         append ("\"");
+     }
+ 
+-    void optional_string (const std::optional<std::string> &value)
++    template <typename T> void optional_string (const std::optional<T> &value)
+     {
+         if (value)
+             string (*value);
+         else
+@@ -329,15 +329,17 @@ struct header_plan_t
+     std::string prefix;
+     std::string middle;
+ 
+     bool matches (const envelope_header_t &header,
+-                  const std::string &selected_content_type) const noexcept
++                  std::string_view selected_content_type) const noexcept
+     {
+-        return kind && *kind == header.kind && channel_name == header.channel_name
+-               && message_name == header.message_name && content_type == selected_content_type;
++        return kind && *kind == header.kind
++               && std::string_view (channel_name) == std::string_view (header.channel_name)
++               && std::string_view (message_name) == std::string_view (header.message_name)
++               && std::string_view (content_type) == selected_content_type;
+     }
+ 
+-    void rebuild (const envelope_header_t &header, const std::string &selected_content_type)
++    void rebuild (const envelope_header_t &header, std::string_view selected_content_type)
+     {
+         // Keep the one-entry backing storage on this thread.  `kind` is the
+         // validity marker and is published only after every escaped segment
+         // and key has been rebuilt successfully.
+@@ -347,10 +349,10 @@ struct header_plan_t
+         content_type.clear ();
+         prefix.clear ();
+         middle.clear ();
+ 
+-        channel_name = header.channel_name;
+-        message_name = header.message_name;
++        channel_name.assign (header.channel_name.data (), header.channel_name.size ());
++        message_name.assign (header.message_name.data (), header.message_name.size ());
+         content_type = selected_content_type;
+ 
+         header_writer_t prefix_writer (prefix);
+         prefix_writer.append ("{\"channelName\":");
+@@ -420,9 +422,9 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
+     return encode_header (header, header.content_type);
+ }
+ 
+ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header,
+-                                                  const std::string &content_type) const
++                                                  std::string_view content_type) const
+ {
+     const auto &flow = flow_context_t::current ();
+     const bool stamp_flow = !header.flow_id && flow && !flow->flow_id.empty ();
+     const auto *flow_id = stamp_flow ? &flow->flow_id : header.flow_id ? &*header.flow_id : nullptr;
+@@ -479,9 +481,9 @@ enum class header_value_t
+ 
+ struct header_scalar_t
+ {
+     header_value_t type = header_value_t::missing;
+-    std::string string;
++    header_text_t string;
+     int number = 0;
+ 
+     void set_null ()
+     {
+@@ -514,9 +516,9 @@ struct header_scalar_t
+ };
+ 
+ // Recognize only the byte spelling emitted by header_writer_t. A mismatch
+ // leaves syntax and error reporting to the JSON SAX parser.
+-class canonical_header_reader_t
++template <bool Borrow> class canonical_header_reader_t
+ {
+   public:
+     explicit canonical_header_reader_t (std::string_view bytes) : _remaining (bytes) {}
+ 
+@@ -529,9 +531,9 @@ class canonical_header_reader_t
+     }
+ 
+     bool empty () const noexcept { return _remaining.empty (); }
+ 
+-    bool string (std::string *output)
++    template <typename T> bool string (T *output)
+     {
+         if (!consume ("\""))
+             return false;
+         std::size_t index = 0;
+@@ -555,9 +557,16 @@ class canonical_header_reader_t
+         if (!valid_utf8 (encoded))
+             return false;
+         if (output) {
+             if (!escaped) {
+-                output->assign (encoded);
++                if constexpr (std::is_same_v<T, header_text_t>) {
++                    if constexpr (Borrow)
++                        *output = header_text_t::view (encoded);
++                    else
++                        output->assign (encoded);
++                } else {
++                    output->assign (encoded);
++                }
+             } else {
+                 output->resize (decoded_size);
+                 std::size_t source = 0;
+                 std::size_t destination = 0;
+@@ -776,11 +785,11 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
+         _parse_error = error.what ();
+         return false;
+     }
+ 
+-    bool read_canonical (std::string_view bytes)
++    template <bool Borrow> bool read_canonical (std::string_view bytes)
+     {
+-        canonical_header_reader_t reader (bytes);
++        canonical_header_reader_t<Borrow> reader (bytes);
+         if (!reader.consume ("{\"channelName\":") || !reader.required_string (_channel_name)
+             || !reader.consume (",\"contentType\":") || !reader.required_string (_content_type)
+             || !reader.consume (",\"correlationId\":") || !reader.optional_string (&_correlation_id)
+             || (_correlation_id.type == header_value_t::string && _correlation_id.string.empty ())
+@@ -833,9 +842,11 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
+                                  .content_type = _content_type.type == header_value_t::string
+                                                    ? std::move (_content_type.string)
+                                                    : envelope_codec_t::default_content_type,
+                                  .correlation_id = std::move (_correlation_id.string)};
+-        header.deadline = take_optional (_deadline);
++        header.deadline = _deadline.type == header_value_t::string
++                            ? std::optional<header_text_t> (std::move (_deadline.string))
++                            : std::nullopt;
+         header.topic = take_optional (_topic);
+         header.error_code = take_optional (_error_code);
+         header.error_message = take_optional (_error_message);
+         header.source = take_optional (_source);
+@@ -1072,8 +1083,37 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
+ };
+ 
+ } // namespace
+ 
++namespace
++{
++template <bool Borrow>
++result_t<envelope_header_t>
++decode_header_bytes (std::span<const std::byte> bytes,
++                     bool capture_flow,
++                     std::optional<envelope_header_t> *rejection_context)
++{
++    if (rejection_context)
++        rejection_context->reset ();
++    try {
++        {
++            header_sax_t canonical (capture_flow);
++            if (canonical.read_canonical<Borrow> (
++                  std::string_view (reinterpret_cast<const char *> (bytes.data ()), bytes.size ())))
++                return canonical.finish (rejection_context);
++        }
++        header_sax_t sax (capture_flow);
++        (void) nlohmann::json::sax_parse (bytes.begin (), bytes.end (), &sax);
++        return sax.finish (rejection_context);
++    }
++    catch (const std::exception &ex) {
++        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
++                                                     std::string ("invalid ZLink envelope header: ")
++                                                       + ex.what ());
++    }
++}
++} // namespace
++
+ bool envelope_header_t::can_correlate_reply () const noexcept
+ {
+     constexpr std::size_t maximum_correlation_id_bytes = 64;
+     constexpr unsigned char maximum_ascii_character = 0x7f;
+@@ -1089,31 +1129,33 @@ envelope_codec_t::decode_header (const zlink::message_t &message,
+ {
+     return decode_header (message.bytes (), capture_flow, rejection_context);
+ }
+ 
++result_t<envelope_header_t>
++envelope_codec_t::decode_header_view (const zlink::message_t &message,
++                                      bool capture_flow,
++                                      std::optional<envelope_header_t> *rejection_context) const
++{
++    return decode_header_bytes<true> (message.bytes (), capture_flow, rejection_context);
++}
++
++result_t<envelope_header_t>
++envelope_codec_t::decode_header_view (const message_parts_t &parts,
++                                      bool capture_flow,
++                                      std::optional<envelope_header_t> *rejection_context) const
++{
++    if (parts.size () == 0
++        || std::holds_alternative<std::span<const std::span<const std::byte>>> (parts._parts))
++        return decode_header (parts, capture_flow, rejection_context);
++    return decode_header_view (parts[0], capture_flow, rejection_context);
++}
++
+ result_t<envelope_header_t>
+ envelope_codec_t::decode_header (std::span<const std::byte> bytes,
+                                  bool capture_flow,
+                                  std::optional<envelope_header_t> *rejection_context) const
+ {
+-    if (rejection_context)
+-        rejection_context->reset ();
+-    try {
+-        {
+-            header_sax_t canonical (capture_flow);
+-            if (canonical.read_canonical (
+-                  std::string_view (reinterpret_cast<const char *> (bytes.data ()), bytes.size ())))
+-                return canonical.finish (rejection_context);
+-        }
+-        header_sax_t sax (capture_flow);
+-        (void) nlohmann::json::sax_parse (bytes.begin (), bytes.end (), &sax);
+-        return sax.finish (rejection_context);
+-    }
+-    catch (const std::exception &ex) {
+-        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+-                                                     std::string ("invalid ZLink envelope header: ")
+-                                                       + ex.what ());
+-    }
++    return decode_header_bytes<false> (bytes, capture_flow, rejection_context);
+ }
+ 
+ result_t<envelope_header_t>
+ envelope_codec_t::decode_header (const message_parts_t &parts,
+@@ -1125,8 +1167,10 @@ envelope_codec_t::decode_header (const message_parts_t &parts,
+             rejection_context->reset ();
+         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                      "ZLink envelope header part is missing");
+     }
++    if (!std::holds_alternative<std::span<const std::span<const std::byte>>> (parts._parts))
++        return decode_header (parts[0], capture_flow, rejection_context);
+     return decode_header (parts.part_bytes (0), capture_flow, rejection_context);
+ }
+ 
+ result_t<encoded_payload_t> envelope_codec_t::decode_body_view (const message_parts_t &parts) const
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+index 15e6867616..fda3e23614 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+@@ -7,8 +7,9 @@
+ #include <zlink/framework/contracts/dispatch/execution.hpp>
+ #include <zlink/framework/contracts/errors/result.hpp>
+ #include <zlink/json_profile.hpp>
+ 
++#include <array>
+ #include <chrono>
+ #include <map>
+ #include <optional>
+ #include <string>
+@@ -27,16 +28,122 @@ enum class message_kind_t
+     publish = 4,
+     error = 5
+ };
+ 
++// Internal text either borrows the retained wire header or owns decoded/created text.
++// Copies preserve that representation; public contexts materialize their string values.
++class header_text_t
++{
++  public:
++    header_text_t () = default;
++    header_text_t (const char *text) : _text (std::string (text)) {}
++    header_text_t (std::string text) : _text (std::move (text)) {}
++    header_text_t (const header_text_t &other) : _text (other._text)
++    {
++        if (const auto *view = std::get_if<std::string_view> (&other._text))
++            _text = std::string (*view);
++    }
++    header_text_t &operator= (const header_text_t &other)
++    {
++        if (this != &other) {
++            if (const auto *view = std::get_if<std::string_view> (&other._text))
++                assign (*view);
++            else
++                _text = other._text;
++        }
++        return *this;
++    }
++    header_text_t (header_text_t &&) noexcept = default;
++    header_text_t &operator= (header_text_t &&) noexcept = default;
++    header_text_t (std::string_view text) : _text (std::string (text)) {}
++    header_text_t (std::array<char, 20> text) : _text (text) {}
++    static header_text_t view (std::string_view text)
++    {
++        header_text_t result;
++        result._text = text;
++        return result;
++    }
++    operator std::string_view () const noexcept
++    {
++        return std::visit (
++          [] (const auto &text) { return std::string_view (text.data (), text.size ()); }, _text);
++    }
++    operator std::string () const & { return std::string (std::string_view (*this)); }
++    operator std::string () &&
++    {
++        if (auto *owned = std::get_if<std::string> (&_text))
++            return std::move (*owned);
++        return std::string (std::string_view (*this));
++    }
++    bool empty () const noexcept { return std::string_view (*this).empty (); }
++    std::size_t size () const noexcept { return std::string_view (*this).size (); }
++    const char *data () const noexcept { return std::string_view (*this).data (); }
++    const char *begin () const noexcept { return data (); }
++    const char *end () const noexcept { return data () + size (); }
++    auto find (char value) const noexcept { return std::string_view (*this).find (value); }
++    void clear () { _text = std::string{}; }
++    void assign (std::string_view text)
++    {
++        if (auto *owned = std::get_if<std::string> (&_text))
++            owned->assign (text.data (), text.size ());
++        else
++            _text = std::string (text);
++    }
++    void resize (std::size_t size) { _text = std::string (size, '\0'); }
++    char &operator[] (std::size_t index) { return std::get<std::string> (_text)[index]; }
++    friend bool operator== (const header_text_t &a, const header_text_t &b) noexcept
++    {
++        return std::string_view (a) == std::string_view (b);
++    }
++    template <typename T>
++        requires std::is_convertible_v<const T &, std::string_view>
++    friend bool operator== (const header_text_t &a, const T &b) noexcept
++    {
++        return std::string_view (a) == std::string_view (b);
++    }
++    friend std::string operator+ (std::string a, const header_text_t &b)
++    {
++        a.append (b.data (), b.size ());
++        return a;
++    }
++    friend std::string operator+ (const char *a, const header_text_t &b)
++    {
++        return std::string (a) + b;
++    }
++    friend std::string operator+ (const header_text_t &a, const char *b)
++    {
++        return std::string (a) + b;
++    }
++
++  private:
++    std::variant<std::string, std::string_view, std::array<char, 20>> _text;
++};
++
++// Header copies own their scalar text. Only a moved invocation retains the
++// original frame; copying a header never clones a native message.
++struct envelope_header_storage_t
++{
++    envelope_header_storage_t () = default;
++    envelope_header_storage_t (const envelope_header_storage_t &) noexcept {}
++    envelope_header_storage_t &operator= (const envelope_header_storage_t &other) noexcept
++    {
++        if (this != &other)
++            message.reset ();
++        return *this;
++    }
++    envelope_header_storage_t (envelope_header_storage_t &&) noexcept = default;
++    envelope_header_storage_t &operator= (envelope_header_storage_t &&) noexcept = default;
++    std::optional<zlink::message_t> message;
++};
++
+ struct envelope_header_t
+ {
+     message_kind_t kind = message_kind_t::request;
+-    std::string channel_name;
+-    std::string message_name;
+-    std::string content_type = zlink::detail::json_profile::content_type;
+-    std::string correlation_id;
+-    std::optional<std::string> deadline;
++    header_text_t channel_name;
++    header_text_t message_name;
++    header_text_t content_type = zlink::detail::json_profile::content_type;
++    header_text_t correlation_id;
++    std::optional<header_text_t> deadline;
+     std::optional<std::string> topic;
+     std::optional<std::string> error_code;
+     std::optional<std::string> error_message;
+     std::optional<std::string> source;
+@@ -45,8 +152,9 @@ struct envelope_header_t
+      * Every route/actor/spot relay preserves both values as-is. */
+     std::optional<std::string> flow_id;
+     std::optional<flow_origin_t> flow_origin;
+     bool can_correlate_reply () const noexcept;
++    envelope_header_storage_t retained_header;
+ };
+ 
+ class message_parts_t
+ {
+@@ -117,14 +225,23 @@ class envelope_codec_t
+     result_t<envelope_header_t>
+     decode_header (std::span<const std::byte> bytes,
+                    bool capture_flow = true,
+                    std::optional<envelope_header_t> *rejection_context = nullptr) const;
++    // The caller retains the input frame until it moves into the invocation.
++    result_t<envelope_header_t>
++    decode_header_view (const zlink::message_t &message,
++                        bool capture_flow = true,
++                        std::optional<envelope_header_t> *rejection_context = nullptr) const;
++    result_t<envelope_header_t>
++    decode_header_view (const message_parts_t &parts,
++                        bool capture_flow = true,
++                        std::optional<envelope_header_t> *rejection_context = nullptr) const;
+     result_t<encoded_payload_t> decode_body_view (const message_parts_t &parts) const;
+     result_t<zlink::message_t> decode_body (const message_parts_t &parts) const;
+ 
+   private:
+     friend class client_call_codec_t;
+     zlink::message_t encode_header (const envelope_header_t &header,
+-                                    const std::string &content_type) const;
++                                    std::string_view content_type) const;
+ };
+ 
+ } // namespace zlink::framework::runtime::messaging
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/actor_join_recovery_codec.hpp b/framework/languages/cpp/framework/src/runtime/protocol/actor_join_recovery_codec.hpp
+index 10b8faad82..de1f5e11e6 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/actor_join_recovery_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/actor_join_recovery_codec.hpp
+@@ -401,10 +401,10 @@ decode_actor_join_recovery_saved_work (const frozen_record_t &record)
+         }
+     }
+     if (candidate->kind != frozen_record_kind_t::node_send
+         || candidate->source_kind != frozen_source_kind_t::node || !candidate->application
+-        || candidate->application->packet_name != actor_join_recovery_packet_name
+-        || candidate->application->content_type != actor_join_recovery_content_type)
++        || candidate->application->packet_name () != actor_join_recovery_packet_name
++        || candidate->application->content_type () != actor_join_recovery_content_type)
+         return std::nullopt;
+     service_wire_pilot_zljr_record_v1 generated;
+     try {
+         generated = decode_zljr_record_v1 (candidate->canonical_bytes.empty ()
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+index 7d256b3c7b..8511be2dd0 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+@@ -2906,8 +2906,13 @@ std::string decode_channel_send_header (std::span<const std::uint8_t> bytes)
+ }
+ 
+ namespace
+ {
++bool framework_multipart_profile (std::string_view packet, std::string_view content) noexcept
++{
++    return packet == framework_multipart_packet_name && content == framework_multipart_content_type;
++}
++
+ application_payload_t::multipart_t
+ retain_application_messages (std::span<const zlink::message_t> parts)
+ {
+     application_payload_t::multipart_t retained;
+@@ -2917,18 +2922,27 @@ retain_application_messages (std::span<const zlink::message_t> parts)
+     return retained;
+ }
+ } // namespace
+ 
++const std::string &application_payload_t::packet_name () const noexcept
++{
++    static const std::string multipart_name (framework_multipart_packet_name);
++    return parts () ? multipart_name : std::get<byte_payload_t> (_body).packet_name;
++}
++
++const std::string &application_payload_t::content_type () const noexcept
++{
++    static const std::string multipart_type (framework_multipart_content_type);
++    return parts () ? multipart_type : std::get<byte_payload_t> (_body).content_type;
++}
++
+ application_payload_t::application_payload_t (const application_payload_t &other) :
+-    packet_name (other.packet_name),
+-    content_type (other.content_type),
+-    flow_id (other.flow_id),
+-    flow_origin (other.flow_origin)
++    flow_id (other.flow_id), flow_origin (other.flow_origin)
+ {
+     if (const auto *parts = other.parts ()) {
+         _body = retain_application_messages (*parts);
+     } else {
+-        _body = other.payload_bytes ();
++        _body = std::get<byte_payload_t> (other._body);
+     }
+ }
+ 
+ application_payload_t &application_payload_t::operator= (const application_payload_t &other)
+@@ -2943,10 +2957,8 @@ application_payload_t application_payload_t::from_parts (const multipart_t &part
+     if (parts.empty ())
+         throw std::invalid_argument ("framework multipart requires at least one part");
+     auto retained = retain_application_messages (parts);
+     application_payload_t result;
+-    result.packet_name = framework_multipart_packet_name;
+-    result.content_type = framework_multipart_content_type;
+     result._body = std::move (retained);
+     return result;
+ }
+ 
+@@ -2954,38 +2966,51 @@ application_payload_t application_payload_t::from_parts (multipart_t &&parts)
+ {
+     if (parts.empty ())
+         throw std::invalid_argument ("framework multipart requires at least one part");
+     application_payload_t result;
+-    result.packet_name = framework_multipart_packet_name;
+-    result.content_type = framework_multipart_content_type;
+     result._body = std::move (parts);
+     return result;
+ }
+ 
+ namespace
+ {
+-template <typename CreatePart>
+-auto decode_application_parts_bytes (std::span<const std::uint8_t> encoded, CreatePart create_part)
++template <typename Prepare, typename Consume>
++void read_application_parts_bytes (std::span<const std::uint8_t> encoded,
++                                   Prepare prepare,
++                                   Consume consume)
+ {
+     if (encoded.size () < 4)
+         throw service_wire_error_t ("framework multipart payload is truncated");
+     std::size_t offset = 0;
+     const auto count = read_u32 (encoded, offset);
+     if (count == 0 || count > (encoded.size () - offset) / sizeof (std::uint32_t))
+         throw service_wire_error_t ("framework multipart part count is invalid");
+-    std::vector<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>> parts;
+-    parts.reserve (count);
++    prepare (count);
+     for (std::uint32_t index = 0; index < count; ++index) {
+         if (encoded.size () - offset < 4)
+             throw service_wire_error_t ("framework multipart payload is truncated");
+         const auto size = read_u32 (encoded, offset);
+         if (size > encoded.size () - offset)
+             throw service_wire_error_t ("framework multipart part is truncated");
+-        parts.push_back (create_part (encoded.subspan (offset, size)));
++        consume (encoded.subspan (offset, size));
+         offset += size;
+     }
+     if (offset != encoded.size ())
+         throw service_wire_error_t ("framework multipart payload has trailing bytes");
++}
++
++template <typename CreatePart,
++          typename Allocator =
++            std::allocator<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>>>
++auto decode_application_parts_bytes (std::span<const std::uint8_t> encoded,
++                                     CreatePart create_part,
++                                     Allocator allocator = {})
++{
++    std::vector<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>, Allocator> parts (
++      allocator);
++    read_application_parts_bytes (
++      encoded, [&] (auto count) { parts.reserve (count); },
++      [&] (auto bytes) { parts.push_back (create_part (bytes)); });
+     return parts;
+ }
+ } // namespace
+ 
+@@ -2993,10 +3018,9 @@ namespace
+ {
+ application_payload_t::multipart_t retained_application_parts (const application_payload_t &payload,
+                                                                bool header_only)
+ {
+-    if (payload.packet_name != framework_multipart_packet_name
+-        || payload.content_type != framework_multipart_content_type)
++    if (!framework_multipart_profile (payload.packet_name (), payload.content_type ()))
+         throw service_wire_error_t ("framework application payload profile is unsupported");
+     if (const auto *parts = payload.parts ()) {
+         const auto count = header_only ? std::min (parts->size (), std::size_t{1}) : parts->size ();
+         return retain_application_messages (
+@@ -3014,8 +3038,29 @@ application_payload_t::multipart_t decode_application_parts (const application_p
+ {
+     return retained_application_parts (payload, false);
+ }
+ 
++std::size_t decode_application_part_views (const application_payload_t &payload,
++                                           std::span<std::span<const std::byte>> descriptors)
++{
++    if (!framework_multipart_profile (payload.packet_name (), payload.content_type ()))
++        throw service_wire_error_t ("framework application payload profile is unsupported");
++    std::size_t written = 0;
++    const auto append = [&] (std::span<const std::byte> bytes) {
++        if (written < descriptors.size ())
++            descriptors[written++] = bytes;
++    };
++    if (const auto *parts = payload.parts ()) {
++        for (const auto &part : *parts)
++            append (part.bytes ());
++    } else {
++        read_application_parts_bytes (
++          payload.payload_bytes (), [] (auto) {},
++          [&] (auto bytes) { append (std::as_bytes (bytes)); });
++    }
++    return written;
++}
++
+ zlink::message_t decode_application_header (const application_payload_t &payload)
+ {
+     auto parts = retained_application_parts (payload, true);
+     if (parts.empty ())
+@@ -3024,9 +3069,9 @@ zlink::message_t decode_application_header (const application_payload_t &payload
+ }
+ 
+ bool operator== (const application_payload_t &left, const application_payload_t &right)
+ {
+-    if (left.packet_name != right.packet_name || left.content_type != right.content_type
++    if (left.packet_name () != right.packet_name () || left.content_type () != right.content_type ()
+         || left.flow_id != right.flow_id || left.flow_origin != right.flow_origin)
+         return false;
+     const auto *left_parts = left.parts ();
+     const auto *right_parts = right.parts ();
+@@ -3090,20 +3135,20 @@ Buffer encode_application_payload_into (const application_payload_t &payload)
+         }
+     } else {
+         payload_size = payload.payload_bytes ().size ();
+     }
+-    const auto body_size = std::uint64_t{6} + payload.packet_name.size ()
+-                           + payload.content_type.size () + payload_size
++    const auto body_size = std::uint64_t{6} + payload.packet_name ().size ()
++                           + payload.content_type ().size () + payload_size
+                            + (payload.flow_id ? 2 + payload.flow_id->size () : 0);
+     if (body_size > std::numeric_limits<std::uint32_t>::max ()) {
+         throw service_wire_error_t ("application payload envelope exceeds u32");
+     }
+     auto result = allocate_wire_buffer<Buffer> (5 + body_size);
+     result.push_back (payload.flow_id ? application_payload_flow_version
+                                       : application_payload_version);
+     append_u32 (result, static_cast<std::uint32_t> (body_size));
+-    append_text8 (result, payload.packet_name, "packet name");
+-    append_text8 (result, payload.content_type, "content type");
++    append_text8 (result, payload.packet_name (), "packet name");
++    append_text8 (result, payload.content_type (), "content type");
+     append_u32 (result, static_cast<std::uint32_t> (payload_size));
+     if (parts) {
+         append_u32 (result, static_cast<std::uint32_t> (parts->size ()));
+         for (const auto &part : *parts) {
+@@ -3194,12 +3239,10 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t>
+ {
+     return decode_application_payload_bytes (
+       bytes, capture_flow,
+       [] (auto packet_name, auto content_type, auto body, auto flow_id, auto flow_origin) {
+-          application_payload_t result;
+-          result.packet_name = packet_name;
+-          result.content_type = content_type;
+-          result.payload_bytes ().assign (body.begin (), body.end ());
++          application_payload_t result{std::string (packet_name), std::string (content_type),
++                                       std::vector<std::uint8_t> (body.begin (), body.end ())};
+           if (flow_id)
+               result.flow_id.emplace (*flow_id);
+           result.flow_origin = flow_origin;
+           return result;
+@@ -3207,20 +3250,22 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t>
+ }
+ 
+ namespace
+ {
+-template <typename CreatePart>
++template <typename CreatePart,
++          typename Allocator =
++            std::allocator<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>>>
+ auto decode_application_parts_with (std::span<const std::uint8_t> bytes,
+                                     bool capture_flow,
+-                                    CreatePart create_part)
++                                    CreatePart create_part,
++                                    Allocator allocator = {})
+ {
+     return decode_application_payload_bytes (
+       bytes, capture_flow,
+-      [create_part] (auto packet_name, auto content_type, auto body, auto, auto) {
+-          if (packet_name != framework_multipart_packet_name
+-              || content_type != framework_multipart_content_type)
++      [create_part, allocator] (auto packet_name, auto content_type, auto body, auto, auto) {
++          if (!framework_multipart_profile (packet_name, content_type))
+               throw service_wire_error_t ("framework application payload profile is unsupported");
+-          return decode_application_parts_bytes (body, create_part);
++          return decode_application_parts_bytes (body, create_part, allocator);
+       });
+ }
+ } // namespace
+ 
+@@ -3230,8 +3275,16 @@ decode_application_part_views (std::span<const std::uint8_t> bytes, bool capture
+     return decode_application_parts_with (bytes, capture_flow,
+                                           [] (auto part) { return std::as_bytes (part); });
+ }
+ 
++std::pmr::vector<std::span<const std::byte>> decode_application_part_views (
++  std::span<const std::uint8_t> bytes, bool capture_flow, std::pmr::memory_resource *storage)
++{
++    return decode_application_parts_with (
++      bytes, capture_flow, [] (auto part) { return std::as_bytes (part); },
++      std::pmr::polymorphic_allocator<std::span<const std::byte>> (storage));
++}
++
+ namespace
+ {
+ // One received message backs every part decoded from it. Each part holds one
+ // reference; the message is released with the last part.
+@@ -3284,10 +3337,9 @@ application_payload_t::multipart_t decode_application_parts (zlink::message_t &&
+ }
+ 
+ std::size_t application_payload_hwm_bytes (const application_payload_t &payload)
+ {
+-    if (payload.packet_name != framework_multipart_packet_name
+-        || payload.content_type != framework_multipart_content_type) {
++    if (!framework_multipart_profile (payload.packet_name (), payload.content_type ())) {
+         return payload.payload_bytes ().size ();
+     }
+     if (const auto *parts = payload.parts ())
+         return parts->back ().size ();
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
+index dd3d7e1947..9c9d01aa72 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
+@@ -12,8 +12,9 @@
+ #include <zlink/Contracts/Messaging/message.hpp>
+ 
+ #include <cstdint>
+ #include <memory>
++#include <memory_resource>
+ #include <optional>
+ #include <span>
+ #include <string>
+ #include <stdexcept>
+@@ -80,43 +81,53 @@ struct application_payload_t
+                            std::string content,
+                            std::vector<std::uint8_t> bytes,
+                            std::optional<std::string> flow = {},
+                            std::optional<flow_origin_t> origin = {}) :
+-        packet_name (std::move (packet)),
+-        content_type (std::move (content)),
+         flow_id (std::move (flow)),
+         flow_origin (origin),
+-        _body (std::move (bytes))
++        _body (byte_payload_t{std::move (packet), std::move (content), std::move (bytes)})
+     {
+     }
+ 
+     static application_payload_t from_parts (const multipart_t &parts);
+     static application_payload_t from_parts (multipart_t &&parts);
+     const multipart_t *parts () const noexcept { return std::get_if<multipart_t> (&_body); }
+     const std::vector<std::uint8_t> &payload_bytes () const
+     {
+-        return std::get<std::vector<std::uint8_t>> (_body);
++        return std::get<byte_payload_t> (_body).bytes;
+     }
+-    std::vector<std::uint8_t> &payload_bytes ()
++    std::vector<std::uint8_t> &payload_bytes () { return std::get<byte_payload_t> (_body).bytes; }
++
++    void release_body ()
+     {
+-        return std::get<std::vector<std::uint8_t>> (_body);
++        if (auto *messages = std::get_if<multipart_t> (&_body))
++            multipart_t{}.swap (*messages);
++        else
++            std::vector<std::uint8_t>{}.swap (std::get<byte_payload_t> (_body).bytes);
+     }
+-
+-    std::string packet_name;
+-    std::string content_type;
++    const std::string &packet_name () const noexcept;
++    const std::string &content_type () const noexcept;
+     std::optional<std::string> flow_id;
+     std::optional<flow_origin_t> flow_origin;
+ 
+     friend bool operator== (const application_payload_t &, const application_payload_t &);
+ 
+   private:
+     // The codec owns either incoming bytes or outgoing parts, never both.
+-    std::variant<std::vector<std::uint8_t>, multipart_t> _body;
++    struct byte_payload_t
++    {
++        std::string packet_name;
++        std::string content_type;
++        std::vector<std::uint8_t> bytes;
++    };
++    std::variant<byte_payload_t, multipart_t> _body;
+ };
+ 
+ // Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
+ application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload);
+ zlink::message_t decode_application_header (const application_payload_t &payload);
++std::size_t decode_application_part_views (const application_payload_t &payload,
++                                           std::span<std::span<const std::byte>> descriptors);
+ 
+ struct spot_route_fence_t
+ {
+     std::string spot_id;
+@@ -1032,8 +1043,11 @@ zlink::message_t encode_application_payload_message (const application_payload_t
+ application_payload_t decode_application_payload (std::span<const std::uint8_t> bytes,
+                                                   bool capture_flow = true);
+ std::vector<std::span<const std::byte>>
+ decode_application_part_views (std::span<const std::uint8_t> bytes, bool capture_flow = true);
++std::pmr::vector<std::span<const std::byte>> decode_application_part_views (
++  std::span<const std::uint8_t> bytes, bool capture_flow, std::pmr::memory_resource *storage);
++
+ application_payload_t::multipart_t decode_application_parts (zlink::message_t &&bytes,
+                                                              bool capture_flow = true);
+ 
+ inline std::span<const std::uint8_t> message_bytes (const zlink::message_t &message) noexcept
+diff --git a/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp b/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp
+index 85f16a5a3c..469a4a3053 100644
+--- a/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp
+@@ -4990,9 +4990,9 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
+                                      ? current->activation_scope->provider ()
+                                      : *empty_services;
+                   auto replay = spot_handler_registry_t (current).invoke_erased (
+                     {}, spot_handler_kind_t::packet,
+-                    original->original_activation->application_payload.packet_name, {},
++                    original->original_activation->application_payload.packet_name (), {},
+                     std::type_index (typeid (void)), current->spot_instance.get (), nullptr,
+                     provider, *current->channel_runtime->serializers, carrier->first,
+                     carrier->second, false);
+                   detail::observe_task_completion (
+@@ -6602,14 +6602,20 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
+             }
+             if (packet.application_record && !packet.application_record->invocation ()) {
+                 runtime::stateful::with_accepted_application (
+                   *packet.application_record->payload (), [&] (auto, const auto &application) {
+-                      const runtime::messaging::message_parts_t parts (
+-                        runtime::protocol::decode_application_parts (application));
+-                      const auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
++                      std::array<std::span<const std::byte>, 2> descriptors;
++                      auto parts =
++                        application.parts ()
++                          ? runtime::messaging::message_parts_t::borrow (*application.parts ())
++                          : runtime::messaging::message_parts_t::borrow (
++                              std::span<const std::span<const std::byte>> (descriptors)
++                                .first (runtime::protocol::decode_application_part_views (
++                                  application, descriptors)));
++                      auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
+                       if (!body)
+                           std::rethrow_exception (body.exception ());
+-                      packet.application_record->set_invocation (body.value (),
++                      packet.application_record->set_invocation (std::move (body.value ()),
+                                                                  std::move (metadata));
+                   });
+                 metadata = std::move (packet.application_record->invocation ()->second);
+             }
+@@ -9776,9 +9782,9 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
+                   std::rethrow_exception (header.exception ());
+               packet.packet_name = header.value ().message_name;
+               packet.content_type = invocation_metadata
+                                       ? std::move (invocation_metadata->content_type)
+-                                      : header.value ().content_type;
++                                      : std::string (header.value ().content_type);
+               packet.metadata = invocation_metadata ? std::move (invocation_metadata->values)
+                                                     : header.value ().metadata;
+               packet.is_request = kind == runtime::protocol::frozen_record_kind_t::actor_request;
+           });
+@@ -15385,10 +15391,20 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+   serializer_registry_t &serializers,
+   std::function<void ()> deferred_terminal,
+   bool *terminal_deferred,
+   runtime::handler_entry_t before_application_handler,
+-  runtime::serial_execution_queue_t::async_completion_t application_completed)
+-{
++  runtime::serial_execution_queue_t::async_completion_t application_completed,
++  runtime::application_dispatch_terminal_owner_t *local_terminal)
++{
++    std::shared_ptr<runtime::application_dispatch_terminal_owner_t> promoted_terminal;
++    const auto defer_terminal = [&] () -> std::function<void ()> {
++        if (!local_terminal)
++            return std::move (deferred_terminal);
++        promoted_terminal = std::make_shared<runtime::application_dispatch_terminal_owner_t> (
++          std::move (*local_terminal));
++        local_terminal = nullptr;
++        return [owned = promoted_terminal] { owned->settle (); };
++    };
+     if (terminal_deferred)
+         *terminal_deferred = false;
+     if (owner.owner_kind == service::owner_kind_t::spot
+         && record.kind == service::record_kind_t::spot_multicast) {
+@@ -15428,14 +15444,14 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+                            : result_t<zlink::message_t>::failure (
+                                submission.error_kind (), submission.error ()
+                                                            ? submission.error ()->what ()
+                                                            : "SPOT subscription dispatch failed"));
+-        if (terminal_deferred && deferred_terminal)
++        if (terminal_deferred && (deferred_terminal || local_terminal))
+             *terminal_deferred = true;
+         detail::observe_task_terminal (
+-          dispatched, [state = _state, topic = record.topic, context_state = context->_state,
+-                       deferred_terminal =
+-                         std::move (deferred_terminal)] (const result_t<zlink::message_t> &result) {
++          dispatched,
++          [state = _state, topic = record.topic, context_state = context->_state,
++           deferred_terminal = defer_terminal ()] (const result_t<zlink::message_t> &result) {
+               if (!result) {
+                   const framework_exception_t error (
+                     result.error_kind (), result.error () ? result.error ()->what ()
+                                                           : "SPOT subscription dispatch failed");
+@@ -15550,12 +15566,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+                 settle_pending_handoff_request (std::move (*pending), completed);
+                 co_return;
+             }(_state, std::move (encoded), header, record.source_node_rid, terminal_route,
+                                                      *success);
+-            if (deferred_terminal) {
++            if (deferred_terminal || local_terminal) {
+                 detail::observe_task_completion (
+-                  settle, [node = _state, deferred_terminal = std::move (deferred_terminal)] (
+-                            const result_t<void> &terminal) {
++                  settle, [node = _state,
++                           deferred_terminal = defer_terminal ()] (const result_t<void> &terminal) {
+                       const auto failures = node->runtime_failures ();
+                       if (!terminal)
+                           failures->report (terminal.exception ());
+                       failures->capture ([&] { deferred_terminal (); });
+@@ -15584,9 +15600,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+                                                      serializers);
+         if (route_send && dispatcher.can_handle_send (header.message_name)) {
+             const bool transfer_actor_leave_owner_reservation =
+               node_record && header.message_name == spot_actor_leave_route_command_t::packet_name
+-              && static_cast<bool> (deferred_terminal);
++              && (deferred_terminal || local_terminal);
+             route_received_packet_t received{record.source_node_rid,
+                                              record.operation_id.low == 0
+                                                ? std::nullopt
+                                                : std::make_optional (record.operation_id.low),
+@@ -15608,13 +15624,13 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+                       operation_low == 0 ? std::nullopt
+                                          : std::make_optional (std::to_string (operation_low)));
+                 }
+             };
+-            auto dispatched = transfer_actor_leave_owner_reservation
+-                                ? dispatcher.dispatch_actor_leave_async (
+-                                    std::move (received), std::move (deferred_terminal),
+-                                    record.transferred_owner_byte_cost)
+-                                : dispatcher.dispatch_send (received, header, services);
++            auto dispatched =
++              transfer_actor_leave_owner_reservation
++                ? dispatcher.dispatch_actor_leave_async (std::move (received), defer_terminal (),
++                                                         record.transferred_owner_byte_cost)
++                : dispatcher.dispatch_send (received, header, services);
+             detail::observe_task_completion (
+               dispatched, [report] (const result_t<result_t<void>> &terminal) {
+                   report (terminal ? terminal.value ()
+                                    : detail::propagate_failure<void> (
+@@ -15630,14 +15646,14 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+                                                ? std::nullopt
+                                                : std::make_optional (record.operation_id.low),
+                                              std::move (encoded), std::nullopt, record.received_at};
+             detail::channel_reply_writer_t replies;
+-            if (deferred_terminal) {
++            if (deferred_terminal || local_terminal) {
+                 const auto async_dispatched = dispatcher.dispatch_request_async (
+                   received, header, services,
+                   [reply_token = record.reply_token, request_header = header,
+                    deferred_terminal =
+-                     std::move (deferred_terminal)] (result_t<zlink::message_t> response) mutable {
++                     defer_terminal ()] (result_t<zlink::message_t> response) mutable {
+                       try {
+                           detail::channel_reply_writer_t async_replies;
+                           const auto reply_parts =
+                             response ? async_replies.reply_raw_envelope (
+@@ -15796,9 +15812,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+                       std::move (on_export));
+                 if (terminal_deferred)
+                     *terminal_deferred = true;
+                 detail::observe_task_completion (
+-                  handled, [terminal, deferred_terminal = std::move (deferred_terminal)] (
++                  handled, [terminal, deferred_terminal = defer_terminal ()] (
+                              const result_t<zlink::message_t> &result) mutable {
+                       try {
+                           if (terminal) {
+                               if (auto complete = std::exchange (*terminal, {}))
+@@ -16222,10 +16238,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+             }
+         }
+         const auto request_header = header;
+         auto terminal_claimed = std::make_shared<std::atomic_bool> (false);
+-        auto terminal_owner =
+-          std::make_shared<std::function<void ()>> (std::move (deferred_terminal));
++        auto terminal_owner = std::make_shared<std::function<void ()>> (defer_terminal ());
+         std::function<void ()> after_application_admission;
+         if (record.kind == service::record_kind_t::actor_send && *terminal_owner) {
+             // Spec 05 section 4.3 defines one-way acceptance at the target
+             // mailbox/relay queue. Do not retain the source Session ingress
+@@ -16429,9 +16444,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
+      * the record terminal from here (Spot-Actor membership: Join on the
+      * lifecycle lane). The Spot lifecycle drain waits for it at shutdown. */
+     auto reply = std::make_shared<std::function<void (result_t<actor_join_reply_t>)>> (
+       [reply_token = record.reply_token,
+-       deferred_terminal = std::move (deferred_terminal)] (result_t<actor_join_reply_t> joined) {
++       deferred_terminal = defer_terminal ()] (result_t<actor_join_reply_t> joined) {
+           if (!joined) {
+               (void) service::actor_join_reply (
+                 reply_token,
+                 detail::propagate_failure<service::actor_join_result_t> (
+diff --git a/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.hpp b/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.hpp
+index ffad5b6885..1165de14ec 100644
+--- a/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.hpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #pragma once
++#include "runtime/mesh/application_dispatch_terminal_owner.hpp"
+ 
+ #include "actor_transfer_coordinator.hpp"
+ #include "activation_admission.hpp"
+ #include "runtime/actors/actor_serial_executor.hpp"
+@@ -2031,9 +2032,10 @@ class spot_node_runtime_t
+       serializer_registry_t &serializers,
+       std::function<void ()> deferred_terminal = {},
+       bool *terminal_deferred = nullptr,
+       runtime::handler_entry_t before_application_handler = {},
+-      runtime::serial_execution_queue_t::async_completion_t application_completed = {});
++      runtime::serial_execution_queue_t::async_completion_t application_completed = {},
++      runtime::application_dispatch_terminal_owner_t *local_terminal = nullptr);
+     void set_route_client (route_client_t route_client);
+     void on_destroy_actor (std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor);
+     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);
+     void on_actor_packet_relay (std::function<task_t<std::optional<zlink::message_t>> (
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index bbcb1a4a0a..9ea0a78aa4 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -263,9 +263,9 @@ void report_stateful_dispatch_error (
+         try {
+             const auto *identity = accepted ? accepted->identity () : nullptr;
+             const auto &turn = identity ? *identity : delivery.turn;
+             stateful::with_accepted_application (turn, [&] (auto, const auto &application) {
+-                event.packet_name = application.packet_name;
++                event.packet_name = application.packet_name ();
+                 event.flow_id = application.flow_id;
+                 event.flow_origin = application.flow_origin;
+                 const auto header_part = identity
+                                            ? accepted->application_header ()
+@@ -5177,9 +5177,9 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
+                                                           : dispatch_message_kind_t::send,
+                       .reason = detail::dispatch_reason_from_error (&error),
+                       .action = activation->request ? dispatch_error_action_t::reply_error
+                                                     : dispatch_error_action_t::drop,
+-                      .packet_name = owned_command->application_payload.packet_name,
++                      .packet_name = owned_command->application_payload.packet_name (),
+                       .spot_id = activation->target.spot_id,
+                       .source_rid =
+                         zlink::routing_id_t::from (activation->source_node_routing_id).to_string (),
+                       .exception = exception,
+@@ -5259,9 +5259,9 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
+                         message_flow_event_t event{
+                           .outcome = message_flow_outcome_t::dropped,
+                           .surface = dispatch_error_surface_t::instance_spot,
+                           .message_kind = dispatch_message_kind_t::send,
+-                          .packet_name = owned_command->application_payload.packet_name,
++                          .packet_name = owned_command->application_payload.packet_name (),
+                           .source_rid =
+                             zlink::routing_id_t::from (activation->source_node_routing_id)
+                               .to_string (),
+                           .spot_id = activation->target.spot_id,
+@@ -7437,13 +7437,32 @@ public_host_runtime_t::dispatch_ready (mesh::service_mailbox_t::application_disp
+                                        bool accept_application_receive,
+                                        std::function<bool ()> next_application_receive,
+                                        std::optional<zlink::poll_event_flag_t> waited)
+ {
+-    if (!dispatch) {
++    return dispatch_ready_impl (std::move (dispatch), accept_application_receive,
++                                std::move (next_application_receive), waited,
++                                !_transport->mailbox ().has_application_dispatch ());
++}
++
++task_t<std::size_t> public_host_runtime_t::dispatch_hosted_ready (
++  mesh::service_mailbox_t::application_dispatch_t dispatch,
++  bool accept_application_receive,
++  std::function<bool ()> next_application_receive,
++  std::optional<zlink::poll_event_flag_t> waited)
++{
++    return dispatch_ready_impl (std::move (dispatch), accept_application_receive,
++                                std::move (next_application_receive), waited, false);
++}
++
++task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
++  mesh::service_mailbox_t::application_dispatch_t dispatch,
++  bool accept_application_receive,
++  std::function<bool ()> next_application_receive,
++  std::optional<zlink::poll_event_flag_t> waited,
++  bool standalone)
++{
++    if (!dispatch)
+         throw std::invalid_argument ("framework public host dispatch callback is required");
+-    }
+-    // The mailbox dispatcher is bound at host start and unbound after receive shutdown.
+-    const bool standalone = !_transport->mailbox ().has_application_dispatch ();
+     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+     (void) co_await _relocation_wire->retry_terminal_relays (now);
+     (void) _relocation_wire->reap_terminal_tombstones (now);
+     (void) _transport->tick_liveness (now);
+@@ -8524,8 +8543,27 @@ public_host_runtime_t::dispatch_application_owner (
+ std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch_activity (
+   std::chrono::milliseconds timeout,
+   bool accept_application_receive,
+   std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
++{
++    return wait_for_dispatch_activity_impl (timeout, accept_application_receive, next_activity,
++                                            true);
++}
++
++std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_hosted_dispatch_activity (
++  std::chrono::milliseconds timeout,
++  bool accept_application_receive,
++  std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
++{
++    return wait_for_dispatch_activity_impl (timeout, accept_application_receive, next_activity,
++                                            false);
++}
++
++std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch_activity_impl (
++  std::chrono::milliseconds timeout,
++  bool accept_application_receive,
++  std::optional<std::chrono::steady_clock::time_point> next_activity,
++  bool standalone) noexcept
+ {
+     try {
+         if (next_activity) {
+             const auto now = std::chrono::steady_clock::now ();
+@@ -8535,9 +8573,11 @@ std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch
+                 : std::chrono::ceil<std::chrono::milliseconds> (*next_activity - now);
+             if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
+                 timeout = remaining;
+         }
+-        return _transport->wait_for_activity (timeout, accept_application_receive);
++        return standalone
++                 ? _transport->wait_for_activity (timeout, accept_application_receive)
++                 : _transport->wait_for_hosted_activity (timeout, accept_application_receive);
+     }
+     catch (...) {
+         _options.mesh.runtime_failures->report (std::current_exception ());
+         return std::nullopt;
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
+index 80af10860c..1a2caefee9 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
+@@ -882,8 +882,24 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
+     task_t<std::size_t> dispatch_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                         bool accept_application_receive = true,
+                                         std::function<bool ()> next_application_receive = {},
+                                         std::optional<zlink::poll_event_flag_t> readiness = {});
++    task_t<std::size_t>
++    dispatch_hosted_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
++                           bool accept_application_receive = true,
++                           std::function<bool ()> next_application_receive = {},
++                           std::optional<zlink::poll_event_flag_t> readiness = {});
++    task_t<std::size_t>
++    dispatch_ready_impl (mesh::service_mailbox_t::application_dispatch_t dispatch,
++                         bool accept_application_receive,
++                         std::function<bool ()> next_application_receive,
++                         std::optional<zlink::poll_event_flag_t> waited,
++                         bool standalone);
++    std::optional<zlink::poll_event_flag_t> wait_for_dispatch_activity_impl (
++      std::chrono::milliseconds timeout,
++      bool accept_application_receive,
++      std::optional<std::chrono::steady_clock::time_point> next_activity,
++      bool standalone) noexcept;
+     using application_owner_result_t = std::variant<bool, task_t<bool>>;
+     application_owner_result_t
+     dispatch_application_owner (std::string owner,
+                                 const mesh::service_mailbox_t::application_dispatch_t dispatch,
+@@ -892,8 +908,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
+     std::optional<zlink::poll_event_flag_t> wait_for_dispatch_activity (
+       std::chrono::milliseconds timeout,
+       bool accept_application_receive,
+       std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept;
++    std::optional<zlink::poll_event_flag_t> wait_for_hosted_dispatch_activity (
++      std::chrono::milliseconds timeout,
++      bool accept_application_receive,
++      std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept;
+     task_t<std::pair<bool, std::optional<std::chrono::steady_clock::time_point>>>
+     next_dispatch_activity_async ();
+     void signal_dispatch_activity () noexcept;
+     task_t<bool> prepare_actor_transfer_async (const actor_transfer_prepare_t &prepare,
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/raw_stateful_dispatch.cpp b/framework/languages/cpp/framework/src/runtime/stateful/raw_stateful_dispatch.cpp
+index 41a5d40e3c..a2851edc84 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/raw_stateful_dispatch.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/raw_stateful_dispatch.cpp
+@@ -432,14 +432,14 @@ stateful_error_t raw_stateful_dispatch_t::finish_accepted_ingress (
+                 if (actor)
+                     event.actor_id = owner.key;
+                 else
+                     event.spot_id = owner.key;
+-                event.packet_name = admission.admitted_application->packet_name;
++                event.packet_name = admission.admitted_application->packet_name ();
+                 event.flow_id = admission.admitted_application->flow_id;
+                 event.flow_origin = admission.admitted_application->flow_origin;
+-                if (admission.admitted_application->packet_name
++                if (admission.admitted_application->packet_name ()
+                       == protocol::framework_multipart_packet_name
+-                    && admission.admitted_application->content_type
++                    && admission.admitted_application->content_type ()
+                          == protocol::framework_multipart_content_type) {
+                     const messaging::message_parts_t parts (
+                       protocol::decode_application_parts (*admission.admitted_application));
+                     if (parts.size () != 0) {

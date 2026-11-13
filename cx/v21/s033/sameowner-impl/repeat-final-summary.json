@@ -1,0 +1,608 @@
+[
+  {
+    "case": "mailbox",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-mailbox-01.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-01.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 2,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-02.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 3,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-03.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 4,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-04.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 5,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-05.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 6,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-06.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 7,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-07.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 8,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-08.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 9,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-09.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 10,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-10.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 11,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-11.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 12,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-12.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 13,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-13.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 14,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-14.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 15,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-15.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 16,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-16.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 17,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-17.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 18,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-18.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 19,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-19.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 20,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-20.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 21,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-21.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 22,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-22.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 23,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-23.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 24,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-24.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 25,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-25.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 26,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-26.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 27,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-27.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 28,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-28.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 29,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-29.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 30,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-30.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 31,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-31.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 32,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-32.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 33,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-33.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 34,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-34.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 35,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-35.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 36,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-36.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 37,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-37.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 38,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-38.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 39,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-39.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 40,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-40.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 41,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-41.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 42,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-42.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 43,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-43.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 44,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-44.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 45,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-45.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 46,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-46.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 47,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-47.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 48,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-48.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 49,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-49.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 50,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-channel-50.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-01.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 2,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-02.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 3,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-03.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 4,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-04.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 5,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-05.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 6,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-06.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 7,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-07.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 8,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-08.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 9,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-09.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 10,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-10.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 11,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-11.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 12,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-12.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 13,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-13.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 14,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-14.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 15,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-15.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 16,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-16.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 17,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-17.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 18,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-18.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 19,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-19.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 20,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-20.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 21,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-21.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 22,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-22.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 23,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-23.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 24,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-24.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 25,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-25.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 26,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-26.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 27,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-27.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 28,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-28.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 29,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-29.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 30,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-30.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 31,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-31.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 32,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-32.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 33,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-33.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 34,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-34.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 35,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-35.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 36,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-36.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 37,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-37.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 38,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-38.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 39,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-39.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 40,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-40.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 41,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-41.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 42,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-42.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 43,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-43.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 44,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-44.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 45,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-45.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 46,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-46.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 47,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-47.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 48,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-48.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 49,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-49.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 50,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/repeat-final-actor-50.log"
+  }
+]

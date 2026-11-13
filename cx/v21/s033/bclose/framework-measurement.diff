@@ -1,0 +1,50 @@
+--- jdr6/ZLinkJavaRawServicePortContractTest.java
++++ measurement/ZLinkJavaRawServicePortContractTest.java
+@@ -54,6 +54,15 @@
+ import java.util.function.Function;
+ 
+ final class ZLinkJavaRawServicePortContractTest {
++    private static final java.util.concurrent.ConcurrentHashMap<String,
++            java.util.concurrent.atomic.LongAdder> BCLOSE_OUTCOMES =
++            new java.util.concurrent.ConcurrentHashMap<>();
++
++    @org.junit.jupiter.api.AfterAll
++    static void reportBindingCloseOutcomes() throws Exception {
++        System.out.println("BCLOSE_OUTCOMES=" + new java.util.TreeMap<>(BCLOSE_OUTCOMES));
++        System.out.println("BCLOSE_BINDING=" + Class.forName("systems.zlink.runtime.sockets.CompletionOwner").getProtectionDomain().getCodeSource().getLocation());
++    }
+ 
+     @Test
+     void tokenlessRequestCapacityFailureRetainsItsKindAndCauseThroughMeshCompletion()
+@@ -1035,7 +1044,7 @@
+         }
+     }
+ 
+-    @RepeatedTest(100)
++    @RepeatedTest(1000)
+     void repliesRacingRuntimeCloseAreRejectedAfterCloseStartsAndCloseSucceeds() throws Exception {
+         Context context = Zlink.createContext();
+         var runtime = new ZLinkJavaRawMeshNode(context, "reply-close-race");
+@@ -1047,7 +1056,7 @@
+         }
+     }
+ 
+-    @RepeatedTest(100)
++    @RepeatedTest(1000)
+     void repliesRacingPortCloseAreRejectedAfterCloseStartsAndCloseSucceeds() throws Exception {
+         Context context = Zlink.createContext();
+         var port = new ZLinkJavaRawServicePort(context);
+@@ -1276,7 +1285,12 @@
+             assertFalse(closeThread.isAlive());
+             for (int index = 0; index < count; index++) {
+                 Throwable result = replyResults.get(index).get(3, TimeUnit.SECONDS);
+-
++                String outcome = result == null ? "OK"
++                        : result instanceof ZlinkSubmitException submit
++                            ? submit.getResult() + "/" + submit.getNativeErrno()
++                            : result.getClass().getSimpleName() + ":" + result.getMessage();
++                BCLOSE_OUTCOMES.computeIfAbsent(closeName + "/" + outcome,
++                        ignored -> new java.util.concurrent.atomic.LongAdder()).increment();
+ 
+                 // A reply that passed the closed check before close started can reach the
+                 // binding after its socket closed; the binding then rejects it as closed.

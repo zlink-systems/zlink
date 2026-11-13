@@ -1,0 +1,19 @@
+{
+  "samples": 179,
+  "max_external_cpu": 0.9943994162550053,
+  "minimum_memavailable_kb": 26186688,
+  "detected": {
+    "time": "2026-11-08T13:10:31+0900",
+    "foreign_cpu": [
+      {
+        "pid": 2225995,
+        "ppid": 2225993,
+        "comm": "python3",
+        "cores": 0.9943994162550053,
+        "cwd": "/root/worktree/zlink-3868-csendb"
+      }
+    ],
+    "memavailable_kb": 26322184,
+    "rule": "external >0.5 CPU in one second, or >0.25 CPU for two consecutive seconds; MemAvailable >=12 GiB"
+  }
+}

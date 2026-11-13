@@ -1,0 +1,257 @@
+diff --git a/core/src/runtime/core/pipe_transport.cpp b/core/src/runtime/core/pipe_transport.cpp
+index a7b20632d3..d93a45fdf7 100644
+--- a/core/src/runtime/core/pipe_transport.cpp
++++ b/core/src/runtime/core/pipe_transport.cpp
+@@ -4,6 +4,10 @@
+ #include <stdio.h>
+ #include <new>
+ #include <stddef.h>
++#include <chrono>
++#include <cstdlib>
++#include <functional>
++#include <thread>
+ 
+ #include "utils/macros.hpp"
+ #include "utils/config.hpp"
+@@ -25,6 +29,26 @@ using zlink::pipe_detail::head_reclassify_idle;
+ using zlink::pipe_detail::head_reclassify_queued;
+ using zlink::pipe_detail::pipe_debug_log;
+ 
++static bool disconnect_trace_enabled ()
++{
++    const char *value = std::getenv ("ZLINK_DISCONNECT_TRACE");
++    return value && value[0] == '1';
++}
++
++static unsigned long long disconnect_trace_ns ()
++{
++    return static_cast<unsigned long long> (
++      std::chrono::duration_cast<std::chrono::nanoseconds> (
++        std::chrono::steady_clock::now ().time_since_epoch ())
++        .count ());
++}
++
++static unsigned long long disconnect_trace_thread ()
++{
++    return static_cast<unsigned long long> (
++      std::hash<std::thread::id> () (std::this_thread::get_id ()));
++}
++
+ void zlink::pipe_t::rollback ()
+ {
+     rollback_unlocked ();
+@@ -722,9 +746,17 @@ bool zlink::pipe_t::try_claim_transport_disconnected_event (uint64_t connection_
+     // physical connection, so replacing it does not inherit the old claim.
+     const uint64_t connection_id =
+       connection_id_ != 0 ? connection_id_ : get_transport_connection_id ();
+-    return connection_id != 0
+-           && _transport_disconnected_event_connection_id.exchange (
+-                connection_id, std::memory_order_acq_rel) != connection_id;
++    const bool claimed =
++      connection_id != 0
++      && _transport_disconnected_event_connection_id.exchange (
++           connection_id, std::memory_order_acq_rel)
++           != connection_id;
++    if (disconnect_trace_enabled ())
++        fprintf (stderr,
++                 "DISCONNECT_TRACE ns=%llu thread=%llu site=try_claim pipe=%p connection=%llu claimed=%d\n",
++                 disconnect_trace_ns (), disconnect_trace_thread (), static_cast<const void *> (this),
++                 static_cast<unsigned long long> (connection_id), claimed);
++    return claimed;
+ }
+ 
+ uint64_t zlink::pipe_t::get_route_incarnation_id () const
+diff --git a/core/src/runtime/engine/asio/asio_engine.cpp b/core/src/runtime/engine/asio/asio_engine.cpp
+index 21016e8900..f324aa8694 100644
+--- a/core/src/runtime/engine/asio/asio_engine.cpp
++++ b/core/src/runtime/engine/asio/asio_engine.cpp
+@@ -27,9 +27,34 @@
+ #endif
+ 
+ #include <array>
++#include <chrono>
+ #include <cstring>
++#include <cstdio>
++#include <cstdlib>
++#include <functional>
++#include <thread>
+ #include <sstream>
+ 
++static bool disconnect_trace_enabled ()
++{
++    const char *value = std::getenv ("ZLINK_DISCONNECT_TRACE");
++    return value && value[0] == '1';
++}
++
++static unsigned long long disconnect_trace_ns ()
++{
++    return static_cast<unsigned long long> (
++      std::chrono::duration_cast<std::chrono::nanoseconds> (
++        std::chrono::steady_clock::now ().time_since_epoch ())
++        .count ());
++}
++
++static unsigned long long disconnect_trace_thread ()
++{
++    return static_cast<unsigned long long> (
++      std::hash<std::thread::id> () (std::this_thread::get_id ()));
++}
++
+ // Debug logging for ASIO engine - enable with -DZLINK_ASIO_DEBUG=1
+ #if defined(ZLINK_ASIO_DEBUG)
+ #define ASIO_ENGINE_DEBUG 1
+@@ -954,6 +979,11 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
+         return;
+ 
+     if (ec) {
++        if (disconnect_trace_enabled ())
++            fprintf (stderr,
++                     "DISCONNECT_TRACE ns=%llu thread=%llu site=asio_read_error engine=%p error=%d bytes=%zu\n",
++                     disconnect_trace_ns (), disconnect_trace_thread (), static_cast<void *> (this),
++                     ec.value (), bytes_transferred);
+         if (ec == boost::asio::error::operation_aborted)
+             return;
+         if (_decoder && _decoder->stream_end () != 0) {
+@@ -1984,6 +2014,12 @@ void zlink::asio_engine_t::error (error_reason_t reason_,
+ 
+ void zlink::asio_engine_t::emit_disconnected (uint64_t reason_)
+ {
++    if (disconnect_trace_enabled ())
++        fprintf (stderr,
++                 "DISCONNECT_TRACE ns=%llu thread=%llu site=emit_disconnected engine=%p connection=%llu reason=%llu\n",
++                 disconnect_trace_ns (), disconnect_trace_thread (), static_cast<void *> (this),
++                 static_cast<unsigned long long> (_endpoint_uri_pair.connection_id),
++                 static_cast<unsigned long long> (reason_));
+     if (!_connection_facade.session || _endpoint_uri_pair.connection_id == 0)
+         return;
+     zlink::blob_t routing_id;
+diff --git a/core/src/runtime/engine/asio/asio_poller.cpp b/core/src/runtime/engine/asio/asio_poller.cpp
+index 86ec28431e..82824e270c 100644
+--- a/core/src/runtime/engine/asio/asio_poller.cpp
++++ b/core/src/runtime/engine/asio/asio_poller.cpp
+@@ -10,6 +10,9 @@
+ #include <new>
+ #include <thread>
+ #include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <functional>
+ #ifndef ZLINK_HAVE_WINDOWS
+ #include <unistd.h>
+ #include <boost/asio/posix/stream_descriptor.hpp>
+@@ -35,6 +38,26 @@
+ #include "utils/config.hpp"
+ #include "core/i_poll_events.hpp"
+ 
++static bool disconnect_trace_enabled ()
++{
++    const char *value = std::getenv ("ZLINK_DISCONNECT_TRACE");
++    return value && value[0] == '1';
++}
++
++static unsigned long long disconnect_trace_ns ()
++{
++    return static_cast<unsigned long long> (
++      std::chrono::duration_cast<std::chrono::nanoseconds> (
++        std::chrono::steady_clock::now ().time_since_epoch ())
++        .count ());
++}
++
++static unsigned long long disconnect_trace_thread ()
++{
++    return static_cast<unsigned long long> (
++      std::hash<std::thread::id> () (std::this_thread::get_id ()));
++}
++
+ zlink::asio_poller_t::poll_entry_t::poll_entry_t (socket_type_t type_, void *socket_) :
+     type (type_),
+     socket (socket_),
+@@ -462,7 +485,18 @@ void zlink::asio_poller_t::loop ()
+             }
+ 
+             ASIO_DBG ("loop: run_for %d ms (no ready events)", poll_timeout_ms);
+-            _io_context.run_for (std::chrono::milliseconds (poll_timeout_ms));
++            if (disconnect_trace_enabled ())
++                fprintf (stderr,
++                         "DISCONNECT_TRACE ns=%llu thread=%llu site=poller_wait_enter poller=%p timeout_ms=%d\n",
++                         disconnect_trace_ns (), disconnect_trace_thread (), static_cast<void *> (this),
++                         poll_timeout_ms);
++            const std::size_t handlers =
++              _io_context.run_for (std::chrono::milliseconds (poll_timeout_ms));
++            if (disconnect_trace_enabled ())
++                fprintf (stderr,
++                         "DISCONNECT_TRACE ns=%llu thread=%llu site=poller_wait_exit poller=%p timeout_ms=%d returned_on_event=%d handlers=%zu\n",
++                         disconnect_trace_ns (), disconnect_trace_thread (), static_cast<void *> (this),
++                         poll_timeout_ms, handlers != 0, handlers);
+         }
+         //  else: Events were processed, continue loop immediately to check
+         //  for more ready events (batching effect)
+diff --git a/core/src/runtime/sockets/common/socket_base_monitor.cpp b/core/src/runtime/sockets/common/socket_base_monitor.cpp
+index 645b52e8ec..1cc3b6111f 100644
+--- a/core/src/runtime/sockets/common/socket_base_monitor.cpp
++++ b/core/src/runtime/sockets/common/socket_base_monitor.cpp
+@@ -12,8 +12,34 @@
+ #include "utils/debug_log.hpp"
+ #include "zlink.h"
+ 
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <functional>
++#include <thread>
++
+ namespace
+ {
++bool disconnect_trace_enabled ()
++{
++    const char *value = std::getenv ("ZLINK_DISCONNECT_TRACE");
++    return value && value[0] == '1';
++}
++
++unsigned long long disconnect_trace_ns ()
++{
++    return static_cast<unsigned long long> (
++      std::chrono::duration_cast<std::chrono::nanoseconds> (
++        std::chrono::steady_clock::now ().time_since_epoch ())
++        .count ());
++}
++
++unsigned long long disconnect_trace_thread ()
++{
++    return static_cast<unsigned long long> (
++      std::hash<std::thread::id> () (std::this_thread::get_id ()));
++}
++
+ uint32_t compute_blocked_ratio_ppm_local (uint64_t attempts_, uint64_t blocked_)
+ {
+     if (attempts_ == 0 || blocked_ == 0)
+@@ -457,6 +483,11 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
+                                                uint64_t transport_pair_id_,
+                                                uint64_t transport_pair_generation_)
+ {
++    if (disconnect_trace_enabled ())
++        fprintf (stderr,
++                 "DISCONNECT_TRACE ns=%llu thread=%llu site=event_disconnected socket=%p connection=%llu\n",
++                 disconnect_trace_ns (), disconnect_trace_thread (), static_cast<void *> (this),
++                 static_cast<unsigned long long> (endpoint_uri_pair_.connection_id));
+     uint32_t ready_count = 0;
+     bool changed = false;
+     bool enqueue_disconnected = false;
+@@ -755,7 +786,17 @@ void zlink::socket_base_t::pump_monitor_events ()
+ 
+ void zlink::socket_base_t::enqueue_monitor_event (const monitor_event_record_t &record_)
+ {
++    if (disconnect_trace_enabled ())
++        fprintf (stderr,
++                 "DISCONNECT_TRACE ns=%llu thread=%llu site=enqueue_monitor_event socket=%p event=%llu action=begin\n",
++                 disconnect_trace_ns (), disconnect_trace_thread (), static_cast<void *> (this),
++                 static_cast<unsigned long long> (record_.event));
+     monitor_runtime ().enqueue_worker_event (record_, get_ctx ()->control_runtime_if_started ());
++    if (disconnect_trace_enabled ())
++        fprintf (stderr,
++                 "DISCONNECT_TRACE ns=%llu thread=%llu site=enqueue_monitor_event socket=%p event=%llu action=end\n",
++                 disconnect_trace_ns (), disconnect_trace_thread (), static_cast<void *> (this),
++                 static_cast<unsigned long long> (record_.event));
+ }
+ 
+ bool zlink::socket_base_t::build_monitor_event_record (

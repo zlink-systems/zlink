@@ -1,0 +1,263 @@
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..18b330c8e3 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -9,6 +9,9 @@
+ #include <filesystem>
+ #include <csignal>
+ #include <condition_variable>
++#include <utility>
++#include <exception>
++#include <mutex>
+ #include <cxxabi.h>
+ 
+ #include "bench.grpc.pb.h"
+@@ -20,6 +23,7 @@
+ 
+ #include <atomic>
+ #include <chrono>
++#include <cmath>
+ #include <cstdio>
+ #include <deque>
+ #include <functional>
+@@ -28,6 +32,7 @@
+ #include <memory>
+ #include <stdexcept>
+ #include <string>
++#include <thread>
+ #include <typeinfo>
+ #include <type_traits>
+ #include <vector>
+@@ -61,9 +66,38 @@ struct options_t
+     int drain_bound_ms = 30000;
+     int readiness_timeout_ms = 30000;
+     size_t latency_sample_limit = 200000;
++    double target_rate = 0;
++    std::string p2_variant = "off";
+     std::string output_file;
+ };
+ 
++class submission_pacer_t
++{
++  public:
++    explicit submission_pacer_t (double rate) : _rate (rate) {}
++
++    bool wait_until (clock_t_::time_point deadline)
++    {
++        if (_rate <= 0)
++            return clock_t_::now () < deadline;
++        const auto interval = std::chrono::duration_cast<clock_t_::duration> (
++          std::chrono::duration<double> (1.0 / _rate));
++        const auto now = clock_t_::now ();
++        const auto scheduled = std::max (now, _next);
++        if (scheduled >= deadline)
++            return false;
++        std::this_thread::sleep_until (scheduled);
++        if (clock_t_::now () >= deadline)
++            return false;
++        _next = scheduled + interval;
++        return true;
++    }
++
++  private:
++    double _rate;
++    clock_t_::time_point _next{};
++};
++
+ // ---------------------------------------------------------------------------
+ // per-cell measurement state
+ // ---------------------------------------------------------------------------
+@@ -441,7 +475,10 @@ class zlink_raw_driver_t : public driver_t
+     int request_window () const override { return _window; }
+ 
+     zlink_raw_driver_t (const options_t &options, int window, bool command_path) :
+-        _options (options), _window (window), _command_path (command_path)
++        _options (options),
++        _window (window),
++        _command_path (command_path),
++        _pacer (options.target_rate)
+     {
+         _socket = std::make_unique<zlink::router_socket_t> (_context);
+         const std::string client_rid =
+@@ -453,6 +490,12 @@ class zlink_raw_driver_t : public driver_t
+         _socket->connect (command_path ? options.raw_command_endpoint
+                                        : options.raw_request_endpoint);
+         _poller.add (*_socket, zlink::poll_event_flag_t::pollcompletion, 1);
++        if (options.p2_variant == "C1" || options.p2_variant == "C2")
++            _poller.modify (*_socket, zlink::poll_event_flag_t::pollcompletion
++                                        | zlink::poll_event_flag_t::pollin
++                                        | zlink::poll_event_flag_t::pollout
++                                        | zlink::poll_event_flag_t::pollroute
++                                        | zlink::poll_event_flag_t::pollconnect);
+     }
+ 
+ 
+@@ -551,7 +594,7 @@ class zlink_raw_driver_t : public driver_t
+               resumed != 0
+                 ? std::chrono::milliseconds (0)
+                 : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
+-            _poller.wait (events.data (), events.size (), wait);
++            wait_for_completions (events, wait);
+         }
+ 
+         close_window (deadline);
+@@ -559,6 +602,16 @@ class zlink_raw_driver_t : public driver_t
+ 
+ 
+   private:
++    void wait_for_completions (std::vector<zlink::poll_event_t> &events,
++                               std::chrono::milliseconds wait)
++    {
++        if (_options.p2_variant != "C2") {
++            _poller.wait (events.data (), events.size (), wait);
++            return;
++        }
++        _completion_waiter.run (_poller, events.data (), events.size (), wait);
++    }
++
+     void run_slots (clock_t_::time_point deadline,
+                     size_t payload_size,
+                     phase_t phase,
+@@ -597,7 +650,7 @@ class zlink_raw_driver_t : public driver_t
+               resumed != 0
+                 ? std::chrono::milliseconds (0)
+                 : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
+-            _poller.wait (events.data (), events.size (), wait);
++            wait_for_completions (events, wait);
+         }
+ 
+         // Anything still outstanding when the loop gives up was abandoned
+@@ -675,6 +728,8 @@ class zlink_raw_driver_t : public driver_t
+         co_await _ready.schedule ();
+         size_t submitted_since_progress = 0;
+         while (clock_t_::now () < _deadline) {
++            if (!_pacer.wait_until (_deadline))
++                co_return;
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -723,6 +778,8 @@ class zlink_raw_driver_t : public driver_t
+     {
+         co_await _ready.schedule ();
+         while (clock_t_::now () < _deadline) {
++            if (!_pacer.wait_until (_deadline))
++                co_return;
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -773,11 +830,79 @@ class zlink_raw_driver_t : public driver_t
+     const options_t &_options;
+     int _window;
+     bool _command_path;
++    submission_pacer_t _pacer;
+     uint32_t _run_id = static_cast<uint32_t> (now_ns ());
+     zlink::context_t _context;
+     std::unique_ptr<zlink::router_socket_t> _socket;
+     zlink::routing_id_t _target = zlink::routing_id_t::from (std::string ("unset"));
+     zlink::poller_t _poller;
++    // P2 C2: one persistent thread waits on the poller and hands the events back.
++    struct completion_waiter_t
++    {
++        std::mutex mutex;
++        std::condition_variable changed;
++        bool requested = false, finished = false, stopping = false;
++        zlink::poller_t *poller = nullptr;
++        zlink::poll_event_t *events = nullptr;
++        size_t count = 0;
++        std::chrono::milliseconds wait{0};
++        std::exception_ptr error;
++        std::thread worker;
++
++        void run (zlink::poller_t &target,
++                  zlink::poll_event_t *out,
++                  size_t capacity,
++                  std::chrono::milliseconds timeout)
++        {
++            std::unique_lock<std::mutex> lock (mutex);
++            if (!worker.joinable ())
++                worker = std::thread ([this] { loop (); });
++            poller = &target;
++            events = out;
++            count = capacity;
++            wait = timeout;
++            finished = false;
++            requested = true;
++            changed.notify_all ();
++            changed.wait (lock, [this] { return finished; });
++            if (error)
++                std::rethrow_exception (std::exchange (error, nullptr));
++        }
++
++        void loop ()
++        {
++            std::unique_lock<std::mutex> lock (mutex);
++            for (;;) {
++                changed.wait (lock, [this] { return stopping || requested; });
++                if (stopping)
++                    return;
++                requested = false;
++                lock.unlock ();
++                try {
++                    poller->wait (events, count, wait);
++                }
++                catch (...) {
++                    lock.lock ();
++                    error = std::current_exception ();
++                    lock.unlock ();
++                }
++                lock.lock ();
++                finished = true;
++                changed.notify_all ();
++            }
++        }
++
++        ~completion_waiter_t ()
++        {
++            {
++                std::lock_guard<std::mutex> lock (mutex);
++                stopping = true;
++            }
++            changed.notify_all ();
++            if (worker.joinable ())
++                worker.join ();
++        }
++    } _completion_waiter;
+     ready_queue_t _ready;
+ 
+     clock_t_::time_point _deadline{};
+@@ -800,6 +925,7 @@ class framework_driver_t final : public driver_t
+ 
+     framework_driver_t (const options_t &options, int window, bool command) :
+         _options (options),
++        _pacer (options.target_rate),
+         _window (window),
+         _command (command),
+         _host (std::vector<int>{}, bench_http_callback_t{})
+@@ -922,7 +1048,7 @@ class framework_driver_t final : public driver_t
+             if (in_flight != 0 || !std::is_void_v<T>)
+                 completion_signal->take_completed (completed_slots);
+             // Admission sequences submits; the pattern window bounds replies.
+-            if (can_submit (clock_t_::now ())) {
++            if (can_submit (clock_t_::now ()) && _pacer.wait_until (deadline)) {
+                 uint64_t sent = 0;
+                 if constexpr (!std::is_void_v<T>)
+                     sent = now_ns ();
+@@ -999,6 +1125,7 @@ class framework_driver_t final : public driver_t
+     }
+ 
+     const options_t &_options;
++    submission_pacer_t _pacer;
+     int _window;
+     bool _command;
+     stats_http_server_t _host;
+@@ -1370,6 +1497,10 @@ int main (int argc, char **argv)
+         options.stats_port = std::stoi (arg_value (argc, argv, "--stats-port", "5281"));
+         options.target_stats_port =
+           std::stoi (arg_value (argc, argv, "--target-stats-port", "5283"));
++        options.target_rate = std::stod (arg_value (argc, argv, "--target-rate", "0"));
++        options.p2_variant = arg_value (argc, argv, "--p2-variant", "off");
++        if (!std::isfinite (options.target_rate) || options.target_rate < 0)
++            throw std::runtime_error ("target rate must be finite and non-negative");
+         options.warmup_seconds = std::stod (arg_value (argc, argv, "--warmup-seconds", "5"));
+         options.warmup_segments = std::stoi (arg_value (argc, argv, "--warmup-segments", "10"));
+         options.request_timeout_ms =

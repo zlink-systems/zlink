@@ -1,0 +1,7 @@
+replyMessages는 기존 closeAttempt를 volatile로 선언해 close 시작 여부를 확인한다. close가 시작된 뒤 진입한 reply는 IllegalStateException("service port is closed")로 거부하며, 전달된 Message는 finally에서 소비한다. close가 시작된 기존 reply 경로에는 별도 검사를 추가하지 않았다. Router close가 BUSY를 반환하면 최대 8회 시도하고 재시도 전 1ms 동안 LockSupport.parkNanos로 대기한다. 이 대기는 CPU를 spin하지 않으면서 in-flight native submit이 끝날 기회를 준다. 8회 모두 BUSY이면 기존처럼 호출자에게 실패를 전달하고 소유권을 유지해 다음 close가 다시 시도한다.
+
+failedSocketCloseRetainsOwnershipUntilLaterCleanupSucceeds와 BUSY가 몇 번의 시도 뒤 해소되는 테스트를 유지했다. 여러 thread의 reply와 port/runtime close 경합 테스트는 각각 100회 반복하며 close 성공, close 시작 후 reply 거부와 메시지 소비를 확인한다. 별도 순서 제어 테스트는 reply submit을 완료 신호까지 멈춘 뒤 close가 BUSY 한 번을 받고, submit이 끝난 후 재시도가 성공하는지 확인한다.
+
+새 race 테스트 세 차례 실행이 모두 성공했다. 각 실행에 port/runtime 각 100회 반복과 결정적 순서 테스트가 포함됐다. :zlink-framework-core:test와 :zlink-framework-core:integrationTest가 성공했다. samples의 classes도 성공했다. scripts/format/format.sh --check java와 git diff --check가 성공했다. 첫 format check는 계약 테스트 파일의 형식 차이를 보고해 Java formatter를 적용한 다음 재검사했고, 통과했다. formatter 적용 후 git status에서 변경 파일은 지정된 Framework 구현 파일과 계약 테스트 파일 두 개뿐임을 확인했다.
+
+reply submission 판정 위치는 수정 전 Framework의 lane 진입, owner 확인, closed 확인과 binding/Core였다. 수정 후 Framework에서는 closeAttempt를 한 번 읽는 closed 확인만 하고 native submit 판정은 binding/Core가 담당한다. Framework 판정 위치 수는 3곳에서 1곳으로 줄었다. CLOSE_BUSY_MAX_ATTEMPTS=8 상수는 BUSY 재시도 횟수를 제한한다. 1ms 대기는 상수 필드나 별도 timer 없이 LockSupport.parkNanos로 구현했다. 새 queue, lock, cache, flag 또는 별도 상태는 추가하지 않았다.

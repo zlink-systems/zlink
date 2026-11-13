@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Port selection is necessarily a short hand-off: the runner only probes that
+# a port is free before the sample processes bind it. Retry only when a role
+# reports the concrete bind error caused by another process taking the port.
+# Functional failures keep their original status and are never retried here.
+if [[ "${1:-}" != "--zlink-tictactoe-retry-child" ]]; then
+  for attempt in 1 2 3; do
+    if bash "$0" --zlink-tictactoe-retry-child "$@"; then
+      exit 0
+    else
+      status=$?
+    fi
+    if [[ "$status" -ne 75 ]]; then
+      exit "$status"
+    fi
+    echo "TicTacToe sample startup port collision; retrying with fresh ports (attempt $((attempt + 1))/3)." >&2
+  done
+  echo "TicTacToe sample startup port collision persisted after 3 attempts." >&2
+  exit 75
+fi
+
+source "$SCRIPT_DIR/../redis-common.sh"
+source "$SCRIPT_DIR/../sample-build-common.sh"
+zlink_cpp_sample_prepare_build
+zlink_cpp_sample_log_step "build"
+cmake --build "$BUILD_DIR" --parallel 2 --target \
+  sample_cpp_framework_tictactoe_play \
+  sample_cpp_framework_tictactoe_api \
+  sample_cpp_framework_tictactoe_client \
+  $(zlink_cpp_sample_framework_test_targets \
+    test_cpp_framework_sample_parity \
+    zlink_cpp_framework_mesh_node_vertical_test \
+    test_cpp_framework_actor_gateway)
+
+PLAY_BIN="$BIN_DIR/sample_cpp_framework_tictactoe_play"
+API_BIN="$BIN_DIR/sample_cpp_framework_tictactoe_api"
+CLIENT_BIN="$BIN_DIR/sample_cpp_framework_tictactoe_client"
+
+for binary in "$PLAY_BIN" "$API_BIN" "$CLIENT_BIN"; do
+  if [[ ! -x "$binary" ]]; then
+    echo "Missing executable: $binary" >&2
+    echo "CMake build did not produce the expected TicTacToe sample executable." >&2
+    exit 1
+  fi
+done
+
+zlink_cpp_sample_run_framework_tests \
+  'test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)'
+
+read -r -a PORTS <<<"$(zlink_sample_allocate_ports 17)"
+
+if [[ ${#PORTS[@]} -lt 17 ]]; then
+  echo "Failed to allocate 17 local TCP ports for the TicTacToe sample." >&2
+  echo "This environment may block local socket creation." >&2
+  exit 1
+fi
+
+API_A_ENDPOINT="tcp://127.0.0.1:${PORTS[0]}"
+API_B_ENDPOINT="tcp://127.0.0.1:${PORTS[1]}"
+API_A_HTTP_ENDPOINT="http://127.0.0.1:${PORTS[2]}"
+API_B_HTTP_ENDPOINT="http://127.0.0.1:${PORTS[3]}"
+PLAY_A_ENDPOINT="tcp://127.0.0.1:${PORTS[4]}"
+PLAY_B_ENDPOINT="tcp://127.0.0.1:${PORTS[5]}"
+PLAY_A_STREAM_ENDPOINT="tcp://127.0.0.1:${PORTS[6]}"
+PLAY_B_STREAM_ENDPOINT="tcp://127.0.0.1:${PORTS[7]}"
+PLAY_A_SPOT_ENDPOINT="tcp://127.0.0.1:${PORTS[8]}"
+PLAY_B_SPOT_ENDPOINT="tcp://127.0.0.1:${PORTS[9]}"
+PLAY_A_SPOT_ROUTER_ENDPOINT="tcp://127.0.0.1:${PORTS[10]}"
+PLAY_B_SPOT_ROUTER_ENDPOINT="tcp://127.0.0.1:${PORTS[11]}"
+PLAY_A_ROUTE_ENDPOINT="tcp://127.0.0.1:${PORTS[12]}"
+PLAY_B_ROUTE_ENDPOINT="tcp://127.0.0.1:${PORTS[13]}"
+API_A_ROUTE_ENDPOINT="tcp://127.0.0.1:${PORTS[15]}"
+API_B_ROUTE_ENDPOINT="tcp://127.0.0.1:${PORTS[16]}"
+
+endpoint_host() {
+  local endpoint="$1"
+  endpoint="${endpoint#tcp://}"
+  endpoint="${endpoint#http://}"
+  endpoint="${endpoint#redis://}"
+  echo "${endpoint%:*}"
+}
+
+endpoint_port() {
+  local endpoint="$1"
+  endpoint="${endpoint#tcp://}"
+  endpoint="${endpoint#http://}"
+  endpoint="${endpoint#redis://}"
+  echo "${endpoint##*:}"
+}
+
+wait_port() {
+  local name="$1"
+  local endpoint="$2"
+  local host
+  local port
+  host="$(endpoint_host "$endpoint")"
+  port="$(endpoint_port "$endpoint")"
+  for _ in $(seq 1 120); do
+    if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
+      return 0
+    fi
+    for log in "$LOG_DIR"/*.log; do
+      [[ -f "$log" ]] || continue
+      if grep -Eq 'errno=98|Address already in use' "$log"; then
+        echo "${name} failed because a sample port was already in use: ${log}" >&2
+        return 75
+      fi
+    done
+    sleep 0.1
+  done
+  for log in "$LOG_DIR"/*.log; do
+    [[ -f "$log" ]] || continue
+    if grep -Eq 'errno=98|Address already in use' "$log"; then
+      echo "${name} failed because a sample port was already in use: ${log}" >&2
+      return 75
+    fi
+  done
+  echo "Timed out waiting for ${name} at ${endpoint}" >&2
+  return 1
+}
+
+wait_grep() {
+  local pattern="$1"
+  local file="$2"
+  for _ in $(seq 1 300); do
+    if grep -q "$pattern" "$file"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  grep -q "$pattern" "$file"
+}
+
+wait_any_grep() {
+  local pattern="$1"
+  shift
+  for _ in $(seq 1 300); do
+    if grep -q "$pattern" "$@"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  grep -q "$pattern" "$@"
+}
+
+log_count() {
+  local evidence="$1"
+  shift
+  { grep -Fh -- "${evidence}" "$@" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'
+}
+
+wait_log_count() {
+  local expected="$1" evidence="$2"
+  shift 2
+  for _ in $(seq 1 300); do
+    if [[ "$(log_count "${evidence}" "$@")" == "${expected}" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for ${expected} '${evidence}'" >&2
+  return 1
+}
+
+RUN_DIR="$(mktemp -d)"
+LOG_DIR="$RUN_DIR/logs"
+FLOW_LOG_DIR="$RUN_DIR/flow-logs"
+mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
+PIDS=()
+REDIS_CONTAINER=""
+cleanup_done=false
+TICTACTOE_CPP_REDIS_KEY_PREFIX="zlink:tictactoe-cpp:${RANDOM}:$$:room:"
+REDIS_KEY_PREFIX="$TICTACTOE_CPP_REDIS_KEY_PREFIX"
+
+cleanup() {
+  local code=${1:-$?}
+  if [[ "$cleanup_done" == true ]]; then
+    return
+  fi
+  cleanup_done=true
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
+  if [[ -n "$REDIS_CONTAINER" ]]; then
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
+  fi
+  if [[ "$code" -ne 0 ]]; then
+    echo "TicTacToe sample logs (failure evidence):" >&2
+    for log in "$LOG_DIR"/*.log "$FLOW_LOG_DIR"/*.log; do
+      [[ -f "$log" ]] || continue
+      echo "--- $log" >&2
+      sed -n '1,240p' "$log" >&2
+    done
+  fi
+  zlink_sample_close_run_dir "$RUN_DIR" "$code" "TicTacToe"
+  return "$code"
+}
+trap zlink_cpp_sample_exit_trap EXIT
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is required to run the TicTacToe sample." >&2
+  exit 1
+fi
+zlink_cpp_sample_log_step "Redis start"
+zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
+  "zlink-redis-cpp-sample-tictactoe" "redis:7-alpine"
+TICTACTOE_CPP_REDIS_ENDPOINT="127.0.0.1:${redis_port}"
+wait_port redis "$TICTACTOE_CPP_REDIS_ENDPOINT"
+
+CONFIG_DIR="$LOG_DIR/config"
+mkdir -p "$CONFIG_DIR"
+
+# 각 role은 자기 설정 파일 하나만 받는다(공통 정책 sample-e2e-configuration-policy.ko.md §2.1).
+write_role_config() {
+  local api_node="$2" play_node="$3"
+  zlink_sample_write_private_file "$CONFIG_DIR/$1.json" <<CONFIG_JSON
+{
+  "sample": {
+    "host": {"keepRunning": true},
+    "topology": {
+      "logDir": "$FLOW_LOG_DIR",
+      "apiNode": "$api_node",
+      "playNode": "$play_node",
+      "apiEndpoint": "$API_A_ENDPOINT",
+      "apiAEndpoint": "$API_A_ENDPOINT",
+      "apiBEndpoint": "$API_B_ENDPOINT",
+      "apiHttpEndpoint": "$API_A_HTTP_ENDPOINT",
+      "apiAHttpEndpoint": "$API_A_HTTP_ENDPOINT",
+      "apiBHttpEndpoint": "$API_B_HTTP_ENDPOINT",
+      "playEndpoint": "$PLAY_A_ENDPOINT",
+      "playAEndpoint": "$PLAY_A_ENDPOINT",
+      "playBEndpoint": "$PLAY_B_ENDPOINT",
+      "playARouteEndpoint": "$PLAY_A_ROUTE_ENDPOINT",
+      "playBRouteEndpoint": "$PLAY_B_ROUTE_ENDPOINT",
+      "apiARouteEndpoint": "$API_A_ROUTE_ENDPOINT",
+      "apiBRouteEndpoint": "$API_B_ROUTE_ENDPOINT",
+      "playASpotEndpoint": "$PLAY_A_SPOT_ENDPOINT",
+      "playBSpotEndpoint": "$PLAY_B_SPOT_ENDPOINT",
+      "playASpotRouterEndpoint": "$PLAY_A_SPOT_ROUTER_ENDPOINT",
+      "playBSpotRouterEndpoint": "$PLAY_B_SPOT_ROUTER_ENDPOINT",
+      "playAStreamEndpoint": "$PLAY_A_STREAM_ENDPOINT",
+      "playBStreamEndpoint": "$PLAY_B_STREAM_ENDPOINT",
+      "redisEndpoint": "$TICTACTOE_CPP_REDIS_ENDPOINT",
+      "redisKeyPrefix": "$REDIS_KEY_PREFIX"
+    }
+  }
+}
+CONFIG_JSON
+}
+
+write_role_config play-a a a
+write_role_config play-b a b
+write_role_config api-a a a
+write_role_config api-b b a
+
+start_server() {
+  local name="$1"
+  local binary="$2"
+  shift 2
+  # Keep application readiness markers separate from diagnostic trace. Both
+  # streams are still preserved in the failure bundle, but independent file
+  # descriptors prevent concurrent stdout/stderr writes from splitting a
+  # marker that the runner must verify.
+  stdbuf -oL -eL "$binary" "$@" >"$LOG_DIR/${name}.stdout.log" \
+    2>"$LOG_DIR/${name}.trace.log" &
+  local pid=$!
+  PIDS+=("$pid")
+  zlink_cpp_sample_log_step "process start: $name pid=$pid"
+}
+
+# Start Play first so both RouteMesh server endpoints exist before API creates
+# its two outbound RouteMesh connections. Start API as soon as those endpoints
+# listen so Play's ClientServer connections also see a server on first connect.
+start_server play-b "$PLAY_BIN" --config="$CONFIG_DIR/play-b.json"
+start_server play-a "$PLAY_BIN" --config="$CONFIG_DIR/play-a.json"
+
+wait_port play-a-object-route "$PLAY_A_ROUTE_ENDPOINT"
+wait_port play-a-stream "$PLAY_A_STREAM_ENDPOINT"
+wait_port play-b-object-route "$PLAY_B_ROUTE_ENDPOINT"
+wait_port play-b-stream "$PLAY_B_STREAM_ENDPOINT"
+
+start_server api-a "$API_BIN" --config="$CONFIG_DIR/api-a.json"
+start_server api-b "$API_BIN" --config="$CONFIG_DIR/api-b.json"
+
+wait_port api-a-channel "$API_A_ENDPOINT"
+wait_port api-a-http "$API_A_HTTP_ENDPOINT"
+wait_port api-a-object-route "$API_A_ROUTE_ENDPOINT"
+wait_port api-b-channel "$API_B_ENDPOINT"
+wait_port api-b-http "$API_B_HTTP_ENDPOINT"
+wait_port api-b-object-route "$API_B_ROUTE_ENDPOINT"
+
+wait_log_count 1 "tictactoe-ready kind=peer-route node=play-a peer=play-b" "$LOG_DIR/play-a.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=peer-route node=play-b peer=play-a" "$LOG_DIR/play-b.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=http node=api-a" "$LOG_DIR/api-a.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=http node=api-b" "$LOG_DIR/api-b.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" "$LOG_DIR/api-a.stdout.log"
+wait_log_count 1 "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" "$LOG_DIR/api-b.stdout.log"
+
+wait_route_ready() {
+  local target_rid="$1"
+  for _ in $(seq 1 120); do
+    if curl --connect-timeout 0.2 --max-time 0.5 -fsS \
+      "$API_A_HTTP_ENDPOINT/ready?targetRid=${target_rid}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  curl --connect-timeout 0.2 --max-time 1 -sS \
+    "$API_A_HTTP_ENDPOINT/ready?targetRid=${target_rid}" >&2 || true
+  echo "Timed out waiting for API route peer ${target_rid}" >&2
+  return 1
+}
+
+wait_route_ready "tictactoe-play-a"
+wait_route_ready "tictactoe-play-b"
+
+LIFECYCLE_COMPLETION_FILE="$RUN_DIR/lifecycle-complete"
+"$CLIENT_BIN" --api-http-endpoint "$API_A_HTTP_ENDPOINT" \
+  --lifecycle-completion-file "$LIFECYCLE_COMPLETION_FILE" \
+  >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.trace.log" &
+CLIENT_PID=$!
+PIDS+=("$CLIENT_PID")
+zlink_cpp_sample_log_step "process start: client pid=$CLIENT_PID"
+
+wait_log_count 1 "tictactoe-lifecycle actor-bound actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-o" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-o" "$LOG_DIR"/play-*.stdout.log
+: >"$LIFECYCLE_COMPLETION_FILE"
+
+set +e
+wait "$CLIENT_PID"
+CLIENT_STATUS=$?
+set -e
+zlink_cpp_sample_log_step "process exit: client status=$CLIENT_STATUS"
+zlink_cpp_sample_remove_pid "$CLIENT_PID"
+if [[ "$CLIENT_STATUS" -ne 0 ]]; then
+  for log in "$LOG_DIR"/*.log; do
+    [[ -f "$log" ]] && cat "$log" >&2
+  done
+  exit "$CLIENT_STATUS"
+fi
+
+wait_log_count 1 "observer-connected endpoint=${PLAY_B_STREAM_ENDPOINT}" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "observer-subscription=verified subscribed=true" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "observer-win-milestone=verified actor=player-x wins=100" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "reconnected-game-state=verified actor=player-x room=" "$LOG_DIR/client.stdout.log"
+wait_log_count 1 "tictactoe=completed" "$LOG_DIR/client.stdout.log"
+wait_log_count 0 "tictactoe-lifecycle actor-destroy-complete actor=observer" "$LOG_DIR"/play-*.stdout.log
+grep -Rq "packet=LeaveGameMsg" "$FLOW_LOG_DIR"
+grep -Rq "message flow" "$FLOW_LOG_DIR"
+
+cleanup
+trap - EXIT
+zlink_cpp_sample_assert_graceful_teardown
+
+# full client/server self-check completed
+echo "tictactoe-placement=completed"

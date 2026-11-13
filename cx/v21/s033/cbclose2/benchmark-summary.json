@@ -1,0 +1,843 @@
+{
+  "pairs": [
+    {
+      "pair": 1,
+      "pattern": "PAIR",
+      "attempt": 1,
+      "uptime": "01:47:42 up 24 days, 17:13,  3 users,  load average: 1.14, 2.23, 3.94",
+      "load1": 1.14306640625,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156462.3986828,
+          "end": 1794156467.4443529,
+          "memory_kB": 26362996,
+          "log": "PAIR-1-attempt1-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156467.4445162,
+          "end": 1794156472.499442,
+          "memory_kB": 26385960,
+          "log": "PAIR-1-attempt1-after.log"
+        }
+      ],
+      "rates": {
+        "main": 1755466.6,
+        "after": 1616305.2
+      },
+      "ratio": 0.9207268312595637
+    },
+    {
+      "pair": 2,
+      "pattern": "PAIR",
+      "attempt": 1,
+      "uptime": "01:48:04 up 24 days, 17:13,  3 users,  load average: 1.44, 2.21, 3.89",
+      "load1": 1.4365234375,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156484.6886182,
+          "end": 1794156489.7355728,
+          "memory_kB": 26434692,
+          "log": "PAIR-2-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156489.735742,
+          "end": 1794156494.7797234,
+          "memory_kB": 26428420,
+          "log": "PAIR-2-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 1783262.4,
+        "main": 1947609.2
+      },
+      "ratio": 0.9156161307925635
+    },
+    {
+      "pair": 3,
+      "pattern": "PAIR",
+      "attempt": 1,
+      "uptime": "01:48:26 up 24 days, 17:14,  3 users,  load average: 1.81, 2.25, 3.87",
+      "load1": 1.80712890625,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156506.958216,
+          "end": 1794156512.0004363,
+          "memory_kB": 26439956,
+          "log": "PAIR-3-attempt1-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156512.000601,
+          "end": 1794156517.04603,
+          "memory_kB": 26437944,
+          "log": "PAIR-3-attempt1-after.log"
+        }
+      ],
+      "rates": {
+        "main": 1956395.2,
+        "after": 1900250.6
+      },
+      "ratio": 0.9713020150529914
+    },
+    {
+      "pair": 4,
+      "pattern": "PAIR",
+      "attempt": 1,
+      "uptime": "01:48:49 up 24 days, 17:14,  3 users,  load average: 2.08, 2.28, 3.83",
+      "load1": 2.0849609375,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156529.2158175,
+          "end": 1794156534.2614305,
+          "memory_kB": 26438712,
+          "log": "PAIR-4-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156534.2616165,
+          "end": 1794156539.309374,
+          "memory_kB": 26441540,
+          "log": "PAIR-4-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 1853360.2,
+        "main": 2017202.4
+      },
+      "ratio": 0.918777510873475
+    },
+    {
+      "pair": 5,
+      "pattern": "PAIR",
+      "attempt": 1,
+      "uptime": "01:49:11 up 24 days, 17:14,  3 users,  load average: 2.21, 2.29, 3.80",
+      "load1": 2.20947265625,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156551.4890435,
+          "end": 1794156556.5335593,
+          "memory_kB": 26433996,
+          "log": "PAIR-5-attempt1-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156556.5337448,
+          "end": 1794156561.581855,
+          "memory_kB": 26430756,
+          "log": "PAIR-5-attempt1-after.log"
+        }
+      ],
+      "rates": {
+        "main": 1922890.4,
+        "after": 1804510.4
+      },
+      "ratio": 0.9384364288261047
+    },
+    {
+      "pair": 6,
+      "pattern": "PAIR",
+      "attempt": 1,
+      "uptime": "01:49:33 up 24 days, 17:15,  3 users,  load average: 2.13, 2.27, 3.75",
+      "load1": 2.1259765625,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156573.757039,
+          "end": 1794156578.8026507,
+          "memory_kB": 26451484,
+          "log": "PAIR-6-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pair",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156578.8028383,
+          "end": 1794156583.8467042,
+          "memory_kB": 26449668,
+          "log": "PAIR-6-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 1833510.6,
+        "main": 1916350.8
+      },
+      "ratio": 0.956771902096422
+    },
+    {
+      "pair": 1,
+      "pattern": "PUBSUB",
+      "attempt": 1,
+      "uptime": "01:47:52 up 24 days, 17:13,  3 users,  load average: 1.36, 2.24, 3.93",
+      "load1": 1.35546875,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156472.5304983,
+          "end": 1794156478.5979965,
+          "memory_kB": 26405724,
+          "log": "PUBSUB-1-attempt1-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156478.5981822,
+          "end": 1794156484.6566968,
+          "memory_kB": 26426548,
+          "log": "PUBSUB-1-attempt1-after.log"
+        }
+      ],
+      "rates": {
+        "main": 1744897.2,
+        "after": 1682165.0
+      },
+      "ratio": 0.9640481972233093
+    },
+    {
+      "pair": 2,
+      "pattern": "PUBSUB",
+      "attempt": 1,
+      "uptime": "01:48:14 up 24 days, 17:13,  3 users,  load average: 1.60, 2.22, 3.87",
+      "load1": 1.59716796875,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156494.8105137,
+          "end": 1794156500.8631155,
+          "memory_kB": 26443288,
+          "log": "PUBSUB-2-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156500.8633008,
+          "end": 1794156506.927317,
+          "memory_kB": 26435792,
+          "log": "PUBSUB-2-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 1621544.0,
+        "main": 1690132.4
+      },
+      "ratio": 0.9594183272269085
+    },
+    {
+      "pair": 3,
+      "pattern": "PUBSUB",
+      "attempt": 1,
+      "uptime": "01:48:37 up 24 days, 17:14,  3 users,  load average: 1.91, 2.26, 3.85",
+      "load1": 1.91064453125,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156517.0759163,
+          "end": 1794156523.1348403,
+          "memory_kB": 26447372,
+          "log": "PUBSUB-3-attempt1-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156523.1350298,
+          "end": 1794156529.1854873,
+          "memory_kB": 26423760,
+          "log": "PUBSUB-3-attempt1-after.log"
+        }
+      ],
+      "rates": {
+        "main": 1557670.0,
+        "after": 1675440.0
+      },
+      "ratio": 1.0756065148587313
+    },
+    {
+      "pair": 4,
+      "pattern": "PUBSUB",
+      "attempt": 1,
+      "uptime": "01:48:59 up 24 days, 17:14,  3 users,  load average: 2.15, 2.28, 3.82",
+      "load1": 2.15234375,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156539.3402164,
+          "end": 1794156545.395557,
+          "memory_kB": 26446360,
+          "log": "PUBSUB-4-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156545.3957353,
+          "end": 1794156551.457589,
+          "memory_kB": 26418996,
+          "log": "PUBSUB-4-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 1624865.4,
+        "main": 1713387.2
+      },
+      "ratio": 0.9483352040916379
+    },
+    {
+      "pair": 5,
+      "pattern": "PUBSUB",
+      "attempt": 1,
+      "uptime": "01:49:21 up 24 days, 17:15,  3 users,  load average: 2.26, 2.30, 3.79",
+      "load1": 2.25732421875,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156561.613073,
+          "end": 1794156567.6774485,
+          "memory_kB": 26440836,
+          "log": "PUBSUB-5-attempt1-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156567.6776114,
+          "end": 1794156573.7256439,
+          "memory_kB": 26437672,
+          "log": "PUBSUB-5-attempt1-after.log"
+        }
+      ],
+      "rates": {
+        "main": 1712346.2,
+        "after": 1674717.2
+      },
+      "ratio": 0.978024887724223
+    },
+    {
+      "pair": 6,
+      "pattern": "PUBSUB",
+      "attempt": 1,
+      "uptime": "01:49:43 up 24 days, 17:15,  3 users,  load average: 2.18, 2.27, 3.74",
+      "load1": 2.18017578125,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/worktree/zlink-4060-cpp-binding/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156583.8814843,
+          "end": 1794156589.9488466,
+          "memory_kB": 26453776,
+          "log": "PUBSUB-6-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/main-tree/bindings/cpp/perf/single/build/cpp_perf_pubsub",
+            "cpp",
+            "inproc",
+            "1024"
+          ],
+          "exit": 0,
+          "start": 1794156589.9490342,
+          "end": 1794156596.016181,
+          "memory_kB": 26450980,
+          "log": "PUBSUB-6-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 1683886.4,
+        "main": 1731314.6
+      },
+      "ratio": 0.9726056720136247
+    },
+    {
+      "pair": 1,
+      "pattern": "REQUEST_SERIAL",
+      "attempt": 2,
+      "uptime": "02:41:17 up 24 days, 18:06,  3 users,  load average: 2.03, 3.24, 3.38",
+      "load1": 2.03125,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-main"
+          ],
+          "exit": 0,
+          "start": 1794159677.712894,
+          "end": 1794159683.7298045,
+          "memory_kB": 27230676,
+          "log": "REQUEST_SERIAL-1-attempt2-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-after"
+          ],
+          "exit": 0,
+          "start": 1794159683.7299695,
+          "end": 1794159689.7356834,
+          "memory_kB": 27227408,
+          "log": "REQUEST_SERIAL-1-attempt2-after.log"
+        }
+      ],
+      "rates": {
+        "main": 79754.8,
+        "after": 78814.3
+      },
+      "ratio": 0.9882076063133505
+    },
+    {
+      "pair": 2,
+      "pattern": "REQUEST_SERIAL",
+      "attempt": 1,
+      "uptime": "02:41:29 up 24 days, 18:07,  3 users,  load average: 1.87, 3.15, 3.35",
+      "load1": 1.86962890625,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-after"
+          ],
+          "exit": 0,
+          "start": 1794159689.7766094,
+          "end": 1794159695.7817938,
+          "memory_kB": 27177804,
+          "log": "REQUEST_SERIAL-2-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-main"
+          ],
+          "exit": 0,
+          "start": 1794159695.78194,
+          "end": 1794159701.7873666,
+          "memory_kB": 27259320,
+          "log": "REQUEST_SERIAL-2-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 79518.9,
+        "main": 79943.0
+      },
+      "ratio": 0.9946949701662434
+    },
+    {
+      "pair": 3,
+      "pattern": "REQUEST_SERIAL",
+      "attempt": 1,
+      "uptime": "02:41:41 up 24 days, 18:07,  3 users,  load average: 1.97, 3.13, 3.34",
+      "load1": 1.97021484375,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-main"
+          ],
+          "exit": 0,
+          "start": 1794159701.8192642,
+          "end": 1794159707.8247101,
+          "memory_kB": 27282252,
+          "log": "REQUEST_SERIAL-3-attempt1-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-after"
+          ],
+          "exit": 0,
+          "start": 1794159707.8249104,
+          "end": 1794159713.8301613,
+          "memory_kB": 27291436,
+          "log": "REQUEST_SERIAL-3-attempt1-after.log"
+        }
+      ],
+      "rates": {
+        "main": 79781.1,
+        "after": 78709.5
+      },
+      "ratio": 0.9865682473668574
+    },
+    {
+      "pair": 4,
+      "pattern": "REQUEST_SERIAL",
+      "attempt": 1,
+      "uptime": "02:41:53 up 24 days, 18:07,  3 users,  load average: 1.97, 3.09, 3.32",
+      "load1": 1.97509765625,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-after"
+          ],
+          "exit": 0,
+          "start": 1794159713.8617065,
+          "end": 1794159719.867427,
+          "memory_kB": 27300892,
+          "log": "REQUEST_SERIAL-4-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-main"
+          ],
+          "exit": 0,
+          "start": 1794159719.8676286,
+          "end": 1794159725.87369,
+          "memory_kB": 27295396,
+          "log": "REQUEST_SERIAL-4-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 77431.9,
+        "main": 77606.1
+      },
+      "ratio": 0.9977553310886643
+    },
+    {
+      "pair": 5,
+      "pattern": "REQUEST_SERIAL",
+      "attempt": 1,
+      "uptime": "02:42:05 up 24 days, 18:07,  3 users,  load average: 1.77, 2.99, 3.28",
+      "load1": 1.76513671875,
+      "runs": [
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-main"
+          ],
+          "exit": 0,
+          "start": 1794159725.914312,
+          "end": 1794159731.9198444,
+          "memory_kB": 27301208,
+          "log": "REQUEST_SERIAL-5-attempt1-main.log"
+        },
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-after"
+          ],
+          "exit": 0,
+          "start": 1794159731.920046,
+          "end": 1794159737.925667,
+          "memory_kB": 27305868,
+          "log": "REQUEST_SERIAL-5-attempt1-after.log"
+        }
+      ],
+      "rates": {
+        "main": 78761.5,
+        "after": 79080.4
+      },
+      "ratio": 1.0040489325368358
+    },
+    {
+      "pair": 6,
+      "pattern": "REQUEST_SERIAL",
+      "attempt": 1,
+      "uptime": "02:42:17 up 24 days, 18:07,  3 users,  load average: 1.81, 2.95, 3.27",
+      "load1": 1.8076171875,
+      "runs": [
+        {
+          "label": "after",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-after"
+          ],
+          "exit": 0,
+          "start": 1794159737.9582582,
+          "end": 1794159743.9639838,
+          "memory_kB": 27293080,
+          "log": "REQUEST_SERIAL-6-attempt1-after.log"
+        },
+        {
+          "label": "main",
+          "command": [
+            "taskset",
+            "-c",
+            "8-15",
+            "/root/jobs/fx/cx/v21/s033/cbclose2/serial-main"
+          ],
+          "exit": 0,
+          "start": 1794159743.9641757,
+          "end": 1794159749.970741,
+          "memory_kB": 27291852,
+          "log": "REQUEST_SERIAL-6-attempt1-main.log"
+        }
+      ],
+      "rates": {
+        "after": 76743.9,
+        "main": 76878.2
+      },
+      "ratio": 0.9982530808473663
+    }
+  ],
+  "deferred": [
+    {
+      "pair": 1,
+      "pattern": "REQUEST_SERIAL",
+      "attempt": 1,
+      "uptime": "02:40:17 up 24 days, 18:05,  3 users,  load average: 4.79, 3.86, 3.58",
+      "load1": 4.79052734375,
+      "runs": [],
+      "deferred": true
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "runner_exit": 0,
+  "captures": [
+    {
+      "implementation": "zlink-cpp",
+      "source_pid": 3146964,
+      "target_pid": 3146891,
+      "source_completed_delta": 694859,
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560/raw-condB/zlink-cpp-run-01"
+    },
+    {
+      "implementation": "zlink-framework-cpp",
+      "source_pid": 3148092,
+      "target_pid": 3148012,
+      "source_completed_delta": 172147,
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560/raw-condB/zlink-framework-cpp-run-02"
+    },
+    {
+      "implementation": "zlink-cpp",
+      "source_pid": 3148933,
+      "target_pid": 3148861,
+      "source_completed_delta": 707977,
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560/raw-condB/zlink-cpp-run-03"
+    },
+    {
+      "implementation": "zlink-framework-cpp",
+      "source_pid": 3149878,
+      "target_pid": 3149809,
+      "source_completed_delta": 181345,
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560/raw-condB/zlink-framework-cpp-run-04"
+    }
+  ]
+}

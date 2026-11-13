@@ -1,0 +1,4 @@
+# #1863 감독자 리뷰
+- 2026-10-16 1단계 진단 확인: async_delay.hpp:17-56 호출마다 std::thread detach, stop·owner 없음; 생산 호출 8곳 소유 표. 대안 1(호출별 worker를 app_state_t가 추적·ShuttingDown 완료·executor 닫기 전 join) 선택 — 0.30.2 최소 변경, delay는 cold path. 대안 2(host timer worker 다중 deadline)는 0.31.0 후속 후보.
+- 2026-10-16 b97a4c6272 감독자 승인 → PR #1875. async_delay.hpp 전 줄 확인: 등록·stop·timer 접근 모두 teardown mutex, 결과는 mutex 안 stop 읽기로 결정·publication은 lock 밖. request_stop은 termination_operation.mutex 안에서 호출되나 teardown mutex 보유 중 operation.mutex를 잡는 경로 없음(lock 순서 역전 없음, 2962/3003/3016/4141 확인). 멤버 순서 mutex→delays, ~app_state_t 첫 줄 stop_and_join. 시험 diff는 owner 주입만(약화 없음). red 1/1 실패, unit 124/124·contract 43/43·TSan m6c ×3 경고 0 로그 원문 확인. 관찰: worker poll 루프가 poll_interval마다 host mutex를 잡음(cold path라 허용). preflight counter는 red(두 host 공유 executor)로 근거 있음.
+- 절차 위반(codex): 재현 중 자기 시험 자식에 kill -KILL 사용 — 다른 프로세스 영향 없음, 보고서 기록. 브리프 공통 규칙 재강조 필요.

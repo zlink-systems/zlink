@@ -1,0 +1,26 @@
+{
+  "requests": 243,
+  "events": 1701,
+  "excluded_http_adjacencies": {
+    "different HTTP frame": 230,
+    "incomplete or ambiguous stage sequence": 12
+  },
+  "stages": {
+    "before_schedule_us": {
+      "p50": 254.99984622001648,
+      "p99": 436.0000602900982
+    },
+    "schedule_to_run_us": {
+      "p50": 20.0001522898674,
+      "p99": 37.999823689460754
+    },
+    "run_to_spot_us": {
+      "p50": 28.999987989664078,
+      "p99": 45.999884605407715
+    },
+    "spot_to_http_us": {
+      "p50": 78.99990305304527,
+      "p99": 124.99978765845299
+    }
+  }
+}

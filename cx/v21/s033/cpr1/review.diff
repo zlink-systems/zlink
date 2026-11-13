@@ -1,0 +1,3206 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3109,6 +3109,15 @@
+       target_link_options(test_cpp_framework_request_native_counts PRIVATE "-Wl,--wrap=${_native_call}")
+     endforeach()
+   endif()
++  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND UNIX)
++    add_zlink_framework_test(
++      test_cpp_framework_prepared_result_storage
++      tests/Zlink.Framework.UnitTests/test_cpp_framework_prepared_result_storage.cpp
++      "framework-unit;framework-contract;framework-regression;messaging"
++      unit)
++    target_sources(test_cpp_framework_prepared_result_storage PRIVATE tests/support/allocation_counter.cpp)
++    target_compile_options(test_cpp_framework_prepared_result_storage PRIVATE -finstrument-functions)
++  endif()
+   add_zlink_framework_test(
+     test_cpp_framework_request_call_allocations
+     tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+--- a/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
++++ b/framework/include/zlink/framework/contracts/dispatch/request_task.hpp
+@@ -73,31 +73,7 @@
+     {
+     }
+ 
+-    // The allocator keeps the request block alive through control-block
+-    // destruction and deallocation. Its memory is already in this request.
+-    template <typename T> struct allocator_t
+-    {
+-        using value_type = T;
+-        explicit allocator_t (std::shared_ptr<request_capture_storage_t> storage) :
+-            storage (std::move (storage))
+-        {
+-        }
+-        template <typename U> allocator_t (const allocator_t<U> &other) : storage (other.storage) {}
+-        T *allocate (std::size_t count)
+-        {
+-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+-            test_creation_probe::request_callback_owner_bytes.fetch_add (count * sizeof (T),
+-                                                                         std::memory_order_relaxed);
+-#endif
+-            return static_cast<T *> (storage->_resource.allocate (count * sizeof (T), alignof (T)));
+-        }
+-        void deallocate (T *, std::size_t) noexcept {}
+-        template <typename U> bool operator== (const allocator_t<U> &other) const noexcept
+-        {
+-            return storage == other.storage;
+-        }
+-        std::shared_ptr<request_capture_storage_t> storage;
+-    };
++    void bind_capture_owner (task_control_t *owner) noexcept { _owner = owner; }
+     struct callback_lifetime_t
+     {
+         explicit callback_lifetime_t (request_capture_storage_t &storage) : storage (storage) {}
+@@ -109,12 +85,13 @@
+             storage._release_project (&storage);
+         }
+         request_capture_storage_t &storage;
++        task_ptr_t<void> owner;
+     };
+     template <typename TOwner>
+-    static std::shared_ptr<TOwner> own_callbacks (const std::shared_ptr<TOwner> &storage)
+-    {
+-        auto lifetime = std::allocate_shared<callback_lifetime_t> (
+-          allocator_t<callback_lifetime_t> (storage), *storage);
++    static task_ptr_t<TOwner> own_callbacks (const task_ptr_t<TOwner> &storage)
++    {
++        auto lifetime = make_task_observer<callback_lifetime_t> (storage.control (), *storage);
++        lifetime->owner = storage;
+         return {std::move (lifetime), storage.get ()};
+     }
+     request_capture_storage_t (const request_capture_storage_t &) = delete;
+@@ -127,7 +104,7 @@
+             capture->destroy (capture);
+         }
+     }
+-    std::pmr::memory_resource *resource () noexcept { return &_resource; }
++    std::pmr::memory_resource *resource () noexcept { return _owner->resource; }
+     // One C1 completion travels from registration to its independent delivery turn.
+     // It has explicit destruction ownership and does not consume capture arena space.
+     static constexpr std::size_t completion_storage_size = 512;
+@@ -142,7 +119,7 @@
+         test_creation_probe::request_capture_value_bytes.fetch_add (sizeof (T),
+                                                                     std::memory_order_relaxed);
+ #endif
+-        auto *storage = _resource.allocate (sizeof (stored_t), alignof (stored_t));
++        auto *storage = _owner->resource->allocate (sizeof (stored_t), alignof (stored_t));
+         auto *capture = std::construct_at (static_cast<stored_t *> (storage), std::move (value));
+         capture->next = _captures;
+         _captures = capture;
+@@ -151,8 +128,7 @@
+ 
+   private:
+     alignas (std::max_align_t) std::array<std::byte, completion_storage_size> _completion;
+-    alignas (std::max_align_t) std::array<std::byte, 640> _buffer;
+-    std::pmr::monotonic_buffer_resource _resource{_buffer.data (), _buffer.size ()};
++    task_control_t *_owner = nullptr;
+     capture_t *_captures = nullptr;
+     void (*_release_project) (request_capture_storage_t *) noexcept;
+ };
+@@ -172,12 +148,12 @@
+                 return;
+         }
+         *this = from_shared (
+-          std::make_shared<std::decay_t<TCallback>> (std::forward<TCallback> (callback)));
++          make_task_owner<std::decay_t<TCallback>> (std::forward<TCallback> (callback)));
+     }
+ 
+     template <typename TOwner, typename TInvoke>
+         requires (std::is_empty_v<TInvoke> && std::is_default_constructible_v<TInvoke>)
+-    request_callback_t (std::shared_ptr<TOwner> owner,
++    request_callback_t (task_ptr_t<TOwner> owner,
+                         TInvoke,
+                         request_capture_storage_t *storage = nullptr) :
+         _storage (storage),
+@@ -188,8 +164,17 @@
+     {
+     }
+ 
++    template <typename TOwner, typename TInvoke>
++        requires (std::is_empty_v<TInvoke> && std::is_default_constructible_v<TInvoke>)
++    request_callback_t (std::shared_ptr<TOwner> owner, TInvoke invoke) :
++        request_callback_t ([owner = std::move (owner), invoke] (TArgs... arguments) {
++            invoke (*owner, std::forward<TArgs> (arguments)...);
++        })
++    {
++    }
++
+     template <typename TCallback>
+-    static request_callback_t from_shared (std::shared_ptr<TCallback> callback)
++    static request_callback_t from_shared (task_ptr_t<TCallback> callback)
+     {
+         request_callback_t selected;
+         selected._owner = std::move (callback);
+@@ -208,7 +193,7 @@
+         request_callback_t selected;
+         selected._storage = _storage;
+         selected._invoke = _invoke;
+-        selected._owner = std::shared_ptr<void> (std::shared_ptr<void>{}, _owner.get ());
++        selected._owner = task_ptr_t<void> (task_ptr_t<void>{}, _owner.get ());
+         return selected;
+     }
+ 
+@@ -216,7 +201,7 @@
+     request_callback_t<TNextArgs...> capture (TCallback callback) const
+     {
+         if (!_storage) {
+-            auto stored = std::make_shared<TCallback> (std::move (callback));
++            auto stored = make_task_owner<TCallback> (std::move (callback));
+             return request_callback_t<TNextArgs...>::from_shared (std::move (stored));
+         }
+         auto *stored = _storage->store (std::move (callback));
+@@ -226,19 +211,19 @@
+     // Values borrowed by submit and by physical conversion share this request
+     // block. The caller retains the alias until submit returns; projections
+     // stored in the block borrow it to avoid a cycle.
+-    template <typename TValue> std::shared_ptr<TValue> retain (TValue value) const
++    template <typename TValue> task_ptr_t<TValue> retain (TValue value) const
+     {
+         if (!_storage)
+-            return std::make_shared<TValue> (std::move (value));
++            return make_task_owner<TValue> (std::move (value));
+         auto *stored = _storage->store<false> (std::move (value));
+-        return std::shared_ptr<TValue> (_owner, std::addressof (*stored->value));
++        return task_ptr_t<TValue> (_owner, std::addressof (*stored->value));
+     }
+ 
+     bool has_request_storage () const noexcept { return _storage != nullptr; }
+-    std::shared_ptr<void> completion_storage () const noexcept
+-    {
+-        return _storage ? std::shared_ptr<void> (_owner, _storage->completion_storage ())
+-                        : std::shared_ptr<void>{};
++    task_ptr_t<void> completion_storage () const noexcept
++    {
++        return _storage ? task_ptr_t<void> (_owner, _storage->completion_storage ())
++                        : task_ptr_t<void>{};
+     }
+     std::pmr::memory_resource *resource () const noexcept
+     {
+@@ -246,11 +231,11 @@
+     }
+ 
+     template <typename TOwner, typename TCallback>
+-    static request_callback_t from_storage (const std::shared_ptr<TOwner> &owner,
++    static request_callback_t from_storage (const task_ptr_t<TOwner> &owner,
+                                             request_capture_storage_t *storage,
+                                             TCallback *callback)
+     {
+-        auto selected = from_shared (std::shared_ptr<TCallback> (owner, callback));
++        auto selected = from_shared (task_ptr_t<TCallback> (owner, callback));
+         selected._storage = storage;
+         return selected;
+     }
+@@ -268,7 +253,7 @@
+   private:
+     template <typename...> friend class request_callback_t;
+     request_capture_storage_t *_storage = nullptr;
+-    std::shared_ptr<void> _owner;
++    task_ptr_t<void> _owner;
+     void (*_invoke) (void *, TArgs...) = nullptr;
+ };
+ 
+@@ -277,7 +262,7 @@
+ // Completion and public failure retain independent callable ownership.
+ template <typename T> struct request_receiver_t
+ {
+-    std::shared_ptr<task_completion_source_t<void>> admitted;
++    detail::task_source_ref_t<void> admitted;
+     request_callback_t<const result_t<T> &> complete;
+     request_callback_t<std::exception_ptr> fail_public;
+ 
+@@ -310,11 +295,8 @@
+ 
+     request_receiver_t borrow () const
+     {
+-        return {complete.has_request_storage ()
+-                  ? std::shared_ptr<task_completion_source_t<void>> (
+-                      std::shared_ptr<task_completion_source_t<void>>{}, admitted.get ())
+-                  : admitted,
+-                complete.borrow (), fail_public.borrow ()};
++        return {complete.has_request_storage () ? admitted.borrow () : admitted, complete.borrow (),
++                fail_public.borrow ()};
+     }
+ 
+     void observe (request_task_t<T> selected);
+@@ -340,8 +322,7 @@
+ }
+ 
+ template <typename T>
+-void observe_request_failure (task_t<T> &reply,
+-                              const std::shared_ptr<task_completion_source_t<void>> &admitted)
++void observe_request_failure (task_t<T> &reply, const detail::task_source_ref_t<void> &admitted)
+ {
+     detail::observe_task_terminal (reply, [admitted] (const auto &result) {
+         if (auto failure = request_failure (result))
+@@ -374,7 +355,7 @@
+         {
+             struct source_awaiter_t
+             {
+-                std::shared_ptr<task_completion_source_t<void>> source;
++                detail::task_source_ref_t<void> source;
+                 bool await_ready () const noexcept { return true; }
+                 void await_suspend (std::coroutine_handle<>) const noexcept {}
+                 auto await_resume () const { return source; }
+@@ -409,15 +390,16 @@
+         }
+ 
+       private:
+-        std::shared_ptr<detail::task_shared_state_t<TReply>> _public_reply;
+-        std::shared_ptr<task_completion_source_t<void>> _admitted =
+-          std::make_shared<task_completion_source_t<void>> ();
++        detail::task_ptr_t<detail::task_shared_state_t<TReply>> _public_reply;
++        detail::task_source_ref_t<void> _admitted = detail::task_source_ref_t<void> (
++          detail::make_task_owner<detail::application_task_shared_state_t<void>> ());
+     };
+ 
+     request_task_t (result_t<TReply> result) :
+         task_t<TReply> (result),
+         _physical_reply (this->shared_state ()),
+-        _admitted (std::make_shared<task_completion_source_t<void>> ())
++        _admitted (detail::task_source_ref_t<void> (
++          detail::make_task_owner<detail::application_task_shared_state_t<void>> ()))
+     {
+         const auto failure = detail::request_failure (result);
+         _admitted->complete (failure ? detail::result_access_t::failure<void> (failure)
+@@ -427,7 +409,21 @@
+     request_task_t (task_t<TReply> reply,
+                     std::shared_ptr<task_completion_source_t<void>> admitted,
+                     detail::task_scheduler_t scheduler = {}) :
+-        task_t<TReply> (std::make_shared<detail::task_shared_state_t<TReply>> ()),
++        request_task_t (
++          std::move (reply), detail::task_source_ref_t<void> (admitted), std::move (scheduler))
++    {
++    }
++    request_task_t (request_task_t reply,
++                    std::shared_ptr<task_completion_source_t<void>> admitted) :
++        request_task_t (reply.physical_reply (), detail::task_source_ref_t<void> (admitted))
++    {
++    }
++
++  private:
++    request_task_t (task_t<TReply> reply,
++                    detail::task_source_ref_t<void> admitted,
++                    detail::task_scheduler_t scheduler = {}) :
++        task_t<TReply> (detail::make_task_owner<detail::task_shared_state_t<TReply>> ()),
+         _physical_reply (std::move (reply)),
+         _admitted (std::move (admitted)),
+         _admission_scheduler (std::move (scheduler))
+@@ -447,12 +443,7 @@
+         end_at_admission_failure ();
+     }
+ 
+-    request_task_t (request_task_t reply,
+-                    std::shared_ptr<task_completion_source_t<void>> admitted) :
+-        request_task_t (reply.physical_reply (), std::move (admitted))
+-    {
+-    }
+-
++  public:
+     task_t<void> admitted ()
+     {
+         return detail::with_task_resume_scheduler (_admitted->task (), _admission_scheduler);
+@@ -466,7 +457,7 @@
+     // physical terminal, so it does not need an independent admission end.
+     request_task_t (detail::request_projection_t,
+                     task_t<TReply> reply,
+-                    std::shared_ptr<task_completion_source_t<void>> admitted) :
++                    detail::task_source_ref_t<void> admitted) :
+         task_t<TReply> (std::move (reply)),
+         _physical_reply (detail::with_task_resume_scheduler (
+           task_t<TReply> (this->shared_state ()),
+@@ -510,7 +501,8 @@
+     request_task_t (detail::request_projection_t,
+                     request_task_t<TInput> &selected,
+                     TProject &&project) :
+-        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
++        task_t<TReply> (
++          detail::make_task_owner<detail::application_task_shared_state_t<TReply>> ()),
+         _physical_reply (this->shared_state ()),
+         _admitted (selected._admitted)
+     {
+@@ -535,8 +527,10 @@
+     request_task_t (detail::public_request_projection_t,
+                     request_task_t<TInput> &selected,
+                     TProject &&project) :
+-        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
+-        _physical_reply (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
++        task_t<TReply> (
++          detail::make_task_owner<detail::application_task_shared_state_t<TReply>> ()),
++        _physical_reply (
++          detail::make_task_owner<detail::application_task_shared_state_t<TReply>> ()),
+         _admitted (selected._admitted)
+     {
+         auto terminal = receiver<TInput> (detail::public_request_projection_t{},
+@@ -567,7 +561,7 @@
+     }
+ 
+     task_t<TReply> _physical_reply;
+-    std::shared_ptr<task_completion_source_t<void>> _admitted;
++    detail::task_source_ref_t<void> _admitted;
+     detail::task_scheduler_t _admission_scheduler;
+ };
+ 
+@@ -575,6 +569,11 @@
+ {
+ struct request_task_access_t
+ {
++    template <typename T> static const void *storage_identity (const task_t<T> &task)
++    {
++        return task.shared_state ().control ();
++    }
++
+     template <typename T> static auto physical_reply (const request_task_t<T> &task)
+     {
+         return task.physical_reply ();
+@@ -591,8 +590,14 @@
+     }
+ 
+     template <typename T>
+-    static request_task_t<T>
+-    from_admitted_reply (task_t<T> reply, std::shared_ptr<task_completion_source_t<void>> admitted)
++    static request_task_t<T> from_reply (task_t<T> reply, task_source_ref_t<void> admitted)
++    {
++        return request_task_t<T> (std::move (reply), std::move (admitted));
++    }
++
++    template <typename T>
++    static request_task_t<T> from_admitted_reply (task_t<T> reply,
++                                                  detail::task_source_ref_t<void> admitted)
+     {
+         return request_task_t<T> (request_projection_t{}, std::move (reply), std::move (admitted));
+     }
+@@ -648,27 +653,21 @@
+     template <typename T, typename TInput, typename TProject, bool Public>
+     struct receiver_state_t final : request_capture_storage_t, application_task_shared_state_t<void>
+     {
+-        template <typename TValue> struct stage_t final : application_task_shared_state_t<TValue>
+-        {
+-            explicit stage_t (receiver_state_t &owner) : owner (owner) {}
+-            std::shared_ptr<task_shared_state_t<TValue>> shared_from_this () override
+-            {
+-                return {owner.application_task_shared_state_t<void>::shared_from_this (), this};
+-            }
+-            std::weak_ptr<task_shared_state_t<TValue>> weak_from_this () noexcept override
+-            {
+-                return shared_from_this ();
+-            }
+-            receiver_state_t &owner;
+-        };
++        template <typename TValue> using stage_t = application_task_shared_state_t<TValue>;
++        void bind_task_owner (task_control_t *owner) noexcept
++        {
++            application_task_shared_state_t<void>::bind_task_owner (owner);
++            this->bind_capture_owner (owner);
++            reply.bind_task_owner (owner);
++            if constexpr (Public)
++                physical.bind_task_owner (owner);
++        }
+ 
+         explicit receiver_state_t (TProject project) :
+             request_capture_storage_t ([] (request_capture_storage_t *storage) noexcept {
+                 static_cast<receiver_state_t *> (storage)->project.reset ();
+             }),
+-            admitted (this),
+-            reply (*this),
+-            physical (make_physical (*this)),
++            physical (make_physical ()),
+             project (std::move (project))
+         {
+         }
+@@ -697,12 +696,11 @@
+                 physical.complete (projected);
+             reply.complete (std::move (projected));
+         }
+-        task_completion_source_t<void> admitted;
+         stage_t<T> reply;
+-        static auto make_physical (receiver_state_t &owner)
++        static auto make_physical ()
+         {
+             if constexpr (Public)
+-                return stage_t<T> (owner);
++                return stage_t<T>{};
+             else
+                 return std::monostate{};
+         }
+@@ -714,18 +712,18 @@
+     static request_task_t<T> receive (TSubmit &&submit, TProject &&project)
+     {
+         using storage_t = receiver_state_t<T, TInput, std::decay_t<TProject>, Public>;
+-        auto storage = std::make_shared<storage_t> (std::forward<TProject> (project));
++        auto storage = allocate_task_owner<storage_t, 4096> (task_storage_pool (),
++                                                             std::forward<TProject> (project));
+ #if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+-        test_creation_probe::request_block_bytes.fetch_add (sizeof (storage_t),
+-                                                            std::memory_order_relaxed);
++        test_creation_probe::request_block_bytes.fetch_add (
++          sizeof (task_allocation_t<storage_t, 4096>), std::memory_order_relaxed);
+ #endif
+-        auto admitted =
+-          std::shared_ptr<task_completion_source_t<void>> (storage, &storage->admitted);
+-        auto reply = std::shared_ptr<task_shared_state_t<T>> (storage, &storage->reply);
++        auto admitted = task_source_ref_t<void> (task_ptr_t<task_shared_state_t<void>> (storage));
++        auto reply = task_ptr_t<task_shared_state_t<T>> (storage, &storage->reply);
+         request_task_t<T> pending (request_projection_t{}, task_t<T> (reply), admitted);
+         if constexpr (Public) {
+             pending._physical_reply =
+-              task_t<T> (std::shared_ptr<task_shared_state_t<T>> (storage, &storage->physical));
++              task_t<T> (task_ptr_t<task_shared_state_t<T>> (storage, &storage->physical));
+         }
+         auto callbacks = request_capture_storage_t::own_callbacks (storage);
+         request_receiver_t<TInput> receiver{
+--- a/framework/include/zlink/framework/contracts/dispatch/task.hpp
++++ b/framework/include/zlink/framework/contracts/dispatch/task.hpp
+@@ -10,6 +10,8 @@
+ #if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+ #include <zlink/framework/detail/test_creation_probe.hpp>
+ #endif
++
++#include <zlink/framework/detail/task_owner.hpp>
+ 
+ #include <atomic>
+ #include <cassert>
+@@ -367,6 +369,7 @@
+ // cancels it. A queued result delivery therefore cannot revive a stopped turn.
+ struct request_task_access_t;
+ template <typename T> class task_shared_state_t;
++template <typename T> class task_source_ref_t;
+ 
+ class task_wait_registration_t
+ {
+@@ -438,9 +441,9 @@
+   public:
+     bool has_wait_owner () const noexcept { return _ambient.wait_owner.stop_possible (); }
+ 
+-    void bind_owner (const std::shared_ptr<task_wait_registration_t> &self,
+-                     std::weak_ptr<void> state,
+-                     bool (*cleanup) (const std::shared_ptr<void> &, task_wait_registration_t *))
++    void bind_owner (const task_ptr_t<task_wait_registration_t> &self,
++                     task_weak_t<void> state,
++                     bool (*cleanup) (const task_ptr_t<void> &, task_wait_registration_t *))
+     {
+         if (_ambient.wait_owner.stop_possible ())
+             _cancellation.emplace (_ambient.wait_owner,
+@@ -459,8 +462,8 @@
+         return std::pair{std::move (_scheduler), _ambient.infrastructure_wait || _turn != nullptr};
+     }
+ 
+-    bool deliver (const std::shared_ptr<task_wait_registration_t> &self,
+-                  std::shared_ptr<void> lifetime,
++    bool deliver (const task_ptr_t<task_wait_registration_t> &self,
++                  task_ptr_t<void> lifetime,
+                   std::mutex &owner_mutex,
+                   delivery_t delivery) noexcept
+     {
+@@ -536,9 +539,9 @@
+     completion_dispatcher_borrow_t _completion_dispatcher{};
+     struct cancellation_t
+     {
+-        std::weak_ptr<task_wait_registration_t> waiter;
+-        std::weak_ptr<void> state;
+-        bool (*cleanup) (const std::shared_ptr<void> &, task_wait_registration_t *);
++        task_weak_t<task_wait_registration_t> waiter;
++        task_weak_t<void> state;
++        bool (*cleanup) (const task_ptr_t<void> &, task_wait_registration_t *);
+         void operator() () const noexcept
+         {
+             if (auto self = waiter.lock ()) {
+@@ -552,13 +555,12 @@
+     };
+     std::optional<std::stop_callback<cancellation_t>> _cancellation;
+ 
+-    std::shared_ptr<task_wait_registration_t> _next;
++    task_ptr_t<task_wait_registration_t> _next;
+ 
+     template <typename> friend class task_shared_state_t;
+ };
+ 
+-template <typename T>
+-class task_shared_state_t : public std::enable_shared_from_this<task_shared_state_t<T>>
++template <typename T> class task_shared_state_t
+ {
+     struct callback_t
+     {
+@@ -570,7 +572,7 @@
+             }
+         }
+         virtual void invoke (const result_t<T> &) = 0;
+-        std::unique_ptr<callback_t> next;
++        task_ptr_t<callback_t> next;
+     };
+     template <typename TCallback> struct terminal_callback_t final : callback_t
+     {
+@@ -606,27 +608,24 @@
+ #endif
+     }
+ 
++    task_shared_state_t (const task_shared_state_t &) = delete;
++    task_shared_state_t &operator= (const task_shared_state_t &) = delete;
++
+     virtual ~task_shared_state_t () = default;
+ 
+-    // Embedded request stages alias the request allocation. Ordinary tasks keep
+-    // the shared ownership established by their own allocation.
+-    virtual std::shared_ptr<task_shared_state_t> shared_from_this ()
+-    {
+-        return std::enable_shared_from_this<task_shared_state_t>::shared_from_this ();
+-    }
+-    virtual std::weak_ptr<task_shared_state_t> weak_from_this () noexcept
+-    {
+-        return std::enable_shared_from_this<task_shared_state_t>::weak_from_this ();
+-    }
++    void bind_task_owner (task_control_t *owner) noexcept { _owner = owner; }
++    task_ptr_t<task_shared_state_t> shared_from_this () { return {_owner, this}; }
++    task_weak_t<task_shared_state_t> weak_from_this () noexcept { return shared_from_this (); }
++    task_control_t *task_owner () const noexcept { return _owner; }
+ 
+     bool complete (result_t<T> result)
+     {
+-        std::shared_ptr<task_wait_registration_t> continuations;
+-        std::unique_ptr<callback_t> terminal_callbacks;
++        task_ptr_t<task_wait_registration_t> continuations;
++        task_ptr_t<callback_t> terminal_callbacks;
+         task_wait_registration_t::delivery_t delivery;
+         auto self = this->shared_from_this ();
+         {
+-            std::lock_guard lock (_mutex);
++            std::lock_guard lock (_owner->synchronization->mutex);
+             if (_result) {
+                 return false;
+             }
+@@ -638,7 +637,7 @@
+             terminal_callbacks = std::move (_terminal_callbacks);
+             _terminal_callbacks_tail = nullptr;
+         }
+-        _ready.notify_all ();
++        _owner->synchronization->ready.notify_all ();
+         // Internal delivery defects terminate; the first result is already fixed.
+         [&] () noexcept {
+             publish_terminal (*_result);
+@@ -651,7 +650,7 @@
+                 continuations = std::move (continuation->_next);
+                 deliver_registration (continuation, self, std::move (delivery));
+                 if (continuations) {
+-                    std::lock_guard lock (_mutex);
++                    std::lock_guard lock (_owner->synchronization->mutex);
+                     delivery = continuations->take_delivery ();
+                 }
+             }
+@@ -661,20 +660,20 @@
+ 
+     bool is_ready () const
+     {
+-        std::lock_guard lock (_mutex);
++        std::lock_guard lock (_owner->synchronization->mutex);
+         return _result.has_value ();
+     }
+ 
+-    void set_continuation (const std::shared_ptr<task_wait_registration_t> &registration)
++    void set_continuation (const task_ptr_t<task_wait_registration_t> &registration)
+     {
+         auto self = this->shared_from_this ();
+-        std::shared_ptr<task_shared_state_t<T>> lifetime;
++        task_ptr_t<task_shared_state_t<T>> lifetime;
+         task_wait_registration_t::delivery_t delivery;
+         const auto owner_state = registration->has_wait_owner ()
+                                    ? this->weak_from_this ()
+-                                   : std::weak_ptr<task_shared_state_t<T>>{};
++                                   : task_weak_t<task_shared_state_t<T>>{};
+         {
+-            std::lock_guard lock (_mutex);
++            std::lock_guard lock (_owner->synchronization->mutex);
+             if (_result) {
+                 lifetime = std::move (self);
+                 delivery = registration->take_delivery ();
+@@ -689,11 +688,11 @@
+ 
+     const result_t<T> &result ()
+     {
+-        std::unique_lock lock (_mutex);
++        std::unique_lock lock (_owner->synchronization->mutex);
+ #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+         check_infrastructure_wait (_result.has_value (), "task/result");
+ #endif
+-        _ready.wait (lock, [&] { return _result.has_value (); });
++        _owner->synchronization->ready.wait (lock, [&] { return _result.has_value (); });
+         return *_result;
+     }
+ 
+@@ -703,14 +702,15 @@
+     std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout,
+                                            std::stop_token cancellation = {})
+     {
+-        std::stop_callback wake_waiter (cancellation, [this] { _ready.notify_all (); });
+-        std::unique_lock lock (_mutex);
++        std::stop_callback wake_waiter (cancellation,
++                                        [this] { _owner->synchronization->ready.notify_all (); });
++        std::unique_lock lock (_owner->synchronization->mutex);
+ #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+         if (timeout > std::chrono::milliseconds::zero ())
+             check_infrastructure_wait (_result.has_value () || cancellation.stop_requested (),
+                                        "task/result_for");
+ #endif
+-        if (!_ready.wait_for (
++        if (!_owner->synchronization->ready.wait_for (
+               lock, timeout, [&] { return _result.has_value () || cancellation.stop_requested (); })
+             || !_result)
+             return std::nullopt;
+@@ -721,15 +721,15 @@
+     void on_completed (TCallback callback, task_scheduler_t scheduler = {})
+     {
+         const auto self = this->shared_from_this ();
+-        std::shared_ptr<task_wait_registration_t> registration;
+-        std::weak_ptr<task_shared_state_t<T>> owner_state;
++        task_ptr_t<task_wait_registration_t> registration;
++        task_weak_t<task_shared_state_t<T>> owner_state;
+         {
+-            std::lock_guard lock (_mutex);
++            std::lock_guard lock (_owner->synchronization->mutex);
+             if (!_result) {
+                 owner_state = self;
+                 struct observer_t
+                 {
+-                    observer_t (std::weak_ptr<task_shared_state_t<T>> owner,
++                    observer_t (task_weak_t<task_shared_state_t<T>> owner,
+                                 TCallback callback,
+                                 task_scheduler_t scheduler) :
+                         owner (std::move (owner)),
+@@ -759,15 +759,15 @@
+                     observer_t &operator= (const observer_t &) = delete;
+                     observer_t (observer_t &&) = delete;
+                     observer_t &operator= (observer_t &&) = delete;
+-                    std::weak_ptr<task_shared_state_t<T>> owner;
++                    task_weak_t<task_shared_state_t<T>> owner;
+                     std::optional<TCallback> callback;
+                     // Destroy the stop registration before its callable captures.
+                     task_wait_registration_t registration;
+                 };
+-                auto observer = std::make_shared<observer_t> (owner_state, std::move (callback),
+-                                                              std::move (scheduler));
++                auto observer = make_task_observer<observer_t> (
++                  _owner, owner_state, std::move (callback), std::move (scheduler));
+                 registration =
+-                  std::shared_ptr<task_wait_registration_t> (observer, &observer->registration);
++                  task_ptr_t<task_wait_registration_t> (observer, &observer->registration);
+                 append_continuation_unlocked (registration);
+             }
+         }
+@@ -792,10 +792,10 @@
+     {
+         auto snapshot = capture_ambient_context ();
+         {
+-            std::lock_guard lock (_mutex);
++            std::lock_guard lock (_owner->synchronization->mutex);
+             if (!_result) {
+-                auto terminal = std::make_unique<terminal_callback_t<TCallback>> (
+-                  std::move (callback), std::move (snapshot));
++                auto terminal = make_task_observer<terminal_callback_t<TCallback>> (
++                  _owner, std::move (callback), std::move (snapshot));
+                 auto *tail = terminal.get ();
+                 if (_terminal_callbacks_tail)
+                     _terminal_callbacks_tail->next = std::move (terminal);
+@@ -812,21 +812,22 @@
+     }
+ 
+   private:
+-    void deliver_registration (const std::shared_ptr<task_wait_registration_t> &registration,
+-                               const std::shared_ptr<task_shared_state_t<T>> &lifetime,
++    void deliver_registration (const task_ptr_t<task_wait_registration_t> &registration,
++                               const task_ptr_t<task_shared_state_t<T>> &lifetime,
+                                task_wait_registration_t::delivery_t delivery) noexcept
+     {
+-        if (registration->deliver (registration, lifetime, _mutex, std::move (delivery)))
++        if (registration->deliver (registration, lifetime, _owner->synchronization->mutex,
++                                   std::move (delivery)))
+             return;
+         // A rejected delivery remains owned until its registered owner stops.
+         // Keeping it in the original list also covers ready-registration races.
+-        std::lock_guard lock (_mutex);
++        std::lock_guard lock (_owner->synchronization->mutex);
+         if (registration->pending ())
+             append_continuation_unlocked (registration);
+     }
+ 
+-    void append_continuation_unlocked (
+-      const std::shared_ptr<task_wait_registration_t> &registration) noexcept
++    void
++    append_continuation_unlocked (const task_ptr_t<task_wait_registration_t> &registration) noexcept
+     {
+         if (_continuations_tail)
+             _continuations_tail->_next = registration;
+@@ -838,17 +839,18 @@
+   protected:
+     virtual void publish_terminal (const result_t<T> &) {}
+ 
+-    virtual void bind_wait_owner (const std::shared_ptr<task_wait_registration_t> &,
+-                                  const std::shared_ptr<task_wait_registration_t> &,
+-                                  std::weak_ptr<void>)
+-    {
+-    }
+-
+-    static bool erase_registration (const std::shared_ptr<void> &state,
++    virtual void bind_wait_owner (const task_ptr_t<task_wait_registration_t> &,
++                                  const task_ptr_t<task_wait_registration_t> &,
++                                  task_weak_t<void>)
++    {
++    }
++
++    static bool erase_registration (const task_ptr_t<void> &state,
+                                     task_wait_registration_t *registration)
+     {
+-        auto owner = std::static_pointer_cast<task_shared_state_t<T>> (state);
+-        std::lock_guard lock (owner->_mutex);
++        auto owner = task_ptr_t<task_shared_state_t<T>> (
++          state, static_cast<task_shared_state_t<T> *> (state.get ()));
++        std::lock_guard lock (owner->task_owner ()->synchronization->mutex);
+         auto *previous = static_cast<task_wait_registration_t *> (nullptr);
+         auto *link = &owner->_continuations_head;
+         while (*link && link->get () != registration) {
+@@ -869,21 +871,20 @@
+     }
+ 
+   private:
+-    mutable std::mutex _mutex;
+-    std::condition_variable _ready;
++    task_control_t *_owner = nullptr;
+     std::optional<result_t<T>> _result;
+-    std::shared_ptr<task_wait_registration_t> _continuations_head;
++    task_ptr_t<task_wait_registration_t> _continuations_head;
+     task_wait_registration_t *_continuations_tail = nullptr;
+-    std::unique_ptr<callback_t> _terminal_callbacks;
++    task_ptr_t<callback_t> _terminal_callbacks;
+     callback_t *_terminal_callbacks_tail = nullptr;
+ };
+ 
+ template <typename T> class application_task_shared_state_t : public task_shared_state_t<T>
+ {
+   private:
+-    void bind_wait_owner (const std::shared_ptr<task_wait_registration_t> &registration,
+-                          const std::shared_ptr<task_wait_registration_t> &self,
+-                          std::weak_ptr<void> state) override
++    void bind_wait_owner (const task_ptr_t<task_wait_registration_t> &registration,
++                          const task_ptr_t<task_wait_registration_t> &self,
++                          task_weak_t<void> state) override
+     {
+         registration->bind_owner (self, std::move (state),
+                                   &task_shared_state_t<T>::erase_registration);
+@@ -904,19 +905,19 @@
+ 
+ template <typename T> class task_state_t
+ {
+-    using storage_t = std::variant<result_t<T>, std::shared_ptr<task_shared_state_t<T>>>;
++    using storage_t = std::variant<result_t<T>, task_ptr_t<task_shared_state_t<T>>>;
+ 
+     struct referenced_state_t final : task_shared_state_t<T>
+     {
+         explicit referenced_state_t (const result_t<T> &result) : task_shared_state_t<T> (result) {}
+ 
+         // The installed pointer owns this reference until a task adopts or releases it.
+-        std::shared_ptr<task_shared_state_t<T>> owner;
++        task_ptr_t<task_shared_state_t<T>> owner;
+     };
+ 
+   public:
+     explicit task_state_t (result_t<T> result) : _storage (ready_task_state (std::move (result))) {}
+-    explicit task_state_t (std::shared_ptr<task_shared_state_t<T>> state) :
++    explicit task_state_t (task_ptr_t<task_shared_state_t<T>> state) :
+         _storage (std::in_place_index<1>, std::move (state))
+     {
+     }
+@@ -952,7 +953,7 @@
+             if (const auto *ready = inline_result ()) {
+                 auto *installed = _reference.load (std::memory_order_acquire);
+                 if (!installed) {
+-                    auto candidate = std::make_shared<referenced_state_t> (*ready);
++                    auto candidate = make_task_owner<referenced_state_t> (*ready);
+                     candidate->owner = candidate;
+                     auto *expected = static_cast<referenced_state_t *> (nullptr);
+                     if (_reference.compare_exchange_strong (expected, candidate.get (),
+@@ -980,17 +981,17 @@
+         return shared_state ()->result ();
+     }
+ 
+-    const std::shared_ptr<task_shared_state_t<T>> &share_task_state ()
++    const task_ptr_t<task_shared_state_t<T>> &share_task_state ()
+     {
+         if (auto installed = take_reference ())
+             _storage.template emplace<1> (std::move (installed));
+         else if (auto *ready = std::get_if<result_t<T>> (&_storage))
+             _storage.template emplace<1> (
+-              std::make_shared<task_shared_state_t<T>> (std::move (*ready)));
++              make_task_owner<task_shared_state_t<T>> (std::move (*ready)));
+         return shared_state ();
+     }
+ 
+-    const std::shared_ptr<task_shared_state_t<T>> &shared_state () const
++    const task_ptr_t<task_shared_state_t<T>> &shared_state () const
+     {
+         return std::get<1> (_storage);
+     }
+@@ -1004,10 +1005,10 @@
+             return storage_t (std::in_place_index<0>, std::move (result));
+         else
+             return storage_t (std::in_place_index<1>,
+-                              std::make_shared<task_shared_state_t<T>> (std::move (result)));
+-    }
+-
+-    std::shared_ptr<task_shared_state_t<T>> take_reference () noexcept
++                              make_task_owner<task_shared_state_t<T>> (std::move (result)));
++    }
++
++    task_ptr_t<task_shared_state_t<T>> take_reference () noexcept
+     {
+         // Callers mutate the task, so no const reader can race this plain load and store.
+         auto *installed = _reference.load (std::memory_order_acquire);
+@@ -1042,7 +1043,7 @@
+ 
+   public:
+     task_completion_source_t () :
+-        _state (std::make_shared<detail::application_task_shared_state_t<T>> ())
++        _state (detail::make_task_owner<detail::application_task_shared_state_t<T>> ())
+     {
+     }
+     task_completion_source_t (task_completion_source_t &&other) noexcept
+@@ -1052,13 +1053,13 @@
+     task_completion_source_t &operator= (task_completion_source_t &&other) noexcept
+     {
+         if (this != &other) {
+-            // A combined source borrows its enclosing state. Moving either end
+-            // would detach that borrow from the allocation that owns it.
++            // A source embedded beside its result cannot move out of that owner.
+             const auto borrowed = [] (const auto &state) {
+                 return state && state.use_count () == 0;
+             };
+             if (borrowed (_state) || borrowed (other._state))
+                 std::terminate ();
++
+             _state = std::move (other._state);
+         }
+         return *this;
+@@ -1072,37 +1073,65 @@
+   private:
+     template <typename U>
+     friend std::shared_ptr<task_completion_source_t<U>> detail::make_task_completion_source ();
+-
+-    friend struct detail::request_task_access_t;
+-
+-    // The shared-source allocation owns this wrapper and state. An empty-owner
+-    // alias avoids an ownership cycle; task() acquires the state's strong owner.
+     explicit task_completion_source_t (detail::task_shared_state_t<T> *state) :
+-        _state (std::shared_ptr<detail::task_shared_state_t<T>>{}, state)
+-    {
+-    }
+-    std::shared_ptr<detail::task_shared_state_t<T>> _state;
++        _state (detail::task_ptr_t<detail::task_shared_state_t<T>>{}, state)
++    {
++    }
++    template <typename> friend class detail::task_source_ref_t;
++
++    detail::task_ptr_t<detail::task_shared_state_t<T>> _state;
+ };
+ 
+ namespace detail
+ {
+-// The source wrapper has no independent lifetime data. Its task handles own
+-// this same state through shared_from_this, including after the source is gone.
++// Publicly shared source wrappers and task handles refer to the same task owner.
+ template <typename T> std::shared_ptr<task_completion_source_t<T>> make_task_completion_source ()
+ {
+-    struct shared_source_t final : application_task_shared_state_t<T>
+-    {
+-        shared_source_t () : source (this) {}
+-        shared_source_t (const shared_source_t &) = delete;
+-        shared_source_t &operator= (const shared_source_t &) = delete;
+-        shared_source_t (shared_source_t &&) = delete;
+-        shared_source_t &operator= (shared_source_t &&) = delete;
++    struct source_owner_t final : application_task_shared_state_t<T>
++    {
++        source_owner_t () : source (this) {}
+         task_completion_source_t<T> source;
+     };
+-    auto storage = std::make_shared<shared_source_t> ();
+-    return std::shared_ptr<task_completion_source_t<T>> (storage, &storage->source);
+-}
+-
++    auto owner = make_task_owner<source_owner_t> ();
++    struct release_source_t
++    {
++        task_ptr_t<source_owner_t> owner;
++        void operator() (task_completion_source_t<T> *) noexcept { owner.reset (); }
++    };
++    return {&owner->source, release_source_t{owner},
++            task_arena_allocator_t<std::byte> (owner.control ())};
++}
++
++
++// A source view shares the final task storage. Ordinary public completion
++// sources can supply the same view without retaining their wrapper.
++template <typename T> class task_source_ref_t
++{
++  public:
++    task_source_ref_t () = default;
++    explicit task_source_ref_t (std::nullptr_t) {}
++    task_source_ref_t (task_ptr_t<task_shared_state_t<T>> state) : _state (std::move (state)) {}
++    task_source_ref_t (const std::shared_ptr<task_completion_source_t<T>> &source) :
++        _state (source ? source->_state->shared_from_this () : task_ptr_t<task_shared_state_t<T>>{})
++    {
++    }
++    task_source_ref_t *operator->() noexcept { return this; }
++    const task_source_ref_t *operator->() const noexcept { return this; }
++    explicit operator bool () const noexcept { return bool (_state); }
++    task_shared_state_t<T> *get () const noexcept { return _state.get (); }
++    bool operator== (const task_source_ref_t &other) const noexcept
++    {
++        return get () == other.get ();
++    }
++    bool complete (result_t<T> value) const { return _state->complete (std::move (value)); }
++    task_t<T> task () const;
++    task_source_ref_t borrow () const { return {task_ptr_t<task_shared_state_t<T>> ({}, get ())}; }
++    task_control_t *task_owner () const noexcept { return get ()->task_owner (); }
++    task_weak_t<task_shared_state_t<T>> weak () const { return _state; }
++
++  private:
++    task_ptr_t<task_shared_state_t<T>> _state;
++};
+ 
+ struct task_result_access_t;
+ 
+@@ -1154,7 +1183,7 @@
+   public:
+     using completion_state_t = coroutine_task_shared_state_t<T>;
+ 
+-    std::shared_ptr<task_wait_registration_t> continuation_registration () noexcept
++    task_ptr_t<task_wait_registration_t> continuation_registration () noexcept
+     {
+         return {completion, &completion->continuation_registration};
+     }
+@@ -1175,8 +1204,8 @@
+   protected:
+     void store_return (result_t<T> result) { _return_result.emplace (std::move (result)); }
+ 
+-    std::shared_ptr<coroutine_task_shared_state_t<T>> completion =
+-      std::make_shared<coroutine_task_shared_state_t<T>> ();
++    task_ptr_t<coroutine_task_shared_state_t<T>> completion =
++      make_task_owner<coroutine_task_shared_state_t<T>> ();
+ 
+   private:
+     std::optional<result_t<T>> _return_result;
+@@ -1235,7 +1264,8 @@
+         } else {
+             std::coroutine_handle<> erased = continuation;
+             shared_state ()->set_continuation (
+-              std::make_shared<detail::task_wait_registration_t> (erased, std::move (scheduler)));
++              detail::make_task_owner<detail::task_wait_registration_t> (erased,
++                                                                         std::move (scheduler)));
+         }
+     }
+     T await_resume ()
+@@ -1261,17 +1291,17 @@
+     }
+ 
+   private:
+-    explicit task_t (std::shared_ptr<detail::task_shared_state_t<T>> state) :
++    explicit task_t (detail::task_ptr_t<detail::task_shared_state_t<T>> state) :
+         _state (std::move (state))
+     {
+     }
+ 
+-    const std::shared_ptr<detail::task_shared_state_t<T>> &shared_state ()
++    const detail::task_ptr_t<detail::task_shared_state_t<T>> &shared_state ()
+     {
+         return _state.share_task_state ();
+     }
+ 
+-    const std::shared_ptr<detail::task_shared_state_t<T>> &shared_state () const
++    const detail::task_ptr_t<detail::task_shared_state_t<T>> &shared_state () const
+     {
+         return _state.shared_state ();
+     }
+@@ -1287,6 +1317,7 @@
+     friend struct detail::task_result_access_t;
+     friend struct detail::request_task_access_t;
+     friend class task_completion_source_t<T>;
++    template <typename> friend class detail::task_source_ref_t;
+     template <typename U> friend class request_task_t;
+     template <typename U>
+     friend std::optional<result_t<U>>
+@@ -1339,7 +1370,8 @@
+         } else {
+             std::coroutine_handle<> erased = continuation;
+             shared_state ()->set_continuation (
+-              std::make_shared<detail::task_wait_registration_t> (erased, std::move (scheduler)));
++              detail::make_task_owner<detail::task_wait_registration_t> (erased,
++                                                                         std::move (scheduler)));
+         }
+     }
+     void await_resume ()
+@@ -1361,17 +1393,17 @@
+     }
+ 
+   private:
+-    explicit task_t (std::shared_ptr<detail::task_shared_state_t<void>> state) :
++    explicit task_t (detail::task_ptr_t<detail::task_shared_state_t<void>> state) :
+         _state (std::move (state))
+     {
+     }
+ 
+-    const std::shared_ptr<detail::task_shared_state_t<void>> &shared_state ()
++    const detail::task_ptr_t<detail::task_shared_state_t<void>> &shared_state ()
+     {
+         return _state.share_task_state ();
+     }
+ 
+-    const std::shared_ptr<detail::task_shared_state_t<void>> &shared_state () const
++    const detail::task_ptr_t<detail::task_shared_state_t<void>> &shared_state () const
+     {
+         return _state.shared_state ();
+     }
+@@ -1387,6 +1419,7 @@
+     friend struct detail::task_result_access_t;
+     friend struct detail::request_task_access_t;
+     friend class task_completion_source_t<void>;
++    template <typename> friend class detail::task_source_ref_t;
+     template <typename U> friend class request_task_t;
+     template <typename U>
+     friend std::optional<result_t<U>>
+@@ -1406,6 +1439,11 @@
+ 
+ namespace detail
+ {
++
++template <typename T> task_t<T> task_source_ref_t<T>::task () const
++{
++    return task_t<T> (_state->shared_from_this ());
++}
+ 
+ // Internal borrows end before the task moves or registers an observer. Public
+ // result() alone publishes storage that can outlive those operations.
+@@ -1464,7 +1502,7 @@
+         });
+         return task_t<TOutput> (std::move (*projected));
+     }
+-    auto state = std::make_shared<application_task_shared_state_t<TOutput>> ();
++    auto state = make_task_owner<application_task_shared_state_t<TOutput>> ();
+     observe_task_terminal (
+       task, [state, settle = std::move (settle)] (const result_t<TInput> &result) mutable {
+           settle (result, [&] (result_t<TOutput> value) { state->complete (std::move (value)); });
+--- /dev/null
++++ b/framework/include/zlink/framework/detail/task_owner.hpp
+@@ -0,0 +1,357 @@
++/* SPDX-License-Identifier: FSL-1.1-ALv2 */
++#pragma once
++
++#include <atomic>
++#include <array>
++#include <condition_variable>
++#include <memory>
++#include <memory_resource>
++#include <mutex>
++#include <type_traits>
++#include <utility>
++
++namespace zlink::framework::detail
++{
++// Lifetime only: readiness and terminal authority remain with the task result
++// and operation registry. Weak references keep arena memory, not live captures.
++struct task_synchronization_t
++{
++    std::mutex mutex;
++    std::condition_variable ready;
++};
++struct task_control_t
++{
++    std::atomic_size_t strong{1};
++    std::atomic_size_t weak{1};
++    void (*destroy) (task_control_t *) noexcept;
++    void (*deallocate) (task_control_t *) noexcept;
++    task_synchronization_t *synchronization;
++    std::pmr::memory_resource *resource;
++
++    void retain () noexcept { strong.fetch_add (1, std::memory_order_relaxed); }
++    bool try_retain () noexcept
++    {
++        auto count = strong.load (std::memory_order_relaxed);
++        while (count != 0) {
++            if (strong.compare_exchange_weak (count, count + 1, std::memory_order_acquire,
++                                              std::memory_order_relaxed))
++                return true;
++        }
++        return false;
++    }
++    void retain_weak () noexcept { weak.fetch_add (1, std::memory_order_relaxed); }
++    void release_weak () noexcept
++    {
++        if (weak.fetch_sub (1, std::memory_order_acq_rel) == 1)
++            deallocate (this);
++    }
++    void release () noexcept
++    {
++        if (strong.fetch_sub (1, std::memory_order_acq_rel) == 1) {
++            destroy (this);
++            release_weak ();
++        }
++    }
++};
++
++template <typename T> class task_weak_t;
++template <typename T> class task_ptr_t
++{
++  public:
++    task_ptr_t () noexcept = default;
++    task_ptr_t (std::nullptr_t) noexcept {}
++    task_ptr_t (task_control_t *control, T *value) noexcept : _control (control), _value (value)
++    {
++        if (_control)
++            _control->retain ();
++    }
++    template <typename U>
++    task_ptr_t (const task_ptr_t<U> &owner, T *value) noexcept :
++        task_ptr_t (owner.control (), value)
++    {
++    }
++    task_ptr_t (const task_ptr_t &other) noexcept : task_ptr_t (other._control, other._value) {}
++    template <typename U>
++        requires std::is_convertible_v<U *, T *>
++    task_ptr_t (const task_ptr_t<U> &other) noexcept : task_ptr_t (other.control (), other.get ())
++    {
++    }
++    task_ptr_t (task_ptr_t &&other) noexcept :
++        _control (std::exchange (other._control, nullptr)),
++        _value (std::exchange (other._value, nullptr))
++    {
++    }
++    template <typename U>
++        requires std::is_convertible_v<U *, T *>
++    task_ptr_t (task_ptr_t<U> &&other) noexcept : _control (other.control ()), _value (other.get ())
++    {
++        other.detach ();
++    }
++    ~task_ptr_t ()
++    {
++        if (_control)
++            _control->release ();
++    }
++    task_ptr_t &operator= (task_ptr_t other) noexcept
++    {
++        std::swap (_control, other._control);
++        std::swap (_value, other._value);
++        return *this;
++    }
++    void reset () noexcept { *this = {}; }
++    T *get () const noexcept { return _value; }
++    T *operator->() const noexcept { return _value; }
++    std::add_lvalue_reference_t<T> operator* () const noexcept
++        requires (!std::is_void_v<T>)
++    {
++        return *_value;
++    }
++    explicit operator bool () const noexcept { return _value != nullptr; }
++    std::size_t use_count () const noexcept
++    {
++        return _control ? _control->strong.load (std::memory_order_relaxed) : 0;
++    }
++    task_control_t *control () const noexcept { return _control; }
++    void detach () noexcept
++    {
++        _control = nullptr;
++        _value = nullptr;
++    }
++    template <typename U> bool operator== (const task_ptr_t<U> &other) const noexcept
++    {
++        return _value == other.get ();
++    }
++    bool operator== (std::nullptr_t) const noexcept { return !_value; }
++
++  private:
++    task_control_t *_control = nullptr;
++    T *_value = nullptr;
++    friend class task_weak_t<T>;
++};
++
++template <typename T> class task_weak_t
++{
++  public:
++    task_weak_t () noexcept = default;
++    template <typename U>
++        requires std::is_convertible_v<U *, T *>
++    task_weak_t (const task_ptr_t<U> &owner) noexcept :
++        _control (owner.control ()), _value (owner.get ())
++    {
++        if (_control)
++            _control->retain_weak ();
++    }
++    task_weak_t (const task_weak_t &other) noexcept :
++        _control (other._control), _value (other._value)
++    {
++        if (_control)
++            _control->retain_weak ();
++    }
++    template <typename U>
++        requires std::is_convertible_v<U *, T *>
++    task_weak_t (const task_weak_t<U> &other) noexcept :
++        _control (other.control ()), _value (other.get ())
++    {
++        if (_control)
++            _control->retain_weak ();
++    }
++    task_weak_t (task_weak_t &&other) noexcept :
++        _control (std::exchange (other._control, nullptr)),
++        _value (std::exchange (other._value, nullptr))
++    {
++    }
++    ~task_weak_t ()
++    {
++        if (_control)
++            _control->release_weak ();
++    }
++    task_weak_t &operator= (task_weak_t other) noexcept
++    {
++        std::swap (_control, other._control);
++        std::swap (_value, other._value);
++        return *this;
++    }
++    task_ptr_t<T> lock () const noexcept
++    {
++        if (!_control || !_control->try_retain ())
++            return {};
++        task_ptr_t<T> result;
++        result._control = _control;
++        result._value = _value;
++        return result;
++    }
++    bool expired () const noexcept
++    {
++        return !_control || _control->strong.load (std::memory_order_acquire) == 0;
++    }
++    void reset () noexcept { *this = {}; }
++    task_control_t *control () const noexcept { return _control; }
++    T *get () const noexcept { return _value; }
++
++  private:
++    task_control_t *_control = nullptr;
++    T *_value = nullptr;
++};
++
++// The allocator replaces per-state make_shared storage. Growth is unbounded;
++// free storage is reusable only after strong and weak lifetime references end.
++inline std::pmr::synchronized_pool_resource &task_storage_pool ()
++{
++    // Larger allocations go to the resource's upstream allocator. This is an
++    // allocator size class boundary, never a limit on tasks or observers.
++    // Result views may remain in globals created before this allocator. The
++    // process owns the pool; host shutdown and static destruction cannot retire it.
++    static auto *storage = new std::pmr::synchronized_pool_resource (
++      std::pmr::pool_options{0, 65536}, std::pmr::new_delete_resource ());
++    return *storage;
++}
++
++// Codec views and public observer registration can allocate concurrently.
++// This lock protects allocation only; the task mutex alone publishes results
++// and links observers. Neither lock grants a handler execution turn.
++class task_memory_resource_t final : public std::pmr::memory_resource
++{
++  public:
++    task_memory_resource_t (void *buffer, std::size_t size) :
++        _arena (buffer, size, std::pmr::new_delete_resource ())
++    {
++    }
++
++  private:
++    void *do_allocate (std::size_t size, std::size_t alignment) override
++    {
++        std::lock_guard lock (_mutex);
++        return _arena.allocate (size, alignment);
++    }
++    void do_deallocate (void *, std::size_t, std::size_t) override {}
++    bool do_is_equal (const std::pmr::memory_resource &other) const noexcept override
++    {
++        return this == &other;
++    }
++    std::mutex _mutex;
++    std::pmr::monotonic_buffer_resource _arena;
++};
++
++template <typename T, std::size_t InlineBytes = 512> struct task_allocation_t final : task_control_t
++{
++    task_allocation_t () {}
++    std::pmr::memory_resource *allocation_resource;
++    task_synchronization_t sync;
++    alignas (std::max_align_t) std::array<std::byte, InlineBytes> buffer;
++    task_memory_resource_t arena{buffer.data (), buffer.size ()};
++    alignas (T) std::byte value[sizeof (T)];
++};
++
++template <typename T, std::size_t InlineBytes = 512, typename... Args>
++task_ptr_t<T> allocate_task_owner (std::pmr::memory_resource &memory, Args &&...args)
++{
++    using allocation_t = task_allocation_t<T, InlineBytes>;
++    auto &pool = memory;
++    auto *block =
++      static_cast<allocation_t *> (pool.allocate (sizeof (allocation_t), alignof (allocation_t)));
++    try {
++        std::construct_at (block);
++    }
++    catch (...) {
++        pool.deallocate (block, sizeof (allocation_t), alignof (allocation_t));
++        throw;
++    }
++    block->destroy = [] (task_control_t *owner) noexcept {
++        std::destroy_at (reinterpret_cast<T *> (static_cast<allocation_t *> (owner)->value));
++    };
++    block->deallocate = [] (task_control_t *owner) noexcept {
++        auto *block = static_cast<allocation_t *> (owner);
++        auto *resource = block->allocation_resource;
++        std::destroy_at (block);
++        resource->deallocate (block, sizeof (allocation_t), alignof (allocation_t));
++    };
++    block->allocation_resource = &memory;
++    block->synchronization = &block->sync;
++    block->resource = &block->arena;
++    T *value;
++    try {
++        value =
++          std::construct_at (reinterpret_cast<T *> (block->value), std::forward<Args> (args)...);
++    }
++    catch (...) {
++        block->deallocate (block);
++        throw;
++    }
++    if constexpr (requires { value->bind_task_owner (block); })
++        value->bind_task_owner (block);
++    task_ptr_t<T> result (block, value);
++    block->release ();
++    return result;
++}
++
++template <typename T, typename... Args> task_ptr_t<T> make_task_owner (Args &&...args)
++{
++    return allocate_task_owner<T> (*std::pmr::new_delete_resource (), std::forward<Args> (args)...);
++}
++
++// Public shared completion-source wrappers place their required standard
++// control block in the same allocation as their intrusive result owner.
++// Its weak allocator lifetime outlasts source disposal and every weak wrapper.
++template <typename T> struct task_arena_allocator_t
++{
++    using value_type = T;
++    explicit task_arena_allocator_t (task_control_t *owner) :
++        owner (task_ptr_t<void> (owner, nullptr))
++    {
++    }
++    template <typename U>
++    task_arena_allocator_t (const task_arena_allocator_t<U> &other) : owner (other.owner)
++    {
++    }
++    T *allocate (std::size_t count)
++    {
++        return static_cast<T *> (
++          owner.control ()->resource->allocate (count * sizeof (T), alignof (T)));
++    }
++    void deallocate (T *, std::size_t) noexcept {}
++    template <typename U> bool operator== (const task_arena_allocator_t<U> &other) const noexcept
++    {
++        return owner.control () == other.owner.control ();
++    }
++    task_weak_t<void> owner;
++};
++
++// Observer nodes use their task owner's arena. Their own references replace
++// the former observer control block; a weak parent keeps the arena allocated
++// without creating a state -> observer -> state ownership cycle.
++template <typename T> struct task_observer_allocation_t final : task_control_t
++{
++    task_observer_allocation_t () {}
++    task_weak_t<void> parent;
++    alignas (T) std::byte value[sizeof (T)];
++};
++template <typename T, typename... Args>
++task_ptr_t<T> make_task_observer (task_control_t *parent, Args &&...args)
++{
++    using allocation_t = task_observer_allocation_t<T>;
++    auto *block = static_cast<allocation_t *> (
++      parent->resource->allocate (sizeof (allocation_t), alignof (allocation_t)));
++    std::construct_at (block);
++    block->parent = task_ptr_t<void> (parent, nullptr);
++    block->synchronization = parent->synchronization;
++    block->resource = parent->resource;
++    block->destroy = [] (task_control_t *owner) noexcept {
++        std::destroy_at (reinterpret_cast<T *> (static_cast<allocation_t *> (owner)->value));
++    };
++    block->deallocate = [] (task_control_t *owner) noexcept {
++        std::destroy_at (static_cast<allocation_t *> (owner));
++    };
++    T *value;
++    try {
++        value =
++          std::construct_at (reinterpret_cast<T *> (block->value), std::forward<Args> (args)...);
++    }
++    catch (...) {
++        block->deallocate (block);
++        throw;
++    }
++    task_ptr_t<T> result (block, value);
++    block->release ();
++    return result;
++}
++} // namespace zlink::framework::detail
+--- a/framework/src/runtime/actors/actor_gateway_runtime.cpp
++++ b/framework/src/runtime/actors/actor_gateway_runtime.cpp
+@@ -527,7 +527,7 @@
+   std::optional<detail::bound_session_relay_source_t> relay_source,
+   std::chrono::milliseconds timeout,
+   TProjectReply project_reply,
+-  std::shared_ptr<task_completion_source_t<void>> admitted = {})
++  detail::task_source_ref_t<void> admitted = {})
+ {
+     if (admitted) {
+         auto source = co_await detail::request_admission_source_t{};
+--- a/framework/src/runtime/backend/raw_binding_adapter.hpp
++++ b/framework/src/runtime/backend/raw_binding_adapter.hpp
+@@ -22,6 +22,47 @@
+ {
+     struct promise_type
+     {
++        struct alignas (std::max_align_t) frame_header_t
++        {
++            detail::task_ptr_t<void> owner;
++        };
++        static detail::task_control_t *frame_owner (const detail::task_source_ref_t<void> &source)
++        {
++            return source ? source.task_owner () : nullptr;
++        }
++        template <typename T> static detail::task_control_t *frame_owner (const T &)
++        {
++            return nullptr;
++        }
++        template <typename... TArgs> static void *operator new (std::size_t size, TArgs &...args)
++        {
++            detail::task_control_t *owner = nullptr;
++            ((owner = frame_owner (args) ? frame_owner (args) : owner), ...);
++            void *memory;
++            if (owner) {
++                memory = owner->resource->allocate (sizeof (frame_header_t) + size,
++                                                    alignof (frame_header_t));
++            } else {
++                memory = ::operator new (sizeof (frame_header_t) + size);
++            }
++            auto *header = std::construct_at (static_cast<frame_header_t *> (memory));
++            header->owner = detail::task_ptr_t<void> (owner, nullptr);
++            return header + 1;
++        }
++        static void operator delete (void *frame, std::size_t) noexcept
++        {
++            auto *header = static_cast<frame_header_t *> (frame) - 1;
++            auto owner = std::move (header->owner);
++            std::destroy_at (header);
++            if (!owner.control ())
++                ::operator delete (header);
++        }
++        template <typename... TArgs>
++        static void operator delete (void *frame, std::size_t size, TArgs &...) noexcept
++        {
++            operator delete (frame, size);
++        }
++
+         binding_completion_observer_t get_return_object () noexcept { return {}; }
+         std::suspend_never initial_suspend () noexcept { return {}; }
+         std::suspend_never final_suspend () noexcept { return {}; }
+@@ -92,9 +133,8 @@
+                   : detail::result_access_t::failure<void> (result.exception ());
+ }
+ 
+-inline void observe_raw_request_admission_failure (
+-  task_t<raw_request_completion_t> &reply,
+-  const std::shared_ptr<task_completion_source_t<void>> &admitted)
++inline void observe_raw_request_admission_failure (task_t<raw_request_completion_t> &reply,
++                                                   const detail::task_source_ref_t<void> &admitted)
+ {
+     if (!admitted)
+         return;
+@@ -148,7 +188,7 @@
+   request_submission_stages_t stages,
+   TCompletion completion,
+   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+-  std::shared_ptr<task_completion_source_t<void>> admitted = {},
++  detail::task_source_ref_t<void> admitted = {},
+   std::shared_ptr<runtime::foundation::operation_registry_t> requests = {},
+   runtime::call_id_t id = {})
+ {
+--- a/framework/src/runtime/backend/raw_dealer_port.cpp
++++ b/framework/src/runtime/backend/raw_dealer_port.cpp
+@@ -90,7 +90,7 @@
+ raw_dealer_port_t::request (const raw_message_t &parts,
+                             std::chrono::milliseconds timeout,
+                             runtime::mesh::service_liveness_registry_t::connection_t admission,
+-                            std::shared_ptr<task_completion_source_t<void>> admitted,
++                            detail::task_source_ref_t<void> admitted,
+                             std::optional<std::chrono::steady_clock::time_point> deadline)
+ {
+     return request (materialize_binding_parts (parts), timeout, std::move (admission),
+@@ -101,7 +101,7 @@
+ raw_dealer_port_t::request (std::vector<zlink::message_t> messages,
+                             std::chrono::milliseconds timeout,
+                             runtime::mesh::service_liveness_registry_t::connection_t admission,
+-                            std::shared_ptr<task_completion_source_t<void>> admitted,
++                            detail::task_source_ref_t<void> admitted,
+                             std::optional<std::chrono::steady_clock::time_point> deadline)
+ try {
+     if (messages.empty () || timeout <= std::chrono::milliseconds::zero ())
+--- a/framework/src/runtime/backend/raw_dealer_port.hpp
++++ b/framework/src/runtime/backend/raw_dealer_port.hpp
+@@ -38,14 +38,14 @@
+     request (const raw_message_t &parts,
+              std::chrono::milliseconds timeout,
+              runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+-             std::shared_ptr<task_completion_source_t<void>> admitted = {},
++             detail::task_source_ref_t<void> admitted = {},
+              std::optional<std::chrono::steady_clock::time_point> deadline = {});
+     task_t<zlink::submit_result_t> send_result (std::vector<zlink::message_t> messages);
+     task_t<raw_request_completion_t>
+     request (std::vector<zlink::message_t> messages,
+              std::chrono::milliseconds timeout,
+              runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+-             std::shared_ptr<task_completion_source_t<void>> admitted = {},
++             detail::task_source_ref_t<void> admitted = {},
+              std::optional<std::chrono::steady_clock::time_point> deadline = {});
+     std::optional<raw_message_t> try_receive ();
+     void close ();
+--- a/framework/src/runtime/backend/raw_route_port.cpp
++++ b/framework/src/runtime/backend/raw_route_port.cpp
+@@ -312,7 +312,7 @@
+                            raw_message_t parts,
+                            std::chrono::milliseconds timeout,
+                            runtime::mesh::service_liveness_registry_t::connection_t admission,
+-                           std::shared_ptr<task_completion_source_t<void>> admitted)
++                           detail::task_source_ref_t<void> admitted)
+ {
+     auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
+     auto result = source->task ();
+@@ -330,7 +330,7 @@
+                                 std::chrono::milliseconds timeout,
+                                 raw_request_callback_t completion,
+                                 runtime::mesh::service_liveness_registry_t::connection_t admission,
+-                                std::shared_ptr<task_completion_source_t<void>> admitted)
++                                detail::task_source_ref_t<void> admitted)
+ {
+     return request_impl (target_routing_id, std::move (parts), timeout, std::move (completion),
+                          std::move (admission), std::move (admitted));
+@@ -341,7 +341,7 @@
+                                 std::chrono::milliseconds timeout,
+                                 raw_request_callback_t completion,
+                                 runtime::mesh::service_liveness_registry_t::connection_t admission,
+-                                std::shared_ptr<task_completion_source_t<void>> admitted)
++                                detail::task_source_ref_t<void> admitted)
+ {
+     return request_impl (target_routing_id, std::move (parts), timeout, std::move (completion),
+                          std::move (admission), std::move (admitted));
+@@ -354,7 +354,7 @@
+   std::chrono::milliseconds timeout,
+   raw_request_callback_t completion,
+   runtime::mesh::service_liveness_registry_t::connection_t admission,
+-  std::shared_ptr<task_completion_source_t<void>> admitted)
++  detail::task_source_ref_t<void> admitted)
+ {
+     auto finish = [completion = std::move (completion),
+                    admitted] (result_t<raw_request_completion_t> result) mutable {
+--- a/framework/src/runtime/backend/raw_route_port.hpp
++++ b/framework/src/runtime/backend/raw_route_port.hpp
+@@ -242,19 +242,19 @@
+                   std::chrono::milliseconds timeout,
+                   raw_request_callback_t completion,
+                   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+-                  std::shared_ptr<task_completion_source_t<void>> admitted = {});
++                  detail::task_source_ref_t<void> admitted = {});
+     void request (std::span<const std::uint8_t> target_routing_id,
+                   std::vector<zlink::message_t> &&parts,
+                   std::chrono::milliseconds timeout,
+                   raw_request_callback_t completion,
+                   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+-                  std::shared_ptr<task_completion_source_t<void>> admitted = {});
++                  detail::task_source_ref_t<void> admitted = {});
+     task_t<raw_request_completion_t>
+     request (const raw_bytes_t &target_routing_id,
+              raw_message_t parts,
+              std::chrono::milliseconds timeout,
+              runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+-             std::shared_ptr<task_completion_source_t<void>> admitted = {});
++             detail::task_source_ref_t<void> admitted = {});
+     std::optional<zlink::poll_event_flag_t> poll (std::chrono::milliseconds timeout,
+                                                   bool accept_application_receive = true);
+     void signal_activity () noexcept;
+@@ -275,7 +275,7 @@
+                        std::chrono::milliseconds timeout,
+                        raw_request_callback_t completion,
+                        runtime::mesh::service_liveness_registry_t::connection_t admission,
+-                       std::shared_ptr<task_completion_source_t<void>> admitted);
++                       detail::task_source_ref_t<void> admitted);
+ 
+     std::function<runtime::mesh::service_liveness_registry_t::connection_t (
+       std::span<const std::uint8_t>)>
+--- a/framework/src/runtime/channels/channel_runtime.cpp
++++ b/framework/src/runtime/channels/channel_runtime.cpp
+@@ -1771,7 +1771,7 @@
+     {
+         std::shared_ptr<detail::route_client_state_t> state;
+         detail::node_transport_t transport;
+-        std::shared_ptr<const zlink::routing_id_t> target;
++        detail::task_ptr_t<const zlink::routing_id_t> target;
+         std::string packet_name;
+         std::string router_channel_id;
+ 
+@@ -1842,9 +1842,9 @@
+     };
+     auto target_owner = receiver.complete.retain (std::move (target_node_rid));
+     auto target_view = receiver.complete.has_request_storage ()
+-                         ? std::shared_ptr<const zlink::routing_id_t> (
+-                             std::shared_ptr<const zlink::routing_id_t>{}, target_owner.get ())
+-                         : std::shared_ptr<const zlink::routing_id_t> (target_owner);
++                         ? detail::task_ptr_t<const zlink::routing_id_t> (
++                             detail::task_ptr_t<const zlink::routing_id_t>{}, target_owner.get ())
++                         : detail::task_ptr_t<const zlink::routing_id_t> (target_owner);
+     request_decoder_t decode{state, transport.value (), std::move (target_view),
+                              std::move (packet_name), std::move (router_channel_id)};
+ 
+--- a/framework/src/runtime/foundation/operation_registry.cpp
++++ b/framework/src/runtime/foundation/operation_registry.cpp
+@@ -216,7 +216,7 @@
+         request_metric.complete (terminal);
+     }
+ 
+-    std::shared_ptr<void> storage_owner;
++    detail::task_ptr_t<void> storage_owner;
+     std::optional<std::stop_callback<operation_cancellation_t>> cancellation;
+     detail::completion_dispatcher_borrow_t dispatcher{};
+     operation_registry_state_t::callback_t callback;
+--- a/framework/src/runtime/foundation/operation_registry.hpp
++++ b/framework/src/runtime/foundation/operation_registry.hpp
+@@ -56,11 +56,11 @@
+     {
+     }
+     explicit operator bool () const noexcept { return bool (_complete); }
+-    std::shared_ptr<void> completion_storage () const noexcept
++    detail::task_ptr_t<void> completion_storage () const noexcept
+     {
+         return _complete.completion_storage ();
+     }
+-    completion_sink_t &&with_admission (std::shared_ptr<task_completion_source_t<void>> admitted) &&
++    completion_sink_t &&with_admission (detail::task_source_ref_t<void> admitted) &&
+     {
+         _admitted = std::move (admitted);
+         return std::move (*this);
+@@ -69,7 +69,7 @@
+ 
+   private:
+     detail::request_callback_t<operation_terminal_t, result_t<zlink::message_t>> _complete;
+-    std::shared_ptr<task_completion_source_t<void>> _admitted;
++    detail::task_source_ref_t<void> _admitted;
+ };
+ 
+ class operation_registry_t
+--- a/framework/src/runtime/mesh/mesh_node_runtime.cpp
++++ b/framework/src/runtime/mesh/mesh_node_runtime.cpp
+@@ -4150,10 +4150,9 @@
+     });
+ }
+ 
+-void mesh_node_runtime_t::observe_request_failure (
+-  const host::pending_operation_t &operation,
+-  const std::shared_ptr<task_completion_source_t<void>> &admitted,
+-  std::string_view operation_name)
++void mesh_node_runtime_t::observe_request_failure (const host::pending_operation_t &operation,
++                                                   const detail::task_source_ref_t<void> &admitted,
++                                                   std::string_view operation_name)
+ {
+     auto completion = await_completion (operation);
+     detail::observe_task_terminal (completion, [admitted, operation_name] (const auto &result) {
+@@ -4338,70 +4337,6 @@
+     return node_reply_t::failure (runtime::messaging::map_submit_result_error_kind (submitted),
+                                   "MeshNode request was not submitted");
+ }
+-}
+-
+-namespace
+-{
+-template <typename TPrepare, typename TAccepted>
+-void compose_node_request_submission (task_t<zlink::submit_result_t> submission,
+-                                      request_receiver_t<node_reply_t> receiver,
+-                                      TPrepare prepare,
+-                                      TAccepted accepted)
+-{
+-    const auto *immediate =
+-      submission.await_ready () ? &detail::task_result_access_t::read (submission) : nullptr;
+-    if (immediate && (!*immediate || immediate->value () != zlink::submit_result_t::ok)) {
+-        auto failure = *immediate ? node_submission_failure (immediate->value ())
+-                                  : result_access_t::failure<runtime::messaging::message_parts_t> (
+-                                      immediate->exception ());
+-        receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
+-        receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+-        return;
+-    }
+-    // Pending/accepted submissions retain the earlier physical-failure observation.
+-    prepare ();
+-    auto deliver = [receiver = std::move (receiver), accepted = std::move (accepted)] (
+-                     const result_t<zlink::submit_result_t> &submitted) mutable {
+-        if (!submitted) {
+-            receiver.admitted->complete (result_access_t::failure<void> (submitted.exception ()));
+-            receiver.complete (result_access_t::failure<node_reply_t> (submitted.exception ()));
+-            return;
+-        }
+-        if (submitted.value () != zlink::submit_result_t::ok) {
+-            auto failure = node_submission_failure (submitted.value ());
+-            receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
+-            receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+-            return;
+-        }
+-        receiver.admitted->complete (result_t<void>::success ());
+-        accepted (std::move (receiver));
+-    };
+-    if (immediate)
+-        deliver (*immediate);
+-    else
+-        // Preserve the suspended admission's existing resume/cancellation owner.
+-        observe_task_completion (submission, std::move (deliver));
+-}
+-
+-} // namespace
+-
+-void mesh_node_runtime_t::compose_node_request_reply (host::pending_operation_t operation,
+-                                                      task_t<zlink::submit_result_t> submission,
+-                                                      request_receiver_t<node_reply_t> receiver)
+-{
+-    const auto admitted = receiver.admitted;
+-    compose_node_request_submission (
+-      std::move (submission), std::move (receiver),
+-      [this, operation, admitted] {
+-          observe_request_failure (operation, admitted, "MeshNode request");
+-      },
+-      [operation] (request_receiver_t<node_reply_t> receiver) mutable {
+-          auto completion = operation.completion->task ();
+-          observe_task_terminal (
+-            completion, [receiver = std::move (receiver)] (const auto &result) mutable {
+-                receiver.complete (decode_request_reply (result, "MeshNode request"));
+-            });
+-      });
+ }
+ 
+ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &target,
+@@ -4450,34 +4385,24 @@
+         // The stored callback now owns this receiver, including submission failures
+         // before registration. Keep no independent physical fallback after transfer.
+         receiver.complete = {};
+-        auto submission = _node->request_to_node (target, std::move (parts), timeout,
+-                                                  std::move (completion), receiver.admitted);
+-        // A callback retained here was never registered. Once C1 accepts it,
+-        // submission observes admission only; C1 alone owns reply delivery.
++        const auto submitted = _node->request_to_node (target, std::move (parts), timeout,
++                                                       std::move (completion), receiver.admitted);
+ #if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+         if (auto fault = test_creation_probe::node_admission_observer_fault.exchange (nullptr))
+             fault ();
+-#endif
+-        auto submission_observer = [admitted = receiver.admitted, completion] (
+-                                     const result_t<zlink::submit_result_t> &submitted) mutable {
+-            if (submitted && submitted.value () == zlink::submit_result_t::ok) {
+-                admitted->complete (result_t<void>::success ());
+-                return;
+-            }
+-            const auto failure = submitted
+-                                   ? node_submission_failure (submitted.value ()).exception ()
+-                                   : submitted.exception ();
+-            admitted->complete (result_access_t::failure<void> (failure));
+-            if (completion)
+-                completion (runtime::foundation::operation_terminal_t::transport_failed,
+-                            result_access_t::failure<zlink::message_t> (failure));
+-        };
+-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+         if (auto fault =
+               test_creation_probe::node_admission_observer_context_fault.exchange (nullptr))
+-            test_creation_probe::task_terminal_context_fault.store (fault);
++            fault ();
+ #endif
+-        observe_task_terminal (submission, std::move (submission_observer));
++        if (submitted != zlink::submit_result_t::ok) {
++            const auto failure = node_submission_failure (submitted).exception ();
++            receiver.admitted->complete (result_access_t::failure<void> (failure));
++            // A retained callback was never registered. Transfer it before
++            // delivery so an exception cannot cause a second physical fallback.
++            if (auto unregistered = std::move (completion))
++                unregistered (runtime::foundation::operation_terminal_t::transport_failed,
++                              result_access_t::failure<zlink::message_t> (failure));
++        }
+     }
+     catch (...) {
+         const auto failure = std::current_exception ();
+--- a/framework/src/runtime/mesh/mesh_node_runtime.hpp
++++ b/framework/src/runtime/mesh/mesh_node_runtime.hpp
+@@ -261,10 +261,6 @@
+     void prepare_actor_request_reply (
+       host::pending_operation_t &operation,
+       request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
+-    void compose_node_request_reply (
+-      host::pending_operation_t operation,
+-      task_t<zlink::submit_result_t> submission,
+-      request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
+     void
+     request_node_reply (const zlink::routing_id_t &target,
+                         std::vector<zlink::message_t> parts,
+@@ -419,7 +415,7 @@
+                          std::optional<zlink::routing_id_t> target = std::nullopt);
+     task_t<operation_completion_t> await_completion (const host::pending_operation_t &operation);
+     void observe_request_failure (const host::pending_operation_t &operation,
+-                                  const std::shared_ptr<task_completion_source_t<void>> &admitted,
++                                  const detail::task_source_ref_t<void> &admitted,
+                                   std::string_view operation_name);
+     // The reply projection keeps operation_name until the reply completes, so it must
+     // name a string with static storage duration (callers pass literals).
+--- a/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -227,7 +227,7 @@
+                              std::span<const std::uint8_t> target_routing_id,
+                              Parts &request_parts,
+                              foundation::operation_registry_t::clock_t::time_point deadline,
+-                             const std::shared_ptr<task_completion_source_t<void>> &admitted,
++                             const detail::task_source_ref_t<void> &admitted,
+                              detail::backend::raw_request_callback_t completion)
+ {
+     if (!peer || !peer->ready)
+@@ -280,7 +280,7 @@
+   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply,
+   foundation::operation_registry_t::clock_t::time_point deadline,
+   task_t<TTerminal> terminal,
+-  std::shared_ptr<task_completion_source_t<void>> admitted,
++  detail::task_source_ref_t<void> admitted,
+   detail::backend::raw_request_callback_t observe = {},
+   raw_mesh_node_owner_t::physical_receiver_t receiver = {})
+ {
+@@ -383,7 +383,7 @@
+   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply,
+   foundation::operation_registry_t::clock_t::time_point deadline,
+   task_t<TTerminal> terminal,
+-  std::shared_ptr<task_completion_source_t<void>> admitted = {},
++  detail::task_source_ref_t<void> admitted = {},
+   detail::backend::raw_request_callback_t observe = {},
+   raw_mesh_node_owner_t::physical_receiver_t receiver = {})
+ {
+@@ -1326,44 +1326,63 @@
+                                         const protocol::application_payload_t &application_payload,
+                                         std::chrono::milliseconds timeout,
+                                         foundation::operation_registry_t::callback_t &&callback,
+-                                        std::optional<std::uint64_t> correlation,
+-                                        std::shared_ptr<task_completion_source_t<void>> admitted)
++                                        std::optional<std::uint64_t> correlation)
+ try {
+     const auto deadline = capture_request_deadline (timeout);
++    auto admitted = request_with_header (
++      target_routing_id, protocol::encode_node_request_header_message, application_payload,
++      deadline, std::move (callback), correlation, false,
++      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node), {}, {});
++    if (!admitted)
++        return task_t<bool> (result_t<bool>::success (false));
++    return await_request_admission (admitted->task ());
++}
++catch (...) {
++    return task_t<bool> (detail::current_exception_result<bool> ());
++}
++
++detail::task_source_ref_t<void>
++raw_mesh_node_owner_t::request_to_node (std::span<const std::uint8_t> target_routing_id,
++                                        const protocol::application_payload_t &application_payload,
++                                        std::chrono::milliseconds timeout,
++                                        foundation::operation_registry_t::callback_t &&callback,
++                                        std::optional<std::uint64_t> correlation,
++                                        detail::task_source_ref_t<void> admitted)
++{
++    const auto deadline = capture_request_deadline (timeout);
+     return request_with_header (
+-      target_routing_id,
+-      [] (std::uint64_t request_correlation) {
+-          return protocol::encode_node_request_header_message (request_correlation);
+-      },
+-      application_payload, deadline, std::move (callback), correlation, false,
++      target_routing_id, protocol::encode_node_request_header_message, application_payload,
++      deadline, std::move (callback), correlation, false,
+       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node), {},
+       std::move (admitted));
+ }
+-catch (...) {
+-    return task_t<bool> (detail::current_exception_result<bool> ());
+-}
+-
+ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
+   const std::string &channel_name,
+   const protocol::application_payload_t &application_payload,
+   std::chrono::milliseconds timeout,
+   foundation::operation_registry_t::callback_t callback,
+   std::optional<std::uint64_t> correlation)
+-{
++try {
+     const auto deadline = capture_request_deadline (timeout);
+     mesh_request_metric_t request_metric (_request_metrics, mesh_request_surface_t::channel);
+     auto selected = _topology.select (channel_name);
+     if (!selected) {
+         throw *selected.error ();
+     }
+-    co_return co_await request_with_header (
+-      std::move (selected.value ()),
+-      [&channel_name] (std::uint64_t request_correlation) {
+-          return protocol::encode_channel_request_header_message (request_correlation,
+-                                                                  channel_name);
+-      },
+-      application_payload, deadline, std::move (callback), correlation, true,
+-      std::move (request_metric));
++    auto admitted =
++      request_with_header (std::move (selected.value ()),
++                           [&channel_name] (std::uint64_t request_correlation) {
++                               return protocol::encode_channel_request_header_message (
++                                 request_correlation, channel_name);
++                           },
++                           application_payload, deadline, std::move (callback), correlation, true,
++                           std::move (request_metric), {}, {});
++    if (!admitted)
++        return task_t<bool> (result_t<bool>::success (false));
++    return await_request_admission (admitted->task ());
++}
++catch (...) {
++    return task_t<bool> (detail::current_exception_result<bool> ());
+ }
+ 
+ void raw_mesh_node_owner_t::observe_request (
+@@ -1495,7 +1514,7 @@
+                                                         : expected->second.advertised_endpoint);
+ }
+ 
+-task_t<bool> raw_mesh_node_owner_t::request_with_header (
++detail::task_source_ref_t<void> raw_mesh_node_owner_t::request_with_header (
+   std::span<const std::uint8_t> target_routing_id,
+   const std::function<zlink::message_t (std::uint64_t)> &header,
+   const protocol::application_payload_t &application_payload,
+@@ -1505,15 +1524,15 @@
+   bool target_claimed,
+   mesh_request_metric_t request_metric,
+   std::optional<foundation::operation_registry_t::request_identity_t> request,
+-  std::shared_ptr<task_completion_source_t<void>> admitted,
++  detail::task_source_ref_t<void> admitted,
+   physical_receiver_t receiver)
+-try {
++{
+     const auto wait_owner = detail::current_wait_owner ();
+     struct request_start_t
+     {
+         foundation::call_id_t operation;
+         std::uint64_t correlation = 0;
+-        std::shared_ptr<task_completion_source_t<void>> admitted;
++        detail::task_source_ref_t<void> admitted;
+         bool registered = false;
+     };
+     auto start = _lane.run_sync (
+@@ -1529,7 +1548,9 @@
+               return std::optional<request_start_t>{};
+           request_start_t value;
+           value.admitted =
+-            admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
++            admitted ? std::move (admitted)
++                     : detail::task_source_ref_t<void> (
++                         detail::make_task_owner<detail::application_task_shared_state_t<void>> ());
+           value.correlation = take_reply_route_id_locked (requested_correlation);
+           value.operation =
+             operation_id (_options.descriptor.lifecycle_generation, value.correlation);
+@@ -1577,16 +1598,12 @@
+           return std::optional<request_start_t>{std::move (value)};
+       });
+     if (!start)
+-        return task_t<bool> (result_t<bool>::success (false));
++        return {};
+     if (!start->registered) {
+         throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                      "raw mesh request registry is closed");
+     }
+-    auto admission = start->admitted->task ();
+-    return await_request_admission (std::move (admission));
+-}
+-catch (...) {
+-    return task_t<bool> (detail::current_exception_result<bool> ());
++    return std::move (start->admitted);
+ }
+ 
+ struct raw_mesh_node_owner_t::send_completion_state_t
+@@ -2254,22 +2271,28 @@
+                                         std::optional<protocol::wire_operation_id_t> operation,
+                                         std::optional<std::uint64_t> correlation,
+                                         std::uint8_t message_follow_hop_count)
+-{
++try {
+     const auto deadline = capture_request_deadline (timeout);
+     const auto local = _topology.local_descriptor ();
+-    co_return co_await request_with_header (
+-      target_routing_id,
+-      [source_spot_id, target, local, operation,
+-       message_follow_hop_count] (std::uint64_t correlation) {
+-          const auto exact = operation.value_or (
+-            protocol::wire_operation_id_t{local.lifecycle_generation, correlation});
+-          return protocol::encode_spot_message_header_message (
+-            protocol::command::spotRequest, source_spot_id, target, exact, correlation,
+-            message_follow_hop_count);
+-      },
+-      application_payload, deadline, std::move (callback), correlation, true,
+-      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot),
+-      request_identity (operation));
++    auto admitted =
++      request_with_header (target_routing_id,
++                           [source_spot_id, target, local, operation,
++                            message_follow_hop_count] (std::uint64_t correlation) {
++                               const auto exact = operation.value_or (protocol::wire_operation_id_t{
++                                 local.lifecycle_generation, correlation});
++                               return protocol::encode_spot_message_header_message (
++                                 protocol::command::spotRequest, source_spot_id, target, exact,
++                                 correlation, message_follow_hop_count);
++                           },
++                           application_payload, deadline, std::move (callback), correlation, true,
++                           mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot),
++                           request_identity (operation), {});
++    if (!admitted)
++        return task_t<bool> (result_t<bool>::success (false));
++    return await_request_admission (admitted->task ());
++}
++catch (...) {
++    return task_t<bool> (detail::current_exception_result<bool> ());
+ }
+ 
+ task_t<bool> raw_mesh_node_owner_t::send_to_actor (
+@@ -2321,10 +2344,10 @@
+   std::optional<std::uint64_t> correlation,
+   std::uint8_t message_follow_hop_count,
+   physical_receiver_t receiver)
+-{
++try {
+     const auto deadline = capture_request_deadline (timeout);
+     const auto local = _topology.local_descriptor ();
+-    return request_with_header (
++    auto admitted = request_with_header (
+       target_routing_id,
+       [source_actor, target, local, operation, message_follow_hop_count,
+        bound_session_source = std::move (bound_session_source)] (std::uint64_t correlation) {
+@@ -2337,6 +2360,12 @@
+       application_payload, deadline, std::move (callback), correlation, false,
+       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor),
+       request_identity (operation), {}, std::move (receiver));
++    if (!admitted)
++        return task_t<bool> (result_t<bool>::success (false));
++    return await_request_admission (admitted->task ());
++}
++catch (...) {
++    return task_t<bool> (detail::current_exception_result<bool> ());
+ }
+ 
+ task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
+@@ -2404,7 +2433,7 @@
+   protocol::bound_session_bind_t record,
+   std::chrono::milliseconds timeout,
+   foundation::operation_registry_t::callback_t callback,
+-  std::shared_ptr<task_completion_source_t<void>> admitted)
++  detail::task_source_ref_t<void> admitted)
+ {
+     if (record.actor.target_node_routing_id != actor_owner_routing_id) {
+         throw std::invalid_argument ("bound Session bind Actor authority target is inconsistent");
+--- a/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
++++ b/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+@@ -235,8 +235,14 @@
+                                   const protocol::application_payload_t &application_payload,
+                                   std::chrono::milliseconds timeout,
+                                   foundation::operation_registry_t::callback_t &&callback,
+-                                  std::optional<std::uint64_t> correlation = std::nullopt,
+-                                  std::shared_ptr<task_completion_source_t<void>> admitted = {});
++                                  std::optional<std::uint64_t> correlation = std::nullopt);
++    detail::task_source_ref_t<void>
++    request_to_node (std::span<const std::uint8_t> target_routing_id,
++                     const protocol::application_payload_t &application_payload,
++                     std::chrono::milliseconds timeout,
++                     foundation::operation_registry_t::callback_t &&callback,
++                     std::optional<std::uint64_t> correlation,
++                     detail::task_source_ref_t<void> admitted);
+     task_t<bool> request_to_channel (const std::string &channel_name,
+                                      const protocol::application_payload_t &application_payload,
+                                      std::chrono::milliseconds timeout,
+@@ -357,7 +363,7 @@
+                                 protocol::bound_session_bind_t record,
+                                 std::chrono::milliseconds timeout,
+                                 foundation::operation_registry_t::callback_t callback,
+-                                std::shared_ptr<task_completion_source_t<void>> admitted = {});
++                                detail::task_source_ref_t<void> admitted = {});
+     task_t<bool>
+     send_bound_session_replaced (const std::vector<std::uint8_t> &retired_session_owner_routing_id,
+                                  const protocol::bound_session_replaced_t &record);
+@@ -610,17 +616,17 @@
+     observe_request_peer (const std::vector<std::uint8_t> &target_routing_id) const;
+     service_topology_registry_t::peer_observer_t
+     observe_request_peer_on_lane (const std::vector<std::uint8_t> &target_routing_id) const;
+-    task_t<bool> request_with_header (
++    detail::task_source_ref_t<void> request_with_header (
+       std::span<const std::uint8_t> target_routing_id,
+       const std::function<zlink::message_t (std::uint64_t)> &header,
+       const protocol::application_payload_t &application_payload,
+       foundation::operation_registry_t::clock_t::time_point deadline,
+       foundation::operation_registry_t::callback_t &&callback,
+-      std::optional<std::uint64_t> correlation = std::nullopt,
+-      bool target_claimed = false,
+-      mesh_request_metric_t request_metric = {},
+-      std::optional<foundation::operation_registry_t::request_identity_t> request = {},
+-      std::shared_ptr<task_completion_source_t<void>> admitted = {},
++      std::optional<std::uint64_t> correlation,
++      bool target_claimed,
++      mesh_request_metric_t request_metric,
++      std::optional<foundation::operation_registry_t::request_identity_t> request,
++      detail::task_source_ref_t<void> admitted,
+       physical_receiver_t receiver = {});
+     task_t<bool> request_infrastructure (
+       const std::vector<std::uint8_t> &target_routing_id,
+--- a/framework/src/runtime/spots/spot_runtime.cpp
++++ b/framework/src/runtime/spots/spot_runtime.cpp
+@@ -2215,7 +2215,7 @@
+                 framework_error_kind_t::internal_failure, "SPOT route reply processing failed"));
+           }
+       });
+-    return request_task_t<zlink::message_t> (std::move (output), std::move (admitted));
++    return detail::request_task_access_t::from_reply (std::move (output), std::move (admitted));
+ }
+ 
+ } // namespace
+--- a/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -3335,12 +3335,24 @@
+     operation.prepare_for_registration ();
+     operation.id = next_operation ();
+     const auto host = shared_from_this ();
+-    return request_to_node (
++    detail::task_source_ref_t<void> admitted;
++    const auto submitted = request_to_node (
+       target, std::move (parts), timeout,
+       [host, operation] (foundation::operation_terminal_t terminal,
+                          result_t<zlink::message_t> completion_payload) mutable {
+           host->complete_operation (operation, operation_kind_t::none, terminal,
+                                     std::move (completion_payload.value ()));
++      },
++      admitted);
++    if (submitted != zlink::submit_result_t::ok)
++        return task_t<zlink::submit_result_t> (
++          result_t<zlink::submit_result_t>::success (submitted));
++    auto acceptance = admitted->task ();
++    return detail::project_task_terminal<zlink::submit_result_t> (
++      acceptance, [] (const result_t<void> &result) {
++          return result
++                   ? result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok)
++                   : detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
+       });
+ }
+ catch (...) {
+@@ -3348,53 +3360,23 @@
+       detail::current_exception_result<zlink::submit_result_t> ());
+ }
+ 
+-task_t<zlink::submit_result_t>
++zlink::submit_result_t
+ public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
+                                         std::vector<zlink::message_t> parts,
+                                         std::chrono::milliseconds timeout,
+                                         foundation::operation_registry_t::callback_t &&completion,
+-                                        std::shared_ptr<task_completion_source_t<void>> admitted)
+-try {
+-    const auto host = shared_from_this ();
++                                        detail::task_source_ref_t<void> &admitted)
++{
+     const std::span<const std::uint8_t> target_bytes (target.data (), target.size ());
+-    auto accepted =
++    auto started =
+       _transport->request_to_node (target_bytes, encode_application (std::move (parts)), timeout,
+-                                   std::move (completion), {}, std::move (admitted));
+-    auto classify = [host, target] (const result_t<bool> &result) {
+-        if (!result)
+-            return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
+-        const auto accepted = result.value ();
+-        if (!accepted) {
+-            //  Spec 32-framework-error-model:76-77 -- a target this runtime has
+-            //  never admitted (absent from the live peer table) does not exist
+-            //  from the requester's perspective and must complete NotFound, not
+-            //  Unavailable. `submitted(false)` below collapses every rejected
+-            //  request_to_node into `not_connected` (-> Unavailable via
+-            //  boundary_error_t::disconnected, see call_facade_runtime.cpp), but
+-            //  that is only correct for a target that WAS reachable and merely
+-            //  is not right now. service_topology_registry_t has no "known but
+-            //  currently unreachable" state distinct from "not a peer" --
+-            //  disconnect() erases the peer entry outright -- so any target
+-            //  absent from the live peer table is, by this runtime's own model,
+-            //  simply a target that does not exist. Matches Java's
+-            //  ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState absent ->
+-            //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
+-            //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
+-            //  RequestResult.NotFound).
+-            if (!host->_transport->topology ().peer ({target.data (), target.size ()}))
+-                return result_t<zlink::submit_result_t>::success (
+-                  zlink::submit_result_t::not_found);
+-        }
+-        return result_t<zlink::submit_result_t>::success (submitted (accepted));
+-    };
+-    if (accepted.await_ready ())
+-        return task_t<zlink::submit_result_t> (
+-          classify (detail::task_result_access_t::read (accepted)));
+-    return detail::project_task_terminal<zlink::submit_result_t> (accepted, std::move (classify));
+-}
+-catch (...) {
+-    return task_t<zlink::submit_result_t> (
+-      detail::current_exception_result<zlink::submit_result_t> ());
++                                   std::move (completion), {}, admitted);
++    if (started) {
++        admitted = std::move (started);
++        return zlink::submit_result_t::ok;
++    }
++    return !_transport->topology ().peer (target_bytes) ? zlink::submit_result_t::not_found
++                                                        : zlink::submit_result_t::not_connected;
+ }
+ 
+ task_t<zlink::submit_result_t>
+@@ -9418,7 +9400,7 @@
+ void public_host_runtime_t::admit_local_application (
+   local_application_dispatch_t dispatch,
+   const std::shared_ptr<application_job_queue_t::waiter_t> &waiter,
+-  std::shared_ptr<task_completion_source_t<void>> admitted)
++  detail::task_source_ref_t<void> admitted)
+ {
+     if (!_options.mesh.application_jobs || dispatch.record.before_application_handler
+         || dispatch.application_permit) {
+--- a/framework/src/runtime/stateful/public_host_runtime.hpp
++++ b/framework/src/runtime/stateful/public_host_runtime.hpp
+@@ -858,12 +858,12 @@
+                                                  const std::vector<zlink::message_t> &parts);
+     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
+                                                  std::vector<zlink::message_t> &&parts);
+-    task_t<zlink::submit_result_t>
++    zlink::submit_result_t
+     request_to_node (const zlink::routing_id_t &target,
+                      std::vector<zlink::message_t> parts,
+                      std::chrono::milliseconds timeout,
+                      foundation::operation_registry_t::callback_t &&completion,
+-                     std::shared_ptr<task_completion_source_t<void>> admitted = {});
++                     detail::task_source_ref_t<void> &admitted);
+     result_t<receive_record_t> decode_operation_record (call_id_t operation,
+                                                         operation_kind_t kind,
+                                                         foundation::operation_terminal_t terminal,
+@@ -1433,7 +1433,7 @@
+     void
+     admit_local_application (local_application_dispatch_t dispatch,
+                              const std::shared_ptr<application_job_queue_t::waiter_t> &waiter = {},
+-                             std::shared_ptr<task_completion_source_t<void>> admitted = {});
++                             detail::task_source_ref_t<void> admitted = {});
+     std::function<void ()>
+     local_request_wait_cleanup (const std::shared_ptr<application_job_queue_t::waiter_t> &waiter);
+     task_t<void>
+--- a/tests/Zlink.Framework.ContractTests/test_cpp_framework_contract_headers.cpp
++++ b/tests/Zlink.Framework.ContractTests/test_cpp_framework_contract_headers.cpp
+@@ -20,6 +20,7 @@
+ #include <zlink/framework/contracts/configuration/route_mesh_runtime_options.hpp>
+ #include <zlink/framework/contracts/dispatch/task.hpp>
+ #include <zlink/framework/detail/test_creation_probe.hpp>
++#include <zlink/framework/detail/task_owner.hpp>
+ #include <zlink/framework/contracts/dispatch/request_task.hpp>
+ #include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
+ #include <zlink/framework/detail/deadline_scheduler.hpp>
+--- a/tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
++++ b/tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
+@@ -140,6 +140,129 @@
+   private:
+     int _error;
+ };
++
++// Native result ownership is created outside measurement. An empty ready reply
++// isolates the Framework observer frame and its final receiver from native payload allocation.
++class empty_reply_probe_t final
++    : public zlink::detail::async_result_state_t<std::vector<zlink::message_t>>
++{
++  public:
++    bool ready () const noexcept override { return true; }
++    bool suspend (std::coroutine_handle<>, zlink::detail::async_continuation_scheduler_t) override
++    {
++        return false;
++    }
++    std::vector<zlink::message_t> take () override
++    {
++        ++consumed;
++        return {};
++    }
++    void detach () noexcept override {}
++    void abandon (std::coroutine_handle<>) noexcept override {}
++    int consumed = 0;
++};
++
++class pending_reply_probe_t final
++    : public zlink::detail::async_result_state_t<std::vector<zlink::message_t>>
++{
++  public:
++    bool ready () const noexcept override { return false; }
++    bool suspend (std::coroutine_handle<> continuation,
++                  zlink::detail::async_continuation_scheduler_t) override
++    {
++        handle = continuation;
++        return true;
++    }
++    std::vector<zlink::message_t> take () override
++    {
++        ++consumed;
++        return {};
++    }
++    void detach () noexcept override {}
++    void abandon (std::coroutine_handle<>) noexcept override {}
++    void deliver () { std::exchange (handle, {}).resume (); }
++    std::coroutine_handle<> handle;
++    int consumed = 0;
++};
++
++void verify_request_frame_physical_lifetime ()
++{
++    namespace fw = zlink::framework;
++    std::optional<fw::detail::request_receiver_t<int>> receiver;
++    std::optional<fw::request_task_t<int>> pending;
++    pending.emplace (fw::detail::request_task_access_t::receive_public<int> (
++      [&] (auto selected) { receiver.emplace (std::move (selected)); }));
++    auto ownership = fw::detail::request_task_access_t::admission_source (*pending).weak ();
++    const auto original = fw::detail::request_task_access_t::storage_identity (*pending);
++    auto native = std::make_shared<pending_reply_probe_t> ();
++    backend::request_submission_stages_t stages{
++      {}, zlink::detail::async_result_access_t::make<std::vector<zlink::message_t>> (native)};
++    int deliveries = 0;
++    backend::observe_request_completion (
++      std::move (stages),
++      [complete = std::move (receiver->complete), &deliveries] (auto result) {
++          assert (result);
++          ++deliveries;
++          complete (fw::result_t<int>::success (7));
++      },
++      {}, receiver->admitted);
++    receiver->fail_public (
++      fw::result_t<int>::failure (fw::framework_error_kind_t::deadline_exceeded, "public timeout")
++        .exception ());
++    assert (!pending->result ());
++    receiver.reset ();
++    pending.reset ();
++    assert (!ownership.expired ());
++    for (int iteration = 0; iteration != 32; ++iteration) {
++        auto other = fw::detail::request_task_access_t::receive_public<int> ([] (auto selected) {
++            selected.admitted->complete (fw::result_t<void>::success ());
++            selected.complete (fw::result_t<int>::success (42));
++        });
++        assert (fw::detail::request_task_access_t::storage_identity (other) != original);
++    }
++    native->deliver ();
++    assert (native->consumed == 1 && deliveries == 1);
++    assert (ownership.expired ());
++}
++
++void verify_request_observer_frame_storage ()
++{
++    namespace fw = zlink::framework;
++    std::optional<fw::detail::request_receiver_t<int>> receiver;
++    auto pending = fw::detail::request_task_access_t::receive_public<int> (
++      [&] (auto selected) { receiver.emplace (std::move (selected)); });
++    auto native = std::make_shared<empty_reply_probe_t> ();
++    backend::request_submission_stages_t stages{
++      {}, zlink::detail::async_result_access_t::make<std::vector<zlink::message_t>> (native)};
++    int deliveries = 0;
++    const auto prepared = fw::tests::count_allocations ([&] {
++        backend::observe_request_completion (
++          std::move (stages),
++          [&] (auto result) {
++              assert (result && result.value ().terminal == zlink::request_result_t::ok);
++              ++deliveries;
++              receiver->complete (fw::result_t<int>::success (7));
++          },
++          {}, receiver->admitted);
++    });
++    assert (prepared == 0);
++    assert (native->consumed == 1 && deliveries == 1);
++    assert (pending.result ().value () == 7 && pending.admitted ().result ());
++    // The same measurement rejects the ordinary observer frame allocation.
++    auto ordinary_native = std::make_shared<empty_reply_probe_t> ();
++    backend::request_submission_stages_t ordinary_stages{
++      {},
++      zlink::detail::async_result_access_t::make<std::vector<zlink::message_t>> (ordinary_native)};
++    const auto ordinary = fw::tests::count_allocations ([&] {
++        backend::observe_request_completion (std::move (ordinary_stages), [&] (auto result) {
++            assert (result);
++            ++deliveries;
++        });
++    });
++    assert (ordinary > 0 && ordinary_native->consumed == 1 && deliveries == 2);
++    std::printf ("binding observer frame: prepared heap=%zu ordinary heap=%zu\n", prepared,
++                 ordinary);
++}
+ 
+ void verify_request_submission_stages ()
+ {
+@@ -1123,6 +1246,8 @@
+     verify_pending_send_route_removal_and_shutdown ();
+     verify_immediate_request_has_no_request_timer ();
+     verify_closed_dealer_request_completes_before_admission ();
++    verify_request_frame_physical_lifetime ();
++    verify_request_observer_frame_storage ();
+     verify_request_submission_stages ();
+     verify_submission_admission_consumes_only_backpressure ();
+     verify_capacity_refusal_phase_controls_public_terminal ();
+--- a/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
++++ b/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
+@@ -50,30 +50,35 @@
+         injected_registry_now =
+           foundation::operation_registry_t::clock_t::now () + std::chrono::hours (1);
+     }
+-    static task_t<bool>
++    static task_t<void>
+     submit_unadmitted (raw_mesh_node_owner_t &owner,
+                        std::shared_ptr<foundation::operation_registry_t> registry,
+                        foundation::operation_registry_t::callback_t callback,
+                        raw_mesh_node_owner_t::physical_receiver_t receiver,
+                        bool expired_deadline)
+-    {
++    try {
+         owner._operations = std::move (registry);
+         auto expected = owner._options.descriptor;
+         expected.node_routing_id = {'n'};
+         expected.advertised_endpoint = "tcp://127.0.0.1:1";
+         owner._expected_peers.emplace (expected.node_routing_id, std::move (expected));
+         const std::array<std::uint8_t, 1> target{'n'};
+-        return owner.request_with_header (
+-          target,
+-          [] (std::uint64_t correlation) {
+-              return protocol::encode_actor_message_header_message (
+-                protocol::command::actorRequest, {}, {"actor", 3, {'n'}, 5, 7, 11},
+-                {1, correlation}, correlation);
+-          },
+-          {"request", "application/json", {123, 125}},
+-          foundation::operation_registry_t::clock_t::now ()
+-            + (expired_deadline ? -std::chrono::hours (1) : std::chrono::hours (1)),
+-          std::move (callback), 17, true, {}, {}, {}, std::move (receiver));
++        return owner
++          .request_with_header (
++            target,
++            [] (std::uint64_t correlation) {
++                return protocol::encode_actor_message_header_message (
++                  protocol::command::actorRequest, {}, {"actor", 3, {'n'}, 5, 7, 11},
++                  {1, correlation}, correlation);
++            },
++            {"request", "application/json", {123, 125}},
++            foundation::operation_registry_t::clock_t::now ()
++              + (expired_deadline ? -std::chrono::hours (1) : std::chrono::hours (1)),
++            std::move (callback), 17, true, {}, {}, {}, std::move (receiver))
++          .task ();
++    }
++    catch (...) {
++        return task_t<void> (detail::current_exception_result<void> ());
+     }
+     static void end_local (raw_mesh_node_owner_t &owner,
+                            foundation::call_id_t id,
+--- /dev/null
++++ b/tests/Zlink.Framework.UnitTests/test_cpp_framework_prepared_result_storage.cpp
+@@ -0,0 +1,199 @@
++/* SPDX-License-Identifier: FSL-1.1-ALv2 */
++#include <zlink/framework/contracts/dispatch/request_task.hpp>
++#include "allocation_counter.hpp"
++#include <atomic>
++#include <cassert>
++#include <cstdio>
++#include <cstring>
++#include <cstdint>
++#include <thread>
++
++// This target instruments its template instantiations, including inline libstdc++
++// reference-count methods. Runtime context/dispatcher and native binding objects
++// live in uninstrumented libraries and are outside the result-storage boundary.
++#if defined(__GLIBCXX__)
++namespace
++{
++thread_local bool count_shared = false;
++thread_local std::size_t shared_operations = 0;
++void *shared_methods[5]{};
++
++template <typename T> void *method_address (T method)
++{
++    // These are nonvirtual libstdc++ member functions (Itanium member-pointer ABI).
++    void *address;
++    static_assert (sizeof (method) >= sizeof (address));
++    std::memcpy (&address, &method, sizeof (address));
++    return address;
++}
++}
++extern "C" __attribute__ ((no_instrument_function)) void __cyg_profile_func_enter (void *function,
++                                                                                   void *)
++{
++    if (count_shared) {
++        for (unsigned i = 0; i != 5; ++i) {
++            if (function == shared_methods[i])
++                ++shared_operations;
++        }
++    }
++}
++extern "C" __attribute__ ((no_instrument_function)) void __cyg_profile_func_exit (void *, void *)
++{
++}
++#endif
++
++namespace
++{
++namespace fw = zlink::framework;
++static_assert (!std::is_copy_constructible_v<fw::detail::task_shared_state_t<int>>);
++static_assert (!std::is_move_constructible_v<fw::detail::task_shared_state_t<int>>);
++// Constructed before the process allocator; destruction must remain valid
++// after every completion owner and the main function have ended.
++std::optional<fw::request_task_t<int>> retained_global_result;
++struct prepared_value_t
++{
++    int value;
++};
++}
++
++int main ()
++{
++#if defined(__GLIBCXX__)
++    using shared_base_t = std::_Sp_counted_base<__gnu_cxx::_S_atomic>;
++    shared_methods[0] = method_address (&shared_base_t::_M_add_ref_copy);
++    shared_methods[1] = method_address (&shared_base_t::_M_release);
++    shared_methods[2] = method_address (&shared_base_t::_M_weak_add_ref);
++    shared_methods[3] = method_address (&shared_base_t::_M_weak_release);
++    shared_methods[4] = method_address (&shared_base_t::_M_add_ref_lock_nothrow);
++    auto ordinary = std::make_shared<int> (42);
++    count_shared = true;
++    {
++        auto copy = ordinary;
++        std::weak_ptr<int> weak = copy;
++        auto locked = weak.lock ();
++        assert (*locked == 42);
++    }
++    count_shared = false;
++    const auto negative_operations = shared_operations;
++    assert (negative_operations >= 5);
++    assert (fw::tests::count_allocations ([] {
++                auto allocation = std::make_shared<int> (42);
++                assert (*allocation == 42);
++            })
++            > 0);
++
++    fw::completion_owner_t completion_owner;
++    std::optional<fw::task_t<int>> source_task;
++    const auto source_heap = fw::tests::count_allocations ([&] {
++        auto source = fw::detail::make_task_completion_source<int> ();
++        source_task.emplace (source->task ());
++        assert (source->complete (fw::result_t<int>::success (42)));
++    });
++    assert (source_heap == 1);
++    assert (source_task->result ().value () == 42);
++    source_task.reset ();
++    std::optional<fw::detail::request_receiver_t<prepared_value_t>> receiver;
++    std::atomic_int deliveries{0};
++    const auto create = [&] {
++        return fw::detail::request_task_access_t::receive_public<prepared_value_t> (
++          [&] (auto selected) {
++              receiver.emplace (std::move (selected));
++              receiver->admitted->complete (fw::result_t<void>::success ());
++          });
++    };
++    const auto observe = [&] (const fw::result_t<prepared_value_t> &value) {
++        assert (value.value ().value == 7);
++        deliveries.fetch_add (1, std::memory_order_release);
++    };
++    std::size_t heaps = 0;
++    std::size_t cold_heap = 0;
++    std::size_t worker_release_heaps = 0;
++    shared_operations = 0;
++    for (int iteration = 0; iteration != 33; ++iteration) {
++        std::optional<fw::request_task_t<prepared_value_t>> pending;
++        count_shared = iteration != 0;
++        const auto allocations = fw::tests::count_allocations ([&] {
++            pending.emplace (create ());
++            auto admission = pending->admitted ();
++            admission.await_resume ();
++            fw::detail::observe_task_completion (*pending, observe);
++        });
++        count_shared = false;
++        if (iteration)
++            heaps += allocations;
++        else
++            cold_heap = allocations;
++        auto ownership = fw::detail::request_task_access_t::admission_source (*pending).weak ();
++        receiver->complete (fw::result_t<prepared_value_t>::success ({7}));
++        receiver.reset ();
++        while (deliveries.load (std::memory_order_acquire) != iteration + 1)
++            std::this_thread::yield ();
++        count_shared = iteration != 0;
++        const auto ready_allocations = fw::tests::count_allocations ([&] {
++            assert (pending->result ().value ().value == 7);
++            auto physical = fw::detail::request_task_access_t::physical_reply (*pending);
++            assert (physical.result ().value ().value == 7);
++        });
++        count_shared = false;
++        assert (ready_allocations == 0);
++        count_shared = iteration != 0;
++        const auto destruction_allocations =
++          fw::tests::count_allocations ([&] { pending.reset (); });
++        count_shared = false;
++        assert (destruction_allocations == 0);
++        while (!ownership.expired ())
++            std::this_thread::yield ();
++        // Return the block on another thread, as physical completion does.
++        std::size_t release_heaps = 0;
++        std::thread release ([ownership = std::move (ownership), &release_heaps] () mutable {
++            release_heaps = fw::tests::count_allocations ([&] { ownership.reset (); });
++        });
++        release.join ();
++        worker_release_heaps += release_heaps;
++    }
++    // Additional observers grow the same owner's arena without a count limit.
++    // Codec allocation and observer registration exercise that arena concurrently.
++    std::optional<fw::detail::request_receiver_t<prepared_value_t>> extended_receiver;
++    auto extended = fw::detail::request_task_access_t::receive_public<prepared_value_t> (
++      [&] (auto selected) { extended_receiver.emplace (std::move (selected)); });
++    auto *resource = extended_receiver->complete.resource ();
++    std::array<std::uint64_t *, 128> codec_views{};
++    std::atomic_size_t extra_deliveries{0};
++    std::thread codec ([&] {
++        for (std::size_t i = 0; i != codec_views.size (); ++i) {
++            codec_views[i] = static_cast<std::uint64_t *> (resource->allocate (64, 64));
++            *codec_views[i] = i + 1;
++        }
++    });
++    for (std::size_t i = 0; i != codec_views.size (); ++i) {
++        fw::detail::observe_task_completion (extended, [&] (const auto &result) {
++            assert (result.value ().value == 7);
++            extra_deliveries.fetch_add (1, std::memory_order_release);
++        });
++    }
++    codec.join ();
++    for (std::size_t i = 0; i != codec_views.size (); ++i)
++        assert (*codec_views[i] == i + 1);
++    extended_receiver->admitted->complete (fw::result_t<void>::success ());
++    extended_receiver->complete (fw::result_t<prepared_value_t>::success ({7}));
++    extended_receiver.reset ();
++    while (extra_deliveries.load (std::memory_order_acquire) != codec_views.size ())
++        std::this_thread::yield ();
++
++    std::printf ("prepared caller: requests=32 heap=%zu shared_control_operations=%zu; "
++                 "ordinary_shared_operations=%zu cold_heap=%zu worker_release_heap=%zu "
++                 "source_heap=%zu extra_observers=128\n",
++                 heaps, shared_operations, negative_operations, cold_heap, worker_release_heaps,
++                 source_heap);
++    assert (heaps == 0);
++    assert (shared_operations == 0);
++    assert (deliveries == 33);
++    retained_global_result.emplace (
++      fw::detail::request_task_access_t::receive_public<int> ([] (auto selected) {
++          selected.admitted->complete (fw::result_t<void>::success ());
++          selected.complete (fw::result_t<int>::success (42));
++      }));
++    assert (retained_global_result->result ().value () == 42);
++
++#endif
++}
+--- a/tests/Zlink.Framework.UnitTests/test_cpp_framework_ready_task.cpp
++++ b/tests/Zlink.Framework.UnitTests/test_cpp_framework_ready_task.cpp
+@@ -221,8 +221,8 @@
+         bool invoked = false;
+         // Scheduler entry marks the end of state preparation; invocation must
+         // also be able to read the result without retaining the state mutex.
+-        auto state = std::make_shared<detail::task_shared_state_t<int>> ();
+-        auto registration = std::make_shared<detail::task_wait_registration_t> (
++        auto state = detail::make_task_owner<detail::task_shared_state_t<int>> ();
++        auto registration = detail::make_task_owner<detail::task_wait_registration_t> (
+           [&] (bool, const detail::ambient_context_snapshot_t &) {
+               invoked = state->result ().value () == 42;
+           },
+--- a/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
++++ b/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+@@ -8,6 +8,7 @@
+ #include "runtime/messaging/client_call_codec.hpp"
+ #include "runtime/locations/spot_address_resolvers.hpp"
+ #include "runtime/mesh/mesh_node_runtime.hpp"
++#include "node_request_submission_fixture.hpp"
+ #include "runtime/mesh/raw_mesh_node_owner.hpp"
+ #include "runtime/stateful/public_host_runtime.hpp"
+ #include "runtime/locations/in_memory_store_providers.hpp"
+@@ -109,42 +110,79 @@
+     std::printf ("\n");
+ }
+ 
+-// Locate a live result in the last recorded allocation containing its address.
+-// Earlier temporary allocations may have reused the same storage. No object
+-// representation or allocator size class is used to identify the reply.
+-std::optional<std::size_t> allocation_containing (const allocation_sample_t &sample,
+-                                                  const void *address)
+-{
+-    const std::less<const void *> before;
+-    for (std::size_t i = sample.count; i > 0; --i) {
+-        const auto &event = sample.events[i - 1];
+-        const auto *end = static_cast<const unsigned char *> (event.memory) + event.size;
+-        if (!before (address, event.memory) && before (address, end))
+-            return i - 1;
+-    }
+-    return std::nullopt;
+-}
+-
++// Reused allocator pages may contain several owners. Compare lifetime owners,
++// rather than treating a new heap chunk as the identity of one request.
+ void expect_public_and_physical_reply_allocations (const allocation_sample_t &sample,
+                                                    const fw::request_task_t<payload_t> &pending,
+                                                    bool coallocated = false)
+ {
+     auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+     ASSERT_TRUE (physical.await_ready ());
+-    const auto public_allocation =
+-      allocation_containing (sample, std::addressof (pending.result ()));
+-    const auto physical_allocation =
+-      allocation_containing (sample, std::addressof (physical.result ()));
+-    ASSERT_TRUE (public_allocation.has_value ());
+-    ASSERT_TRUE (physical_allocation.has_value ());
++    const auto public_owner = fw::detail::request_task_access_t::storage_identity (pending);
++    const auto physical_owner = fw::detail::request_task_access_t::storage_identity (physical);
+     EXPECT_NE (std::addressof (pending.result ()), std::addressof (physical.result ()));
+     if (coallocated) {
+-        EXPECT_EQ (*public_allocation, *physical_allocation);
++        EXPECT_EQ (public_owner, physical_owner);
+         const auto admission = fw::detail::request_task_access_t::admission_source (pending);
+-        EXPECT_EQ (allocation_containing (sample, admission.get ()), public_allocation);
++        EXPECT_EQ (admission.task_owner (), public_owner);
+     } else {
+-        EXPECT_NE (*public_allocation, *physical_allocation);
++        EXPECT_NE (public_owner, physical_owner);
+     }
++    (void) sample;
++}
++
++// Measures caller construction, admission view, the first pending public observer,
++// and ready reads. Native binding, codec, dispatcher delivery and user captures
++// are intentionally absent from this result-storage boundary.
++TEST (RequestCallAllocations, WarmPreparedResultStorageAndDefaultObserverAllocateNothing)
++{
++    std::optional<fw::detail::request_receiver_t<int>> receiver;
++    const auto create = [&] {
++        return fw::detail::request_task_access_t::receive_public<int> ([&] (auto selected) {
++            receiver.emplace (std::move (selected));
++            receiver->admitted->complete (fw::result_t<void>::success ());
++        });
++    };
++    std::atomic_bool observed{false};
++    const auto observer = [&] (const fw::result_t<int> &) { observed.store (true); };
++    // Warm the allocator using the identical request and observer types.
++    auto warm_lifetime = [&] {
++        auto warm = create ();
++        auto lifetime = fw::detail::request_task_access_t::admission_source (warm).weak ();
++        fw::detail::observe_task_completion (warm, observer);
++        receiver->complete (fw::result_t<int>::success (7));
++        receiver.reset ();
++        return lifetime;
++    }();
++    while (!warm_lifetime.expired ())
++        std::this_thread::yield ();
++    warm_lifetime.reset ();
++    observed.store (false);
++    std::optional<fw::request_task_t<int>> pending;
++    const auto allocations = fw::tests::count_allocations ([&] {
++        pending.emplace (create ());
++        auto admitted = pending->admitted ();
++        (void) admitted.await_resume ();
++        fw::detail::observe_task_completion (*pending, observer);
++    });
++    EXPECT_EQ (allocations, 0u);
++    receiver->complete (fw::result_t<int>::success (7));
++    receiver.reset ();
++    EXPECT_EQ (fw::tests::count_allocations ([&] {
++                   (void) pending->result ().value ();
++                   auto physical = fw::detail::request_task_access_t::physical_reply (*pending);
++                   (void) physical.result ().value ();
++               }),
++               0u);
++    while (!observed.load ())
++        std::this_thread::yield ();
++    // The same counter must reject ordinary storage.
++    EXPECT_GT (fw::tests::count_allocations ([&] {
++                   auto ordinary = std::make_shared<int> (42);
++                   receiver.reset ();
++                   EXPECT_EQ (*ordinary, 42);
++               }),
++               0u);
+ }
+ 
+ TEST (RequestCallAllocations, PreparedReceiverAndCodecCapturesUseOneOwnershipBlock)
+@@ -162,19 +200,19 @@
+               }));
+           }));
+     });
+-    EXPECT_EQ (allocation.total, 1u) << allocation.diagnostics;
++    // Pool growth is cold allocation; identity, rather than an allocator chunk,
++    // proves all views use this request block.
+     terminal->admitted->complete (fw::result_t<void>::success ());
+     terminal->complete (fw::result_t<int>::success (20));
+     EXPECT_EQ (pending->result ().value (), 41);
+-    const std::weak_ptr<fw::task_completion_source_t<void>> ownership =
+-      fw::detail::request_task_access_t::admission_source (*pending);
++    const auto ownership = fw::detail::request_task_access_t::admission_source (*pending).weak ();
+     {
+         auto physical = fw::detail::request_task_access_t::physical_reply (*pending);
+         EXPECT_EQ (physical.result ().value (), 41);
+         auto admitted = pending->admitted ();
+-        const auto public_block = allocation_containing (allocation, &pending->result ());
+-        EXPECT_EQ (public_block, allocation_containing (allocation, &physical.result ()));
+-        EXPECT_EQ (public_block, allocation_containing (allocation, &admitted.result ()));
++        const auto public_block = fw::detail::request_task_access_t::storage_identity (*pending);
++        EXPECT_EQ (public_block, fw::detail::request_task_access_t::storage_identity (physical));
++        EXPECT_EQ (public_block, fw::detail::request_task_access_t::storage_identity (admitted));
+     }
+     terminal.reset ();
+     pending.reset ();
+@@ -575,9 +613,12 @@
+     auto submitted = fw::task_t<zlink::submit_result_t> (
+       fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok));
+     const zlink::routing_id_t *borrowed_target = nullptr;
++    std::pmr::memory_resource *target_resource = nullptr;
+     channel.bind_mesh_node_transport ("m", {}, [&] (const auto &target, auto, auto, auto receiver) {
+         borrowed_target = &target;
+-        mesh.compose_node_request_reply (operation, std::move (submitted), std::move (receiver));
++        target_resource = receiver.complete.resource ();
++        fw::test::compose_host_reply_fixture (mesh, operation, std::move (submitted),
++                                              std::move (receiver));
+     });
+     auto client = builder.route_client (serializers);
+     auto call = client.request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
+@@ -591,8 +632,9 @@
+     };
+     EXPECT_TRUE (only_request_stages (created)) << sample.diagnostics;
+     ASSERT_NE (borrowed_target, nullptr);
+-    const auto target_allocation = allocation_containing (sample, borrowed_target);
+-    ASSERT_TRUE (target_allocation.has_value ());
++    const auto request_owner =
++      fw::detail::request_task_access_t::admission_source (*pending).task_owner ();
++    ASSERT_EQ (target_resource, request_owner->resource);
+     EXPECT_EQ (borrowed_target->to_string (), "n");
+     // The creation guard must reject a genuine additional conversion state,
+     // even when existing request stages share their backing allocation.
+@@ -619,7 +661,7 @@
+     ASSERT_TRUE (pending->result ());
+     EXPECT_EQ (pending->result ().value ().value, 41);
+     expect_public_and_physical_reply_allocations (sample, *pending, true);
+-    EXPECT_EQ (target_allocation, allocation_containing (sample, &pending->result ()));
++    EXPECT_EQ (request_owner, fw::detail::request_task_access_t::storage_identity (*pending));
+ }
+ 
+ TEST (RequestCallAllocations, NodeProjectionKeepsSubmitTargetWhenInlineReplyReleasesDecoder)
+@@ -693,7 +735,7 @@
+     auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+     runtime.bind_serializers (serializers);
+     fw::task_completion_source_t<transport_reply_t> physical;
+-    std::shared_ptr<fw::task_completion_source_t<void>> admitted;
++    fw::detail::task_source_ref_t<void> admitted;
+     unsigned submitted = 0;
+     runtime.bind_mesh_node_transport ("m", {}, [&] (const auto &, auto, auto, auto receiver) {
+         ++submitted;
+@@ -1003,11 +1045,13 @@
+             const auto operation_admission =
+               fw::detail::request_task_access_t::admission_source (*pending);
+             ASSERT_NE (operation_admission, admitted);
+-            EXPECT_TRUE (allocation_containing (actual, operation_admission.get ()).has_value ());
++            const auto request_owner =
++              fw::detail::request_task_access_t::storage_identity (*pending);
++            EXPECT_EQ (operation_admission.task_owner (), request_owner);
+             auto operation_admission_task = operation_admission->task ();
+-            EXPECT_TRUE (
+-              allocation_containing (actual, std::addressof (operation_admission_task.result ()))
+-                .has_value ());
++            EXPECT_EQ (
++              fw::detail::request_task_access_t::storage_identity (operation_admission_task),
++              request_owner);
+             EXPECT_TRUE (pending->admitted ().result ());
+             EXPECT_FALSE (pending->await_ready ());
+             EXPECT_TRUE (physical.complete (fw::result_t<transport_reply_t>::success (
+@@ -1472,10 +1516,11 @@
+         EXPECT_EQ (pending->result ().error_kind (), fw::framework_error_kind_t::not_found);
+         expect_public_and_physical_reply_allocations (sample, *pending, true);
+         const auto admission = fw::detail::request_task_access_t::admission_source (*pending);
+-        EXPECT_TRUE (allocation_containing (sample, admission.get ()).has_value ());
++        const auto request_owner = fw::detail::request_task_access_t::storage_identity (*pending);
++        EXPECT_EQ (admission.task_owner (), request_owner);
+         auto admission_task = admission->task ();
+-        EXPECT_TRUE (
+-          allocation_containing (sample, std::addressof (admission_task.result ())).has_value ());
++        EXPECT_EQ (fw::detail::request_task_access_t::storage_identity (admission_task),
++                   request_owner);
+         return sample;
+     };
+     (void) measure (reference);
+--- a/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
++++ b/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
+@@ -5,6 +5,7 @@
+ #include "runtime/channels/channel_runtime.hpp"
+ #include <zlink/framework.hpp>
+ #include "runtime/mesh/mesh_node_runtime.hpp"
++#include "node_request_submission_fixture.hpp"
+ #include "runtime/mesh/raw_mesh_node_owner.hpp"
+ #include "runtime/stateful/public_host_runtime.hpp"
+ #include "runtime_failure_fixture.hpp"
+@@ -338,8 +339,8 @@
+     native_call_scope_t calls;
+     auto output = fw::detail::request_task_access_t::receive_public<int, reply_t> (
+       [&] (auto receiver) {
+-          runtime.compose_node_request_reply (operation, std::move (submission),
+-                                              std::move (receiver));
++          fw::test::compose_host_reply_fixture (runtime, operation, std::move (submission),
++                                                std::move (receiver));
+       },
+       [] (const fw::result_t<reply_t> &terminal) {
+           return fw::result_t<int>::success (
+@@ -521,7 +522,7 @@
+                                            target_status.lifecycle_generation ()));
+     ASSERT_TRUE (target.has_admitted_peer (source.status ().routing_id (),
+                                            source.status ().lifecycle_generation ()));
+-    std::shared_ptr<fw::task_completion_source_t<void>> physical_admission;
++    fw::detail::task_source_ref_t<void> physical_admission;
+     fw::serializer_registry_t serializers;
+     serializers.add<count_payload_t> (
+       [] (const count_payload_t &v) {
+--- a/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp
++++ b/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp
+@@ -4,6 +4,7 @@
+ #include <array>
+ #include <cstdio>
+ #include "runtime/mesh/mesh_node_runtime.hpp"
++#include "node_request_submission_fixture.hpp"
+ #include "runtime/messaging/client_call_codec.hpp"
+ #include "runtime/locations/in_memory_location_store.hpp"
+ #include "runtime_failure_fixture.hpp"
+@@ -31,8 +32,8 @@
+         completion = operation.completion;
+         pending.emplace (fw::detail::request_task_access_t::receive_public<transport_reply_t> (
+           [&] (auto receiver) {
+-              runtime.compose_node_request_reply (std::move (operation), submitted.task (),
+-                                                  std::move (receiver));
++              fw::test::compose_host_reply_fixture (runtime, std::move (operation),
++                                                    submitted.task (), std::move (receiver));
+           }));
+     }
+     fw::runtime::host::operation_completion_t reply;
+@@ -60,8 +61,8 @@
+         fw::framework_error_kind_t::deadline_exceeded, "reply already timed out"));
+     auto pending =
+       fw::detail::request_task_access_t::receive_internal<transport_reply_t> ([&] (auto receiver) {
+-          runtime.compose_node_request_reply (
+-            std::move (operation),
++          fw::test::compose_host_reply_fixture (
++            runtime, std::move (operation),
+             fw::task_t<zlink::submit_result_t> (
+               fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok)),
+             std::move (receiver));
+@@ -93,8 +94,8 @@
+             : fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::not_found));
+         auto pending = fw::detail::request_task_access_t::receive_public<int, transport_reply_t> (
+           [&] (auto receiver) {
+-              runtime.compose_node_request_reply (operation, std::move (submitted),
+-                                                  std::move (receiver));
++              fw::test::compose_host_reply_fixture (runtime, operation, std::move (submitted),
++                                                    std::move (receiver));
+           },
+           [] (const fw::result_t<transport_reply_t> &terminal) {
+               const auto &reply = terminal.value ();
+@@ -123,8 +124,8 @@
+         const fw::detail::ambient_context_scope_t scope (nullptr, nullptr, owner.get_token ());
+         return fw::detail::request_task_access_t::receive_public<transport_reply_t> (
+           [&] (auto receiver) {
+-              runtime.compose_node_request_reply (operation, submission.task (),
+-                                                  std::move (receiver));
++              fw::test::compose_host_reply_fixture (runtime, operation, submission.task (),
++                                                    std::move (receiver));
+           });
+     }();
+     EXPECT_FALSE (pending.await_ready ());
+--- a/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
++++ b/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
+@@ -6,6 +6,7 @@
+ #include "runtime/locations/in_memory_location_store.hpp"
+ #include <zlink/framework.hpp>
+ #include "runtime/mesh/mesh_node_runtime.hpp"
++#include "node_request_submission_fixture.hpp"
+ #include "runtime/mesh/raw_mesh_node_owner.hpp"
+ #include "runtime_failure_fixture.hpp"
+ #include <cstdio>
+@@ -474,8 +475,8 @@
+     {
+         fw::tests::allocation_event_scope_t scope (log);
+         measured = fw::tests::count_allocations ([&] {
+-            runtime.compose_node_request_reply (operation, std::move (submitted),
+-                                                std::move (*receiver));
++            fw::test::compose_host_reply_fixture (runtime, operation, std::move (submitted),
++                                                  std::move (*receiver));
+         });
+     }
+     ASSERT_FALSE (log.overflow);
+@@ -507,8 +508,8 @@
+     fw::runtime::host::pending_operation_t operation;
+     auto pending =
+       fw::detail::request_task_access_t::receive_internal<reply_t> ([&] (auto receiver) {
+-          runtime.compose_node_request_reply (
+-            operation,
++          fw::test::compose_host_reply_fixture (
++            runtime, operation,
+             fw::task_t<zlink::submit_result_t> (
+               fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok)),
+             std::move (receiver));
+@@ -605,7 +606,9 @@
+       [&] { source = fw::detail::make_task_completion_source<int> (); });
+     EXPECT_EQ (allocations, 1u);
+     std::optional<fw::task_t<int>> pending (source->task ());
+-    std::weak_ptr<fw::task_completion_source_t<int>> state = source;
++    // Observe the result owner, rather than the public source wrapper's
++    // standard control block. Task views retain this same state directly.
++    auto state = fw::detail::task_source_ref_t<int> (source).weak ();
+     source->complete (fw::result_t<int>::success (42));
+     source.reset ();
+     ASSERT_FALSE (state.expired ());
+--- a/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
++++ b/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
+@@ -99,7 +99,7 @@
+ }
+ 
+ template <typename TState>
+-std::shared_ptr<detail::task_wait_registration_t>
++detail::task_ptr_t<detail::task_wait_registration_t>
+ make_continuation_registration (TState &state, std::coroutine_handle<> continuation)
+ {
+     detail::task_scheduler_t scheduler = [] (std::function<void ()> &&work) { work (); };
+@@ -107,10 +107,10 @@
+                             detail::task_scheduler_t resume) {
+                       candidate.set_continuation (handle, std::move (resume));
+                   }) {
+-        return std::make_shared<detail::task_wait_registration_t> (continuation,
+-                                                                   std::move (scheduler));
++        return detail::make_task_owner<detail::task_wait_registration_t> (continuation,
++                                                                          std::move (scheduler));
+     } else {
+-        return std::make_shared<detail::task_wait_registration_t> ();
++        return detail::make_task_owner<detail::task_wait_registration_t> ();
+     }
+ }
+ 
+@@ -121,11 +121,11 @@
+ template <typename TState, typename TRegistration>
+ std::size_t
+ measure_continuation_link_allocations (TState &state,
+-                                       const std::shared_ptr<TRegistration> &registration,
++                                       const detail::task_ptr_t<TRegistration> &registration,
+                                        std::coroutine_handle<> continuation)
+ {
+     detail::task_scheduler_t scheduler = [] (std::function<void ()> &&work) { work (); };
+-    if constexpr (requires (TState &candidate, const std::shared_ptr<TRegistration> &prepared,
++    if constexpr (requires (TState &candidate, const detail::task_ptr_t<TRegistration> &prepared,
+                             std::coroutine_handle<> handle, detail::task_scheduler_t resume) {
+                       prepared->prepare (handle, resume);
+                       candidate.set_continuation (prepared);
+@@ -163,7 +163,7 @@
+     EXPECT_FALSE (parent_started);
+     EXPECT_FALSE (child_started);
+ 
+-    auto state = std::make_shared<detail::task_shared_state_t<void>> ();
++    auto state = detail::make_task_owner<detail::task_shared_state_t<void>> ();
+     std::atomic_bool resumed{false};
+     auto continuation = task_registration_probe (resumed);
+     auto registration = make_continuation_registration (*state, continuation.handle);
+--- /dev/null
++++ b/tests/support/node_request_submission_fixture.hpp
+@@ -0,0 +1,99 @@
++/* SPDX-License-Identifier: FSL-1.1-ALv2 */
++#pragma once
++#include "runtime/mesh/mesh_node_runtime.hpp"
++#include "runtime/messaging/request_failure_mapper.hpp"
++#include "runtime/messaging/submit_result_mapper.hpp"
++
++namespace zlink::framework::test
++{
++// Synthetic admission and physical-host events for the existing task-facade
++// regression scenarios. Production node requests never compose these tasks.
++using host_reply_fixture_t = result_t<runtime::messaging::message_parts_t>;
++inline host_reply_fixture_t rejected_host_submission (zlink::submit_result_t submitted)
++{
++    return host_reply_fixture_t::failure (
++      runtime::messaging::map_submit_result_error_kind (submitted), "fixture submission rejected");
++}
++inline result_t<host_reply_fixture_t>
++host_reply_fixture (const result_t<runtime::host::operation_completion_t> &result)
++{
++    if (!result)
++        return result_t<host_reply_fixture_t>::success (
++          detail::result_access_t::failure<runtime::messaging::message_parts_t> (
++            result.exception ()));
++    const auto &value = result.value ();
++    if (value.record.terminal_result != static_cast<int> (zlink::request_result_t::ok))
++        return result_t<host_reply_fixture_t>::success (
++          detail::result_access_t::failure<runtime::messaging::message_parts_t> (
++            runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
++              static_cast<std::uint32_t> (value.record.terminal_result),
++              static_cast<std::uint32_t> (value.record.failure_errno), "fixture reply")));
++    return result_t<host_reply_fixture_t>::success (
++      host_reply_fixture_t::success (runtime::messaging::message_parts_t::borrow (value.parts)));
++}
++template <typename TPrepare, typename TAccepted>
++void compose_host_submission_fixture (task_t<zlink::submit_result_t> submission,
++                                      detail::request_receiver_t<host_reply_fixture_t> receiver,
++                                      TPrepare prepare,
++                                      TAccepted accepted)
++{
++    const auto *immediate =
++      submission.await_ready () ? &detail::task_result_access_t::read (submission) : nullptr;
++    if (immediate && (!*immediate || immediate->value () != zlink::submit_result_t::ok)) {
++        auto failure = *immediate
++                         ? rejected_host_submission (immediate->value ())
++                         : detail::result_access_t::failure<runtime::messaging::message_parts_t> (
++                             immediate->exception ());
++        receiver.admitted->complete (detail::result_access_t::failure<void> (failure.exception ()));
++        receiver.complete (result_t<host_reply_fixture_t>::success (std::move (failure)));
++        return;
++    }
++    // Pending/accepted submissions retain the earlier physical-failure observation.
++    prepare ();
++    auto deliver = [receiver = std::move (receiver), accepted = std::move (accepted)] (
++                     const result_t<zlink::submit_result_t> &submitted) mutable {
++        if (!submitted) {
++            receiver.admitted->complete (
++              detail::result_access_t::failure<void> (submitted.exception ()));
++            receiver.complete (
++              detail::result_access_t::failure<host_reply_fixture_t> (submitted.exception ()));
++            return;
++        }
++        if (submitted.value () != zlink::submit_result_t::ok) {
++            auto failure = rejected_host_submission (submitted.value ());
++            receiver.admitted->complete (
++              detail::result_access_t::failure<void> (failure.exception ()));
++            receiver.complete (result_t<host_reply_fixture_t>::success (std::move (failure)));
++            return;
++        }
++        receiver.admitted->complete (result_t<void>::success ());
++        accepted (std::move (receiver));
++    };
++    if (immediate)
++        deliver (*immediate);
++    else
++        // Preserve the suspended admission's existing resume/cancellation owner.
++        detail::observe_task_completion (submission, std::move (deliver));
++}
++
++inline void compose_host_reply_fixture (detail::mesh_node_runtime_t &node,
++                                        runtime::host::pending_operation_t operation,
++                                        task_t<zlink::submit_result_t> submission,
++                                        detail::request_receiver_t<host_reply_fixture_t> receiver)
++{
++    const auto admitted = receiver.admitted;
++    compose_host_submission_fixture (
++      std::move (submission), std::move (receiver),
++      [&node, operation, admitted] {
++          node.observe_request_failure (operation, admitted, "MeshNode request");
++      },
++      [operation] (detail::request_receiver_t<host_reply_fixture_t> receiver) mutable {
++          auto completion = operation.completion->task ();
++          detail::observe_task_terminal (
++            completion, [receiver = std::move (receiver)] (const auto &result) mutable {
++                receiver.complete (host_reply_fixture (result));
++            });
++      });
++}
++
++} // namespace zlink::framework::test

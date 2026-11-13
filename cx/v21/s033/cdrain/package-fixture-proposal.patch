@@ -1,0 +1,44 @@
+--- a/framework/languages/cpp/tests/Zlink.Framework.PackageTests/install_consumer.cmake
++++ b/framework/languages/cpp/tests/Zlink.Framework.PackageTests/install_consumer.cmake
+@@ -201,8 +201,6 @@
+ #include <zlink/stream_connector_throwing.hpp>
+ #include <zlink/stream_e2e_client.hpp>
+ #include <zlink/stream_e2e_client/codecs/auto_codec.hpp>
+-
+-#include <nlohmann/json.hpp>
+ 
+ #include <boost/asio.hpp>
+ 
+@@ -251,23 +249,15 @@
+                  zlink::framework::task_t<zlink::framework::location_page_t<
+                    zlink::framework::location_object_entry_t>>>);
+ 
+-void
+-to_json (nlohmann::json &json, const login_request_t &)
+-{
+-  json = nlohmann::json::object ();
+-}
+-
+-void
+-to_json (nlohmann::json &json, const room_view_t &view)
+-{
+-  json = nlohmann::json{{"value", view.value}};
+-}
+-
+-void
+-from_json (const nlohmann::json &json, room_view_t &view)
+-{
+-  view.value = json.value ("value", 0);
+-}
++template <> struct zlink::json::dto_traits<login_request_t>
++{
++  static constexpr auto fields = std::tuple{};
++};
++
++template <> struct zlink::json::dto_traits<room_view_t>
++{
++  static constexpr auto fields = std::tuple{zlink::json::field ("value", &room_view_t::value)};
++};
+ 
+ int
+ main ()

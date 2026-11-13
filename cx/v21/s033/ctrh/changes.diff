@@ -1,0 +1,794 @@
+--- before/CMakeLists.txt
++++ after/CMakeLists.txt
+@@ -1284,6 +1284,8 @@
+     framework/src/runtime/dispatch/offload_executor.cpp
+     tests/support/allocation_counter.cpp)
+   target_compile_features(test_cpp_framework_offload_executor PRIVATE cxx_std_20)
++  target_compile_definitions(test_cpp_framework_offload_executor PRIVATE
++    ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+   target_include_directories(test_cpp_framework_offload_executor PRIVATE
+     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+     ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
+@@ -2333,6 +2335,20 @@
+       tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+       "framework-unit;framework-regression;execution;resource"
+       unit)
++    if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
++      zlink_framework_cpp_add_test(
++        NAME test_cpp_framework_receive_handoff_no_idle
++        COMMAND test_cpp_framework_mailbox_owner_dispatch no-idle
++        LABELS "framework-unit;framework-regression;execution;resource"
++        TIER unit
++        TIMEOUT 30)
++      zlink_framework_cpp_add_test(
++        NAME test_cpp_framework_receive_handoff_stop_reserved
++        COMMAND test_cpp_framework_mailbox_owner_dispatch stop-reserved
++        LABELS "framework-unit;framework-regression;execution;resource"
++        TIER unit
++        TIMEOUT 30)
++    endif()
+     target_include_directories(test_cpp_framework_mailbox_owner_dispatch PRIVATE
+       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
+--- before/framework/src/runtime/dispatch/offload_executor.cpp
++++ after/framework/src/runtime/dispatch/offload_executor.cpp
+@@ -67,6 +67,7 @@
+     }
+     std::lock_guard lock (_mutex);
+     _workers.reserve (_max_worker_count);
++    _idle_workers.reserve (_max_worker_count);
+     for (std::size_t i = 0; i < _min_worker_count; ++i) {
+         start_worker_locked ();
+     }
+@@ -99,7 +100,8 @@
+         if (_stopping && _active == _role_active && _queue.empty ()) {
+             return false;
+         }
+-        if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
++        if (_idle_workers.size () <= _queue.size () + _roles.size ()
++            && _live_workers < _max_worker_count) {
+             start_worker_locked ();
+         }
+         _queue.push (work_item_t{std::move (work), std::nullopt});
+@@ -160,7 +162,8 @@
+         if (_stopping) {
+             return false;
+         }
+-        if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
++        if (_idle_workers.size () <= _queue.size () + _roles.size ()
++            && _live_workers < _max_worker_count) {
+             start_worker_locked ();
+         }
+         _queue.push (work_item_t{std::move (work), std::stop_source{}});
+@@ -175,9 +178,22 @@
+         std::lock_guard lock (_mutex);
+         if (_stopping)
+             return false;
+-        _roles.push (std::move (role));
+-    }
+-    _ready.notify_one ();
++        if (!assign_idle_role_locked (role))
++            _roles.push (std::move (role));
++    }
++    _ready.notify_all ();
++    return true;
++}
++
++bool offload_executor_t::assign_idle_role_locked (const std::shared_ptr<role_t> &role)
++{
++    if (_idle_workers.empty ())
++        return false;
++    auto &worker = *_idle_workers.back ();
++    _idle_workers.pop_back ();
++    worker.role = role;
++    ++_role_active;
++    ++_active;
+     return true;
+ }
+ 
+@@ -327,53 +343,90 @@
+                       << " executor=" << this << std::endl;
+         }
+     };
++    worker_state_t worker;
+     while (true) {
+         work_item_t work;
+         std::shared_ptr<role_t> role;
+         {
+             std::unique_lock lock (_mutex);
+-            ++_idle_workers;
++            _idle_workers.push_back (&worker);
++            const auto has_work = [&] {
++                return worker.role || _stopping || !_roles.empty () || !_queue.empty ();
++            };
+             bool ready = false;
+             if (_idle_timeout.count () == 0) {
+-                _ready.wait (lock,
+-                             [this] { return _stopping || !_roles.empty () || !_queue.empty (); });
++                _ready.wait (lock, has_work);
+                 ready = true;
+             } else {
+-                ready = _ready.wait_for (lock, _idle_timeout, [this] {
+-                    return _stopping || !_roles.empty () || !_queue.empty ();
+-                });
+-            }
+-            --_idle_workers;
+-            if (!ready && _roles.empty () && _queue.empty ()) {
+-                if (_live_workers > _min_worker_count) {
++                ready = _ready.wait_for (lock, _idle_timeout, has_work);
++            }
++            if (!worker.role) {
++                const auto idle = std::find (_idle_workers.begin (), _idle_workers.end (), &worker);
++                _idle_workers.erase (idle);
++            }
++            if (worker.role) {
++                // Assignment already retained both role and drain lifetime.
++                role = std::move (worker.role);
++            } else {
++                if (!ready && _roles.empty () && _queue.empty ()) {
++                    if (_live_workers > _min_worker_count) {
++                        retire_current_worker_locked ();
++                        trace_exit ();
++                        return;
++                    }
++                    continue;
++                }
++                if (_stopping && _roles.empty () && _queue.empty ()) {
+                     retire_current_worker_locked ();
+                     trace_exit ();
+                     return;
+                 }
+-                continue;
+-            }
+-            if (_stopping && _roles.empty () && _queue.empty ()) {
+-                retire_current_worker_locked ();
+-                trace_exit ();
+-                return;
+-            }
+-            if (!_roles.empty ()) {
+-                role = std::move (_roles.front ());
+-                _roles.pop ();
+-                ++_role_active;
+-            } else {
+-                work = std::move (_queue.front ());
+-                _queue.pop ();
+-                if (work.cancellation)
+-                    _active_cancellations.push_back (&*work.cancellation);
+-            }
+-            ++_active;
++                if (!_roles.empty ()) {
++                    role = std::move (_roles.front ());
++                    _roles.pop ();
++                    ++_role_active;
++                } else {
++                    work = std::move (_queue.front ());
++                    _queue.pop ();
++                    if (work.cancellation)
++                        _active_cancellations.push_back (&*work.cancellation);
++                }
++                ++_active;
++            }
+         }
+ 
+         // A receive role is deliberately outside the application exception
+         // boundary.
+         if (role) {
+-            role->run ();
++            while (true) {
++                auto application = role->run ();
++                if (!application)
++                    break;
++                bool handed_off;
++                const auto *identity = role.get ();
++                {
++                    std::lock_guard lock (_mutex);
++                    handed_off = !_stopping && assign_idle_role_locked (role);
++                    if (handed_off) {
++                        // The old active unit becomes application work; the
++                        // replacement was retained by the same assignment owner.
++                        --_role_active;
++                        role.reset ();
++                    }
++                }
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++                if (_handoff_observer)
++                    _handoff_observer (identity, handed_off);
++#else
++                (void) identity;
++#endif
++                if (handed_off) {
++                    _ready.notify_all ();
++                    run_application_turn ([&] { application (true); });
++                    break;
++                }
++                application (false);
++            }
+         } else {
+             run_application_turn ([&] {
+                 std::visit (
+--- before/framework/src/runtime/dispatch/offload_executor.hpp
++++ after/framework/src/runtime/dispatch/offload_executor.hpp
+@@ -26,7 +26,11 @@
+       public:
+         virtual ~role_t () = default;
+         // Exceptions preserve the dedicated receive thread's terminate policy.
+-        virtual void run () = 0;
++        // A nonempty result ends this receive rotation. The executor decides
++        // placement once, after run's stack and receive scopes have returned.
++        // true runs one existing owner drain here; false posts it as before.
++        using application_turn_t = std::function<void (bool)>;
++        virtual application_turn_t run () = 0;
+     };
+ 
+     template <typename Work> static void run_application_turn (Work &&work) noexcept
+@@ -107,6 +111,11 @@
+     };
+ 
+     bool try_submit_application (work_t work);
++    struct worker_state_t
++    {
++        std::shared_ptr<role_t> role;
++    };
++    bool assign_idle_role_locked (const std::shared_ptr<role_t> &role);
+     void worker_loop ();
+     void complete_work_locked ();
+     void start_worker_locked ();
+@@ -129,7 +138,12 @@
+     std::size_t _active = 0;
+     std::size_t _role_active = 0;
+     std::size_t _live_workers = 0;
+-    std::size_t _idle_workers = 0;
++    // This replaces the idle count: removal reserves this exact worker and
++    // its role slot excludes application assignment until receive returns.
++    std::vector<worker_state_t *> _idle_workers;
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++    std::function<void (const role_t *, bool)> _handoff_observer;
++#endif
+ };
+ 
+ // Runtimes share one process pool and retain it until their lanes have drained.
+--- before/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ after/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -2120,16 +2120,32 @@
+     {
+     }
+ 
+-    void run () override
++    application_turn_t run () override
+     {
+-        std::optional<zlink::poll_event_flag_t> readiness;
+-        while (!host._stop.load (std::memory_order_acquire))
+-            readiness = rotate (readiness);
++        while (!host._stop.load (std::memory_order_acquire)) {
++            auto ready = rotate ();
++            if (ready) {
++                return [host = &host, node = node, registration = registration,
++                        ready = std::move (ready)] (bool handed_off) mutable {
++                    if (!handed_off) {
++                        mesh::service_mailbox_t::notify_application_ready (ready);
++                        return;
++                    }
++                    auto owner = std::move (ready->first.front ());
++                    ready->first.pop_front ();
++                    auto local =
++                      host->make_application_owner_work (node, registration, std::move (owner));
++                    // Publish every sibling before a local handler can block.
++                    mesh::service_mailbox_t::notify_application_ready (ready);
++                    local (false);
++                };
++            }
++        }
+         supply.close ();
+-    }
+-
+-    std::optional<zlink::poll_event_flag_t>
+-    rotate (std::optional<zlink::poll_event_flag_t> readiness)
++        return {};
++    }
++
++    mesh::service_mailbox_t::application_ready_batch_t rotate ()
+     {
+         auto &application_permit = *receive_permit;
+         auto &mailbox = node->native_node ().transport ().mailbox ();
+@@ -2360,8 +2376,7 @@
+             readiness = node->native_node ().wait_for_hosted_dispatch_activity (
+               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
+         }
+-        mesh::service_mailbox_t::notify_application_ready (ready);
+-        return readiness;
++        return ready;
+     }
+ 
+     struct pending_management_t
+@@ -2375,6 +2390,8 @@
+     const std::shared_ptr<detail::mesh_node_builder_state_t> registration;
+     const std::shared_ptr<std::optional<application_job_queue_t::permit_t>> receive_permit;
+     application_supply_slot_t supply;
++    // Continuity belongs to the receive role across worker assignments.
++    std::optional<zlink::poll_event_flag_t> readiness;
+     std::optional<pending_management_t> pending_management;
+ };
+ namespace
+--- before/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
++++ after/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+@@ -2,6 +2,7 @@
+ #ifdef NDEBUG
+ #undef NDEBUG
+ #endif
++#include "runtime/execution/state_lane.hpp"
+ #include "runtime/locations/in_memory_location_store.hpp"
+ #include "runtime/locations/location_runtime.hpp"
+ #include "runtime/locations/store_location_resolvers.hpp"
+@@ -21,6 +22,28 @@
+ {
+ struct offload_executor_test_access_t
+ {
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++    static void observe (offload_executor_t &executor,
++                         std::function<void (const offload_executor_t::role_t *, bool)> observer)
++    {
++        executor._handoff_observer = std::move (observer);
++    }
++#endif
++    static void limit_to_existing_workers (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        executor._max_worker_count = executor._live_workers;
++    }
++    static std::size_t idle (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        return executor._idle_workers.size ();
++    }
++    static bool stopping (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        return executor._stopping;
++    }
+     static std::condition_variable *ready (offload_executor_t &executor)
+     {
+         return &executor._ready;
+@@ -29,6 +52,18 @@
+ }
+ namespace
+ {
++bool no_idle = false, stop_reserved = false;
++std::promise<void> handoff_reserved, release_assignment;
++std::shared_future<void> assignment_release;
++rt::offload_executor_t *placement = nullptr;
++std::promise<void> spare_busy, release_spare, fallback_observed;
++std::shared_future<void> spare_release;
++std::atomic_size_t active_receivers{0}, ready_rotations{0}, handoff_attempts{0},
++  handoff_successes{0};
++std::atomic_size_t marker_deliveries{0}, stop_deliveries{0};
++thread_local bool in_receive_role = false;
++std::promise<void> stop_handler_started, release_stop_handler;
++std::shared_future<void> stop_handler_release;
+ std::atomic<std::condition_variable *> application_ready{nullptr};
+ std::atomic_size_t worker_notifications{0};
+ std::atomic_bool watch_notifications{false};
+@@ -50,6 +85,13 @@
+ {
+     void handle (const probe_t &probe, const fw::route_message_context_t &)
+     {
++        assert (!in_receive_role && rt::state_lane_t::current () == nullptr);
++        if (probe.value == "stop-probe") {
++            ++stop_deliveries;
++            stop_handler_started.set_value ();
++            stop_handler_release.wait ();
++            return;
++        }
+         if (probe.value == "parallel-probe") {
+             parallel_started.set_value ();
+             return;
+@@ -61,6 +103,7 @@
+                 queue_drained.set_value ();
+             return;
+         }
++        ++marker_deliveries;
+         handler_blocked = true;
+         handled.set_value (std::this_thread::get_id ());
+         release_handler_turn.wait ();
+@@ -89,8 +132,11 @@
+         for (std::size_t index = 0; index < *count; ++index) {
+             const auto *data = static_cast<const char *> (zlink_msg_data (&parts[index]));
+             const auto bytes = zlink_msg_size (&parts[index]);
+-            if (std::string_view (data, bytes).find ("queued-probe-") != std::string_view::npos)
++            if (std::string_view (data, bytes).find ("queued-probe-") != std::string_view::npos) {
++                std::lock_guard lock (observation_mutex);
++                assert (std::this_thread::get_id () != received_on || no_idle);
+                 ++received_queued;
++            }
+             if (bytes >= sizeof (marker) - 1
+                 && std::string_view (data, bytes).find (marker) != std::string_view::npos) {
+                 std::lock_guard lock (observation_mutex);
+@@ -111,11 +157,56 @@
+   std::shared_ptr<rt::offload_executor_t::
+                     role_t>) __asm__ ("__wrap__ZN5zlink9framework7runtime18offload_executor_"
+                                       "t10start_roleESt10shared_ptrINS2_6role_tEE");
++struct observed_receive_role_t final : rt::offload_executor_t::role_t
++{
++    std::shared_ptr<rt::offload_executor_t::role_t> inner;
++    explicit observed_receive_role_t (std::shared_ptr<rt::offload_executor_t::role_t> role) :
++        inner (std::move (role))
++    {
++    }
++    application_turn_t run () override
++    {
++        assert (++active_receivers == 1);
++        assert (!in_receive_role);
++        in_receive_role = true;
++        auto application = inner->run ();
++        in_receive_role = false;
++        --active_receivers;
++        if (application)
++            ++ready_rotations;
++        return application;
++    }
++};
+ extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
+                                     std::shared_ptr<rt::offload_executor_t::role_t> role)
+ {
++    placement = executor;
+     application_ready = rt::offload_executor_test_access_t::ready (*executor);
+-    return real_start_role (executor, std::move (role));
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++    rt::offload_executor_test_access_t::observe (*executor, [] (const auto *, bool success) {
++        ++handoff_attempts;
++        handoff_successes += success;
++        if (stop_reserved) {
++            assert (success);
++            handoff_reserved.set_value ();
++            assignment_release.wait ();
++        }
++        if (no_idle) {
++            assert (!success);
++            fallback_observed.set_value ();
++        }
++    });
++#endif
++    if (no_idle) {
++        rt::offload_executor_test_access_t::limit_to_existing_workers (*executor);
++        auto busy = spare_busy.get_future ();
++        assert (executor->try_submit_internal ([] {
++            spare_busy.set_value ();
++            spare_release.wait ();
++        }));
++        assert (busy.wait_for (5s) == std::future_status::ready);
++    }
++    return real_start_role (executor, std::make_shared<observed_receive_role_t> (std::move (role)));
+ }
+ 
+ extern "C" void
+@@ -129,8 +220,13 @@
+     real_notify (ready);
+ }
+ 
+-int main ()
+-{
++int main (int argc, char **argv)
++{
++    no_idle = argc > 1 && std::string_view (argv[1]) == "no-idle";
++    stop_reserved = argc > 1 && std::string_view (argv[1]) == "stop-reserved";
++    assignment_release = release_assignment.get_future ().share ();
++    spare_release = release_spare.get_future ().share ();
++    stop_handler_release = release_stop_handler.get_future ().share ();
+     bool correct = true;
+     {
+         fw::completion_owner_t completion;
+@@ -213,6 +309,12 @@
+               .value ();
+             std::this_thread::yield ();
+         }
++        if (!no_idle) {
++            while (rt::offload_executor_test_access_t::idle (*placement) == 0) {
++                assert (std::chrono::steady_clock::now () < deadline);
++                std::this_thread::yield ();
++            }
++        }
+         rt::messaging::client_call_codec_t codec;
+         auto header = codec.create_envelope (rt::messaging::message_kind_t::command,
+                                              "mailbox-owner-dispatch", "HandoffProbe");
+@@ -224,6 +326,39 @@
+             .result ()
+             .value ()
+           == zlink::submit_result_t::ok);
++        if (stop_reserved) {
++            auto reserved = handoff_reserved.get_future ();
++            assert (reserved.wait_for (5s) == std::future_status::ready);
++            auto stopping = std::async (std::launch::async, [&] { service.stop (); });
++            const auto stop_deadline = std::chrono::steady_clock::now () + 5s;
++            while (!rt::offload_executor_test_access_t::stopping (*placement)) {
++                assert (std::chrono::steady_clock::now () < stop_deadline);
++                std::this_thread::yield ();
++            }
++            assert (stopping.wait_for (0s) != std::future_status::ready);
++            release_assignment.set_value ();
++            assert (invocation.wait_for (5s) == std::future_status::ready);
++            {
++                std::lock_guard lock (observation_mutex);
++                assert (invocation.get () == received_on);
++            }
++            release_handler.set_value ();
++            assert (stopping.wait_for (5s) == std::future_status::ready);
++            stopping.get ();
++            source.stop ();
++            assert (marker_deliveries == 1 && handoff_attempts == 1 && handoff_successes == 1);
++            assert (active_receivers == 0 && ready_rotations == 1);
++            assert (placement->drained () && placement->owned_thread_count () == 0);
++            std::cout << "stop_between_assignment_and_wake delivered=" << marker_deliveries
++                      << " active_receivers=" << active_receivers << '\n';
++            return 0;
++        }
++        if (no_idle) {
++            auto fallback = fallback_observed.get_future ();
++            assert (fallback.wait_for (5s) == std::future_status::ready);
++            assert (handoff_attempts == 1 && handoff_successes == 0);
++            release_spare.set_value ();
++        }
+         assert (invocation.wait_for (5s) == std::future_status::ready);
+         std::thread::id receiver;
+         {
+@@ -232,7 +367,7 @@
+         }
+         const auto handler = invocation.get ();
+         const bool same = receiver == handler;
+-        {
++        if (!no_idle) {
+             for (std::size_t index = 0; index < queued_records; ++index) {
+                 auto queued = codec.encode_envelope_parts (
+                   header, probe_t{"queued-probe-" + std::to_string (index)}, serializers);
+@@ -250,9 +385,9 @@
+             }
+             assert (handled_queued.load () == 0);
+             const auto notifications_while_busy = worker_notifications.load ();
+-            std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
+-                      << std::endl;
+-            correct = correct && notifications_while_busy == 1;
++            std::cout << "application_notify_one_for_129_records=" << notifications_while_busy
++                      << " handoff_assignments=" << handoff_successes << std::endl;
++            correct = correct && notifications_while_busy == 0;
+             auto completed = std::make_shared<std::promise<void>> ();
+             auto terminal = completed->get_future ();
+             const auto operation =
+@@ -287,10 +422,44 @@
+         }
+         std::cout << "queued_records=" << handled_queued.load ()
+                   << " handler_on_receive_thread=" << same << '\n';
+-        correct = correct && !same && handled_queued.load () == queued_records;
++        correct =
++          correct && (same != no_idle) && handled_queued.load () == (no_idle ? 0 : queued_records);
++        if (no_idle) {
++            release_handler.set_value ();
++            service.stop ();
++        } else {
++            auto stop_parts =
++              codec.encode_envelope_parts (header, probe_t{"stop-probe"}, serializers);
++            assert (source
++                      .send_to_node (*registration->routing_id, stop_parts.items (),
++                                     std::vector<std::uint8_t>{})
++                      .result ()
++                      .value ()
++                    == zlink::submit_result_t::ok);
++            auto stop_started = stop_handler_started.get_future ();
++            assert (stop_started.wait_for (5s) == std::future_status::ready);
++            auto stopping = std::async (std::launch::async, [&] { service.stop (); });
++            const auto stop_deadline = std::chrono::steady_clock::now () + 5s;
++            while (!rt::offload_executor_test_access_t::stopping (*placement)) {
++                assert (std::chrono::steady_clock::now () < stop_deadline);
++                std::this_thread::yield ();
++            }
++            assert (stopping.wait_for (0s) != std::future_status::ready);
++            release_stop_handler.set_value ();
++            assert (stopping.wait_for (5s) == std::future_status::ready);
++            stopping.get ();
++            correct = correct && stop_deliveries == 1;
++        }
+         source.stop ();
+-        service.request_stop ();
+-        service.stop ();
++        assert (marker_deliveries == 1 && active_receivers == 0);
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++        assert (ready_rotations == handoff_attempts);
++#endif
++        assert (placement->drained () && placement->owned_thread_count () == 0);
++        std::cout << "ready_rotations=" << ready_rotations
++                  << " handoff_attempts=" << handoff_attempts
++                  << " handoff_successes=" << handoff_successes
++                  << " active_receivers=" << active_receivers << '\n';
+     }
+     return correct ? 0 : 1;
+ }
+--- before/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
++++ after/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
+@@ -35,7 +35,18 @@
+     static std::size_t idle (offload_executor_t &executor)
+     {
+         std::lock_guard lock (executor._mutex);
+-        return executor._idle_workers;
++        return executor._idle_workers.size ();
++    }
++    static void
++    observe_handoff (offload_executor_t &executor,
++                     std::function<void (const offload_executor_t::role_t *, bool)> observe)
++    {
++        executor._handoff_observer = std::move (observe);
++    }
++    static std::size_t assigned (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        return executor._role_active;
+     }
+     static bool stopping (offload_executor_t &executor)
+     {
+@@ -64,8 +75,159 @@
+ struct test_role_t final : rt::offload_executor_t::role_t
+ {
+     std::function<void ()> execute;
+-    void run () override { execute (); }
++    application_turn_t run () override
++    {
++        execute ();
++        return {};
++    }
+ };
++
++// The executor must return from run before application placement is allowed.
++struct rotating_role_t final : rt::offload_executor_t::role_t
++{
++    std::function<application_turn_t ()> rotate;
++    application_turn_t run () override { return rotate (); }
++};
++
++void receive_handoff_preserves_progress_and_exclusive_assignment ()
++{
++    rt::offload_executor_t executor (3);
++    await ([&] { return rt::offload_executor_test_access_t::idle (executor) == 3; });
++    std::promise<void> release_application, release_receiver, receiver_started, application_started;
++    auto application_release = release_application.get_future ().share ();
++    auto receiver_release = release_receiver.get_future ().share ();
++    auto receiving = receiver_started.get_future ();
++    auto application = application_started.get_future ();
++    std::thread::id first_receiver, next_receiver, application_worker;
++    std::atomic_size_t rotations{0}, attempts{0}, successes{0}, receiving_count{0};
++    auto role = std::make_shared<rotating_role_t> ();
++    rt::offload_executor_test_access_t::observe_handoff (
++      executor, [&] (const auto *observed, bool success) {
++          assert (observed == role.get ());
++          ++attempts;
++          successes += success;
++          assert (rt::offload_executor_test_access_t::assigned (executor) == 1);
++          assert (executor.live_worker_count () == 3 && executor.owned_thread_count () == 3);
++      });
++    role->rotate = [&] () -> rt::offload_executor_t::role_t::application_turn_t {
++        assert (++receiving_count == 1);
++        if (rotations++ == 0) {
++            first_receiver = std::this_thread::get_id ();
++            --receiving_count;
++            return [&] (bool handed_off) {
++                assert (handed_off);
++                application_worker = std::this_thread::get_id ();
++                application_started.set_value ();
++                application_release.wait ();
++            };
++        }
++        next_receiver = std::this_thread::get_id ();
++        receiver_started.set_value ();
++        receiver_release.wait ();
++        --receiving_count;
++        return {};
++    };
++    assert (executor.start_role (role));
++    await (application);
++    await (receiving);
++    assert (first_receiver == application_worker && next_receiver != first_receiver);
++    std::promise<void> independent_started;
++    auto independent = independent_started.get_future ();
++    assert (executor.try_submit_internal ([&] {
++        assert (std::this_thread::get_id () != next_receiver);
++        assert (std::this_thread::get_id () != application_worker);
++        independent_started.set_value ();
++    }));
++    await (independent);
++    assert (attempts == 1 && successes == 1 && rotations == 2);
++    release_application.set_value ();
++    release_receiver.set_value ();
++    executor.drain ();
++    assert (receiving_count == 0 && executor.drained ());
++    assert (executor.owned_thread_count () == 0);
++}
++
++void no_idle_worker_keeps_receive_role_and_posts_application ()
++{
++    rt::offload_executor_t executor (1);
++    await ([&] { return rt::offload_executor_test_access_t::idle (executor) == 1; });
++    std::atomic_size_t rotations{0}, attempts{0}, successes{0}, deliveries{0};
++    rt::offload_executor_test_access_t::observe_handoff (executor,
++                                                         [&] (const auto *, bool success) {
++                                                             ++attempts;
++                                                             successes += success;
++                                                         });
++    auto role = std::make_shared<rotating_role_t> ();
++    role->rotate = [&] () -> rt::offload_executor_t::role_t::application_turn_t {
++        if (rotations++ != 0) {
++            assert (deliveries == 0);
++            return {};
++        }
++        return [&] (bool handed_off) {
++            assert (!handed_off);
++            assert (executor.try_submit_internal ([&] {
++                assert (rotations == 2);
++                ++deliveries;
++            }));
++        };
++    };
++    assert (executor.start_role (role));
++    await ([&] { return deliveries == 1; });
++    executor.drain ();
++    assert (attempts == 1 && successes == 0 && rotations == 2 && deliveries == 1);
++}
++
++void stop_between_assignment_and_wake_keeps_both_drain_lifetimes ()
++{
++    rt::offload_executor_t executor (2);
++    await ([&] { return rt::offload_executor_test_access_t::idle (executor) == 2; });
++    std::promise<void> reserved, release_assignment, release_application, release_receiver;
++    auto assignment_release = release_assignment.get_future ().share ();
++    auto application_release = release_application.get_future ().share ();
++    auto receiver_release = release_receiver.get_future ().share ();
++    auto assigned = reserved.get_future ();
++    std::atomic_size_t rotations{0}, delivered{0}, independent{0};
++    rt::offload_executor_test_access_t::observe_handoff (executor,
++                                                         [&] (const auto *, bool success) {
++                                                             assert (success);
++                                                             reserved.set_value ();
++                                                             assignment_release.wait ();
++                                                         });
++    auto role = std::make_shared<rotating_role_t> ();
++    role->rotate = [&] () -> rt::offload_executor_t::role_t::application_turn_t {
++        if (rotations++ != 0) {
++            receiver_release.wait ();
++            return {};
++        }
++        return [&] (bool handed_off) {
++            assert (handed_off);
++            ++delivered;
++            application_release.wait ();
++        };
++    };
++    assert (executor.start_role (role));
++    await (assigned);
++    // This notification can wake the reserved receiver before the handoff's
++    // own wake. Its assigned role must still precede this application job.
++    assert (executor.try_submit_internal ([&] {
++        assert (rotations == 2 && delivered == 1);
++        ++independent;
++    }));
++    auto draining = std::async (std::launch::async, [&] { executor.drain_application (); });
++    await ([&] { return rt::offload_executor_test_access_t::stopping (executor); });
++    assert (draining.wait_for (0ms) != std::future_status::ready);
++    release_assignment.set_value ();
++    await ([&] { return delivered == 1 && rotations == 2; });
++    assert (independent == 0);
++    assert (draining.wait_for (0ms) != std::future_status::ready);
++    release_application.set_value ();
++    await (draining);
++    assert (!executor.drained () && independent == 1);
++    release_receiver.set_value ();
++    executor.drain ();
++    assert (executor.drained () && rotations == 2 && delivered == 1);
++    assert (executor.owned_thread_count () == 0);
++}
+ 
+ #ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
+ void queued_work_reserves_independent_workers (bool internal_first)
+@@ -276,6 +438,9 @@
+ 
+ int main ()
+ {
++    receive_handoff_preserves_progress_and_exclusive_assignment ();
++    no_idle_worker_keeps_receive_role_and_posts_application ();
++    stop_between_assignment_and_wake_keeps_both_drain_lifetimes ();
+ #ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
+     queued_work_reserves_independent_workers (true);
+     queued_work_reserves_independent_workers (false);

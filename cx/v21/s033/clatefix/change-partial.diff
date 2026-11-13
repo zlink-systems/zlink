@@ -1,0 +1,50 @@
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
+index da726f2348..eb686da965 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
+@@ -82,6 +82,7 @@ struct raw_mesh_node_owner_test_access_t
+         if (terminal == foundation::operation_terminal_t::cancelled)
+             EXPECT_TRUE (owner._operations->cancel (id));
+         else if (terminal == foundation::operation_terminal_t::timed_out) {
++            owner._lane.run ([] {}).get ();
+             const auto deadline = owner._operations->next_deadline ();
+             ASSERT_TRUE (deadline);
+             EXPECT_EQ (owner._operations->expire (*deadline).result ().value (), 1);
+@@ -630,6 +631,14 @@ class local_actor_receiver_t : public testing::Test
+         ASSERT_TRUE (request);
+     }
+ 
++    template <typename T> bool ready_within (const fw::task_t<T> &task)
++    {
++        const auto deadline = std::chrono::steady_clock::now () + 2s;
++        while (!task.await_ready () && std::chrono::steady_clock::now () < deadline)
++            std::this_thread::yield ();
++        return task.await_ready ();
++    }
++
+     void end (terminal_t terminal)
+     {
+         rt::mesh::raw_mesh_node_owner_test_access_t::end_local (
+@@ -906,8 +915,9 @@ TEST_F (local_actor_receiver_t, LocalRegistryTerminalsReachPreparedReceiverOnce)
+         std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
+         rt::mesh::raw_mesh_node_owner_test_access_t::inject_registry_clock (
+           runtime->native_node ().transport ());
+-        ASSERT_EQ (runtime->request_to_actor (actor, parts, operation, 1h).result ().value (),
+-                   zlink::submit_result_t::ok);
++        auto submitted = runtime->request_to_actor (actor, parts, operation, 1h);
++        ASSERT_TRUE (ready_within (submitted));
++        ASSERT_EQ (submitted.result ().value (), zlink::submit_result_t::ok);
+         dispatch_request ();
+         ASSERT_TRUE (request);
+         if (terminal == terminal_t::completed)
+@@ -917,7 +927,9 @@ TEST_F (local_actor_receiver_t, LocalRegistryTerminalsReachPreparedReceiverOnce)
+             EXPECT_TRUE (request->application_record->native_reply (std::nullopt));
+         } else
+             end (terminal);
+-        (void) operation.completion->task ().result ();
++        auto completion = operation.completion->task ();
++        ASSERT_TRUE (ready_within (completion));
++        (void) completion.result ();
+         EXPECT_EQ (calls, 1);
+         EXPECT_FALSE (runtime->native_node ().transport ().fail_local_operation (
+           operation.id, terminal_t::transport_failed));

@@ -1,0 +1,1762 @@
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
+index 8e11e7abee..41c93be339 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
+@@ -163,7 +163,8 @@ class channel_host_service_t::server_loop_t
+         _source = std::make_unique<client_server::raw_client_server_server_t> (
+           std::move (options), _context, &_runtime.state_executor ());
+         _source->start (*_router);
+-        _source->mailbox ().bind_application_dispatch ({}, [this] (const std::string &owner) {
++        _source->mailbox ().bind_application_dispatch ({}, [this] (const std::string &owner,
++                                                                   host::owner_kind_t) {
+             try {
+                 const auto create = [&] { return std::make_shared<owner_drain_t> (*this, owner); };
+                 if (_handler_executor->try_submit_drain (this, owner, std::ref (create)))
+@@ -300,7 +301,8 @@ class channel_host_service_t::server_loop_t
+           std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
+         auto record = mesh::service_mailbox_record_t::from_received (
+           mesh::service_mailbox_t::application_owner (host::owner_kind_t::channel, _channel_name),
+-          mesh::service_mailbox_domain_t::application, std::move (received));
++          mesh::service_mailbox_domain_t::application, host::owner_kind_t::channel,
++          std::move (received));
+         record.before_application_handler = [application_job] {
+             application_job->release_for_handler_entry ();
+         };
+diff --git a/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp b/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
+index 74286a7472..8fa954ca73 100644
+--- a/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
+@@ -506,7 +506,8 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
+     if (!is_control) {
+         if (application_header && !*application_header) {
+             auto rejected = mesh::service_mailbox_record_t::from_received (
+-              channel_name, mesh::service_mailbox_domain_t::application, std::move (*received));
++              channel_name, mesh::service_mailbox_domain_t::application,
++              host::owner_kind_t::channel, std::move (*received));
+             const bool admitted = co_await _lane.run_task ([this, &rejected, now] {
+                 const auto peer = _connections.find (rejected.source_routing_id);
+                 if (peer == _connections.end () || !peer->second)
+@@ -656,7 +657,8 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
+     });
+     const auto route_generation = received.route_generation ();
+     auto record = mesh::service_mailbox_record_t::from_received (
+-      envelope.channel_name, mesh::service_mailbox_domain_t::application, std::move (received));
++      envelope.channel_name, mesh::service_mailbox_domain_t::application,
++      host::owner_kind_t::channel, std::move (received));
+     record.before_application_handler = [permit = application_permit] () mutable {
+         if (!permit)
+             return;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index 5bb3aa5050..54a192d9aa 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -2125,11 +2125,12 @@ next_receive_activity_async (std::shared_ptr<detail::mesh_node_runtime_t> node,
+ auto mesh_node_host_service_t::make_application_owner_work (
+   std::shared_ptr<detail::mesh_node_runtime_t> node,
+   std::shared_ptr<detail::mesh_node_builder_state_t> registration,
+-  std::string owner)
++  std::string owner,
++  host::owner_kind_t owner_kind)
+ {
+     return
+       [node = std::move (node), registration = std::move (registration), owner = std::move (owner),
+-       services = _services, serializers = _serializers, filters = _filters,
++       owner_kind, services = _services, serializers = _serializers, filters = _filters,
+        failures = _runtime_failures, options = _dispatch_options,
+        executor = _application_dispatch.get ()] (
+         bool reject_only, std::shared_ptr<mesh::service_mailbox_claim_t> prepared = {},
+@@ -2141,8 +2142,8 @@ auto mesh_node_host_service_t::make_application_owner_work (
+           }
+           detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
+           auto pending = drain_application_owner (
+-            node, registration, owner, reject_only, services, serializers, filters, options,
+-            executor, std::move (prepared), std::move (source), turn_started);
++            node, registration, owner, owner_kind, reject_only, services, serializers, filters,
++            options, executor, std::move (prepared), std::move (source), turn_started);
+           detail::observe_task_terminal (pending, [failures] (const result_t<void> &result) {
+               failures->capture ([&] { result.value (); });
+           });
+@@ -2348,6 +2349,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+                   if (owner.domain == host::ready_domain_t::application) {
+                       mesh::service_mailbox_record_t mailbox_record;
+                       mailbox_record.owner = mesh::service_mailbox_t::application_owner (owner);
++                      mailbox_record.owner_kind = owner.owner_kind;
+                       mailbox_record.domain = mesh::service_mailbox_domain_t::application;
+                       mailbox_record.before_application_handler = record.before_application_handler;
+                       mailbox_record.application_permit.emplace (std::move (permit));
+@@ -3411,16 +3413,19 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+               std::make_shared<std::optional<application_job_queue_t::permit_t>> ();
+             mesh::service_mailbox_t::application_ready_t submit_owner =
+               [this, executor = _application_dispatch, node,
+-               registration] (const std::string &owner) {
+-                  if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
++               registration] (const std::string &owner, host::owner_kind_t owner_kind) {
++                  if (mesh::service_mailbox_t::concurrent_application_owner (owner_kind)) {
+                       const auto create = [&] {
+                           return std::make_shared<application_owner_drain_t> (
+-                            node, owner, make_application_owner_work (node, registration, owner));
++                            node, owner,
++                            make_application_owner_work (node, registration, owner, owner_kind));
+                       };
+                       if (!executor->try_submit_drain (node.get (), owner, std::ref (create)))
+-                          make_application_owner_work (node, registration, owner) (true);
++                          make_application_owner_work (node, registration, owner,
++                                                       owner_kind) (true);
+                   } else {
+-                      auto start = make_application_owner_work (node, registration, owner);
++                      auto start =
++                        make_application_owner_work (node, registration, owner, owner_kind);
+                       if (!executor->try_submit_internal ([start] { start (false); }))
+                           start (true);
+                   }
+@@ -3927,6 +3932,7 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+   std::shared_ptr<detail::mesh_node_runtime_t> node,
+   std::shared_ptr<detail::mesh_node_builder_state_t> registration,
+   std::string owner,
++  host::owner_kind_t owner_kind,
+   bool reject_only,
+   service_provider_t *services,
+   serializer_registry_t *serializers,
+@@ -3944,7 +3950,7 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+     auto owned_node = std::move (node);
+     auto owned_registration = std::move (registration);
+     auto &mailbox = owned_node->native_node ().transport ().mailbox ();
+-    const bool concurrent = mesh::service_mailbox_t::concurrent_application_owner (owner);
++    const bool concurrent = mesh::service_mailbox_t::concurrent_application_owner (owner_kind);
+     if (!concurrent && !mailbox.begin_application_drain (owner))
+         co_return;
+     const auto deadline = (owned_source ? turn_started : std::chrono::steady_clock::now ())
+@@ -4051,6 +4057,7 @@ mesh_node_host_service_t::submit_local_node_send (std::shared_ptr<detail::mesh_n
+     record.source_node_rid = *source_rid;
+     mesh::service_mailbox_record_t mailbox_record;
+     mailbox_record.owner = mesh::service_mailbox_t::application_owner (owner);
++    mailbox_record.owner_kind = owner.owner_kind;
+     mailbox_record.domain = mesh::service_mailbox_domain_t::application;
+     mailbox_record.application_permit.emplace (std::move (*application_job));
+     mailbox_record.application.emplace (
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
+index 987162db76..b3a67a9135 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
+@@ -158,6 +158,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
+     drain_application_owner (std::shared_ptr<detail::mesh_node_runtime_t> node,
+                              std::shared_ptr<detail::mesh_node_builder_state_t> registration,
+                              std::string owner,
++                             host::owner_kind_t owner_kind,
+                              bool reject_only,
+                              service_provider_t *services,
+                              serializer_registry_t *serializers,
+@@ -194,7 +195,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
+     auto
+     make_application_owner_work (std::shared_ptr<detail::mesh_node_runtime_t> node,
+                                  std::shared_ptr<detail::mesh_node_builder_state_t> registration,
+-                                 std::string owner);
++                                 std::string owner,
++                                 host::owner_kind_t owner_kind);
+     std::optional<location_owner_token_t> current_location_owner () const;
+ };
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+index 225fdeb0dd..07a5952be3 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -1844,7 +1844,7 @@ task_t<bool> raw_mesh_node_owner_t::send_control (std::vector<std::uint8_t> targ
+           admit_control (local, local,
+                          service_mailbox_record_t::from_parts (
+                            owner_key (local.node_routing_id),
+-                           service_mailbox_domain_t::infrastructure,
++                           service_mailbox_domain_t::infrastructure, std::nullopt,
+                            detail::backend::materialize_binding_parts (parts),
+                            local.node_routing_id, std::nullopt, local.lifecycle_generation))
+           == raw_mesh_pump_result_t::infrastructure;
+@@ -2835,7 +2835,7 @@ task_t<bool> raw_mesh_node_owner_t::send_instance_spot_activation (
+         parts.push_back (std::move (*metadata));
+     parts.push_back (protocol::encode_application_payload (application_payload));
+     const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
+-      owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
++      owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure, std::nullopt,
+       detail::backend::materialize_binding_parts (std::move (parts)), local.node_routing_id,
+       std::nullopt));
+     if (accepted)
+@@ -2889,7 +2889,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
+     }
+     if (target_routing_id == local.node_routing_id) {
+         const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
+-          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
++          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure, std::nullopt,
+           detail::backend::materialize_binding_parts (std::move (parts)), local.node_routing_id,
+           correlation));
+         if (!accepted)
+@@ -3024,7 +3024,7 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
+     }
+     if (target_routing_id == local.node_routing_id) {
+         const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
+-          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
++          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure, std::nullopt,
+           detail::backend::materialize_binding_parts ({header (correlation)}),
+           local.node_routing_id, correlation));
+         if (!accepted)
+@@ -3636,9 +3636,11 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
+       [&] (std::string owner, service_mailbox_domain_t domain,
+            std::optional<std::uint64_t> correlation = std::nullopt, std::uint64_t generation = 0,
+            std::optional<std::pair<std::uint64_t, std::uint64_t>> operation = std::nullopt,
+-           std::optional<service_bound_session_source_t> bound_session = std::nullopt) {
++           std::optional<service_bound_session_source_t> bound_session = std::nullopt,
++           std::optional<host::owner_kind_t> owner_kind = std::nullopt) {
+           ingress.owner = std::move (owner);
+           ingress.domain = domain;
++          ingress.owner_kind = owner_kind;
+           ingress.correlation = correlation;
+           ingress.source_node_generation = generation;
+           ingress.operation = operation;
+@@ -3810,11 +3812,12 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
+             }
+             (void) protocol::decode_application_payload (
+               protocol::message_bytes (received->parts ().back ()), false);
+-            return enqueue_received (route_received ("bound-session:" + send.actor.actor_id,
+-                                                     service_mailbox_domain_t::application,
+-                                                     std::nullopt,
+-                                                     admitted->descriptor.lifecycle_generation),
+-                                     raw_mesh_pump_result_t::application);
++            return enqueue_received (
++              route_received ("bound-session:" + send.actor.actor_id,
++                              service_mailbox_domain_t::application, std::nullopt,
++                              admitted->descriptor.lifecycle_generation, std::nullopt, std::nullopt,
++                              host::owner_kind_t::actor),
++              raw_mesh_pump_result_t::application);
+         }
+         if (header.kind == protocol::command::boundSessionBind) {
+             if (header.flags != 0 || received->parts ().size () != 1 || !received->reply_token ()) {
+@@ -4118,7 +4121,8 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
+             return enqueue_received (
+               route_received (service_mailbox_t::application_owner (host::owner_kind_t::node),
+                               service_mailbox_domain_t::application, std::nullopt,
+-                              admitted->descriptor.lifecycle_generation),
++                              admitted->descriptor.lifecycle_generation, std::nullopt, std::nullopt,
++                              host::owner_kind_t::node),
+               raw_mesh_pump_result_t::application);
+         }
+         if ((header.kind != protocol::command::nodeSend
+@@ -4137,6 +4141,7 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
+             return reject ();
+         }
+         std::string mailbox_owner;
++        std::optional<host::owner_kind_t> mailbox_owner_kind;
+         std::optional<std::uint64_t> correlation;
+         std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
+         std::optional<service_bound_session_source_t> bound_session_source;
+@@ -4153,7 +4158,8 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
+                 correlation = protocol::decode_node_request_header (
+                   protocol::message_bytes (received->parts ().front ()));
+             }
+-            mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::node);
++            mailbox_owner_kind = host::owner_kind_t::node;
++            mailbox_owner = service_mailbox_t::application_owner (*mailbox_owner_kind);
+         } else if (header.kind == protocol::command::channelSend
+                    || header.kind == protocol::command::channelRequest) {
+             std::string channel_name;
+@@ -4173,8 +4179,9 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
+             if (!find_service_channel (local, channel_name)) {
+                 return reject ();
+             }
++            mailbox_owner_kind = host::owner_kind_t::channel;
+             mailbox_owner =
+-              service_mailbox_t::application_owner (host::owner_kind_t::channel, channel_name);
++              service_mailbox_t::application_owner (*mailbox_owner_kind, channel_name);
+         } else if (header.kind == protocol::command::spotSend
+                    || header.kind == protocol::command::spotRequest) {
+             if (header.kind == protocol::command::spotRequest && !received->reply_token ()) {
+@@ -4189,8 +4196,9 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
+             }
+             correlation = spot.correlation;
+             operation = std::pair{spot.operation.high, spot.operation.low};
++            mailbox_owner_kind = host::owner_kind_t::spot;
+             mailbox_owner =
+-              service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.target.spot_id);
++              service_mailbox_t::application_owner (*mailbox_owner_kind, spot.target.spot_id);
+         } else {
+             if (header.kind == protocol::command::actorRequest && !received->reply_token ()) {
+                 return reject ();
+@@ -4210,12 +4218,14 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
+                   actor.bound_session_source->binding_generation,
+                   actor.bound_session_source->session_sequence};
+             }
+-            mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::actor,
+-                                                                  actor.target.actor_id);
++            mailbox_owner_kind = host::owner_kind_t::actor;
++            mailbox_owner =
++              service_mailbox_t::application_owner (*mailbox_owner_kind, actor.target.actor_id);
+         }
+-        auto record = route_received (
+-          std::move (mailbox_owner), service_mailbox_domain_t::application, correlation,
+-          admitted->descriptor.lifecycle_generation, operation, std::move (bound_session_source));
++        auto record =
++          route_received (std::move (mailbox_owner), service_mailbox_domain_t::application,
++                          correlation, admitted->descriptor.lifecycle_generation, operation,
++                          std::move (bound_session_source), mailbox_owner_kind);
+         // The receive turn only observes the polling list; a missing source is read by
+         // the authority owner after the canonical claim has recorded its shared lookup.
+         if (operation && _request_sources)
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+index 400c945d2a..25689d4efe 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+@@ -137,6 +137,8 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+         throw std::invalid_argument (
+           "service mailbox record requires an owner and retained payload");
+     }
++    if (record.domain == service_mailbox_domain_t::application && !record.owner_kind)
++        throw std::invalid_argument ("application mailbox record requires an owner kind");
+     // A queued original carries no claim credit; take mints it.
+     record.transferred = {};
+     const auto retained = retained_bytes (record);
+@@ -149,6 +151,11 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+         record.received_at = _utc_clock ();
+     const auto owner = record.owner;
+     auto &queue = target.owners[owner];
++    if (queue.owner_kind != record.owner_kind) {
++        if (queue.owner_kind)
++            throw std::invalid_argument ("mailbox owner kind must match its queue");
++        queue.owner_kind = record.owner_kind;
++    }
+     if (record.domain == service_mailbox_domain_t::application && _state->application_prepare)
+         _state->application_prepare (record);
+     if (admitted)
+@@ -160,14 +167,15 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+     target.bytes += retained;
+     if (queue.phase == owner_phase_t::idle) {
+         queue.phase = owner_phase_t::ready;
+-        target.ready.push_back (owner);
+-    } else if (&target == &_state->application && concurrent_application_owner (owner)
++        target.ready.emplace_back (owner, queue.owner_kind);
++    } else if (&target == &_state->application && concurrent_application_owner (*queue.owner_kind)
+                && queue.phase != owner_phase_t::draining) {
+         // ready carries publication notifications. The executor's persistent
+         // entry retains ready membership after this notification list is taken.
+         queue.phase = owner_phase_t::ready;
+-        if (std::find (target.ready.begin (), target.ready.end (), owner) == target.ready.end ())
+-            target.ready.push_back (owner);
++        if (std::none_of (target.ready.begin (), target.ready.end (),
++                          [&] (const auto &ready) { return ready.first == owner; }))
++            target.ready.emplace_back (owner, queue.owner_kind);
+     }
+     const bool notify = &target == &_state->application && !_state->application_receive_turn;
+     lock.unlock ();
+@@ -188,7 +196,7 @@ service_mailbox_t::try_claim (service_mailbox_domain_t domain_value,
+     std::unique_lock lock (_state->mutex);
+     auto &source = domain (domain_value);
+     while (!source.ready.empty ()) {
+-        const auto &owner = source.ready.front ();
++        const auto &owner = source.ready.front ().first;
+         auto found = source.owners.find (owner);
+         if (found == source.owners.end () || found->second.phase != owner_phase_t::ready
+             || found->second.records.empty ()) {
+@@ -223,15 +231,22 @@ service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
+     auto claim =
+       claim_owner_locked (source, domain_value, owner, message_budget, byte_budget, claimed, lock);
+     if (found->second.phase != owner_phase_t::draining) {
+-        source.ready.erase (std::remove (source.ready.begin (), source.ready.end (), owner),
+-                            source.ready.end ());
++        source.ready.remove_if ([&] (const auto &ready) { return ready.first == owner; });
+     }
+     return claim;
+ }
+ 
+-bool service_mailbox_t::concurrent_application_owner (std::string_view owner) noexcept
++bool service_mailbox_t::concurrent_application_owner (host::owner_kind_t kind)
+ {
+-    return owner == "node" || owner.starts_with ("channel:");
++    switch (kind) {
++        case host::owner_kind_t::node:
++        case host::owner_kind_t::channel:
++            return true;
++        case host::owner_kind_t::spot:
++        case host::owner_kind_t::actor:
++            return false;
++    }
++    throw std::invalid_argument ("unknown application owner kind");
+ }
+ 
+ std::size_t service_mailbox_t::pending_application_records (const std::string &owner) const
+@@ -244,8 +259,6 @@ std::size_t service_mailbox_t::pending_application_records (const std::string &o
+ std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_application_record (
+   const std::string &owner, bool &more, const claimed_t &claimed)
+ {
+-    if (!concurrent_application_owner (owner))
+-        throw std::invalid_argument ("independent application take requires Node/Channel owner");
+     std::unique_lock lock (_state->mutex);
+     auto &source = _state->application;
+     const auto found = source.owners.find (owner);
+@@ -253,6 +266,8 @@ std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_applicatio
+     if (found == source.owners.end () || found->second.records.empty ())
+         return nullptr;
+     auto &queue = found->second;
++    if (!concurrent_application_owner (queue.owner_kind.value ()))
++        throw std::invalid_argument ("independent application take requires Node/Channel owner");
+     auto claim = std::make_shared<service_mailbox_claim_t> ();
+     claim->owner = owner;
+     claim->domain = service_mailbox_domain_t::application;
+@@ -279,7 +294,7 @@ std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_applicatio
+     more = !queue.records.empty ();
+     queue.phase = more ? owner_phase_t::ready : owner_phase_t::retained;
+     if (!more)
+-        source.ready.remove (owner);
++        source.ready.remove_if ([&] (const auto &ready) { return ready.first == owner; });
+     try {
+         if (claimed)
+             claimed (claim);
+@@ -555,7 +570,7 @@ bool service_mailbox_t::finish_locked (state_t &state, const service_mailbox_cla
+             target.owners.erase (found);
+         else {
+             queue.phase = owner_phase_t::ready;
+-            target.ready.push_back (claim.owner);
++            target.ready.emplace_back (claim.owner, queue.owner_kind);
+         }
+     }
+     return &target == &state.application && !state.application_receive_turn;
+@@ -610,7 +625,7 @@ void service_mailbox_t::end_application_drain (const std::string &owner)
+         _state->application.owners.erase (found);
+     } else {
+         queue.phase = owner_phase_t::ready;
+-        _state->application.ready.push_back (owner);
++        _state->application.ready.emplace_back (owner, queue.owner_kind);
+     }
+     const bool notify = !_state->application_receive_turn;
+     lock.unlock ();
+@@ -654,7 +669,7 @@ void service_mailbox_t::notify_application_ready (application_ready_batch_t &rea
+     while (ready && !ready->first.empty ()) {
+         auto owner = std::move (ready->first.front ());
+         ready->first.pop_front ();
+-        ready->second (owner);
++        ready->second (owner.first, owner.second.value ());
+     }
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+index 017af063c2..304b0332b9 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+@@ -166,6 +166,8 @@ class service_mailbox_reply_target_t
+ struct service_mailbox_record_t
+ {
+     std::string owner;
++    // Application producers set the kind before publication; infrastructure leaves it empty.
++    std::optional<host::owner_kind_t> owner_kind;
+     // Same value as value-initialisation, so default-constructed records are never indeterminate.
+     service_mailbox_domain_t domain = service_mailbox_domain_t::application;
+     // Logical peer identity used by topology and location lookups. Native reply routing
+@@ -188,6 +190,7 @@ struct service_mailbox_record_t
+     static service_mailbox_record_t
+     from_parts (std::string owner,
+                 service_mailbox_domain_t domain,
++                std::optional<host::owner_kind_t> owner_kind,
+                 std::vector<zlink::message_t> parts,
+                 std::vector<std::uint8_t> source = {},
+                 std::optional<std::uint64_t> correlation = {},
+@@ -199,6 +202,7 @@ struct service_mailbox_record_t
+         service_mailbox_record_t record{};
+         record.owner = std::move (owner);
+         record.domain = domain;
++        record.owner_kind = owner_kind;
+         record.replace_parts (std::move (parts));
+         record.source_routing_id = std::move (source);
+         record.correlation = correlation;
+@@ -208,12 +212,15 @@ struct service_mailbox_record_t
+         record.before_application_handler = std::move (before_application_handler);
+         return record;
+     }
+-    static service_mailbox_record_t
+-    from_received (std::string owner, service_mailbox_domain_t domain, zlink::received_t received)
++    static service_mailbox_record_t from_received (std::string owner,
++                                                   service_mailbox_domain_t domain,
++                                                   std::optional<host::owner_kind_t> owner_kind,
++                                                   zlink::received_t received)
+     {
+         service_mailbox_record_t record{};
+         record.owner = std::move (owner);
+         record.domain = domain;
++        record.owner_kind = owner_kind;
+         record._received = std::move (received);
+         if (record._received.routing_id ())
+             record.source_routing_id = record._received.routing_id ()->to_bytes ();
+@@ -320,7 +327,7 @@ class service_mailbox_t
+     static std::string application_owner (const host::ready_record_t &owner);
+ 
+     using application_prepare_t = std::function<void (service_mailbox_record_t &)>;
+-    using application_ready_t = std::function<void (const std::string &)>;
++    using application_ready_t = std::function<void (const std::string &, host::owner_kind_t)>;
+     using application_dispatch_t = std::function<void (const host::ready_record_t &,
+                                                        const host::receive_record_t &,
+                                                        std::vector<zlink::message_t>,
+@@ -334,8 +341,10 @@ class service_mailbox_t
+     bool has_application_dispatch () const;
+     void begin_application_receive_turn ();
+     void end_application_receive_turn ();
++    // A notification keeps its kind even if its queue is consumed before delivery.
++    using ready_owner_t = std::pair<std::string, std::optional<host::owner_kind_t>>;
+     using application_ready_batch_t =
+-      std::optional<std::pair<std::list<std::string>, application_ready_t>>;
++      std::optional<std::pair<std::list<ready_owner_t>, application_ready_t>>;
+     application_ready_batch_t take_application_receive_turn ();
+     static void notify_application_ready (application_ready_batch_t &ready);
+     bool begin_application_drain (const std::string &owner);
+@@ -360,7 +369,7 @@ class service_mailbox_t
+                                                               const claimed_t &claimed = {});
+     // Scheduler-only Node/Channel take. The original list node stays in its
+     // existing claim until settlement, independently of later owner records.
+-    static bool concurrent_application_owner (std::string_view owner) noexcept;
++    static bool concurrent_application_owner (host::owner_kind_t kind);
+     std::shared_ptr<service_mailbox_claim_t> try_claim_application_record (
+       const std::string &owner, bool &more, const claimed_t &claimed = {});
+     std::size_t pending_application_records (const std::string &owner) const;
+@@ -444,6 +453,7 @@ class service_mailbox_t
+     // Node/Channel claims transfer the taken list node into the claim.
+     struct owner_queue_t
+     {
++        std::optional<host::owner_kind_t> owner_kind;
+         std::list<service_mailbox_record_t> records;
+         std::size_t messages = 0;
+         std::size_t bytes = 0;
+@@ -455,7 +465,7 @@ class service_mailbox_t
+     struct domain_t
+     {
+         std::unordered_map<std::string, owner_queue_t> owners;
+-        std::list<std::string> ready;
++        std::list<ready_owner_t> ready;
+         std::size_t messages = 0;
+         std::size_t bytes = 0;
+         std::size_t active_messages = 0;
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index 60adddd0d3..5e4bb40385 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -9117,6 +9117,7 @@ void public_host_runtime_t::publish_local_application (mesh::service_mailbox_app
+     }
+     mesh::service_mailbox_record_t record;
+     record.owner = mesh::service_mailbox_t::application_owner (dispatch.owner);
++    record.owner_kind = dispatch.owner.owner_kind;
+     record.domain = mesh::service_mailbox_domain_t::application;
+     record.before_application_handler = dispatch.record.before_application_handler;
+     record.source_routing_id = dispatch.record.source_node_rid.to_bytes ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp
+index 4fa8fc8f0d..f43aa8179f 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp
+@@ -3608,8 +3608,8 @@ struct native_intake_fixture_t
+         return mesh::service_mailbox_record_t::from_parts (
+           mesh::service_mailbox_t::application_owner (fw::runtime::host::owner_kind_t::actor,
+                                                       actor_id),
+-          mesh::service_mailbox_domain_t::application, std::move (record_parts), std::move (source),
+-          {}, 1);
++          mesh::service_mailbox_domain_t::application, fw::runtime::host::owner_kind_t::actor,
++          std::move (record_parts), std::move (source), {}, 1);
+     }
+ };
+ 
+@@ -4605,6 +4605,7 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
+     };
+     mesh::service_mailbox_record_t typed;
+     typed.owner = owner;
++    typed.owner_kind = rt::host::owner_kind_t::actor;
+     typed.domain = mesh::service_mailbox_domain_t::application;
+     typed.application.emplace ();
+     typed.application->record.kind = rt::host::record_kind_t::spot_control;
+@@ -4615,17 +4616,20 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
+     std::vector<zlink::message_t> malformed_parts;
+     malformed_parts.push_back (zlink::message_t::from ("invalid"));
+     auto malformed = mesh::service_mailbox_record_t::from_parts (
+-      owner, mesh::service_mailbox_domain_t::application, std::move (malformed_parts));
++      owner, mesh::service_mailbox_domain_t::application, fw::runtime::host::owner_kind_t::actor,
++      std::move (malformed_parts));
+     ASSERT_TRUE (mailbox.try_enqueue (std::move (malformed)));
+     drain ();
+     EXPECT_EQ (controls, 1u);
+     EXPECT_EQ (rejected, 1u);
+     st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), resolver);
+     EXPECT_THROW (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-                    owner, mesh::service_mailbox_domain_t::application, {})),
++                    owner, mesh::service_mailbox_domain_t::application,
++                    fw::runtime::host::owner_kind_t::actor, {})),
+                   std::invalid_argument);
+     auto invalid_accepted = mesh::service_mailbox_record_t::from_parts (
+-      owner, mesh::service_mailbox_domain_t::application, {zlink::message_t::from ("invalid")});
++      owner, mesh::service_mailbox_domain_t::application, fw::runtime::host::owner_kind_t::actor,
++      {zlink::message_t::from ("invalid")});
+     const auto invalid_slot =
+       fw::test::publish_stateful_claim (host->transport (), object, std::move (invalid_accepted));
+     EXPECT_EQ (raw
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+index 2a325755db..6e74d125ea 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+@@ -113,8 +113,9 @@ void enqueue (mesh::service_mailbox_t &mailbox,
+         correlation = request_correlation;
+     }
+     auto record = mesh::service_mailbox_record_t::from_parts (
+-      claim_owner (channel), domain, std::move (parts), std::move (source), correlation, 0, {}, {},
+-      std::move (before));
++      claim_owner (channel), domain,
++      channel ? host::owner_kind_t::channel : host::owner_kind_t::node, std::move (parts),
++      std::move (source), correlation, 0, {}, {}, std::move (before));
+     if (!raw_request) {
+         record.application.emplace ();
+         record.application->owner.owner_kind =
+@@ -343,6 +344,7 @@ void measure_permit_ownership_cost ()
+             for (std::size_t i = 0; i < count; ++i) {
+                 mesh::service_mailbox_record_t record;
+                 record.owner = owner;
++                record.owner_kind = host::owner_kind_t::node;
+                 record.domain = domain;
+                 record.application.emplace ();
+                 auto &permit = admitted ? record.application_permit : external[i];
+@@ -381,6 +383,7 @@ void verify_inline_permit (bool bulk_release, bool enter_handler = true)
+     require (permit.has_value (), "inline permit reservation failed");
+     mesh::service_mailbox_record_t record;
+     record.owner = owner;
++    record.owner_kind = host::owner_kind_t::node;
+     record.domain = domain;
+     record.application.emplace ();
+     record.application_permit.emplace (std::move (*permit));
+@@ -439,8 +442,8 @@ void verify_failure_permit ()
+     enqueue (mailbox, true);
+     std::vector<zlink::message_t> malformed_parts;
+     malformed_parts.push_back (zlink::message_t::from ("invalid"));
+-    auto malformed =
+-      mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (malformed_parts));
++    auto malformed = mesh::service_mailbox_record_t::from_parts (
++      owner, domain, host::owner_kind_t::node, std::move (malformed_parts));
+     malformed.application_permit = jobs->try_reserve_supply ();
+     require (malformed.application_permit.has_value (), "failure permit unavailable");
+     malformed.application_permit->mark_queued ();
+@@ -485,6 +488,7 @@ void verify_cut_permit ()
+     mesh::service_mailbox_t mailbox;
+     mesh::service_mailbox_record_t record;
+     record.owner = owner;
++    record.owner_kind = host::owner_kind_t::node;
+     record.domain = domain;
+     record.application.emplace ();
+     record.application_permit = jobs.try_reserve_supply ();
+@@ -508,7 +512,8 @@ void verify_reply_source_snapshot ()
+     std::vector<zlink::message_t> parts;
+     parts.push_back (zlink::message_t::from ("request"));
+     auto original = mesh::service_mailbox_record_t::from_parts (
+-      owner, domain, std::move (parts), request_source, request_correlation, 0, {}, {}, [] {});
++      owner, domain, host::owner_kind_t::node, std::move (parts), request_source,
++      request_correlation, 0, {}, {}, [] {});
+     original.application.emplace ();
+     const auto source = original.reply_source ();
+     require (source->source_routing_id == request_source
+@@ -544,8 +549,8 @@ void verify_multicast_admission (bool has_target)
+     parts.push_back (zlink::message_t::from (std::move (writer.data)));
+     parts.push_back (zlink::message_t::from (protocol::encode_application_payload (
+       protocol::application_payload_t::from_parts ({zlink::message_t::from ("payload")}))));
+-    auto original =
+-      mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (parts), request_source);
++    auto original = mesh::service_mailbox_record_t::from_parts (
++      owner, domain, host::owner_kind_t::node, std::move (parts), request_source);
+     original.application_permit.emplace (std::move (*permit));
+     original.application_permit->mark_queued ();
+     auto &mailbox = target->transport ().mailbox ();
+@@ -648,6 +653,7 @@ void verify_retained_local_original ()
+ {
+     mesh::service_mailbox_record_t original;
+     original.owner = owner;
++    original.owner_kind = host::owner_kind_t::node;
+     original.domain = domain;
+     original.application.emplace ();
+     original.application->parts.push_back (zlink::message_t::from ("original"));
+@@ -738,7 +744,8 @@ void verify_prestart_terminal (host::public_host_runtime_t &target)
+     auto &mailbox = target.transport ().mailbox ();
+     std::vector<zlink::message_t> parts;
+     parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0}));
+-    auto record = mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (parts));
++    auto record = mesh::service_mailbox_record_t::from_parts (
++      owner, domain, host::owner_kind_t::node, std::move (parts));
+     require (mailbox.try_enqueue (std::move (record)), "malformed fixture enqueue failed");
+     std::size_t started = 0;
+     std::size_t rejected = 0;
+@@ -798,6 +805,7 @@ void verify_late_release ()
+     std::weak_ptr<host::public_host_runtime_t> alive = target;
+     mesh::service_mailbox_record_t original;
+     original.owner = owner;
++    original.owner_kind = host::owner_kind_t::node;
+     original.domain = domain;
+     original.application.emplace ();
+     original.source_original = mesh::local_request_source_t{
+@@ -850,6 +858,7 @@ void verify_suspended_actor (bool local)
+       "pending-actor", 1, {'c', 'l', 'a', 'i', 'm'}, 1, 1, 1};
+     mesh::service_mailbox_record_t first;
+     first.owner = actor_owner;
++    first.owner_kind = host::owner_kind_t::actor;
+     first.domain = domain;
+     first.source_routing_id = {'c', 'l', 'a', 'i', 'm'};
+     first.source_node_generation = 1;
+@@ -873,6 +882,7 @@ void verify_suspended_actor (bool local)
+     require (mailbox.try_enqueue (std::move (first)), "suspended Actor enqueue failed");
+     mesh::service_mailbox_record_t suffix;
+     suffix.owner = actor_owner;
++    suffix.owner_kind = host::owner_kind_t::actor;
+     suffix.domain = domain;
+     suffix.application.emplace ();
+     suffix.application->owner.owner_kind = host::owner_kind_t::node;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
+index 78906cc203..3b19134764 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
+@@ -452,7 +452,8 @@ struct overlap_batch_t
+         options.runtime_failures =
+           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+         server = std::make_shared<client_server::raw_client_server_server_t> (options, context);
+-        server->mailbox ().bind_application_dispatch ({}, [] (const std::string &) {});
++        server->mailbox ().bind_application_dispatch (
++          {}, [] (const std::string &, zlink::framework::runtime::host::owner_kind_t) {});
+         server->start ();
+         source.options ().linger (0ms);
+         source.set_routing_id (zlink::routing_id_t::from ("overlap-peer"));
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
+index 9e1f0cc6c6..542f6cecdd 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
+@@ -1690,7 +1690,8 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
+     std::vector<zlink::message_t> parts;
+     parts.push_back (zlink::message_t::from (std::vector<std::uint8_t> (512, std::uint8_t{0x2a})));
+     auto record = service_mailbox_record_t::from_parts (
+-      "transferred-owner", service_mailbox_domain_t::application, std::move (parts));
++      "transferred-owner", service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::spot, std::move (parts));
+     if (!mailbox.try_enqueue (std::move (record))) {
+         (*complete_active) ([] {});
+         queue.drain ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp
+index 5cd408ae75..c5b5b7fdb9 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp
+@@ -102,10 +102,11 @@ class HandlerEntryPermit : public ::testing::Test
+         });
+     }
+ 
+-    mesh::service_mailbox_record_t queued (const std::string &owner)
++    mesh::service_mailbox_record_t queued (const std::string &owner, host::owner_kind_t owner_kind)
+     {
+         mesh::service_mailbox_record_t record;
+         record.owner = owner;
++        record.owner_kind = owner_kind;
+         record.domain = domain;
+         record.application_permit = jobs->try_reserve_supply ();
+         EXPECT_TRUE (record.application_permit);
+@@ -152,7 +153,7 @@ class HandlerEntryPermit : public ::testing::Test
+         auto parts = runtime::messaging::envelope_codec_t{}
+                        .encode_raw_body_parts (header, zlink::message_t::from ("17"))
+                        .take_items ();
+-        auto record = queued (owner);
++        auto record = queued (owner, host::owner_kind_t::node);
+         record.replace_parts (
+           {zlink::message_t::from (protocol::encode_node_send_header ()),
+            zlink::message_t::from (protocol::encode_application_payload (
+@@ -266,7 +267,8 @@ TEST_F (HandlerEntryPermit, StatefulAcceptedRecordAsyncFilterOutlivesClaim)
+       header, {"source", 1, {'p', 'e', 'e', 'r'}, 1},
+       protocol::application_payload_t{"packet", "application/json", {'1', '7'}}, false);
+     auto original =
+-      queued (mesh::service_mailbox_t::application_owner (host::owner_kind_t::actor, actor->key));
++      queued (mesh::service_mailbox_t::application_owner (host::owner_kind_t::actor, actor->key),
++              host::owner_kind_t::actor);
+     original.application.emplace ();
+     auto slot = test::publish_stateful_claim (transport, *actor, std::move (original));
+     auto waiter = jobs->wait_for_supply (
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
+index ef1eae0bf5..46f411f792 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
+@@ -1403,7 +1403,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RecoveredRequestWithoutNativeTokenDo
+        .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()});
+     target.start ();
+     auto recovered = rt::mesh::service_mailbox_record_t::from_parts (
+-      "source", rt::mesh::service_mailbox_domain_t::infrastructure, {}, {2}, 17);
++      "source", rt::mesh::service_mailbox_domain_t::infrastructure, std::nullopt, {}, {2}, 17);
+     EXPECT_NO_THROW (EXPECT_FALSE (target.reply_instance_spot_activation (recovered, 0, 0)));
+     target.close ();
+ }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_local_enqueue_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_local_enqueue_allocations.cpp
+index a5d742caee..24aa22c254 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_local_enqueue_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_local_enqueue_allocations.cpp
+@@ -795,8 +795,8 @@ TEST (LocalEnqueueAllocations, IdleManagementDoesNotAllocateInfrastructureBatchS
+         std::vector<zlink::message_t> parts;
+         parts.push_back (zlink::message_t::from (protocol::encode_message_follow (notice)));
+         auto record = mesh::service_mailbox_record_t::from_parts (
+-          "management", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'n'},
+-          {}, 1);
++          "management", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
++          std::move (parts), {'n'}, {}, 1);
+         ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (record)));
+     };
+     std::array<tests::allocation_event_t, 256> events{};
+@@ -926,6 +926,7 @@ TEST (LocalEnqueueAllocations, NativeSpotPublicationMovesCanonicalRecordStorage)
+     ASSERT_EQ (token_copies, 1u);
+     mesh::service_mailbox_record_t original;
+     original.owner = mesh::service_mailbox_t::application_owner (application->owner);
++    original.owner_kind = application->owner.owner_kind;
+     original.domain = mesh::service_mailbox_domain_t::application;
+     original.source_routing_id = {'n'};
+     original.source_node_generation = 1;
+@@ -1184,6 +1185,7 @@ TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
+         application->parts.push_back (zlink::message_t::from ("payload"));
+         mesh::service_mailbox_record_t original;
+         original.owner = mesh::service_mailbox_t::application_owner (application->owner);
++        original.owner_kind = application->owner.owner_kind;
+         const auto owner = original.owner;
+         original.domain = mesh::service_mailbox_domain_t::application;
+         original.application.emplace (std::move (*application));
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
+index c6484d5690..2ac81faf28 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
+@@ -1649,7 +1649,7 @@ void verify_application_owner_drain_transitions ()
+     mesh::service_mailbox_t manual;
+     manual.begin_application_receive_turn ();
+     assert (manual.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "manual", mesh::service_mailbox_domain_t::application,
++      "manual", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
+     manual.end_application_receive_turn ();
+     auto manual_claim = manual.try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
+@@ -1674,7 +1674,10 @@ void verify_application_owner_drain_transitions ()
+             ++copies;
+         }
+         ready_observer_t (ready_observer_t &&) = default;
+-        void operator() (const std::string &owner) const { ready.push_back (owner); }
++        void operator() (const std::string &owner, runtime::host::owner_kind_t) const
++        {
++            ready.push_back (owner);
++        }
+     };
+     mailbox.bind_application_dispatch ([&] (mesh::service_mailbox_record_t &) { ++prepared; },
+                                        ready_observer_t{ready, ready_copies});
+@@ -1685,6 +1688,7 @@ void verify_application_owner_drain_transitions ()
+     const auto enqueue = [&] (std::string owner, std::uint8_t value) {
+         return mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+           std::move (owner), mesh::service_mailbox_domain_t::application,
++          runtime::host::owner_kind_t::spot,
+           zlink::framework::detail::backend::materialize_binding_parts ({{value}})));
+     };
+     mailbox.begin_application_receive_turn ();
+@@ -1749,20 +1753,20 @@ void verify_independent_mailbox_domains_and_claim_fence ()
+     constexpr auto fixed_work_cost = runtime::dispatch_limits::fixed_work_byte_cost;
+     mesh::service_mailbox_t owner_scoped;
+     assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "owner-a", mesh::service_mailbox_domain_t::application,
++      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
+     auto owner_a_claim = owner_scoped.try_claim_owner (mesh::service_mailbox_domain_t::application,
+                                                        "owner-a", 1, 4096);
+     assert (owner_a_claim && owner_a_claim->records.size () == 1);
+     assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "owner-a", mesh::service_mailbox_domain_t::application,
++      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{2}}))));
+     assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "owner-b", mesh::service_mailbox_domain_t::application,
++      "owner-b", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{3}}))));
+     assert (owner_scoped.release (*owner_a_claim));
+     assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "owner-a", mesh::service_mailbox_domain_t::application,
++      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{6}}))));
+     auto owner_a_remaining = owner_scoped.try_claim_owner (
+       mesh::service_mailbox_domain_t::application, "owner-a", 2, 4096);
+@@ -1771,16 +1775,16 @@ void verify_independent_mailbox_domains_and_claim_fence ()
+ 
+     mesh::service_mailbox_t mailbox;
+     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "owner-a", mesh::service_mailbox_domain_t::application,
++      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{1, 2, 3}}))));
+     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "owner-a", mesh::service_mailbox_domain_t::application,
++      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{4, 5}}))));
+     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "peer-a", mesh::service_mailbox_domain_t::infrastructure,
++      "peer-a", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+       zlink::framework::detail::backend::materialize_binding_parts ({{9}}))));
+     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "owner-b", mesh::service_mailbox_domain_t::application,
++      "owner-b", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{7}}))));
+ 
+     auto owner_b =
+@@ -1806,12 +1810,12 @@ void verify_independent_mailbox_domains_and_claim_fence ()
+ 
+     mesh::service_mailbox_t accounting;
+     assert (accounting.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "accounted", mesh::service_mailbox_domain_t::application,
++      "accounted", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{1, 2, 3}}))));
+     assert (accounting.pending_bytes (mesh::service_mailbox_domain_t::application)
+             == fixed_work_cost + 3);
+     assert (accounting.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "accounted", mesh::service_mailbox_domain_t::application,
++      "accounted", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{4}}))));
+     // The claim byte budget bounds one receive turn; it is not a queue limit.
+     // A batch always takes its first record and then stops at the budget.
+@@ -1824,7 +1828,7 @@ void verify_independent_mailbox_domains_and_claim_fence ()
+     assert (accounting.release (*accounted_rest));
+ 
+     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "owner-large", mesh::service_mailbox_domain_t::application,
++      "owner-large", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {std::vector<std::uint8_t> (20, 7)}))));
+     auto oversized = mailbox.try_claim (mesh::service_mailbox_domain_t::application, 1, 1);
+@@ -1833,10 +1837,10 @@ void verify_independent_mailbox_domains_and_claim_fence ()
+ 
+     mesh::service_mailbox_t saturated;
+     assert (saturated.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "first", mesh::service_mailbox_domain_t::application,
++      "first", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
+     auto retained = mesh::service_mailbox_record_t::from_parts (
+-      "first", mesh::service_mailbox_domain_t::application,
++      "first", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{2, 3, 4}}));
+     assert (saturated.try_enqueue (std::move (retained)));
+     auto first = saturated.try_claim (mesh::service_mailbox_domain_t::application, 2, 64);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+index 5e84b8ee8c..2029503aaa 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+@@ -1918,7 +1918,7 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
+           .target_node_generation = source->status ().lifecycle_generation ()};
+         assert (
+           target->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-            "seal", mesh::service_mailbox_domain_t::infrastructure,
++            "seal", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+             {zlink::message_t::from (protocol::encode_session_relocation_seal (seal))},
+             source->status ().routing_id ().to_bytes (), std::nullopt,
+             source->status ().lifecycle_generation ())));
+@@ -2034,6 +2034,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
+       {0, 0, 0, 1, 0, 0, 0, 2, 0x7b, 0x7d}};
+     auto queued = mesh::service_mailbox_record_t::from_parts (
+       "bound-session:" + target.key, mesh::service_mailbox_domain_t::application,
++      host::owner_kind_t::actor,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {protocol::encode_bound_session_send (send),
+          protocol::encode_application_payload (application)}),
+@@ -2122,6 +2123,7 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
+         assert (session_owner->transport ().mailbox ().try_enqueue (
+           mesh::service_mailbox_record_t::from_parts (
+             "bound-session:" + actor.key, mesh::service_mailbox_domain_t::application,
++            host::owner_kind_t::actor,
+             zlink::framework::detail::backend::materialize_binding_parts (
+               {protocol::encode_bound_session_send (send),
+                protocol::encode_application_payload (application)}),
+@@ -4127,6 +4129,7 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
+         application->parts.push_back (zlink::message_t::from (value));
+         mesh::service_mailbox_record_t record;
+         record.owner = mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
++        record.owner_kind = host::owner_kind_t::node;
+         record.domain = mesh::service_mailbox_domain_t::application;
+         record.application.emplace (std::move (*application));
+         return mailbox.try_enqueue (std::move (record));
+@@ -4676,7 +4679,7 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
+           relay.relocation,     coordinator, relay.operation,
+           relay.reply_route_id, source,      protocol::reply_relay_ack_status_t::terminal_received};
+         const auto record = mesh::service_mailbox_record_t::from_parts (
+-          "relay", mesh::service_mailbox_domain_t::infrastructure,
++          "relay", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+           zlink::framework::detail::backend::materialize_binding_parts (
+             {protocol::encode_reply_relay_ack (ack)}),
+           source.node_routing_id, std::nullopt, source.node_generation);
+@@ -5563,7 +5566,7 @@ void verify_memory_accepted_record_authority ()
+         const protocol::spot_route_fence_t fence{
+           object.key, 1, target.node_routing_id, target.lifecycle_generation, 1, 11};
+         auto record = mesh::service_mailbox_record_t::from_parts (
+-          owner, mesh::service_mailbox_domain_t::application,
++          owner, mesh::service_mailbox_domain_t::application, host::owner_kind_t::spot,
+           detail::backend::materialize_binding_parts (
+             {protocol::encode_spot_message_header (protocol::command::spotSend,
+                                                    "memory-source-spot", fence, {1, 900}),
+@@ -5630,6 +5633,7 @@ void verify_memory_accepted_record_authority ()
+                         "memory-source-spot", spot, {1, sequence}, correlation);
+                 auto record = mesh::service_mailbox_record_t::from_parts (
+                   {}, mesh::service_mailbox_domain_t::application,
++                  actor ? host::owner_kind_t::actor : host::owner_kind_t::spot,
+                   detail::backend::materialize_binding_parts (
+                     {header, protocol::encode_application_payload (
+                                {"Memory", "application/json", {'{', '}'}})}),
+@@ -6069,7 +6073,7 @@ void verify_raw_spot_and_actor_routing ()
+ 
+     const protocol::wire_operation_id_t relocated_one_way_operation{0x91, 0x92};
+     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "spot:spot-1", mesh::service_mailbox_domain_t::application,
++      "spot:spot-1", mesh::service_mailbox_domain_t::application, host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {protocol::encode_spot_message_header (protocol::command::spotSend, "source-spot",
+                                                spot_fence, relocated_one_way_operation),
+@@ -6254,7 +6258,7 @@ void verify_raw_spot_and_actor_routing ()
+     // the frame under a fallback node/actor identity.
+     const protocol::wire_operation_id_t unfenced_operation{0xb1, 0xb2};
+     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "actor:actor-1", mesh::service_mailbox_domain_t::application,
++      "actor:actor-1", mesh::service_mailbox_domain_t::application, host::owner_kind_t::actor,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
+                                                 actor_fence, unfenced_operation, 92, 0),
+@@ -6278,7 +6282,7 @@ void verify_raw_spot_and_actor_routing ()
+     // bound-session tail at all is the same pre-Captured condition.
+     const protocol::wire_operation_id_t tailless_operation{0xb3, 0xb4};
+     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "actor:actor-1", mesh::service_mailbox_domain_t::application,
++      "actor:actor-1", mesh::service_mailbox_domain_t::application, host::owner_kind_t::actor,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
+                                                 actor_fence, tailless_operation, 93, 0),
+@@ -6441,6 +6445,7 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
+     const auto unreachable_source = bytes ("unreachable-source");
+     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+       "actor:relocated-reply-actor", mesh::service_mailbox_domain_t::application,
++      host::owner_kind_t::actor,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
+                                                 actor_fence, operation, 99),
+@@ -6524,6 +6529,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
+         const protocol::wire_operation_id_t operation{41, operation_low};
+         assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+           "actor:atomic-actor", mesh::service_mailbox_domain_t::application,
++          host::owner_kind_t::actor,
+           zlink::framework::detail::backend::materialize_binding_parts (
+             {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt,
+                                                     fence, operation),
+@@ -7029,7 +7035,7 @@ void verify_relocation_data_duplicates_are_distinct_arrivals ()
+       relocation, 31, coordinator, protocol::relocation_role_t::source, wire_object, frozen};
+     const auto encoded_data = protocol::encode_relocation_control (data);
+     const auto wire_record = mesh::service_mailbox_record_t::from_parts (
+-      "duplicate-data-target", mesh::service_mailbox_domain_t::infrastructure,
++      "duplicate-data-target", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+       zlink::framework::detail::backend::materialize_binding_parts ({encoded_data}),
+       source_routing_id, std::nullopt, source_generation);
+ 
+@@ -7191,7 +7197,7 @@ void verify_durable_reply_relay_single_winner ()
+       relocation,           coordinator,    operation,
+       relay.reply_route_id, request_source, protocol::reply_relay_ack_status_t::terminal_received};
+     auto stale_ack_record = mesh::service_mailbox_record_t::from_parts (
+-      "target", mesh::service_mailbox_domain_t::infrastructure,
++      "target", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {protocol::encode_reply_relay_ack (stale_ack)}),
+       source_descriptor.node_routing_id, std::nullopt, source_descriptor.lifecycle_generation + 1);
+@@ -7200,7 +7206,7 @@ void verify_durable_reply_relay_single_winner ()
+     auto wrong_route_ack = stale_ack;
+     ++wrong_route_ack.reply_route_id;
+     auto wrong_route_ack_record = mesh::service_mailbox_record_t::from_parts (
+-      "target", mesh::service_mailbox_domain_t::infrastructure,
++      "target", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {protocol::encode_reply_relay_ack (wrong_route_ack)}),
+       source_descriptor.node_routing_id, std::nullopt, source_descriptor.lifecycle_generation);
+@@ -9644,7 +9650,7 @@ void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispa
+       zlink::routing_id_t::from ("lifetime-session").to_bytes (),
+       {protocol::bound_session_binding_state_t::active, 17}};
+     assert (target.transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-      "lifetime-bind", mesh::service_mailbox_domain_t::infrastructure,
++      "lifetime-bind", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+       {zlink::message_t::from (protocol::encode_bound_session_bind (bind))},
+       local.routing_id ().to_bytes (), std::nullopt, local.lifecycle_generation ())));
+     host::public_host_runtime_test_access_t::enqueue_lifetime_probe (target);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp
+index 75921c996b..b8dbe24ae6 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp
+@@ -4718,7 +4718,7 @@ void test_relocation_request_source_registration (test_context_t &test,
+                                               0,
+                                               protocol::framework_error_code::none};
+           auto message = mesh::service_mailbox_record_t::from_parts (
+-            "source", mesh::service_mailbox_domain_t::infrastructure,
++            "source", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+             framework::detail::backend::materialize_binding_parts (
+               {protocol::encode_reply_relay (relay)}),
+             {'t'}, std::nullopt, 1);
+@@ -4958,7 +4958,7 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
+       coordinator, p::relocation_role_t::source,
+       object,      p::encode_frozen_application_record (accepted)};
+     const auto relay_record = mesh::service_mailbox_record_t::from_parts (
+-      "boundary-target", mesh::service_mailbox_domain_t::infrastructure,
++      "boundary-target", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+       {zlink::message_t::from (p::encode_relocation_control (relay_data))},
+       source_node.node_routing_id, std::nullopt, source_node.lifecycle_generation);
+     auto ready = source.request_relocation_prepare (target_node.node_routing_id, prepare, 5s);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
+index f64274173b..f5c89b281b 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
+@@ -26,7 +26,7 @@ record_t record ()
+ {
+     std::vector<zlink::message_t> parts (1);
+     return record_t::from_parts ("node", mesh::service_mailbox_domain_t::application,
+-                                 std::move (parts));
++                                 fw::runtime::host::owner_kind_t::node, std::move (parts));
+ }
+ 
+ void rotate (mailbox_t &mailbox, std::size_t count)
+@@ -55,15 +55,17 @@ void verify_cost ()
+     // Calibrate the owning FIFO, its owner index and its ready index on this
+     // ABI/runtime. Record payload storage is prepared before either measurement.
+     std::unordered_map<std::string, std::list<record_t>> owners;
+-    std::list<std::string> ready_owners;
++    std::list<mailbox_t::ready_owner_t> ready_owners;
+     auto reference_record = record ();
+     const auto reference = fw::tests::measure_allocations ([&] {
+         owners["node"].push_back (std::move (reference_record));
+-        ready_owners.push_back ("node");
++        ready_owners.emplace_back ("node", fw::runtime::host::owner_kind_t::node);
+     });
+     mailbox_t mailbox;
+     std::size_t notifications = 0;
+-    const mailbox_t::application_ready_t ready_callback = [&] (const auto &) { ++notifications; };
++    const mailbox_t::application_ready_t ready_callback = [&] (const auto &, auto) {
++        ++notifications;
++    };
+     mailbox.bind_application_dispatch ({}, ready_callback);
+     mailbox.begin_application_receive_turn ();
+     auto original = record ();
+@@ -75,7 +77,7 @@ void verify_cost ()
+     // Calibrate construction/move too: some standard libraries allocate a list
+     // sentinel even for an empty/moved-from container.
+     using ready_reference_t =
+-      std::optional<std::pair<std::list<std::string>, mailbox_t::application_ready_t>>;
++      std::optional<std::pair<std::list<mailbox_t::ready_owner_t>, mailbox_t::application_ready_t>>;
+     const auto take_reference = [&] () -> ready_reference_t {
+         // Match the owner's mixed nullopt/value returns: NRVO is optional and
+         // MSVC moves the list when this function returns an engaged optional.
+@@ -110,7 +112,7 @@ int main ()
+     try {
+         verify_cost ();
+         mailbox_t mailbox;
+-        mailbox.bind_application_dispatch ({}, [] (const auto &) {});
++        mailbox.bind_application_dispatch ({}, [] (const auto &, auto) {});
+         for (auto count : {1u, 128u})
+             rotate (mailbox, count);
+     }
+@@ -132,7 +134,7 @@ zlink_mailbox_fifo_measure (std::size_t iterations,
+ {
+     try {
+         mailbox_t mailbox;
+-        mailbox.bind_application_dispatch ({}, [] (const auto &) {});
++        mailbox.bind_application_dispatch ({}, [] (const auto &, auto) {});
+         rotate (mailbox, batch_size);
+         const auto start = std::chrono::steady_clock::now ();
+         const auto run = [&] {
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+index 47aa3a28ce..0087156bed 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+@@ -95,6 +95,7 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
+     const auto enqueue = [&] {
+         mesh::service_mailbox_record_t original;
+         original.owner = "node";
++        original.owner_kind = host::owner_kind_t::node;
+         original.domain = mesh::service_mailbox_domain_t::application;
+         original.application.emplace ();
+         original.application->owner.owner_kind = host::owner_kind_t::node;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp
+index 16c8e4f6cc..cd1815a216 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp
+@@ -27,6 +27,7 @@
+ #include <future>
+ #include <memory>
+ #include <optional>
++#include <stdexcept>
+ #include <string>
+ #include <thread>
+ 
+@@ -151,6 +152,87 @@ TEST (ManualDispatchOwner, ReceivedAtSurvivesApplicationQueueWait)
+     check_synchronous_handler_owner (true);
+ }
+ 
++TEST (ManualDispatchOwner, ApplicationConcurrencyUsesKindWithOpaqueOwnerKeys)
++{
++    namespace mesh = fw::runtime::mesh;
++    using kind_t = fw::runtime::host::owner_kind_t;
++    const auto verify = [] (const std::string &key, kind_t kind, bool concurrent) {
++        mesh::service_mailbox_t mailbox;
++        std::optional<kind_t> notified;
++        mailbox.bind_application_dispatch ({}, [&] (const std::string &owner, kind_t owner_kind) {
++            EXPECT_EQ (key, owner);
++            notified = owner_kind;
++        });
++        mailbox.begin_application_receive_turn ();
++        for (unsigned index = 0; index != 2; ++index) {
++            auto record = mesh::service_mailbox_record_t::from_parts (
++              key, mesh::service_mailbox_domain_t::application, kind,
++              {zlink::message_t::from ("payload")});
++            ASSERT_TRUE (mailbox.try_enqueue (std::move (record)));
++        }
++        auto ready = mailbox.take_application_receive_turn ();
++        EXPECT_EQ (concurrent, mesh::service_mailbox_t::concurrent_application_owner (kind));
++        bool more = false;
++        if (concurrent) {
++            const auto first = mailbox.try_claim_application_record (key, more);
++            ASSERT_TRUE (first);
++            EXPECT_TRUE (more);
++            const auto second = mailbox.try_claim_application_record (key, more);
++            ASSERT_TRUE (second);
++            EXPECT_FALSE (more);
++            mailbox.release (*first);
++            mailbox.release (*second);
++        } else {
++            EXPECT_THROW (mailbox.try_claim_application_record (key, more), std::invalid_argument);
++            const auto claim =
++              mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, key, 2, 4096);
++            ASSERT_TRUE (claim);
++            mailbox.release (*claim);
++        }
++        // Delivery still carries the original kind after settlement erased the queue.
++        mesh::service_mailbox_t::notify_application_ready (ready);
++        ASSERT_TRUE (notified);
++        EXPECT_EQ (kind, *notified);
++        EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
++    };
++    verify ("opaque-node-owner", kind_t::node, true);
++    verify ("opaque-channel-owner", kind_t::channel, true);
++    verify ("node", kind_t::spot, false);
++    verify ("channel:looks-concurrent", kind_t::actor, false);
++}
++
++TEST (ManualDispatchOwner, ApplicationOwnerKindMustBeSetAndMatchItsQueue)
++{
++    namespace mesh = fw::runtime::mesh;
++    using kind_t = fw::runtime::host::owner_kind_t;
++    mesh::service_mailbox_t mailbox;
++    unsigned prepared = 0, admitted = 0;
++    mailbox.bind_application_dispatch ([&] (mesh::service_mailbox_record_t &) { ++prepared; }, {});
++    auto record = mesh::service_mailbox_record_t::from_parts (
++      "node", mesh::service_mailbox_domain_t::application, std::nullopt,
++      {zlink::message_t::from ("payload")});
++    EXPECT_THROW (mailbox.try_enqueue (std::move (record), [&] { ++admitted; }),
++                  std::invalid_argument);
++    EXPECT_EQ (0u, prepared);
++    EXPECT_EQ (0u, admitted);
++    EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
++    record.owner_kind = kind_t::node;
++    ASSERT_TRUE (mailbox.try_enqueue (std::move (record), [&] { ++admitted; }));
++    auto conflicting = mesh::service_mailbox_record_t::from_parts (
++      "node", mesh::service_mailbox_domain_t::application, kind_t::channel,
++      {zlink::message_t::from ("payload")});
++    EXPECT_THROW (mailbox.try_enqueue (std::move (conflicting), [&] { ++admitted; }),
++                  std::invalid_argument);
++    EXPECT_EQ (1u, prepared);
++    EXPECT_EQ (1u, admitted);
++    EXPECT_EQ (1u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
++    bool more;
++    const auto claim = mailbox.try_claim_application_record ("node", more);
++    ASSERT_TRUE (claim);
++    EXPECT_FALSE (more);
++    mailbox.release (*claim);
++}
++
+ TEST (ManualDispatchOwner, MailboxUsesItsInjectedUtcClockAtAcceptance)
+ {
+     const auto accepted_at =
+@@ -165,14 +247,15 @@ TEST (ManualDispatchOwner, MailboxUsesItsInjectedUtcClockAtAcceptance)
+       [&] (fw::runtime::mesh::service_mailbox_record_t &record) {
+           prepared_at = record.received_at;
+       },
+-      [] (const std::string &) {});
++      [] (const std::string &, zlink::framework::runtime::host::owner_kind_t) {});
+ 
+     std::vector<zlink::message_t> parts;
+     parts.push_back (zlink::message_t::from ("payload"));
+     auto record = fw::runtime::mesh::service_mailbox_record_t::from_parts (
+       fw::runtime::mesh::service_mailbox_t::application_owner (
+         fw::runtime::host::owner_kind_t::node),
+-      fw::runtime::mesh::service_mailbox_domain_t::application, std::move (parts));
++      fw::runtime::mesh::service_mailbox_domain_t::application,
++      fw::runtime::host::owner_kind_t::node, std::move (parts));
+ 
+     ASSERT_TRUE (mailbox.try_enqueue (std::move (record)));
+     ASSERT_TRUE (prepared_at);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+index b2b66cd63f..fff6604be6 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+@@ -684,6 +684,7 @@ void enqueue_application_route (
+     namespace mesh = zlink::framework::runtime::mesh;
+     mesh::service_mailbox_record_t mailbox_record;
+     mailbox_record.owner = mesh::service_mailbox_t::application_owner (owner);
++    mailbox_record.owner_kind = owner.owner_kind;
+     mailbox_record.domain = mesh::service_mailbox_domain_t::application;
+     mailbox_record.before_application_handler = [] {};
+     mailbox_record.application.emplace (
+@@ -846,8 +847,8 @@ void verify_route_internal_packets_precede_application_dispatch ()
+           "Rel358MulticastPayload", "rel-358-topic", "multicast-through-host")})))};
+     auto multicast_record = runtime::mesh::service_mailbox_record_t::from_parts (
+       multicast_owner, runtime::mesh::service_mailbox_domain_t::application,
+-      std::move (multicast_parts), multicast_source, std::nullopt, 0, {}, {},
+-      std::move (before_multicast_handler));
++      zlink::framework::runtime::host::owner_kind_t::node, std::move (multicast_parts),
++      multicast_source, std::nullopt, 0, {}, {}, std::move (before_multicast_handler));
+     assert (
+       node->native_node ().transport ().mailbox ().try_enqueue (std::move (multicast_record)));
+     assert (multicast_future.wait_for (1s) == std::future_status::ready);
+@@ -890,6 +891,7 @@ void verify_route_internal_packets_precede_application_dispatch ()
+     auto node_send_record = runtime::mesh::service_mailbox_record_t::from_parts (
+       runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::node),
+       runtime::mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::node,
+       {zlink::message_t::from (runtime::protocol::encode_node_send_header ()),
+        zlink::message_t::from (runtime::protocol::encode_application_payload (
+          runtime::protocol::application_payload_t::from_parts (
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_allocations.cpp
+index cd4e466f0a..7988d20a12 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_allocations.cpp
+@@ -59,7 +59,8 @@ mesh::service_mailbox_record_t infrastructure_record (std::vector<std::uint8_t>
+     std::vector<zlink::message_t> parts;
+     parts.push_back (zlink::message_t::from (bytes));
+     return mesh::service_mailbox_record_t::from_parts (
+-      "control", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'s'}, {}, 1);
++      "control", mesh::service_mailbox_domain_t::infrastructure, std::nullopt, std::move (parts),
++      {'s'}, {}, 1);
+ }
+ 
+ wire::message_follow_notice_t notice ()
+@@ -367,7 +368,8 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
+                                                     .advertised_endpoint = "tcp://127.0.0.1:*"}};
+     options.runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ();
+     auto server = std::make_shared<cs::raw_client_server_server_t> (options, context);
+-    server->mailbox ().bind_application_dispatch ({}, [] (const std::string &) {});
++    server->mailbox ().bind_application_dispatch (
++      {}, [] (const std::string &, zlink::framework::runtime::host::owner_kind_t) {});
+     boost::asio::io_context executor;
+     receive_handler_t::calls = 0;
+     const auto dispatch = [&] {
+@@ -392,7 +394,8 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
+         parts.push_back (zlink::message_t::from ("header"));
+         parts.push_back (zlink::message_t::from ("{}"));
+         auto record = mesh::service_mailbox_record_t::from_parts (
+-          "receive", mesh::service_mailbox_domain_t::application, std::move (parts));
++          "receive", mesh::service_mailbox_domain_t::application, host::owner_kind_t::channel,
++          std::move (parts));
+         record.envelope_header.kind = fw::runtime::messaging::message_kind_t::command;
+         record.envelope_header.message_name = "receive.send";
+         record.envelope_header.content_type = "application/json";
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_dispatch_cost.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_dispatch_cost.cpp
+index 87a4cc108f..5d1f1a7091 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_dispatch_cost.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_dispatch_cost.cpp
+@@ -175,7 +175,7 @@ int main ()
+             std::vector<zlink::message_t> parts;
+             parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0}));
+             auto record = runtime::mesh::service_mailbox_record_t::from_parts (
+-              "receive-cost-infrastructure", infrastructure, std::move (parts));
++              "receive-cost-infrastructure", infrastructure, std::nullopt, std::move (parts));
+             require (mailbox.try_enqueue (std::move (record)), "infrastructure enqueue failed");
+         }
+         std::size_t drained = 0;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
+index 9f79692ccd..b20e944d35 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
+@@ -342,7 +342,8 @@ TEST_F (ReceiveRecord, CallerWrapperDestructionKeepsQueuedNativeStorage)
+         original_body = caller_wrapper.parts ().back ().data ();
+         original_token = caller_wrapper.reply_token ();
+         auto record = mesh::service_mailbox_record_t::from_received (
+-          "node", mesh::service_mailbox_domain_t::application, std::move (caller_wrapper));
++          "node", mesh::service_mailbox_domain_t::application,
++          zlink::framework::runtime::host::owner_kind_t::node, std::move (caller_wrapper));
+         record.correlation =
+           wire::decode_node_request_header (wire::message_bytes (record.parts ().front ()));
+         ASSERT_TRUE (target.mailbox ().try_enqueue (std::move (record)));
+@@ -560,7 +561,7 @@ TEST_F (ReceiveRecord, RetainedLocalReplyDoesNotRequireNativeContext)
+       target.register_local_operation_async (now () + 3s, [] (auto, auto) {}).result ().value ();
+     ASSERT_TRUE (operation);
+     const auto record = mesh::service_mailbox_record_t::from_parts (
+-      "node", mesh::service_mailbox_domain_t::infrastructure, {},
++      "node", mesh::service_mailbox_domain_t::infrastructure, std::nullopt, {},
+       target.startup_descriptor ().node_routing_id, operation->low);
+     const auto source = record.reply_source ();
+     EXPECT_FALSE (source->routing_id ());
+@@ -578,6 +579,7 @@ TEST (ReceiveRecordClassification, WholePartsReplacementReclassifiesAndBodyEdits
+     const std::unique_ptr<void, decltype (restore)> scope (&probe, restore);
+     auto record = mesh::service_mailbox_record_t::from_parts (
+       "node", mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::node,
+       {zlink::message_t::from (wire::encode_node_send_header ()), zlink::message_t::from ("body")});
+     static_assert (std::is_const_v<std::remove_reference_t<decltype (record.parts ())>>);
+     EXPECT_EQ (record.service_header ().kind, wire::command::nodeSend);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+index 52ca81b24a..726a9bccf2 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+@@ -202,8 +202,8 @@ mesh::service_mailbox_record_t spot_send (host::public_host_runtime_t &host,
+     auto source_routing_id = std::vector<std::uint8_t>{source};
+     auto record = mesh::service_mailbox_record_t::from_parts (
+       mesh::service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.key),
+-      mesh::service_mailbox_domain_t::application, std::move (parts), std::move (source_routing_id),
+-      correlation, 1);
++      mesh::service_mailbox_domain_t::application, host::owner_kind_t::spot, std::move (parts),
++      std::move (source_routing_id), correlation, 1);
+     record.source_original = mesh::raw_mesh_node_owner_t::local_accepted_source (
+       record.source_routing_id, record.source_node_generation, {});
+     return record;
+@@ -356,7 +356,7 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
+             expected_binding_generation};
+           auto record = mesh::service_mailbox_record_t::from_parts (
+             "bound-session:" + std::string (source_actor.actor_id ().value ()),
+-            mesh::service_mailbox_domain_t::application,
++            mesh::service_mailbox_domain_t::application, host::owner_kind_t::actor,
+             zlink::framework::detail::backend::materialize_binding_parts (
+               {protocol::encode_bound_session_send (send),
+                protocol::encode_application_payload (application)}),
+@@ -1594,7 +1594,8 @@ TEST (FrameworkRelocationSealContract, mailbox_cut_takes_each_untaken_original_o
+     mesh::service_mailbox_t mailbox;
+     const auto record = [domain] (std::uint8_t id) {
+         auto parts = detail::backend::materialize_binding_parts ({{id}});
+-        return mesh::service_mailbox_record_t::from_parts ("spot:cut", domain, std::move (parts));
++        return mesh::service_mailbox_record_t::from_parts (
++          "spot:cut", domain, host::owner_kind_t::spot, std::move (parts));
+     };
+     const auto id_of = [] (const mesh::service_mailbox_record_t &value) {
+         return value.parts ().front ().to_bytes ().front ();
+@@ -1643,7 +1644,8 @@ TEST (FrameworkRelocationSealContract, ordinary_claim_transfers_batch_before_cut
+     batch.reserve (64);
+     for (std::uint8_t index = 0; index < 64; ++index) {
+         auto original = mesh::service_mailbox_record_t::from_parts (
+-          "ordinary", domain, detail::backend::materialize_binding_parts ({{index}}));
++          "ordinary", domain, host::owner_kind_t::node,
++          detail::backend::materialize_binding_parts ({{index}}));
+         ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+     }
+     const auto claim = mailbox.try_claim (domain, 64, 65536, [&] (const auto &claimed) noexcept {
+@@ -1672,7 +1674,8 @@ TEST (FrameworkRelocationSealContract, throwing_claim_consumer_returns_all_credi
+         mesh::service_mailbox_t mailbox;
+         const auto enqueue = [&] {
+             auto original = mesh::service_mailbox_record_t::from_parts (
+-              "ordinary", domain, detail::backend::materialize_binding_parts ({{1}}));
++              "ordinary", domain, host::owner_kind_t::node,
++              detail::backend::materialize_binding_parts ({{1}}));
+             ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+         };
+         enqueue ();
+@@ -1718,6 +1721,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
+     const auto enqueue = [&] {
+         mesh::service_mailbox_record_t original;
+         original.owner = "node";
++        original.owner_kind = host::owner_kind_t::node;
+         original.domain = mesh::service_mailbox_domain_t::application;
+         original.application.emplace ();
+         original.application->owner.owner_kind = host::owner_kind_t::node;
+@@ -2239,7 +2243,7 @@ void verify_native_spot_seal (bool fail_second,
+     if (without_ingress) {
+         // A production host binds its mailbox dispatcher and has no inventory scan.
+         host->transport ().mailbox ().bind_application_dispatch ([] (auto &) {},
+-                                                                 [] (const auto &) {});
++                                                                 [] (const auto &, auto) {});
+         (void) host->dispatch_ready (publish).result ().value ();
+     } else {
+         // Fresh native ingress may not pass the originals restored by this abort.
+@@ -2913,7 +2917,7 @@ TEST (FrameworkRelocationSealContract, raw_dispatch_waits_for_state_lane_outside
+         if (ingest) {
+             const protocol::actor_route_fence_t route{object.key, 1, {1}, 1, 1, 3};
+             auto record = mesh::service_mailbox_record_t::from_parts (
+-              {}, mesh::service_mailbox_domain_t::application,
++              {}, mesh::service_mailbox_domain_t::application, host::owner_kind_t::actor,
+               detail::backend::materialize_binding_parts (
+                 {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt,
+                                                         route, {1, 1}),
+@@ -3483,7 +3487,7 @@ TEST (FrameworkRelocationSealContract,
+     const auto reply = protocol::application_payload_t::from_parts (parts);
+     const auto relay_record = [&] (const protocol::reply_relay_t &value) {
+         return mesh::service_mailbox_record_t::from_parts (
+-          {}, mesh::service_mailbox_domain_t::infrastructure,
++          {}, mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+           detail::backend::materialize_binding_parts (
+             {protocol::encode_reply_relay (value), protocol::encode_application_payload (reply)}),
+           target->status ().routing_id ().to_bytes (), std::nullopt,
+@@ -3570,7 +3574,7 @@ TEST (FrameworkRelocationSealContract, bound_session_close_compares_the_current_
+            lease_generation, session_rid.to_bytes (), binding.binding_generation}};
+         ASSERT_TRUE (session_owner->transport ().mailbox ().try_enqueue (
+           mesh::service_mailbox_record_t::from_parts (
+-            "bound-session-close", mesh::service_mailbox_domain_t::infrastructure,
++            "bound-session-close", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+             zlink::framework::detail::backend::materialize_binding_parts (
+               {protocol::encode_bound_session_close (request)}),
+             zlink::routing_id_t::from ("close-actor-owner").to_bytes (), std::nullopt, 1)));
+@@ -3605,7 +3609,7 @@ TEST (FrameworkRelocationSealContract, malformed_command_42_records_invalid_fram
+     const std::vector<std::uint8_t> malformed{0x5a, 0x4d, 0x01, 0x2a, 0x00};
+     ASSERT_TRUE (
+       owner->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+-        "malformed-command-42", mesh::service_mailbox_domain_t::infrastructure,
++        "malformed-command-42", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+         zlink::framework::detail::backend::materialize_binding_parts ({malformed}),
+         source_rid.to_bytes (), std::nullopt, 1)));
+ 
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
+index 96c5172d0a..cce43eb4b8 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
+@@ -122,6 +122,7 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
+     const std::string mailbox_owner = "actor:" + actor.key;
+     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+       mailbox_owner, mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::actor,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
+                                                 fence, operation, correlation),
+@@ -140,6 +141,7 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
+ 
+     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+       mailbox_owner, mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::actor,
+       zlink::framework::detail::backend::materialize_binding_parts ({{0x01}}))));
+     assert (objects.enqueue (actor, stateful::turn_domain_t::application, {777, {0x02}})
+             == stateful::stateful_error_t::none);
+@@ -216,6 +218,7 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
+       messaging::envelope_codec_t{}.encode_header (request_header).to_bytes ();
+     auto request_record = mesh::service_mailbox_record_t::from_parts (
+       mailbox_owner, mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::channel,
+       zlink::framework::detail::backend::materialize_binding_parts (
+         {request_header_bytes, bytes ("request")}),
+       source_routing_id, correlation);
+@@ -223,6 +226,7 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
+     assert (server.mailbox ().try_enqueue (std::move (request_record)));
+     assert (server.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+       mailbox_owner, mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::channel,
+       zlink::framework::detail::backend::materialize_binding_parts ({{0x02}}))));
+     auto claim = server.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
+                                                     mailbox_owner, 1, 1024);
+@@ -283,10 +287,12 @@ void verify_stateful_ingest_rejection_releases_on_one_shot_terminal ()
+     const std::string mailbox_owner = "actor:" + actor.key;
+     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+       mailbox_owner, mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::actor,
+       zlink::framework::detail::backend::materialize_binding_parts ({{0xff}, {0x00}}),
+       source_routing_id, 81, 1)));
+     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+       mailbox_owner, mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::actor,
+       zlink::framework::detail::backend::materialize_binding_parts ({{0x01}}))));
+ 
+     assert (
+@@ -321,6 +327,7 @@ void verify_claim_original_remains_takeable ()
+     mesh::service_mailbox_t mailbox;
+     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+       "spot:canonical", mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::spot,
+       zlink::framework::detail::backend::materialize_binding_parts ({{1}, {2}}))));
+     auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
+                                           "spot:canonical", 1, 4096);
+@@ -368,6 +375,7 @@ void verify_source_wait_original (bool seal_first, bool reject, bool restore)
+     int permits = 0;
+     auto record = mesh::service_mailbox_record_t::from_parts (
+       key, mesh::service_mailbox_domain_t::application,
++      zlink::framework::runtime::host::owner_kind_t::actor,
+       detail::backend::materialize_binding_parts (
+         {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt, fence,
+                                                 {11, 12}),
+@@ -445,6 +453,7 @@ void verify_partial_prefix_and_stale_claim (bool local)
+     for (std::uint8_t value : {1, 2, 3}) {
+         mesh::service_mailbox_record_t record;
+         record.owner = owner;
++        record.owner_kind = zlink::framework::runtime::host::owner_kind_t::spot;
+         record.domain = mesh::service_mailbox_domain_t::application;
+         record.operation = std::pair<std::uint64_t, std::uint64_t>{9, value};
+         record.before_application_handler = [&] { ++permits; };
+@@ -582,6 +591,7 @@ void verify_concurrent_gate_seal_take ()
+         mesh::service_mailbox_t mailbox;
+         assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+           "spot:race", mesh::service_mailbox_domain_t::application,
++          zlink::framework::runtime::host::owner_kind_t::spot,
+           zlink::framework::detail::backend::materialize_binding_parts ({{1}, {2}}))));
+         auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
+                                               "spot:race", 1, 4096);
+@@ -613,6 +623,7 @@ void verify_claim_owner_can_expire ()
+         mesh::service_mailbox_t mailbox;
+         assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+           "spot:expired", mesh::service_mailbox_domain_t::application,
++          zlink::framework::runtime::host::owner_kind_t::spot,
+           zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
+         auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
+                                               "spot:expired", 1, 4096);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
+index fe89b2727c..35e25fdae2 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
+@@ -584,6 +584,7 @@ TEST (RouteHandlerBoundary, HostedOrdinaryHandoffAllowsSameAndSubsequentClaims)
+             .take_items ();
+         mesh::service_mailbox_record_t queued;
+         queued.owner = mesh::service_mailbox_t::application_owner (owner);
++        queued.owner_kind = owner.owner_kind;
+         queued.domain = mesh::service_mailbox_domain_t::application;
+         queued.before_application_handler = [&] { ++permits; };
+         queued.application.emplace (
+@@ -807,6 +808,7 @@ TEST (RouteHandlerBoundary, HostStopWaitsForPhysicalOrdinaryHandlerTerminal)
+                    .take_items ();
+     mesh::service_mailbox_record_t queued;
+     queued.owner = mesh::service_mailbox_t::application_owner (owner);
++    queued.owner_kind = owner.owner_kind;
+     queued.domain = mesh::service_mailbox_domain_t::application;
+     queued.before_application_handler = [] {};
+     queued.application.emplace (
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
+index 18f1961bcf..e7590e982f 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
+@@ -17,6 +17,7 @@
+ #include <set>
+ #include <stdexcept>
+ #include <thread>
++#include <utility>
+ 
+ namespace fw = zlink::framework;
+ namespace rt = fw::runtime;
+@@ -147,13 +148,14 @@ struct source_t final : rt::offload_executor_t::drain_source_t
+ 
+ void enqueue (mesh::service_mailbox_t &mailbox,
+               const std::string &owner,
++              rt::host::owner_kind_t owner_kind,
+               std::size_t id,
+               const std::shared_ptr<rt::application_job_queue_t> &jobs = {})
+ {
+     std::vector<zlink::message_t> parts;
+     parts.push_back (zlink::message_t::from (std::to_string (id)));
+     auto record = mesh::service_mailbox_record_t::from_parts (
+-      owner, mesh::service_mailbox_domain_t::application, std::move (parts));
++      owner, mesh::service_mailbox_domain_t::application, owner_kind, std::move (parts));
+     if (jobs) {
+         auto permit = jobs->try_reserve_supply ();
+         require (permit.has_value (), "test exhausted application permits");
+@@ -183,7 +185,7 @@ bool burst (std::string_view negative)
+     };
+     mailbox.begin_application_receive_turn ();
+     for (std::size_t id = 0; id != count; ++id)
+-        enqueue (mailbox, "node", id);
++        enqueue (mailbox, "node", rt::host::owner_kind_t::node, id);
+     wakes = 0;
+     count_wakes = true;
+     if (negative == "items") {
+@@ -253,7 +255,7 @@ bool steady_stream (bool notify_every_publication)
+     wakes = 0;
+     count_wakes = true;
+     for (std::size_t id = 0; id != count; ++id) {
+-        enqueue (mailbox, "node", id);
++        enqueue (mailbox, "node", rt::host::owner_kind_t::node, id);
+         require (executor.try_submit_drain (source), "stream publication rejected");
+         if (notify_every_publication)
+             worker_conditions[id % worker_conditions.size ()]->notify_one ();
+@@ -274,7 +276,9 @@ bool steady_stream (bool notify_every_publication)
+     return notifications <= workers && distinct_workers != 0 && distinct_workers <= workers;
+ }
+ 
+-bool independent (bool wait_for_terminal, const std::string &owner)
++bool independent (bool wait_for_terminal,
++                  const std::string &owner,
++                  rt::host::owner_kind_t owner_kind)
+ {
+     rt::offload_executor_t executor (2);
+     mesh::service_mailbox_t mailbox;
+@@ -295,8 +299,8 @@ bool independent (bool wait_for_terminal, const std::string &owner)
+         }
+     };
+     mailbox.begin_application_receive_turn ();
+-    enqueue (mailbox, owner, 0);
+-    enqueue (mailbox, owner, 1);
++    enqueue (mailbox, owner, owner_kind, 0);
++    enqueue (mailbox, owner, owner_kind, 1);
+     require (executor.try_submit_drain (source), "independent source rejected");
+     await (a);
+     const bool progressed = b.wait_for (5s) == std::future_status::ready;
+@@ -336,7 +340,7 @@ void shutdown (bool running)
+         };
+     mailbox.begin_application_receive_turn ();
+     for (std::size_t id = 0; id != count; ++id)
+-        enqueue (mailbox, "node", id, jobs);
++        enqueue (mailbox, "node", rt::host::owner_kind_t::node, id, jobs);
+     require (executor.try_submit_drain (source), "shutdown source rejected");
+     if (running)
+         await (started);
+@@ -358,15 +362,17 @@ void shutdown (bool running)
+ 
+ void last_take_publication_races ()
+ {
+-    for (const auto &owner : {std::string ("node"), std::string ("channel:test")}) {
++    for (const auto &[owner, owner_kind] :
++         {std::pair{std::string ("node"), rt::host::owner_kind_t::node},
++          std::pair{std::string ("channel:test"), rt::host::owner_kind_t::channel}}) {
+         rt::offload_executor_t executor (2);
+         mesh::service_mailbox_t mailbox;
+         auto source = std::make_shared<source_t> (executor, mailbox, owner);
+-        mailbox.bind_application_dispatch ({}, [&] (const auto &) {
++        mailbox.bind_application_dispatch ({}, [&] (const auto &, auto) {
+             require (executor.try_submit_drain (source), "racing source publication rejected");
+         });
+         for (std::size_t id = 0; id != 1000; ++id) {
+-            enqueue (mailbox, owner, id);
++            enqueue (mailbox, owner, owner_kind, id);
+             if ((id & 1) == 0)
+                 await ([&] { return source->completed.load () == id + 1; });
+         }
+@@ -466,15 +472,17 @@ int main (int argc, char **argv)
+         if (mode == "--negative-stream-wakes")
+             return steady_stream (true) ? 0 : 1;
+         if (mode == "--negative-terminal")
+-            return independent (true, "node") ? 0 : 1;
++            return independent (true, "node", rt::host::owner_kind_t::node) ? 0 : 1;
+         if (mode == "--negative-spot-gate")
+             return gated (false, true) ? 0 : 1;
+         if (mode == "--negative-actor-gate")
+             return gated (true, true) ? 0 : 1;
+         require (burst (""), "burst exceeded item/wake bound");
+         require (steady_stream (false), "steady stream exceeded wake/worker bound");
+-        require (independent (false, "node"), "same Node waited for A terminal");
+-        require (independent (false, "channel:test"), "same Channel waited for A terminal");
++        require (independent (false, "node", rt::host::owner_kind_t::node),
++                 "same Node waited for A terminal");
++        require (independent (false, "channel:test", rt::host::owner_kind_t::channel),
++                 "same Channel waited for A terminal");
+         shutdown (false);
+         shutdown (true);
+         last_take_publication_races ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
+index 114e5d7125..554dc8ca88 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
+@@ -922,8 +922,8 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
+         std::vector<zlink::message_t> parts;
+         parts.push_back (zlink::message_t::from (wire::encode_bound_session_bind (bind)));
+         auto record = mesh::service_mailbox_record_t::from_parts (
+-          "control", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'s'}, {},
+-          1);
++          "control", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
++          std::move (parts), {'s'}, {}, 1);
+         ASSERT_TRUE (runtime.transport ().mailbox ().try_enqueue (std::move (record)));
+         auto lifetime = std::make_shared<int> (1);
+         std::weak_ptr<int> held = lifetime;
+diff --git a/framework/languages/cpp/tests/support/stateful_ingress_fixture.hpp b/framework/languages/cpp/tests/support/stateful_ingress_fixture.hpp
+index e69a9447ae..4a20fb4d04 100644
+--- a/framework/languages/cpp/tests/support/stateful_ingress_fixture.hpp
++++ b/framework/languages/cpp/tests/support/stateful_ingress_fixture.hpp
+@@ -22,13 +22,14 @@ publish_stateful_claims (runtime::mesh::raw_mesh_node_owner_t &transport,
+                          std::vector<runtime::mesh::service_mailbox_record_t> records)
+ {
+     auto &mailbox = transport.mailbox ();
+-    const auto key = runtime::mesh::service_mailbox_t::application_owner (
+-      owner.kind == runtime::stateful::object_kind_t::actor ? runtime::host::owner_kind_t::actor
+-                                                            : runtime::host::owner_kind_t::spot,
+-      owner.key);
++    const auto owner_kind = owner.kind == runtime::stateful::object_kind_t::actor
++                              ? runtime::host::owner_kind_t::actor
++                              : runtime::host::owner_kind_t::spot;
++    const auto key = runtime::mesh::service_mailbox_t::application_owner (owner_kind, owner.key);
+     mailbox.begin_application_receive_turn ();
+     for (auto &record : records) {
+         record.owner = key;
++        record.owner_kind = owner_kind;
+         record.domain = runtime::mesh::service_mailbox_domain_t::application;
+         if (!mailbox.try_enqueue (std::move (record)))
+             throw std::runtime_error ("fixture mailbox publication failed");

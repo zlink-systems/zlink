@@ -1,0 +1,6646 @@
+{
+  "records": [
+    {
+      "pattern": "request-backpressure",
+      "run": 1,
+      "variant": "main",
+      "binding": {
+        "throughput": 246120.125539,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.094963,
+          "bandwidth_mb_s": 252.027009,
+          "client_cores": 2.405111,
+          "client_cpu_percent": 15.031943,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 32.523438,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 44,
+          "completed": 1233085,
+          "completed_at_close": 1230624,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 594.017234,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 3.01263,
+          "latency_p95_ms": 10.800676,
+          "latency_p99_ms": 15.216652,
+          "logical_cores": 16,
+          "non_submit_cores": 1.405795,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 3881,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 15.312584,
+          "server_memory_mb": 46.988281,
+          "server_received_at_close": 1233085,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.999316,
+          "submitted": 1233085,
+          "throughput_per_second": 246120.125539,
+          "trigger": {
+            "cellId": "zlink-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793921756321,
+            "runId": "cdrain-main-1-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            258746.545709,
+            262568.914957,
+            260857.722938,
+            261923.015739,
+            261133.604997,
+            263038.971081,
+            261159.333196,
+            267823.143325,
+            267907.54149,
+            271952.8354
+          ],
+          "target_stats": {
+            "received": 1233085,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 594.017234
+          },
+          "source_drain_ms": 94.017234,
+          "runner_settle_ms": 500.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/1/request-backpressure/main/run1/zlink-cpp-request-backpressure-1024",
+        "captured_received": 750498,
+        "captured_completed": 750431,
+        "seconds": 3.002317307051271,
+        "threads": {
+          "157084": {
+            "runtime_ns": 272564,
+            "switches": 31
+          },
+          "157087": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157088": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157089": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157090": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157091": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157092": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157093": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157094": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157095": {
+            "runtime_ns": 22212905,
+            "switches": 2888
+          },
+          "157096": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157097": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157098": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157099": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157100": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157101": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157102": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157103": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157104": {
+            "runtime_ns": 442285,
+            "switches": 31
+          },
+          "157105": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157106": {
+            "runtime_ns": 441905,
+            "switches": 31
+          },
+          "157107": {
+            "runtime_ns": 450649,
+            "switches": 31
+          },
+          "157108": {
+            "runtime_ns": 417003,
+            "switches": 31
+          },
+          "157109": {
+            "runtime_ns": 406416,
+            "switches": 31
+          },
+          "157110": {
+            "runtime_ns": 244260,
+            "switches": 3
+          },
+          "157112": {
+            "runtime_ns": 214924,
+            "switches": 3
+          },
+          "157113": {
+            "runtime_ns": 192943,
+            "switches": 3
+          },
+          "157114": {
+            "runtime_ns": 196279,
+            "switches": 3
+          },
+          "157115": {
+            "runtime_ns": 144873,
+            "switches": 2
+          },
+          "157116": {
+            "runtime_ns": 146446,
+            "switches": 2
+          },
+          "157117": {
+            "runtime_ns": 148821,
+            "switches": 2
+          },
+          "157118": {
+            "runtime_ns": 233510,
+            "switches": 3
+          },
+          "157119": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157120": {
+            "runtime_ns": 1644736,
+            "switches": 21
+          },
+          "157122": {
+            "runtime_ns": 4568744,
+            "switches": 42
+          },
+          "157124": {
+            "runtime_ns": 313458,
+            "switches": 31
+          },
+          "157125": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "157126": {
+            "runtime_ns": 2025320005,
+            "switches": 65282
+          },
+          "157127": {
+            "runtime_ns": 363737,
+            "switches": 31
+          },
+          "157128": {
+            "runtime_ns": 2294722210,
+            "switches": 72117
+          },
+          "157129": {
+            "runtime_ns": 462121,
+            "switches": 31
+          },
+          "157130": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "158706": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "158707": {
+            "runtime_ns": 3053646414,
+            "switches": 458
+          }
+        },
+        "source_switches_per_received": 0.1880191552808935
+      },
+      "framework": {
+        "throughput": 48321.122261,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.008044,
+          "bandwidth_mb_s": 49.480829,
+          "client_cores": 4.21639,
+          "client_cpu_percent": 26.352438,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 37.1875,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 50,
+          "completed": 241719,
+          "completed_at_close": 241606,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 373.30586,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 10.149083,
+          "latency_p95_ms": 18.047051,
+          "latency_p99_ms": 19.504093,
+          "logical_cores": 16,
+          "non_submit_cores": 3.286329,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 1251,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 19.941869,
+          "server_memory_mb": 36.894531,
+          "server_received_at_close": 241719,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.930061,
+          "submitted": 241719,
+          "throughput_per_second": 48321.122261,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793921792976,
+            "runId": "cdrain-main-1-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            49887.913359,
+            49747.726486,
+            49621.010628,
+            49267.482255,
+            49372.531723,
+            49942.725613,
+            48710.52715,
+            49525.627525,
+            49339.797154,
+            49540.622828
+          ],
+          "target_stats": {
+            "received": 241719,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 373.30586
+          },
+          "source_drain_ms": 32.30586,
+          "runner_settle_ms": 341.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/1/request-backpressure/main/run1/zlink-framework-cpp-request-backpressure-1024",
+        "captured_received": 149304,
+        "captured_completed": 149311,
+        "seconds": 3.099971035029739,
+        "threads": {
+          "159000": {
+            "runtime_ns": 282581,
+            "switches": 31
+          },
+          "159003": {
+            "runtime_ns": 2026081,
+            "switches": 1
+          },
+          "159004": {
+            "runtime_ns": 499850,
+            "switches": 3
+          },
+          "159005": {
+            "runtime_ns": 2025810,
+            "switches": 1
+          },
+          "159006": {
+            "runtime_ns": 4047693,
+            "switches": 3
+          },
+          "159007": {
+            "runtime_ns": 3940763,
+            "switches": 2
+          },
+          "159008": {
+            "runtime_ns": 2732188,
+            "switches": 7
+          },
+          "159009": {
+            "runtime_ns": 2012736,
+            "switches": 2
+          },
+          "159010": {
+            "runtime_ns": 382840,
+            "switches": 1
+          },
+          "159011": {
+            "runtime_ns": 21494691,
+            "switches": 2932
+          },
+          "159012": {
+            "runtime_ns": 350669450,
+            "switches": 25846
+          },
+          "159013": {
+            "runtime_ns": 345526385,
+            "switches": 25865
+          },
+          "159014": {
+            "runtime_ns": 348474451,
+            "switches": 25826
+          },
+          "159015": {
+            "runtime_ns": 347388990,
+            "switches": 25852
+          },
+          "159016": {
+            "runtime_ns": 346770054,
+            "switches": 25833
+          },
+          "159017": {
+            "runtime_ns": 346366869,
+            "switches": 25921
+          },
+          "159018": {
+            "runtime_ns": 347612942,
+            "switches": 25777
+          },
+          "159019": {
+            "runtime_ns": 347316134,
+            "switches": 25827
+          },
+          "159020": {
+            "runtime_ns": 337998,
+            "switches": 31
+          },
+          "159021": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "159022": {
+            "runtime_ns": 317333,
+            "switches": 31
+          },
+          "159023": {
+            "runtime_ns": 322612,
+            "switches": 31
+          },
+          "159024": {
+            "runtime_ns": 342761,
+            "switches": 32
+          },
+          "159025": {
+            "runtime_ns": 350487,
+            "switches": 31
+          },
+          "159026": {
+            "runtime_ns": 822915,
+            "switches": 68
+          },
+          "159027": {
+            "runtime_ns": 698905,
+            "switches": 61
+          },
+          "159028": {
+            "runtime_ns": 630209,
+            "switches": 59
+          },
+          "159029": {
+            "runtime_ns": 860195,
+            "switches": 65
+          },
+          "159030": {
+            "runtime_ns": 828923,
+            "switches": 75
+          },
+          "159031": {
+            "runtime_ns": 896570,
+            "switches": 64
+          },
+          "159032": {
+            "runtime_ns": 784021,
+            "switches": 68
+          },
+          "159033": {
+            "runtime_ns": 847992,
+            "switches": 70
+          },
+          "159035": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "159036": {
+            "runtime_ns": 1919492,
+            "switches": 25
+          },
+          "159038": {
+            "runtime_ns": 5627888,
+            "switches": 50
+          },
+          "159040": {
+            "runtime_ns": 21647599,
+            "switches": 2930
+          },
+          "159041": {
+            "runtime_ns": 379650,
+            "switches": 32
+          },
+          "159042": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "159043": {
+            "runtime_ns": 2485424021,
+            "switches": 36995
+          },
+          "159044": {
+            "runtime_ns": 361127,
+            "switches": 31
+          },
+          "159045": {
+            "runtime_ns": 2356273083,
+            "switches": 56049
+          },
+          "159046": {
+            "runtime_ns": 380277,
+            "switches": 31
+          },
+          "159047": {
+            "runtime_ns": 2451878762,
+            "switches": 45458
+          },
+          "159048": {
+            "runtime_ns": 352426,
+            "switches": 32
+          },
+          "159050": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "159051": {
+            "runtime_ns": 1307090,
+            "switches": 33
+          },
+          "159052": {
+            "runtime_ns": 458418,
+            "switches": 44
+          },
+          "160464": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160465": {
+            "runtime_ns": 2875607217,
+            "switches": 13868
+          },
+          "160466": {
+            "runtime_ns": 0,
+            "switches": 0
+          }
+        },
+        "source_switches_per_received": 2.451334190644591,
+        "submitter_tid": "160465",
+        "submitter_cpu_us_per_completed": 19.25917860706847,
+        "submitter_cpu_us_per_received": 19.26008155843112,
+        "submitter_cores": 0.9276238985802051
+      },
+      "ratio": 0.1963314546308529
+    },
+    {
+      "pattern": "request-backpressure",
+      "run": 1,
+      "variant": "branch",
+      "binding": {
+        "throughput": 244087.14297,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.0503309999995,
+          "bandwidth_mb_s": 249.945234,
+          "client_cores": 2.382947,
+          "client_cpu_percent": 14.893421,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 34.023438,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 44,
+          "completed": 1220513,
+          "completed_at_close": 1220448,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 578.762012,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 2.545326,
+          "latency_p95_ms": 13.399168,
+          "latency_p99_ms": 13.942277,
+          "logical_cores": 16,
+          "non_submit_cores": 1.384269,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 4089,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 15.036249,
+          "server_memory_mb": 47.109375,
+          "server_received_at_close": 1220513,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.998678,
+          "submitted": 1220513,
+          "throughput_per_second": 244087.14297,
+          "trigger": {
+            "cellId": "zlink-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793921829841,
+            "runId": "cdrain-branch-1-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            259359.232642,
+            270562.74964,
+            263101.017772,
+            276217.498485,
+            272559.213697,
+            268865.804638,
+            269295.124191,
+            278521.590612,
+            247193.995551,
+            259595.39931
+          ],
+          "target_stats": {
+            "received": 1220513,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 578.762012
+          },
+          "source_drain_ms": 82.762012,
+          "runner_settle_ms": 496.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/1/request-backpressure/branch/run1/zlink-cpp-request-backpressure-1024",
+        "captured_received": 767009,
+        "captured_completed": 766937,
+        "seconds": 3.072610114933923,
+        "threads": {
+          "160718": {
+            "runtime_ns": 285339,
+            "switches": 31
+          },
+          "160721": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160722": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160723": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160724": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160725": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160726": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160727": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160728": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160729": {
+            "runtime_ns": 22609398,
+            "switches": 2956
+          },
+          "160730": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160731": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160732": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160733": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160734": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160735": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160736": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160737": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160738": {
+            "runtime_ns": 422544,
+            "switches": 31
+          },
+          "160739": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160740": {
+            "runtime_ns": 423123,
+            "switches": 31
+          },
+          "160741": {
+            "runtime_ns": 429719,
+            "switches": 31
+          },
+          "160742": {
+            "runtime_ns": 436400,
+            "switches": 31
+          },
+          "160743": {
+            "runtime_ns": 418190,
+            "switches": 31
+          },
+          "160744": {
+            "runtime_ns": 222427,
+            "switches": 3
+          },
+          "160745": {
+            "runtime_ns": 216376,
+            "switches": 3
+          },
+          "160746": {
+            "runtime_ns": 239140,
+            "switches": 3
+          },
+          "160747": {
+            "runtime_ns": 153409,
+            "switches": 2
+          },
+          "160748": {
+            "runtime_ns": 150904,
+            "switches": 2
+          },
+          "160749": {
+            "runtime_ns": 133842,
+            "switches": 2
+          },
+          "160750": {
+            "runtime_ns": 199595,
+            "switches": 3
+          },
+          "160751": {
+            "runtime_ns": 206199,
+            "switches": 3
+          },
+          "160753": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160754": {
+            "runtime_ns": 1594950,
+            "switches": 21
+          },
+          "160756": {
+            "runtime_ns": 4725582,
+            "switches": 42
+          },
+          "160758": {
+            "runtime_ns": 314963,
+            "switches": 31
+          },
+          "160759": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "160760": {
+            "runtime_ns": 1990523430,
+            "switches": 81669
+          },
+          "160761": {
+            "runtime_ns": 349147,
+            "switches": 31
+          },
+          "160762": {
+            "runtime_ns": 2288588431,
+            "switches": 83031
+          },
+          "160763": {
+            "runtime_ns": 424643,
+            "switches": 31
+          },
+          "160764": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "162309": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "162310": {
+            "runtime_ns": 3120684032,
+            "switches": 574
+          }
+        },
+        "source_switches_per_received": 0.21980576499102358
+      },
+      "framework": {
+        "throughput": 49602.023506,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.017791,
+          "bandwidth_mb_s": 50.792472,
+          "client_cores": 4.221378,
+          "client_cpu_percent": 26.38361,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 38.285156,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 50,
+          "completed": 248287,
+          "completed_at_close": 248011,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 369.86532,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 10.712629,
+          "latency_p95_ms": 17.478715,
+          "latency_p99_ms": 19.099568,
+          "logical_cores": 16,
+          "non_submit_cores": 3.300492,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 1008,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 19.97831,
+          "server_memory_mb": 37.859375,
+          "server_received_at_close": 248287,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.920886,
+          "submitted": 248287,
+          "throughput_per_second": 49602.023506,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793921866455,
+            "runId": "cdrain-branch-1-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            49863.908942,
+            49742.539688,
+            50756.541488,
+            50111.305319,
+            50974.023011,
+            48647.984213,
+            50191.775745,
+            50836.701572,
+            49817.144823,
+            50402.276272
+          ],
+          "target_stats": {
+            "received": 248287,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 369.86532
+          },
+          "source_drain_ms": 34.86532,
+          "runner_settle_ms": 335.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/1/request-backpressure/branch/run1/zlink-framework-cpp-request-backpressure-1024",
+        "captured_received": 157157,
+        "captured_completed": 157100,
+        "seconds": 3.117144347866997,
+        "threads": {
+          "162590": {
+            "runtime_ns": 286248,
+            "switches": 32
+          },
+          "162593": {
+            "runtime_ns": 4031012,
+            "switches": 2
+          },
+          "162594": {
+            "runtime_ns": 4046803,
+            "switches": 2
+          },
+          "162595": {
+            "runtime_ns": 2022364,
+            "switches": 1
+          },
+          "162596": {
+            "runtime_ns": 780327,
+            "switches": 2
+          },
+          "162597": {
+            "runtime_ns": 4043757,
+            "switches": 2
+          },
+          "162598": {
+            "runtime_ns": 1146606,
+            "switches": 4
+          },
+          "162599": {
+            "runtime_ns": 4033827,
+            "switches": 4
+          },
+          "162600": {
+            "runtime_ns": 1134806,
+            "switches": 5
+          },
+          "162601": {
+            "runtime_ns": 21457396,
+            "switches": 2954
+          },
+          "162602": {
+            "runtime_ns": 362204459,
+            "switches": 27359
+          },
+          "162603": {
+            "runtime_ns": 367840560,
+            "switches": 27275
+          },
+          "162604": {
+            "runtime_ns": 363867805,
+            "switches": 27373
+          },
+          "162605": {
+            "runtime_ns": 359665112,
+            "switches": 27369
+          },
+          "162606": {
+            "runtime_ns": 366906355,
+            "switches": 27341
+          },
+          "162607": {
+            "runtime_ns": 365562144,
+            "switches": 27224
+          },
+          "162608": {
+            "runtime_ns": 363368837,
+            "switches": 27305
+          },
+          "162609": {
+            "runtime_ns": 363041451,
+            "switches": 27289
+          },
+          "162610": {
+            "runtime_ns": 370786,
+            "switches": 32
+          },
+          "162611": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "162612": {
+            "runtime_ns": 377858,
+            "switches": 32
+          },
+          "162613": {
+            "runtime_ns": 365812,
+            "switches": 32
+          },
+          "162615": {
+            "runtime_ns": 347934,
+            "switches": 32
+          },
+          "162616": {
+            "runtime_ns": 392169,
+            "switches": 32
+          },
+          "162617": {
+            "runtime_ns": 786711,
+            "switches": 66
+          },
+          "162618": {
+            "runtime_ns": 660841,
+            "switches": 65
+          },
+          "162619": {
+            "runtime_ns": 709091,
+            "switches": 68
+          },
+          "162620": {
+            "runtime_ns": 813656,
+            "switches": 67
+          },
+          "162621": {
+            "runtime_ns": 704887,
+            "switches": 73
+          },
+          "162622": {
+            "runtime_ns": 680842,
+            "switches": 69
+          },
+          "162623": {
+            "runtime_ns": 923443,
+            "switches": 71
+          },
+          "162624": {
+            "runtime_ns": 1011282,
+            "switches": 63
+          },
+          "162625": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "162626": {
+            "runtime_ns": 1960379,
+            "switches": 25
+          },
+          "162628": {
+            "runtime_ns": 5701583,
+            "switches": 56
+          },
+          "162630": {
+            "runtime_ns": 21469742,
+            "switches": 2951
+          },
+          "162631": {
+            "runtime_ns": 351669,
+            "switches": 32
+          },
+          "162632": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "162633": {
+            "runtime_ns": 2513445851,
+            "switches": 34451
+          },
+          "162634": {
+            "runtime_ns": 409978,
+            "switches": 32
+          },
+          "162635": {
+            "runtime_ns": 2338263500,
+            "switches": 58629
+          },
+          "162636": {
+            "runtime_ns": 387350,
+            "switches": 32
+          },
+          "162637": {
+            "runtime_ns": 376791,
+            "switches": 32
+          },
+          "162638": {
+            "runtime_ns": 2499917680,
+            "switches": 43532
+          },
+          "162640": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "162641": {
+            "runtime_ns": 1452149,
+            "switches": 32
+          },
+          "162642": {
+            "runtime_ns": 543522,
+            "switches": 49
+          },
+          "164091": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164092": {
+            "runtime_ns": 2867490530,
+            "switches": 15640
+          },
+          "164093": {
+            "runtime_ns": 0,
+            "switches": 0
+          }
+        },
+        "source_switches_per_received": 2.403570951341652,
+        "submitter_tid": "164092",
+        "submitter_cpu_us_per_completed": 18.252645003182685,
+        "submitter_cpu_us_per_received": 18.246024866852892,
+        "submitter_cores": 0.919909445952405
+      },
+      "ratio": 0.20321440491479076
+    },
+    {
+      "pattern": "request-backpressure",
+      "run": 2,
+      "variant": "main",
+      "binding": {
+        "throughput": 255019.349853,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.055880999999,
+          "bandwidth_mb_s": 261.139814,
+          "client_cores": 2.391184,
+          "client_cpu_percent": 14.944902,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 39.039062,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 44,
+          "completed": 1275200,
+          "completed_at_close": 1275111,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 587.517162,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 2.488704,
+          "latency_p95_ms": 4.225967,
+          "latency_p99_ms": 6.650979,
+          "logical_cores": 16,
+          "non_submit_cores": 1.391908,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 7526,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 14.498839,
+          "server_memory_mb": 47.199219,
+          "server_received_at_close": 1275200,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.999276,
+          "submitted": 1275200,
+          "throughput_per_second": 255019.349853,
+          "trigger": {
+            "cellId": "zlink-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922050649,
+            "runId": "cdrain-main-2-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            272717.593697,
+            279452.678946,
+            287519.826019,
+            286929.177892,
+            287579.567589,
+            279566.007927,
+            286450.422727,
+            261710.720514,
+            276173.681849,
+            281358.157387
+          ],
+          "target_stats": {
+            "received": 1275200,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 587.517162
+          },
+          "source_drain_ms": 86.517162,
+          "runner_settle_ms": 501.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/2/request-backpressure/main/run1/zlink-cpp-request-backpressure-1024",
+        "captured_received": 775968,
+        "captured_completed": 775982,
+        "seconds": 3.0405996169429272,
+        "threads": {
+          "172292": {
+            "runtime_ns": 299682,
+            "switches": 31
+          },
+          "172299": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172300": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172301": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172302": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172303": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172304": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172305": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172306": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172307": {
+            "runtime_ns": 21377886,
+            "switches": 2929
+          },
+          "172308": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172309": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172310": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172311": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172312": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172313": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172314": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172315": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172316": {
+            "runtime_ns": 430220,
+            "switches": 31
+          },
+          "172317": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172318": {
+            "runtime_ns": 351853,
+            "switches": 31
+          },
+          "172319": {
+            "runtime_ns": 380940,
+            "switches": 31
+          },
+          "172320": {
+            "runtime_ns": 383924,
+            "switches": 31
+          },
+          "172321": {
+            "runtime_ns": 302739,
+            "switches": 31
+          },
+          "172322": {
+            "runtime_ns": 183525,
+            "switches": 3
+          },
+          "172323": {
+            "runtime_ns": 196921,
+            "switches": 3
+          },
+          "172324": {
+            "runtime_ns": 216928,
+            "switches": 3
+          },
+          "172325": {
+            "runtime_ns": 156625,
+            "switches": 2
+          },
+          "172326": {
+            "runtime_ns": 139762,
+            "switches": 2
+          },
+          "172327": {
+            "runtime_ns": 147267,
+            "switches": 2
+          },
+          "172328": {
+            "runtime_ns": 182614,
+            "switches": 3
+          },
+          "172329": {
+            "runtime_ns": 226808,
+            "switches": 3
+          },
+          "172330": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172331": {
+            "runtime_ns": 1616331,
+            "switches": 21
+          },
+          "172334": {
+            "runtime_ns": 4758895,
+            "switches": 42
+          },
+          "172336": {
+            "runtime_ns": 346622,
+            "switches": 31
+          },
+          "172337": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "172338": {
+            "runtime_ns": 2050259680,
+            "switches": 85052
+          },
+          "172339": {
+            "runtime_ns": 383300,
+            "switches": 31
+          },
+          "172340": {
+            "runtime_ns": 2202264487,
+            "switches": 92150
+          },
+          "172341": {
+            "runtime_ns": 393413,
+            "switches": 31
+          },
+          "172342": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "173972": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "173973": {
+            "runtime_ns": 3094670151,
+            "switches": 442
+          }
+        },
+        "source_switches_per_received": 0.23317456389954225
+      },
+      "framework": {
+        "throughput": 48655.739579,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.006209,
+          "bandwidth_mb_s": 49.823477,
+          "client_cores": 4.284142,
+          "client_cpu_percent": 26.775888,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 43.210938,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 50,
+          "completed": 243905,
+          "completed_at_close": 243279,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 371.814095,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 9.307186,
+          "latency_p95_ms": 16.849177,
+          "latency_p99_ms": 18.395252,
+          "logical_cores": 16,
+          "non_submit_cores": 3.329671,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 1302,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 19.408077,
+          "server_memory_mb": 35.871094,
+          "server_received_at_close": 243905,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.954471,
+          "submitted": 243905,
+          "throughput_per_second": 48655.739579,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922087135,
+            "runId": "cdrain-main-2-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            47722.616382,
+            49081.11851,
+            48406.241026,
+            48882.814952,
+            48228.964887,
+            48571.489167,
+            48754.133638,
+            48220.503734,
+            48806.468258,
+            48862.622521
+          ],
+          "target_stats": {
+            "received": 243905,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 371.814095
+          },
+          "source_drain_ms": 34.814095,
+          "runner_settle_ms": 337.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/2/request-backpressure/main/run1/zlink-framework-cpp-request-backpressure-1024",
+        "captured_received": 149366,
+        "captured_completed": 149377,
+        "seconds": 2.9982268197927624,
+        "threads": {
+          "174208": {
+            "runtime_ns": 266693,
+            "switches": 30
+          },
+          "174211": {
+            "runtime_ns": 2701621,
+            "switches": 5
+          },
+          "174212": {
+            "runtime_ns": 2766344,
+            "switches": 3
+          },
+          "174213": {
+            "runtime_ns": 3852948,
+            "switches": 3
+          },
+          "174214": {
+            "runtime_ns": 4040289,
+            "switches": 2
+          },
+          "174215": {
+            "runtime_ns": 2809704,
+            "switches": 4
+          },
+          "174216": {
+            "runtime_ns": 2030449,
+            "switches": 1
+          },
+          "174217": {
+            "runtime_ns": 2031161,
+            "switches": 1
+          },
+          "174218": {
+            "runtime_ns": 205346,
+            "switches": 2
+          },
+          "174219": {
+            "runtime_ns": 20808846,
+            "switches": 2836
+          },
+          "174220": {
+            "runtime_ns": 356898751,
+            "switches": 26056
+          },
+          "174221": {
+            "runtime_ns": 355689500,
+            "switches": 26140
+          },
+          "174222": {
+            "runtime_ns": 358731790,
+            "switches": 26108
+          },
+          "174223": {
+            "runtime_ns": 356833974,
+            "switches": 26180
+          },
+          "174224": {
+            "runtime_ns": 357810037,
+            "switches": 26129
+          },
+          "174225": {
+            "runtime_ns": 357627882,
+            "switches": 26129
+          },
+          "174226": {
+            "runtime_ns": 355307199,
+            "switches": 26077
+          },
+          "174227": {
+            "runtime_ns": 359006107,
+            "switches": 26103
+          },
+          "174228": {
+            "runtime_ns": 329252,
+            "switches": 30
+          },
+          "174229": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "174230": {
+            "runtime_ns": 353054,
+            "switches": 30
+          },
+          "174231": {
+            "runtime_ns": 333885,
+            "switches": 30
+          },
+          "174233": {
+            "runtime_ns": 335081,
+            "switches": 30
+          },
+          "174234": {
+            "runtime_ns": 309129,
+            "switches": 30
+          },
+          "174235": {
+            "runtime_ns": 574740,
+            "switches": 35
+          },
+          "174236": {
+            "runtime_ns": 639393,
+            "switches": 31
+          },
+          "174237": {
+            "runtime_ns": 660943,
+            "switches": 31
+          },
+          "174238": {
+            "runtime_ns": 499267,
+            "switches": 31
+          },
+          "174239": {
+            "runtime_ns": 435288,
+            "switches": 33
+          },
+          "174240": {
+            "runtime_ns": 458648,
+            "switches": 45
+          },
+          "174241": {
+            "runtime_ns": 440924,
+            "switches": 37
+          },
+          "174242": {
+            "runtime_ns": 408206,
+            "switches": 34
+          },
+          "174243": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "174244": {
+            "runtime_ns": 1828078,
+            "switches": 23
+          },
+          "174246": {
+            "runtime_ns": 5370144,
+            "switches": 51
+          },
+          "174248": {
+            "runtime_ns": 20962515,
+            "switches": 2834
+          },
+          "174249": {
+            "runtime_ns": 331491,
+            "switches": 30
+          },
+          "174250": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "174251": {
+            "runtime_ns": 2499769210,
+            "switches": 40559
+          },
+          "174252": {
+            "runtime_ns": 334638,
+            "switches": 30
+          },
+          "174253": {
+            "runtime_ns": 2301964218,
+            "switches": 53081
+          },
+          "174254": {
+            "runtime_ns": 343060,
+            "switches": 30
+          },
+          "174255": {
+            "runtime_ns": 342906,
+            "switches": 30
+          },
+          "174256": {
+            "runtime_ns": 2399625334,
+            "switches": 44565
+          },
+          "174258": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "174259": {
+            "runtime_ns": 1315828,
+            "switches": 31
+          },
+          "174260": {
+            "runtime_ns": 501694,
+            "switches": 44
+          },
+          "174261": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "175749": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "175750": {
+            "runtime_ns": 2881840719,
+            "switches": 8276
+          }
+        },
+        "source_switches_per_received": 2.422371891862941,
+        "submitter_tid": "175750",
+        "submitter_cpu_us_per_completed": 19.292399224780254,
+        "submitter_cpu_us_per_received": 19.29382000589157,
+        "submitter_cores": 0.9611816891155663
+      },
+      "ratio": 0.19079234421641525
+    },
+    {
+      "pattern": "request-backpressure",
+      "run": 2,
+      "variant": "branch",
+      "binding": {
+        "throughput": 249296.685266,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.014335000001,
+          "bandwidth_mb_s": 255.279806,
+          "client_cores": 2.410453,
+          "client_cpu_percent": 15.065331,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 33.019531,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 44,
+          "completed": 1246720,
+          "completed_at_close": 1246487,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 584.337211,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 2.335781,
+          "latency_p95_ms": 9.682749,
+          "latency_p99_ms": 11.472413,
+          "logical_cores": 16,
+          "non_submit_cores": 1.411491,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 3719,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 15.014803,
+          "server_memory_mb": 46.320312,
+          "server_received_at_close": 1246720,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.998962,
+          "submitted": 1246720,
+          "throughput_per_second": 249296.685266,
+          "trigger": {
+            "cellId": "zlink-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922159633,
+            "runId": "cdrain-branch-2-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            266734.960477,
+            266125.860752,
+            247370.058174,
+            266738.331794,
+            276521.571432,
+            275196.34656,
+            276620.389182,
+            267703.658617,
+            281340.302762,
+            281770.464126
+          ],
+          "target_stats": {
+            "received": 1246720,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 584.337211
+          },
+          "source_drain_ms": 88.337211,
+          "runner_settle_ms": 496.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/2/request-backpressure/branch/run1/zlink-cpp-request-backpressure-1024",
+        "captured_received": 753209,
+        "captured_completed": 753110,
+        "seconds": 2.979996660957113,
+        "threads": {
+          "177787": {
+            "runtime_ns": 296240,
+            "switches": 31
+          },
+          "177790": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177791": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177792": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177793": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177794": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177795": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177796": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177797": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177798": {
+            "runtime_ns": 21661340,
+            "switches": 2873
+          },
+          "177799": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177800": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177801": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177802": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177803": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177804": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177805": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177806": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177807": {
+            "runtime_ns": 365204,
+            "switches": 31
+          },
+          "177808": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177809": {
+            "runtime_ns": 423695,
+            "switches": 32
+          },
+          "177810": {
+            "runtime_ns": 418127,
+            "switches": 31
+          },
+          "177811": {
+            "runtime_ns": 414343,
+            "switches": 31
+          },
+          "177812": {
+            "runtime_ns": 418406,
+            "switches": 31
+          },
+          "177814": {
+            "runtime_ns": 225674,
+            "switches": 3
+          },
+          "177815": {
+            "runtime_ns": 131939,
+            "switches": 2
+          },
+          "177816": {
+            "runtime_ns": 140825,
+            "switches": 2
+          },
+          "177817": {
+            "runtime_ns": 145944,
+            "switches": 2
+          },
+          "177818": {
+            "runtime_ns": 204986,
+            "switches": 3
+          },
+          "177819": {
+            "runtime_ns": 227418,
+            "switches": 4
+          },
+          "177820": {
+            "runtime_ns": 205146,
+            "switches": 3
+          },
+          "177821": {
+            "runtime_ns": 192811,
+            "switches": 3
+          },
+          "177822": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177823": {
+            "runtime_ns": 1727158,
+            "switches": 21
+          },
+          "177825": {
+            "runtime_ns": 4601848,
+            "switches": 42
+          },
+          "177827": {
+            "runtime_ns": 333658,
+            "switches": 31
+          },
+          "177828": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "177829": {
+            "runtime_ns": 1988978466,
+            "switches": 79220
+          },
+          "177830": {
+            "runtime_ns": 337145,
+            "switches": 31
+          },
+          "177831": {
+            "runtime_ns": 2191402186,
+            "switches": 77746
+          },
+          "177832": {
+            "runtime_ns": 398939,
+            "switches": 31
+          },
+          "177833": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "179475": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "179476": {
+            "runtime_ns": 3038697978,
+            "switches": 571
+          }
+        },
+        "source_switches_per_received": 0.21345337084394903
+      },
+      "framework": {
+        "throughput": 49338.920535,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.0080530000005,
+          "bandwidth_mb_s": 50.523055,
+          "client_cores": 4.11151,
+          "client_cpu_percent": 25.69694,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 39.195312,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 50,
+          "completed": 247148,
+          "completed_at_close": 246695,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 379.608497,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 11.304474,
+          "latency_p95_ms": 17.585131,
+          "latency_p99_ms": 18.958118,
+          "logical_cores": 16,
+          "non_submit_cores": 3.20667,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 945,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 19.250229,
+          "server_memory_mb": 38.8125,
+          "server_received_at_close": 247148,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.90484,
+          "submitted": 247148,
+          "throughput_per_second": 49338.920535,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922196387,
+            "runId": "cdrain-branch-2-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            49998.181514,
+            49583.117325,
+            50802.374394,
+            49950.536867,
+            48611.229198,
+            50628.702708,
+            50652.717701,
+            49057.304986,
+            51016.391731,
+            48764.513486
+          ],
+          "target_stats": {
+            "received": 247148,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 379.608497
+          },
+          "source_drain_ms": 34.608497,
+          "runner_settle_ms": 345.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/2/request-backpressure/branch/run1/zlink-framework-cpp-request-backpressure-1024",
+        "captured_received": 154793,
+        "captured_completed": 154817,
+        "seconds": 3.1064727101475,
+        "threads": {
+          "179758": {
+            "runtime_ns": 309625,
+            "switches": 31
+          },
+          "179761": {
+            "runtime_ns": 1455037,
+            "switches": 2
+          },
+          "179763": {
+            "runtime_ns": 2852637,
+            "switches": 4
+          },
+          "179764": {
+            "runtime_ns": 2021122,
+            "switches": 1
+          },
+          "179765": {
+            "runtime_ns": 2697284,
+            "switches": 4
+          },
+          "179766": {
+            "runtime_ns": 2552651,
+            "switches": 2
+          },
+          "179767": {
+            "runtime_ns": 2406286,
+            "switches": 2
+          },
+          "179768": {
+            "runtime_ns": 2368905,
+            "switches": 3
+          },
+          "179769": {
+            "runtime_ns": 3901759,
+            "switches": 2
+          },
+          "179770": {
+            "runtime_ns": 21835782,
+            "switches": 2939
+          },
+          "179771": {
+            "runtime_ns": 376769366,
+            "switches": 28466
+          },
+          "179772": {
+            "runtime_ns": 377318458,
+            "switches": 28418
+          },
+          "179773": {
+            "runtime_ns": 376509329,
+            "switches": 28390
+          },
+          "179774": {
+            "runtime_ns": 377012519,
+            "switches": 28438
+          },
+          "179775": {
+            "runtime_ns": 377257869,
+            "switches": 28475
+          },
+          "179776": {
+            "runtime_ns": 376641580,
+            "switches": 28396
+          },
+          "179777": {
+            "runtime_ns": 376772818,
+            "switches": 28477
+          },
+          "179778": {
+            "runtime_ns": 378398082,
+            "switches": 28456
+          },
+          "179779": {
+            "runtime_ns": 326434,
+            "switches": 31
+          },
+          "179780": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "179781": {
+            "runtime_ns": 332856,
+            "switches": 31
+          },
+          "179782": {
+            "runtime_ns": 360137,
+            "switches": 32
+          },
+          "179783": {
+            "runtime_ns": 329617,
+            "switches": 31
+          },
+          "179784": {
+            "runtime_ns": 330504,
+            "switches": 31
+          },
+          "179785": {
+            "runtime_ns": 770202,
+            "switches": 67
+          },
+          "179786": {
+            "runtime_ns": 820376,
+            "switches": 70
+          },
+          "179787": {
+            "runtime_ns": 739943,
+            "switches": 70
+          },
+          "179788": {
+            "runtime_ns": 873980,
+            "switches": 70
+          },
+          "179789": {
+            "runtime_ns": 823806,
+            "switches": 64
+          },
+          "179790": {
+            "runtime_ns": 824593,
+            "switches": 65
+          },
+          "179791": {
+            "runtime_ns": 684239,
+            "switches": 69
+          },
+          "179792": {
+            "runtime_ns": 881381,
+            "switches": 69
+          },
+          "179793": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "179794": {
+            "runtime_ns": 1914217,
+            "switches": 27
+          },
+          "179796": {
+            "runtime_ns": 5797686,
+            "switches": 54
+          },
+          "179798": {
+            "runtime_ns": 21760812,
+            "switches": 2938
+          },
+          "179799": {
+            "runtime_ns": 341011,
+            "switches": 31
+          },
+          "179800": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "179801": {
+            "runtime_ns": 2470470565,
+            "switches": 36464
+          },
+          "179802": {
+            "runtime_ns": 347184,
+            "switches": 31
+          },
+          "179803": {
+            "runtime_ns": 2062538833,
+            "switches": 68954
+          },
+          "179804": {
+            "runtime_ns": 337667,
+            "switches": 31
+          },
+          "179805": {
+            "runtime_ns": 349921,
+            "switches": 31
+          },
+          "179806": {
+            "runtime_ns": 2434201578,
+            "switches": 46967
+          },
+          "179808": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "179809": {
+            "runtime_ns": 1237615,
+            "switches": 31
+          },
+          "179810": {
+            "runtime_ns": 539993,
+            "switches": 46
+          },
+          "181254": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "181255": {
+            "runtime_ns": 2837238014,
+            "switches": 14998
+          },
+          "181256": {
+            "runtime_ns": 0,
+            "switches": 0
+          }
+        },
+        "source_switches_per_received": 2.5957827550341426,
+        "submitter_tid": "181255",
+        "submitter_cpu_us_per_completed": 18.32639835418591,
+        "submitter_cpu_us_per_received": 18.32923978474479,
+        "submitter_cores": 0.91333106025106
+      },
+      "ratio": 0.19791246113984742
+    },
+    {
+      "pattern": "request-backpressure",
+      "run": 3,
+      "variant": "main",
+      "binding": {
+        "throughput": 252320.285262,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.0815379999995,
+          "bandwidth_mb_s": 258.375972,
+          "client_cores": 2.310675,
+          "client_cpu_percent": 14.441721,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 36.039062,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 44,
+          "completed": 1262562,
+          "completed_at_close": 1261622,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 591.288732,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 2.673628,
+          "latency_p95_ms": 2.204777,
+          "latency_p99_ms": 2.767783,
+          "logical_cores": 16,
+          "non_submit_cores": 1.311522,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 5771,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 14.712025,
+          "server_memory_mb": 46.433594,
+          "server_received_at_close": 1262562,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.999153,
+          "submitted": 1262562,
+          "throughput_per_second": 252320.285262,
+          "trigger": {
+            "cellId": "zlink-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922686831,
+            "runId": "cdrain-main-3-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            265521.600975,
+            277198.697707,
+            275265.66127,
+            273083.060565,
+            275546.748131,
+            285583.557501,
+            275361.073454,
+            279191.234869,
+            277489.313064,
+            284361.278579
+          ],
+          "target_stats": {
+            "received": 1262562,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 591.288732
+          },
+          "source_drain_ms": 89.288732,
+          "runner_settle_ms": 502.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/3/request-backpressure/main/run1/zlink-cpp-request-backpressure-1024",
+        "captured_received": 766570,
+        "captured_completed": 766536,
+        "seconds": 3.0717951050028205,
+        "threads": {
+          "196400": {
+            "runtime_ns": 264797,
+            "switches": 31
+          },
+          "196403": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196404": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196405": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196406": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196407": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196408": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196409": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196410": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196411": {
+            "runtime_ns": 20263309,
+            "switches": 2962
+          },
+          "196412": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196413": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196414": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196415": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196416": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196417": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196418": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196419": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196420": {
+            "runtime_ns": 395165,
+            "switches": 31
+          },
+          "196421": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196422": {
+            "runtime_ns": 463011,
+            "switches": 31
+          },
+          "196423": {
+            "runtime_ns": 420440,
+            "switches": 31
+          },
+          "196424": {
+            "runtime_ns": 324600,
+            "switches": 31
+          },
+          "196426": {
+            "runtime_ns": 372449,
+            "switches": 31
+          },
+          "196427": {
+            "runtime_ns": 254980,
+            "switches": 3
+          },
+          "196428": {
+            "runtime_ns": 226014,
+            "switches": 3
+          },
+          "196429": {
+            "runtime_ns": 217429,
+            "switches": 3
+          },
+          "196430": {
+            "runtime_ns": 141295,
+            "switches": 2
+          },
+          "196431": {
+            "runtime_ns": 139892,
+            "switches": 2
+          },
+          "196432": {
+            "runtime_ns": 126268,
+            "switches": 2
+          },
+          "196433": {
+            "runtime_ns": 200356,
+            "switches": 3
+          },
+          "196434": {
+            "runtime_ns": 215303,
+            "switches": 3
+          },
+          "196435": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196436": {
+            "runtime_ns": 1450449,
+            "switches": 21
+          },
+          "196438": {
+            "runtime_ns": 4862868,
+            "switches": 43
+          },
+          "196440": {
+            "runtime_ns": 333377,
+            "switches": 31
+          },
+          "196441": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "196442": {
+            "runtime_ns": 2098152495,
+            "switches": 79083
+          },
+          "196443": {
+            "runtime_ns": 380184,
+            "switches": 31
+          },
+          "196444": {
+            "runtime_ns": 1943812368,
+            "switches": 104238
+          },
+          "196445": {
+            "runtime_ns": 393472,
+            "switches": 31
+          },
+          "196446": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "198001": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "198002": {
+            "runtime_ns": 3134100046,
+            "switches": 369
+          }
+        },
+        "source_switches_per_received": 0.24396467380669737
+      },
+      "framework": {
+        "throughput": 48290.884971,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.011909999999,
+          "bandwidth_mb_s": 49.449866,
+          "client_cores": 4.275556,
+          "client_cpu_percent": 26.722224,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 38.585938,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 50,
+          "completed": 241620,
+          "completed_at_close": 241455,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 367.667965,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 8.709495,
+          "latency_p95_ms": 17.24221,
+          "latency_p99_ms": 19.188081,
+          "logical_cores": 16,
+          "non_submit_cores": 3.320871,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 1026,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 20.212151,
+          "server_memory_mb": 45.652344,
+          "server_received_at_close": 241620,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.954685,
+          "submitted": 241620,
+          "throughput_per_second": 48290.884971,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922723441,
+            "runId": "cdrain-main-3-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            48561.724223,
+            49073.787321,
+            50051.056695,
+            49557.104708,
+            49613.465831,
+            47795.541145,
+            49367.44092,
+            49819.155422,
+            48420.296381,
+            50413.647052
+          ],
+          "target_stats": {
+            "received": 241620,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 367.667965
+          },
+          "source_drain_ms": 32.667965,
+          "runner_settle_ms": 335.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/3/request-backpressure/main/run1/zlink-framework-cpp-request-backpressure-1024",
+        "captured_received": 152020,
+        "captured_completed": 152046,
+        "seconds": 3.120287532918155,
+        "threads": {
+          "198241": {
+            "runtime_ns": 285146,
+            "switches": 32
+          },
+          "198244": {
+            "runtime_ns": 2178428,
+            "switches": 3
+          },
+          "198245": {
+            "runtime_ns": 89129,
+            "switches": 2
+          },
+          "198246": {
+            "runtime_ns": 219432,
+            "switches": 2
+          },
+          "198247": {
+            "runtime_ns": 2022013,
+            "switches": 1
+          },
+          "198248": {
+            "runtime_ns": 2024168,
+            "switches": 1
+          },
+          "198249": {
+            "runtime_ns": 2529528,
+            "switches": 2
+          },
+          "198250": {
+            "runtime_ns": 2165993,
+            "switches": 2
+          },
+          "198251": {
+            "runtime_ns": 2576617,
+            "switches": 3
+          },
+          "198252": {
+            "runtime_ns": 21770769,
+            "switches": 2952
+          },
+          "198253": {
+            "runtime_ns": 355853118,
+            "switches": 26211
+          },
+          "198254": {
+            "runtime_ns": 355266499,
+            "switches": 26333
+          },
+          "198255": {
+            "runtime_ns": 360127162,
+            "switches": 26330
+          },
+          "198256": {
+            "runtime_ns": 358672774,
+            "switches": 26264
+          },
+          "198257": {
+            "runtime_ns": 354748649,
+            "switches": 26302
+          },
+          "198258": {
+            "runtime_ns": 357051586,
+            "switches": 26375
+          },
+          "198259": {
+            "runtime_ns": 359378690,
+            "switches": 26236
+          },
+          "198260": {
+            "runtime_ns": 354239969,
+            "switches": 26317
+          },
+          "198261": {
+            "runtime_ns": 355588,
+            "switches": 32
+          },
+          "198262": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "198263": {
+            "runtime_ns": 360320,
+            "switches": 32
+          },
+          "198264": {
+            "runtime_ns": 359936,
+            "switches": 32
+          },
+          "198265": {
+            "runtime_ns": 341712,
+            "switches": 32
+          },
+          "198266": {
+            "runtime_ns": 348378,
+            "switches": 32
+          },
+          "198268": {
+            "runtime_ns": 566374,
+            "switches": 43
+          },
+          "198269": {
+            "runtime_ns": 631196,
+            "switches": 48
+          },
+          "198270": {
+            "runtime_ns": 688087,
+            "switches": 46
+          },
+          "198271": {
+            "runtime_ns": 561970,
+            "switches": 39
+          },
+          "198272": {
+            "runtime_ns": 611804,
+            "switches": 41
+          },
+          "198273": {
+            "runtime_ns": 569742,
+            "switches": 42
+          },
+          "198274": {
+            "runtime_ns": 598817,
+            "switches": 42
+          },
+          "198275": {
+            "runtime_ns": 533707,
+            "switches": 45
+          },
+          "198276": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "198277": {
+            "runtime_ns": 1888513,
+            "switches": 25
+          },
+          "198279": {
+            "runtime_ns": 5689843,
+            "switches": 56
+          },
+          "198281": {
+            "runtime_ns": 22140886,
+            "switches": 2954
+          },
+          "198282": {
+            "runtime_ns": 396486,
+            "switches": 32
+          },
+          "198283": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "198284": {
+            "runtime_ns": 2560259033,
+            "switches": 43186
+          },
+          "198285": {
+            "runtime_ns": 368814,
+            "switches": 31
+          },
+          "198286": {
+            "runtime_ns": 2377844091,
+            "switches": 55209
+          },
+          "198287": {
+            "runtime_ns": 356036,
+            "switches": 32
+          },
+          "198288": {
+            "runtime_ns": 344927,
+            "switches": 32
+          },
+          "198289": {
+            "runtime_ns": 2506963101,
+            "switches": 46139
+          },
+          "198291": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "198292": {
+            "runtime_ns": 1445839,
+            "switches": 35
+          },
+          "198293": {
+            "runtime_ns": 526793,
+            "switches": 47
+          },
+          "199763": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "199764": {
+            "runtime_ns": 2972590768,
+            "switches": 10313
+          },
+          "199765": {
+            "runtime_ns": 0,
+            "switches": 0
+          }
+        },
+        "source_switches_per_received": 2.4468162083936322,
+        "submitter_tid": "199764",
+        "submitter_cpu_us_per_completed": 19.55060158110046,
+        "submitter_cpu_us_per_received": 19.553945322983818,
+        "submitter_cores": 0.9526656555333456
+      },
+      "ratio": 0.19138724784198996
+    },
+    {
+      "pattern": "request-backpressure",
+      "run": 3,
+      "variant": "branch",
+      "binding": {
+        "throughput": 246826.093144,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.0710389999995,
+          "bandwidth_mb_s": 252.749919,
+          "client_cores": 2.37684,
+          "client_cpu_percent": 14.855253,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 34.917969,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 44,
+          "completed": 1234457,
+          "completed_at_close": 1234148,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 575.756663,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 2.530032,
+          "latency_p95_ms": 10.85708,
+          "latency_p99_ms": 16.29077,
+          "logical_cores": 16,
+          "non_submit_cores": 1.378052,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 4694,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 14.993572,
+          "server_memory_mb": 46.851562,
+          "server_received_at_close": 1234457,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.998789,
+          "submitted": 1234457,
+          "throughput_per_second": 246826.093144,
+          "trigger": {
+            "cellId": "zlink-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922912845,
+            "runId": "cdrain-branch-3-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            255612.160058,
+            251583.85793,
+            268407.84747,
+            276487.471688,
+            276510.194029,
+            273275.268155,
+            266631.309149,
+            275948.231919,
+            270601.920164,
+            274178.038544
+          ],
+          "target_stats": {
+            "received": 1234457,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 575.756663
+          },
+          "source_drain_ms": 87.756663,
+          "runner_settle_ms": 488.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/3/request-backpressure/branch/run1/zlink-cpp-request-backpressure-1024",
+        "captured_received": 755398,
+        "captured_completed": 755436,
+        "seconds": 3.042468264931813,
+        "threads": {
+          "206929": {
+            "runtime_ns": 276479,
+            "switches": 31
+          },
+          "206932": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206933": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206934": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206935": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206936": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206937": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206938": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206939": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206940": {
+            "runtime_ns": 20933242,
+            "switches": 2922
+          },
+          "206941": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206942": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206943": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206944": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206945": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206946": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206947": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206948": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206949": {
+            "runtime_ns": 393959,
+            "switches": 31
+          },
+          "206950": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206951": {
+            "runtime_ns": 422723,
+            "switches": 31
+          },
+          "206952": {
+            "runtime_ns": 474140,
+            "switches": 31
+          },
+          "206953": {
+            "runtime_ns": 435650,
+            "switches": 31
+          },
+          "206955": {
+            "runtime_ns": 384321,
+            "switches": 31
+          },
+          "206956": {
+            "runtime_ns": 226156,
+            "switches": 3
+          },
+          "206957": {
+            "runtime_ns": 205177,
+            "switches": 3
+          },
+          "206958": {
+            "runtime_ns": 216949,
+            "switches": 3
+          },
+          "206959": {
+            "runtime_ns": 128602,
+            "switches": 2
+          },
+          "206960": {
+            "runtime_ns": 146265,
+            "switches": 2
+          },
+          "206961": {
+            "runtime_ns": 144933,
+            "switches": 2
+          },
+          "206962": {
+            "runtime_ns": 250772,
+            "switches": 3
+          },
+          "206963": {
+            "runtime_ns": 218821,
+            "switches": 3
+          },
+          "206964": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206965": {
+            "runtime_ns": 1523247,
+            "switches": 21
+          },
+          "206967": {
+            "runtime_ns": 4713402,
+            "switches": 43
+          },
+          "206969": {
+            "runtime_ns": 368533,
+            "switches": 31
+          },
+          "206970": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "206971": {
+            "runtime_ns": 2001671980,
+            "switches": 72642
+          },
+          "206972": {
+            "runtime_ns": 432044,
+            "switches": 30
+          },
+          "206973": {
+            "runtime_ns": 2226841423,
+            "switches": 81925
+          },
+          "206974": {
+            "runtime_ns": 340085,
+            "switches": 30
+          },
+          "206975": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "208504": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "208505": {
+            "runtime_ns": 3087585716,
+            "switches": 735
+          }
+        },
+        "source_switches_per_received": 0.20993701333601625
+      },
+      "framework": {
+        "throughput": 51291.148945,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.004977,
+          "bandwidth_mb_s": 52.522137,
+          "client_cores": 4.324929,
+          "client_cpu_percent": 27.030809,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 44.464844,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 50,
+          "completed": 257101,
+          "completed_at_close": 256456,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 377.954313,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 9.411795,
+          "latency_p95_ms": 16.895301,
+          "latency_p99_ms": 18.555958,
+          "logical_cores": 16,
+          "non_submit_cores": 3.385867,
+          "pattern": "request-backpressure",
+          "payload_size": 1024,
+          "peak_in_flight": 1090,
+          "request_window": 0,
+          "role": "source",
+          "server_cpu_percent": 19.535564,
+          "server_memory_mb": 40.382812,
+          "server_received_at_close": 257101,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 1,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": null
+          },
+          "submit_thread_cores": 0.939063,
+          "submitted": 257101,
+          "throughput_per_second": 51291.148945,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-request-backpressure-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "request-backpressure",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922949413,
+            "runId": "cdrain-branch-3-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            50479.806418,
+            49453.789386,
+            50758.741087,
+            50257.348251,
+            50146.611337,
+            50547.94267,
+            49637.555801,
+            50325.034988,
+            50252.180531,
+            49894.378612
+          ],
+          "target_stats": {
+            "received": 257101,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 377.954313
+          },
+          "source_drain_ms": 35.954313,
+          "runner_settle_ms": 342.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/3/request-backpressure/branch/run1/zlink-framework-cpp-request-backpressure-1024",
+        "captured_received": 158753,
+        "captured_completed": 158728,
+        "seconds": 3.1150392449926585,
+        "threads": {
+          "208771": {
+            "runtime_ns": 293011,
+            "switches": 31
+          },
+          "208774": {
+            "runtime_ns": 151526,
+            "switches": 2
+          },
+          "208775": {
+            "runtime_ns": 254228,
+            "switches": 1
+          },
+          "208776": {
+            "runtime_ns": 815764,
+            "switches": 2
+          },
+          "208777": {
+            "runtime_ns": 372591,
+            "switches": 2
+          },
+          "208778": {
+            "runtime_ns": 2010341,
+            "switches": 1
+          },
+          "208779": {
+            "runtime_ns": 3463405,
+            "switches": 4
+          },
+          "208780": {
+            "runtime_ns": 2386981,
+            "switches": 3
+          },
+          "208781": {
+            "runtime_ns": 1826326,
+            "switches": 3
+          },
+          "208782": {
+            "runtime_ns": 22038862,
+            "switches": 2951
+          },
+          "208783": {
+            "runtime_ns": 373129244,
+            "switches": 27953
+          },
+          "208784": {
+            "runtime_ns": 375552551,
+            "switches": 27936
+          },
+          "208785": {
+            "runtime_ns": 377239736,
+            "switches": 27963
+          },
+          "208786": {
+            "runtime_ns": 375624030,
+            "switches": 27973
+          },
+          "208787": {
+            "runtime_ns": 373903323,
+            "switches": 27988
+          },
+          "208788": {
+            "runtime_ns": 376865138,
+            "switches": 28050
+          },
+          "208789": {
+            "runtime_ns": 375627529,
+            "switches": 27998
+          },
+          "208790": {
+            "runtime_ns": 375514192,
+            "switches": 28025
+          },
+          "208792": {
+            "runtime_ns": 385313,
+            "switches": 32
+          },
+          "208793": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "208794": {
+            "runtime_ns": 364498,
+            "switches": 32
+          },
+          "208795": {
+            "runtime_ns": 353973,
+            "switches": 32
+          },
+          "208796": {
+            "runtime_ns": 343517,
+            "switches": 32
+          },
+          "208797": {
+            "runtime_ns": 349745,
+            "switches": 32
+          },
+          "208798": {
+            "runtime_ns": 994140,
+            "switches": 64
+          },
+          "208799": {
+            "runtime_ns": 721391,
+            "switches": 67
+          },
+          "208800": {
+            "runtime_ns": 964092,
+            "switches": 60
+          },
+          "208801": {
+            "runtime_ns": 655328,
+            "switches": 61
+          },
+          "208802": {
+            "runtime_ns": 880794,
+            "switches": 63
+          },
+          "208803": {
+            "runtime_ns": 629208,
+            "switches": 62
+          },
+          "208804": {
+            "runtime_ns": 727393,
+            "switches": 70
+          },
+          "208805": {
+            "runtime_ns": 665534,
+            "switches": 67
+          },
+          "208806": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "208807": {
+            "runtime_ns": 1918079,
+            "switches": 24
+          },
+          "208809": {
+            "runtime_ns": 5631011,
+            "switches": 54
+          },
+          "208811": {
+            "runtime_ns": 21961887,
+            "switches": 2950
+          },
+          "208812": {
+            "runtime_ns": 362852,
+            "switches": 32
+          },
+          "208813": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "208814": {
+            "runtime_ns": 2514309650,
+            "switches": 38661
+          },
+          "208815": {
+            "runtime_ns": 359278,
+            "switches": 31
+          },
+          "208816": {
+            "runtime_ns": 2405680759,
+            "switches": 51988
+          },
+          "208817": {
+            "runtime_ns": 334928,
+            "switches": 31
+          },
+          "208818": {
+            "runtime_ns": 384406,
+            "switches": 32
+          },
+          "208819": {
+            "runtime_ns": 2475040976,
+            "switches": 44456
+          },
+          "208821": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "208822": {
+            "runtime_ns": 1226015,
+            "switches": 33
+          },
+          "208823": {
+            "runtime_ns": 459353,
+            "switches": 40
+          },
+          "208824": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "210256": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "210257": {
+            "runtime_ns": 2910009519,
+            "switches": 14095
+          }
+        },
+        "source_switches_per_received": 2.3935736647496424,
+        "submitter_tid": "210257",
+        "submitter_cpu_us_per_completed": 18.333309302706517,
+        "submitter_cpu_us_per_received": 18.33042222194226,
+        "submitter_cores": 0.9341806924833328
+      },
+      "ratio": 0.20780278248408848
+    },
+    {
+      "pattern": "send-saturation",
+      "run": 1,
+      "variant": "main",
+      "binding": {
+        "throughput": 609125.080453,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.002623,
+          "bandwidth_mb_s": 623.744082,
+          "client_cores": 1.814987,
+          "client_cpu_percent": 11.343669,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 22.699219,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 43,
+          "completed": 3045790,
+          "completed_at_close": 3045790,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 728.767148,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 1.461994,
+          "latency_p95_ms": 5.186815,
+          "latency_p99_ms": 9.523666,
+          "logical_cores": 16,
+          "non_submit_cores": 0.944631,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 12.004195,
+          "server_memory_mb": 56.359375,
+          "server_received_at_close": 3045627,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.870356,
+          "submitted": 3045790,
+          "throughput_per_second": 609125.080453,
+          "trigger": {
+            "cellId": "zlink-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793921903242,
+            "runId": "cdrain-main-1-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            621388.279397,
+            627536.722287,
+            626901.050632,
+            620675.13807,
+            558611.679758,
+            629607.670566,
+            586379.075385,
+            538456.616439,
+            535031.898531,
+            542017.87514
+          ],
+          "target_stats": {
+            "received": 3045790,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 728.767148
+          },
+          "source_drain_ms": 108.767148,
+          "runner_settle_ms": 620.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/1/send-saturation/main/run1/zlink-cpp-send-saturation-1024",
+        "captured_received": 1801893,
+        "captured_completed": 1802075,
+        "seconds": 2.8829305151011795,
+        "threads": {
+          "164340": {
+            "runtime_ns": 269040,
+            "switches": 30
+          },
+          "164343": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164344": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164345": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164346": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164347": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164348": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164349": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164350": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164351": {
+            "runtime_ns": 17146198,
+            "switches": 2849
+          },
+          "164352": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164353": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164354": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164355": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164356": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164357": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164358": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164359": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164360": {
+            "runtime_ns": 375163,
+            "switches": 30
+          },
+          "164361": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164362": {
+            "runtime_ns": 359125,
+            "switches": 30
+          },
+          "164363": {
+            "runtime_ns": 281437,
+            "switches": 30
+          },
+          "164364": {
+            "runtime_ns": 387497,
+            "switches": 30
+          },
+          "164365": {
+            "runtime_ns": 336360,
+            "switches": 30
+          },
+          "164366": {
+            "runtime_ns": 120778,
+            "switches": 2
+          },
+          "164367": {
+            "runtime_ns": 125536,
+            "switches": 2
+          },
+          "164368": {
+            "runtime_ns": 134633,
+            "switches": 2
+          },
+          "164369": {
+            "runtime_ns": 133772,
+            "switches": 2
+          },
+          "164370": {
+            "runtime_ns": 176162,
+            "switches": 3
+          },
+          "164371": {
+            "runtime_ns": 128100,
+            "switches": 3
+          },
+          "164372": {
+            "runtime_ns": 108434,
+            "switches": 2
+          },
+          "164373": {
+            "runtime_ns": 102211,
+            "switches": 2
+          },
+          "164375": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164376": {
+            "runtime_ns": 1343796,
+            "switches": 17
+          },
+          "164378": {
+            "runtime_ns": 3287144,
+            "switches": 34
+          },
+          "164380": {
+            "runtime_ns": 297891,
+            "switches": 30
+          },
+          "164381": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "164382": {
+            "runtime_ns": 2811776216,
+            "switches": 63414
+          },
+          "164383": {
+            "runtime_ns": 295140,
+            "switches": 30
+          },
+          "164384": {
+            "runtime_ns": 311757,
+            "switches": 30
+          },
+          "164385": {
+            "runtime_ns": 321956,
+            "switches": 30
+          },
+          "165981": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "165982": {
+            "runtime_ns": 2623915386,
+            "switches": 1279
+          }
+        },
+        "source_switches_per_received": 0.03768869738658178
+      },
+      "framework": {
+        "throughput": 169574.31545,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.002493,
+          "bandwidth_mb_s": 173.644099,
+          "client_cores": 1.717787,
+          "client_cpu_percent": 10.736166,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 29.394531,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 49,
+          "completed": 848576,
+          "completed_at_close": 848576,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 506.186504,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 3.688908,
+          "latency_p95_ms": 5.565823,
+          "latency_p99_ms": 6.518907,
+          "logical_cores": 16,
+          "non_submit_cores": 0.900127,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 15.80999,
+          "server_memory_mb": 52.632812,
+          "server_received_at_close": 847872,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.81766,
+          "submitted": 848576,
+          "throughput_per_second": 169574.31545,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793921940030,
+            "runId": "cdrain-main-1-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            173478.665987,
+            170115.286969,
+            176650.526701,
+            172858.91228,
+            176407.530561,
+            180568.826714,
+            176665.078288,
+            176930.077316,
+            175479.79461,
+            167384.904256
+          ],
+          "target_stats": {
+            "received": 848576,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 506.186504
+          },
+          "source_drain_ms": 50.186504,
+          "runner_settle_ms": 456.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/1/send-saturation/main/run1/zlink-framework-cpp-send-saturation-1024",
+        "captured_received": 538711,
+        "captured_completed": 538097,
+        "seconds": 3.111875392962247,
+        "threads": {
+          "166239": {
+            "runtime_ns": 274715,
+            "switches": 32
+          },
+          "166242": {
+            "runtime_ns": 81694,
+            "switches": 1
+          },
+          "166243": {
+            "runtime_ns": 151024,
+            "switches": 2
+          },
+          "166244": {
+            "runtime_ns": 71765,
+            "switches": 1
+          },
+          "166245": {
+            "runtime_ns": 75322,
+            "switches": 1
+          },
+          "166246": {
+            "runtime_ns": 49654,
+            "switches": 1
+          },
+          "166247": {
+            "runtime_ns": 74921,
+            "switches": 1
+          },
+          "166248": {
+            "runtime_ns": 87785,
+            "switches": 1
+          },
+          "166249": {
+            "runtime_ns": 88988,
+            "switches": 1
+          },
+          "166250": {
+            "runtime_ns": 19851312,
+            "switches": 2983
+          },
+          "166251": {
+            "runtime_ns": 12615184,
+            "switches": 1086
+          },
+          "166252": {
+            "runtime_ns": 12637137,
+            "switches": 1076
+          },
+          "166253": {
+            "runtime_ns": 13207602,
+            "switches": 1102
+          },
+          "166254": {
+            "runtime_ns": 12869103,
+            "switches": 1095
+          },
+          "166255": {
+            "runtime_ns": 12871917,
+            "switches": 1091
+          },
+          "166256": {
+            "runtime_ns": 12962590,
+            "switches": 1092
+          },
+          "166257": {
+            "runtime_ns": 13048319,
+            "switches": 1080
+          },
+          "166258": {
+            "runtime_ns": 13204763,
+            "switches": 1076
+          },
+          "166259": {
+            "runtime_ns": 390364,
+            "switches": 32
+          },
+          "166260": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "166261": {
+            "runtime_ns": 363535,
+            "switches": 32
+          },
+          "166262": {
+            "runtime_ns": 376628,
+            "switches": 32
+          },
+          "166263": {
+            "runtime_ns": 367338,
+            "switches": 32
+          },
+          "166264": {
+            "runtime_ns": 325164,
+            "switches": 32
+          },
+          "166266": {
+            "runtime_ns": 227418,
+            "switches": 3
+          },
+          "166267": {
+            "runtime_ns": 179708,
+            "switches": 3
+          },
+          "166268": {
+            "runtime_ns": 126448,
+            "switches": 2
+          },
+          "166269": {
+            "runtime_ns": 221627,
+            "switches": 3
+          },
+          "166270": {
+            "runtime_ns": 189035,
+            "switches": 3
+          },
+          "166271": {
+            "runtime_ns": 198694,
+            "switches": 3
+          },
+          "166272": {
+            "runtime_ns": 174839,
+            "switches": 3
+          },
+          "166273": {
+            "runtime_ns": 192722,
+            "switches": 3
+          },
+          "166274": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "166275": {
+            "runtime_ns": 1708865,
+            "switches": 23
+          },
+          "166277": {
+            "runtime_ns": 5019684,
+            "switches": 46
+          },
+          "166279": {
+            "runtime_ns": 20849551,
+            "switches": 2980
+          },
+          "166280": {
+            "runtime_ns": 318253,
+            "switches": 32
+          },
+          "166281": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "166282": {
+            "runtime_ns": 2581716273,
+            "switches": 2449
+          },
+          "166283": {
+            "runtime_ns": 367560,
+            "switches": 32
+          },
+          "166284": {
+            "runtime_ns": 27646474,
+            "switches": 1181
+          },
+          "166285": {
+            "runtime_ns": 390959,
+            "switches": 32
+          },
+          "166286": {
+            "runtime_ns": 332933,
+            "switches": 32
+          },
+          "166287": {
+            "runtime_ns": 80188552,
+            "switches": 2885
+          },
+          "166289": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "166290": {
+            "runtime_ns": 1648763,
+            "switches": 32
+          },
+          "166291": {
+            "runtime_ns": 275067,
+            "switches": 24
+          },
+          "167970": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "167971": {
+            "runtime_ns": 2602222820,
+            "switches": 833
+          }
+        },
+        "source_switches_per_received": 0.04174037656554257,
+        "submitter_tid": "167971",
+        "submitter_cpu_us_per_completed": 4.835973476901004,
+        "submitter_cpu_us_per_received": 4.830461638986395,
+        "submitter_cores": 0.8362233352547256
+      },
+      "ratio": 0.27838997422974165
+    },
+    {
+      "pattern": "send-saturation",
+      "run": 1,
+      "variant": "branch",
+      "binding": {
+        "throughput": 609160.21696,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.003144,
+          "bandwidth_mb_s": 623.780062,
+          "client_cores": 1.789966,
+          "client_cpu_percent": 11.18729,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 24.164062,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 43,
+          "completed": 3046132,
+          "completed_at_close": 3046132,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 720.842346,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 1.350062,
+          "latency_p95_ms": 3.163421,
+          "latency_p99_ms": 8.82529,
+          "logical_cores": 16,
+          "non_submit_cores": 0.951495,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 11.882345,
+          "server_memory_mb": 65.191406,
+          "server_received_at_close": 3045803,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.838472,
+          "submitted": 3046132,
+          "throughput_per_second": 609160.21696,
+          "trigger": {
+            "cellId": "zlink-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793921976946,
+            "runId": "cdrain-branch-1-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            621034.745834,
+            607962.097614,
+            611371.787582,
+            610501.953601,
+            534788.394816,
+            531860.0637,
+            603883.347182,
+            531939.240923,
+            532379.959603,
+            588676.091084
+          ],
+          "target_stats": {
+            "received": 3046132,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 720.842346
+          },
+          "source_drain_ms": 108.842346,
+          "runner_settle_ms": 612.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/1/send-saturation/branch/run1/zlink-cpp-send-saturation-1024",
+        "captured_received": 1761017,
+        "captured_completed": 1761134,
+        "seconds": 2.924825472990051,
+        "threads": {
+          "168314": {
+            "runtime_ns": 274004,
+            "switches": 30
+          },
+          "168317": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168318": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168319": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168320": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168321": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168322": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168323": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168324": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168325": {
+            "runtime_ns": 18757750,
+            "switches": 2883
+          },
+          "168326": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168327": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168328": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168329": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168330": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168331": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168332": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168333": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168334": {
+            "runtime_ns": 294804,
+            "switches": 30
+          },
+          "168335": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168336": {
+            "runtime_ns": 378389,
+            "switches": 30
+          },
+          "168337": {
+            "runtime_ns": 340940,
+            "switches": 30
+          },
+          "168338": {
+            "runtime_ns": 347972,
+            "switches": 30
+          },
+          "168339": {
+            "runtime_ns": 381304,
+            "switches": 30
+          },
+          "168340": {
+            "runtime_ns": 136076,
+            "switches": 2
+          },
+          "168341": {
+            "runtime_ns": 129103,
+            "switches": 2
+          },
+          "168342": {
+            "runtime_ns": 197440,
+            "switches": 3
+          },
+          "168343": {
+            "runtime_ns": 140855,
+            "switches": 2
+          },
+          "168344": {
+            "runtime_ns": 162505,
+            "switches": 2
+          },
+          "168345": {
+            "runtime_ns": 106030,
+            "switches": 2
+          },
+          "168346": {
+            "runtime_ns": 124604,
+            "switches": 2
+          },
+          "168347": {
+            "runtime_ns": 152345,
+            "switches": 2
+          },
+          "168348": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168349": {
+            "runtime_ns": 1089419,
+            "switches": 17
+          },
+          "168352": {
+            "runtime_ns": 3631936,
+            "switches": 34
+          },
+          "168354": {
+            "runtime_ns": 380553,
+            "switches": 30
+          },
+          "168355": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "168356": {
+            "runtime_ns": 2872264507,
+            "switches": 56449
+          },
+          "168357": {
+            "runtime_ns": 352711,
+            "switches": 31
+          },
+          "168358": {
+            "runtime_ns": 375520,
+            "switches": 30
+          },
+          "168359": {
+            "runtime_ns": 330301,
+            "switches": 30
+          },
+          "169984": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "169985": {
+            "runtime_ns": 2549362417,
+            "switches": 1568
+          }
+        },
+        "source_switches_per_received": 0.034791827676848096
+      },
+      "framework": {
+        "throughput": 174110.042361,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.004527,
+          "bandwidth_mb_s": 178.288683,
+          "client_cores": 1.738013,
+          "client_cpu_percent": 10.862584,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 30.414062,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 49,
+          "completed": 871190,
+          "completed_at_close": 871190,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 488.433037,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 3.597312,
+          "latency_p95_ms": 5.207894,
+          "latency_p99_ms": 6.19491,
+          "logical_cores": 16,
+          "non_submit_cores": 0.9096,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 15.819014,
+          "server_memory_mb": 48.050781,
+          "server_received_at_close": 870551,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.828413,
+          "submitted": 871190,
+          "throughput_per_second": 174110.042361,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922013727,
+            "runId": "cdrain-branch-1-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            181105.123915,
+            176263.743771,
+            182708.418183,
+            172202.765804,
+            170205.256457,
+            174780.891869,
+            178578.355226,
+            172733.814745,
+            169097.179004,
+            179615.564525
+          ],
+          "target_stats": {
+            "received": 871190,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 488.433037
+          },
+          "source_drain_ms": 47.433037,
+          "runner_settle_ms": 441.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/1/send-saturation/branch/run1/zlink-framework-cpp-send-saturation-1024",
+        "captured_received": 521629,
+        "captured_completed": 521698,
+        "seconds": 3.0870825469028205,
+        "threads": {
+          "170253": {
+            "runtime_ns": 263557,
+            "switches": 31
+          },
+          "170256": {
+            "runtime_ns": 84319,
+            "switches": 2
+          },
+          "170257": {
+            "runtime_ns": 117221,
+            "switches": 1
+          },
+          "170258": {
+            "runtime_ns": 198464,
+            "switches": 2
+          },
+          "170259": {
+            "runtime_ns": 213111,
+            "switches": 2
+          },
+          "170260": {
+            "runtime_ns": 95400,
+            "switches": 1
+          },
+          "170261": {
+            "runtime_ns": 62397,
+            "switches": 1
+          },
+          "170262": {
+            "runtime_ns": 94669,
+            "switches": 1
+          },
+          "170263": {
+            "runtime_ns": 77115,
+            "switches": 1
+          },
+          "170264": {
+            "runtime_ns": 20516630,
+            "switches": 2953
+          },
+          "170265": {
+            "runtime_ns": 13524149,
+            "switches": 1150
+          },
+          "170266": {
+            "runtime_ns": 13647731,
+            "switches": 1167
+          },
+          "170267": {
+            "runtime_ns": 13561847,
+            "switches": 1158
+          },
+          "170268": {
+            "runtime_ns": 13577894,
+            "switches": 1152
+          },
+          "170269": {
+            "runtime_ns": 13619337,
+            "switches": 1161
+          },
+          "170270": {
+            "runtime_ns": 13436969,
+            "switches": 1170
+          },
+          "170271": {
+            "runtime_ns": 13896193,
+            "switches": 1167
+          },
+          "170272": {
+            "runtime_ns": 13464340,
+            "switches": 1135
+          },
+          "170273": {
+            "runtime_ns": 429200,
+            "switches": 32
+          },
+          "170274": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "170275": {
+            "runtime_ns": 425307,
+            "switches": 32
+          },
+          "170276": {
+            "runtime_ns": 418037,
+            "switches": 32
+          },
+          "170277": {
+            "runtime_ns": 428023,
+            "switches": 32
+          },
+          "170278": {
+            "runtime_ns": 403443,
+            "switches": 32
+          },
+          "170279": {
+            "runtime_ns": 206628,
+            "switches": 3
+          },
+          "170280": {
+            "runtime_ns": 231986,
+            "switches": 3
+          },
+          "170281": {
+            "runtime_ns": 217117,
+            "switches": 3
+          },
+          "170282": {
+            "runtime_ns": 126719,
+            "switches": 2
+          },
+          "170283": {
+            "runtime_ns": 183314,
+            "switches": 3
+          },
+          "170284": {
+            "runtime_ns": 223791,
+            "switches": 3
+          },
+          "170286": {
+            "runtime_ns": 197943,
+            "switches": 3
+          },
+          "170287": {
+            "runtime_ns": 188735,
+            "switches": 3
+          },
+          "170288": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "170289": {
+            "runtime_ns": 1725406,
+            "switches": 23
+          },
+          "170291": {
+            "runtime_ns": 5033325,
+            "switches": 46
+          },
+          "170293": {
+            "runtime_ns": 20501466,
+            "switches": 2955
+          },
+          "170294": {
+            "runtime_ns": 341440,
+            "switches": 32
+          },
+          "170295": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "170296": {
+            "runtime_ns": 2528043517,
+            "switches": 2169
+          },
+          "170297": {
+            "runtime_ns": 384274,
+            "switches": 31
+          },
+          "170298": {
+            "runtime_ns": 29803592,
+            "switches": 1269
+          },
+          "170299": {
+            "runtime_ns": 352634,
+            "switches": 31
+          },
+          "170300": {
+            "runtime_ns": 331838,
+            "switches": 32
+          },
+          "170301": {
+            "runtime_ns": 84456733,
+            "switches": 3065
+          },
+          "170303": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "170304": {
+            "runtime_ns": 1457993,
+            "switches": 31
+          },
+          "170305": {
+            "runtime_ns": 282241,
+            "switches": 24
+          },
+          "171857": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "171858": {
+            "runtime_ns": 2547553129,
+            "switches": 811
+          }
+        },
+        "source_switches_per_received": 0.04401020648775279,
+        "submitter_tid": "171858",
+        "submitter_cpu_us_per_completed": 4.883195122465488,
+        "submitter_cpu_us_per_received": 4.883841061367371,
+        "submitter_cores": 0.825229999617563
+      },
+      "ratio": 0.28581978519525153
+    },
+    {
+      "pattern": "send-saturation",
+      "run": 2,
+      "variant": "main",
+      "binding": {
+        "throughput": 586480.592269,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.001771,
+          "bandwidth_mb_s": 600.556126,
+          "client_cores": 1.741642,
+          "client_cpu_percent": 10.885262,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 22.066406,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 43,
+          "completed": 2932495,
+          "completed_at_close": 2932495,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 712.775112,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 1.680792,
+          "latency_p95_ms": 6.264057,
+          "latency_p99_ms": 12.714028,
+          "logical_cores": 16,
+          "non_submit_cores": 0.950585,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 11.695222,
+          "server_memory_mb": 56.234375,
+          "server_received_at_close": 2932404,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.791057,
+          "submitted": 2932495,
+          "throughput_per_second": 586480.592269,
+          "trigger": {
+            "cellId": "zlink-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922269635,
+            "runId": "cdrain-main-2-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            622046.626481,
+            619389.571484,
+            562352.522563,
+            535290.841223,
+            601249.202183,
+            614061.980248,
+            612344.590341,
+            619385.875917,
+            606949.408545,
+            611811.717647
+          ],
+          "target_stats": {
+            "received": 2932495,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 712.775112
+          },
+          "source_drain_ms": 105.775112,
+          "runner_settle_ms": 607.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/2/send-saturation/main/run1/zlink-cpp-send-saturation-1024",
+        "captured_received": 1826759,
+        "captured_completed": 1826704,
+        "seconds": 2.9126901898998767,
+        "threads": {
+          "183372": {
+            "runtime_ns": 268755,
+            "switches": 31
+          },
+          "183375": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183376": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183377": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183378": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183379": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183380": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183381": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183382": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183383": {
+            "runtime_ns": 19656266,
+            "switches": 2871
+          },
+          "183384": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183385": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183386": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183387": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183388": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183389": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183390": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183391": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183392": {
+            "runtime_ns": 375958,
+            "switches": 30
+          },
+          "183393": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183394": {
+            "runtime_ns": 314578,
+            "switches": 30
+          },
+          "183395": {
+            "runtime_ns": 373931,
+            "switches": 30
+          },
+          "183396": {
+            "runtime_ns": 279750,
+            "switches": 30
+          },
+          "183397": {
+            "runtime_ns": 365074,
+            "switches": 30
+          },
+          "183398": {
+            "runtime_ns": 155061,
+            "switches": 2
+          },
+          "183399": {
+            "runtime_ns": 129733,
+            "switches": 2
+          },
+          "183400": {
+            "runtime_ns": 134604,
+            "switches": 2
+          },
+          "183401": {
+            "runtime_ns": 185598,
+            "switches": 3
+          },
+          "183402": {
+            "runtime_ns": 126989,
+            "switches": 2
+          },
+          "183404": {
+            "runtime_ns": 120035,
+            "switches": 2
+          },
+          "183405": {
+            "runtime_ns": 133351,
+            "switches": 2
+          },
+          "183406": {
+            "runtime_ns": 134934,
+            "switches": 2
+          },
+          "183407": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183408": {
+            "runtime_ns": 1128061,
+            "switches": 17
+          },
+          "183410": {
+            "runtime_ns": 3562622,
+            "switches": 35
+          },
+          "183412": {
+            "runtime_ns": 294914,
+            "switches": 30
+          },
+          "183413": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "183414": {
+            "runtime_ns": 2820455490,
+            "switches": 68331
+          },
+          "183415": {
+            "runtime_ns": 398000,
+            "switches": 31
+          },
+          "183416": {
+            "runtime_ns": 364916,
+            "switches": 31
+          },
+          "183417": {
+            "runtime_ns": 337375,
+            "switches": 31
+          },
+          "185012": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "185013": {
+            "runtime_ns": 2615601467,
+            "switches": 1433
+          }
+        },
+        "source_switches_per_received": 0.03996586303940476
+      },
+      "framework": {
+        "throughput": 177986.539057,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.001712,
+          "bandwidth_mb_s": 182.258216,
+          "client_cores": 1.781003,
+          "client_cpu_percent": 11.131269,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 29.222656,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 49,
+          "completed": 890615,
+          "completed_at_close": 890615,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 492.066804,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 3.407886,
+          "latency_p95_ms": 4.962522,
+          "latency_p99_ms": 5.985064,
+          "logical_cores": 16,
+          "non_submit_cores": 0.925578,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 16.141157,
+          "server_memory_mb": 48.058594,
+          "server_received_at_close": 889933,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.855425,
+          "submitted": 890615,
+          "throughput_per_second": 177986.539057,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922306328,
+            "runId": "cdrain-main-2-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            180736.604883,
+            179380.257321,
+            176448.304925,
+            178320.488406,
+            180593.422203,
+            179935.757687,
+            175249.273515,
+            179036.456657,
+            179744.589077,
+            179240.55197
+          ],
+          "target_stats": {
+            "received": 890615,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 492.066804
+          },
+          "source_drain_ms": 48.066804,
+          "runner_settle_ms": 444.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/2/send-saturation/main/run1/zlink-framework-cpp-send-saturation-1024",
+        "captured_received": 554739,
+        "captured_completed": 554580,
+        "seconds": 3.100052274996415,
+        "threads": {
+          "185283": {
+            "runtime_ns": 275226,
+            "switches": 31
+          },
+          "185286": {
+            "runtime_ns": 62748,
+            "switches": 1
+          },
+          "185287": {
+            "runtime_ns": 49183,
+            "switches": 1
+          },
+          "185288": {
+            "runtime_ns": 99217,
+            "switches": 1
+          },
+          "185289": {
+            "runtime_ns": 75672,
+            "switches": 1
+          },
+          "185290": {
+            "runtime_ns": 162557,
+            "switches": 3
+          },
+          "185291": {
+            "runtime_ns": 129644,
+            "switches": 2
+          },
+          "185292": {
+            "runtime_ns": 146045,
+            "switches": 2
+          },
+          "185293": {
+            "runtime_ns": 63059,
+            "switches": 1
+          },
+          "185294": {
+            "runtime_ns": 20094539,
+            "switches": 2971
+          },
+          "185295": {
+            "runtime_ns": 11470689,
+            "switches": 1004
+          },
+          "185296": {
+            "runtime_ns": 11191846,
+            "switches": 971
+          },
+          "185297": {
+            "runtime_ns": 11475814,
+            "switches": 996
+          },
+          "185298": {
+            "runtime_ns": 11227364,
+            "switches": 979
+          },
+          "185299": {
+            "runtime_ns": 11039513,
+            "switches": 963
+          },
+          "185300": {
+            "runtime_ns": 11293976,
+            "switches": 987
+          },
+          "185301": {
+            "runtime_ns": 11238929,
+            "switches": 988
+          },
+          "185302": {
+            "runtime_ns": 11331156,
+            "switches": 998
+          },
+          "185303": {
+            "runtime_ns": 328889,
+            "switches": 31
+          },
+          "185304": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "185305": {
+            "runtime_ns": 324129,
+            "switches": 31
+          },
+          "185306": {
+            "runtime_ns": 340099,
+            "switches": 31
+          },
+          "185307": {
+            "runtime_ns": 310815,
+            "switches": 31
+          },
+          "185308": {
+            "runtime_ns": 334227,
+            "switches": 31
+          },
+          "185309": {
+            "runtime_ns": 221387,
+            "switches": 3
+          },
+          "185310": {
+            "runtime_ns": 232146,
+            "switches": 3
+          },
+          "185311": {
+            "runtime_ns": 142638,
+            "switches": 2
+          },
+          "185313": {
+            "runtime_ns": 199395,
+            "switches": 3
+          },
+          "185314": {
+            "runtime_ns": 187262,
+            "switches": 3
+          },
+          "185315": {
+            "runtime_ns": 186339,
+            "switches": 3
+          },
+          "185316": {
+            "runtime_ns": 206289,
+            "switches": 3
+          },
+          "185317": {
+            "runtime_ns": 187875,
+            "switches": 3
+          },
+          "185318": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "185319": {
+            "runtime_ns": 1573979,
+            "switches": 23
+          },
+          "185321": {
+            "runtime_ns": 5010146,
+            "switches": 47
+          },
+          "185323": {
+            "runtime_ns": 19420588,
+            "switches": 2972
+          },
+          "185324": {
+            "runtime_ns": 315225,
+            "switches": 31
+          },
+          "185325": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "185326": {
+            "runtime_ns": 2637551350,
+            "switches": 2507
+          },
+          "185327": {
+            "runtime_ns": 354257,
+            "switches": 32
+          },
+          "185328": {
+            "runtime_ns": 24564426,
+            "switches": 1091
+          },
+          "185329": {
+            "runtime_ns": 316348,
+            "switches": 31
+          },
+          "185330": {
+            "runtime_ns": 73372286,
+            "switches": 2631
+          },
+          "185331": {
+            "runtime_ns": 359751,
+            "switches": 31
+          },
+          "185333": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "185334": {
+            "runtime_ns": 1551819,
+            "switches": 31
+          },
+          "185335": {
+            "runtime_ns": 307048,
+            "switches": 24
+          },
+          "186855": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "186856": {
+            "runtime_ns": 2657261980,
+            "switches": 776
+          }
+        },
+        "source_switches_per_received": 0.038405448327952424,
+        "submitter_tid": "186856",
+        "submitter_cpu_us_per_completed": 4.791485412384146,
+        "submitter_cpu_us_per_received": 4.7901120707215465,
+        "submitter_cores": 0.8571668295506639
+      },
+      "ratio": 0.3034824023219565
+    },
+    {
+      "pattern": "send-saturation",
+      "run": 2,
+      "variant": "branch",
+      "binding": {
+        "throughput": 616973.975723,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.00668,
+          "bandwidth_mb_s": 631.781351,
+          "client_cores": 1.803858,
+          "client_cpu_percent": 11.274112,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 23.71875,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 43,
+          "completed": 3085287,
+          "completed_at_close": 3085287,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 717.515434,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 1.51632,
+          "latency_p95_ms": 5.508457,
+          "latency_p99_ms": 10.361348,
+          "logical_cores": 16,
+          "non_submit_cores": 0.942117,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 11.980221,
+          "server_memory_mb": 57.195312,
+          "server_received_at_close": 3084874,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.861741,
+          "submitted": 3085287,
+          "throughput_per_second": 616973.975723,
+          "trigger": {
+            "cellId": "zlink-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922379767,
+            "runId": "cdrain-branch-2-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            611469.41727,
+            613175.710142,
+            619057.918299,
+            627291.42331,
+            602981.213836,
+            539628.603013,
+            529118.575471,
+            534936.240857,
+            536082.661432,
+            608044.652526
+          ],
+          "target_stats": {
+            "received": 3085287,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 717.515434
+          },
+          "source_drain_ms": 108.515434,
+          "runner_settle_ms": 609.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/2/send-saturation/branch/run1/zlink-cpp-send-saturation-1024",
+        "captured_received": 1774026,
+        "captured_completed": 1774026,
+        "seconds": 2.8871859761420637,
+        "threads": {
+          "188918": {
+            "runtime_ns": 273681,
+            "switches": 30
+          },
+          "188922": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188923": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188924": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188925": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188926": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188927": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188928": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188929": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188930": {
+            "runtime_ns": 18658477,
+            "switches": 2851
+          },
+          "188931": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188932": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188933": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188934": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188935": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188936": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188937": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188938": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188939": {
+            "runtime_ns": 420503,
+            "switches": 30
+          },
+          "188940": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188941": {
+            "runtime_ns": 423675,
+            "switches": 30
+          },
+          "188942": {
+            "runtime_ns": 315244,
+            "switches": 30
+          },
+          "188943": {
+            "runtime_ns": 425261,
+            "switches": 30
+          },
+          "188944": {
+            "runtime_ns": 341721,
+            "switches": 30
+          },
+          "188946": {
+            "runtime_ns": 134183,
+            "switches": 2
+          },
+          "188947": {
+            "runtime_ns": 159991,
+            "switches": 2
+          },
+          "188948": {
+            "runtime_ns": 127691,
+            "switches": 2
+          },
+          "188949": {
+            "runtime_ns": 132249,
+            "switches": 2
+          },
+          "188950": {
+            "runtime_ns": 202042,
+            "switches": 3
+          },
+          "188951": {
+            "runtime_ns": 130936,
+            "switches": 2
+          },
+          "188952": {
+            "runtime_ns": 161102,
+            "switches": 2
+          },
+          "188953": {
+            "runtime_ns": 134363,
+            "switches": 2
+          },
+          "188954": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188955": {
+            "runtime_ns": 1063720,
+            "switches": 17
+          },
+          "188957": {
+            "runtime_ns": 3496089,
+            "switches": 35
+          },
+          "188959": {
+            "runtime_ns": 319471,
+            "switches": 30
+          },
+          "188960": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "188961": {
+            "runtime_ns": 2807737132,
+            "switches": 65870
+          },
+          "188962": {
+            "runtime_ns": 330942,
+            "switches": 30
+          },
+          "188963": {
+            "runtime_ns": 372953,
+            "switches": 30
+          },
+          "188964": {
+            "runtime_ns": 392630,
+            "switches": 30
+          },
+          "190513": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "190514": {
+            "runtime_ns": 2594287537,
+            "switches": 1375
+          }
+        },
+        "source_switches_per_received": 0.039720387412585836
+      },
+      "framework": {
+        "throughput": 173203.971941,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.0008100000005,
+          "bandwidth_mb_s": 177.360867,
+          "client_cores": 1.743506,
+          "client_cpu_percent": 10.896909,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 30.703125,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 49,
+          "completed": 866617,
+          "completed_at_close": 866617,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 493.278202,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 3.530308,
+          "latency_p95_ms": 5.300184,
+          "latency_p99_ms": 6.201071,
+          "logical_cores": 16,
+          "non_submit_cores": 0.910546,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 15.966742,
+          "server_memory_mb": 48.585938,
+          "server_received_at_close": 866020,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.832959,
+          "submitted": 866617,
+          "throughput_per_second": 173203.971941,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793922416359,
+            "runId": "cdrain-branch-2-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            178733.968185,
+            179900.78232,
+            181330.82869,
+            176195.435263,
+            177522.721171,
+            175373.558417,
+            175443.086306,
+            179529.887674,
+            185712.201044,
+            177340.748551
+          ],
+          "target_stats": {
+            "received": 866617,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 493.278202
+          },
+          "source_drain_ms": 47.278202,
+          "runner_settle_ms": 446.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/2/send-saturation/branch/run1/zlink-framework-cpp-send-saturation-1024",
+        "captured_received": 529431,
+        "captured_completed": 529841,
+        "seconds": 3.0892144609242678,
+        "threads": {
+          "190772": {
+            "runtime_ns": 277696,
+            "switches": 31
+          },
+          "190775": {
+            "runtime_ns": 71344,
+            "switches": 2
+          },
+          "190776": {
+            "runtime_ns": 74130,
+            "switches": 1
+          },
+          "190777": {
+            "runtime_ns": 53882,
+            "switches": 1
+          },
+          "190778": {
+            "runtime_ns": 80421,
+            "switches": 1
+          },
+          "190779": {
+            "runtime_ns": 65984,
+            "switches": 1
+          },
+          "190780": {
+            "runtime_ns": 85380,
+            "switches": 1
+          },
+          "190781": {
+            "runtime_ns": 57348,
+            "switches": 1
+          },
+          "190782": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "190783": {
+            "runtime_ns": 19177116,
+            "switches": 2960
+          },
+          "190784": {
+            "runtime_ns": 12608489,
+            "switches": 1052
+          },
+          "190785": {
+            "runtime_ns": 12404217,
+            "switches": 1052
+          },
+          "190786": {
+            "runtime_ns": 12442415,
+            "switches": 1049
+          },
+          "190787": {
+            "runtime_ns": 12314638,
+            "switches": 1049
+          },
+          "190788": {
+            "runtime_ns": 12590539,
+            "switches": 1068
+          },
+          "190789": {
+            "runtime_ns": 12774966,
+            "switches": 1059
+          },
+          "190790": {
+            "runtime_ns": 12315160,
+            "switches": 1052
+          },
+          "190791": {
+            "runtime_ns": 12189088,
+            "switches": 1051
+          },
+          "190792": {
+            "runtime_ns": 287200,
+            "switches": 31
+          },
+          "190793": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "190794": {
+            "runtime_ns": 367082,
+            "switches": 31
+          },
+          "190795": {
+            "runtime_ns": 332333,
+            "switches": 31
+          },
+          "190796": {
+            "runtime_ns": 281770,
+            "switches": 31
+          },
+          "190797": {
+            "runtime_ns": 313893,
+            "switches": 31
+          },
+          "190799": {
+            "runtime_ns": 194336,
+            "switches": 3
+          },
+          "190800": {
+            "runtime_ns": 199054,
+            "switches": 3
+          },
+          "190801": {
+            "runtime_ns": 135405,
+            "switches": 2
+          },
+          "190802": {
+            "runtime_ns": 198113,
+            "switches": 3
+          },
+          "190803": {
+            "runtime_ns": 220926,
+            "switches": 3
+          },
+          "190804": {
+            "runtime_ns": 187874,
+            "switches": 3
+          },
+          "190805": {
+            "runtime_ns": 224532,
+            "switches": 3
+          },
+          "190806": {
+            "runtime_ns": 217801,
+            "switches": 3
+          },
+          "190807": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "190808": {
+            "runtime_ns": 1644865,
+            "switches": 23
+          },
+          "190810": {
+            "runtime_ns": 5019946,
+            "switches": 46
+          },
+          "190812": {
+            "runtime_ns": 19529665,
+            "switches": 2958
+          },
+          "190813": {
+            "runtime_ns": 308909,
+            "switches": 31
+          },
+          "190814": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "190815": {
+            "runtime_ns": 2575801487,
+            "switches": 2228
+          },
+          "190816": {
+            "runtime_ns": 348396,
+            "switches": 31
+          },
+          "190817": {
+            "runtime_ns": 27218030,
+            "switches": 1155
+          },
+          "190818": {
+            "runtime_ns": 326544,
+            "switches": 31
+          },
+          "190819": {
+            "runtime_ns": 324960,
+            "switches": 31
+          },
+          "190820": {
+            "runtime_ns": 76627437,
+            "switches": 2774
+          },
+          "190822": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "190823": {
+            "runtime_ns": 1594647,
+            "switches": 32
+          },
+          "190824": {
+            "runtime_ns": 295096,
+            "switches": 22
+          },
+          "192386": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "192387": {
+            "runtime_ns": 2594444338,
+            "switches": 743
+          }
+        },
+        "source_switches_per_received": 0.04101384316369838,
+        "submitter_tid": "192387",
+        "submitter_cpu_us_per_completed": 4.896646990323512,
+        "submitter_cpu_us_per_received": 4.900439033604001,
+        "submitter_cores": 0.839839503154392
+      },
+      "ratio": 0.28073140643903366
+    },
+    {
+      "pattern": "send-saturation",
+      "run": 3,
+      "variant": "main",
+      "binding": {
+        "throughput": 625502.491877,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.002463000001,
+          "bandwidth_mb_s": 640.514552,
+          "client_cores": 1.804016,
+          "client_cpu_percent": 11.275097,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 22.671875,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 43,
+          "completed": 3127990,
+          "completed_at_close": 3127990,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 720.826538,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 1.549448,
+          "latency_p95_ms": 5.019668,
+          "latency_p99_ms": 10.246547,
+          "logical_cores": 16,
+          "non_submit_cores": 0.945183,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 11.748742,
+          "server_memory_mb": 56.003906,
+          "server_received_at_close": 3127514,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.858833,
+          "submitted": 3127990,
+          "throughput_per_second": 625502.491877,
+          "trigger": {
+            "cellId": "zlink-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793923042631,
+            "runId": "cdrain-main-3-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            622156.624282,
+            607673.412987,
+            612998.234299,
+            605559.335116,
+            613586.428515,
+            624712.808728,
+            609862.376314,
+            615277.094869,
+            604464.870313,
+            616100.668383
+          ],
+          "target_stats": {
+            "received": 3127990,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 720.826538
+          },
+          "source_drain_ms": 113.826538,
+          "runner_settle_ms": 607.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/3/send-saturation/main/run1/zlink-cpp-send-saturation-1024",
+        "captured_received": 1802776,
+        "captured_completed": 1802564,
+        "seconds": 2.8884214889258146,
+        "threads": {
+          "212740": {
+            "runtime_ns": 263767,
+            "switches": 30
+          },
+          "212743": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212744": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212745": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212746": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212747": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212748": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212749": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212750": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212751": {
+            "runtime_ns": 18388283,
+            "switches": 2857
+          },
+          "212752": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212753": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212754": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212755": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212756": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212757": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212758": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212759": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212760": {
+            "runtime_ns": 263314,
+            "switches": 30
+          },
+          "212761": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212762": {
+            "runtime_ns": 357219,
+            "switches": 30
+          },
+          "212763": {
+            "runtime_ns": 314484,
+            "switches": 30
+          },
+          "212764": {
+            "runtime_ns": 435879,
+            "switches": 30
+          },
+          "212765": {
+            "runtime_ns": 348575,
+            "switches": 30
+          },
+          "212766": {
+            "runtime_ns": 137218,
+            "switches": 2
+          },
+          "212767": {
+            "runtime_ns": 148289,
+            "switches": 2
+          },
+          "212768": {
+            "runtime_ns": 146745,
+            "switches": 2
+          },
+          "212769": {
+            "runtime_ns": 119935,
+            "switches": 2
+          },
+          "212770": {
+            "runtime_ns": 133150,
+            "switches": 2
+          },
+          "212772": {
+            "runtime_ns": 164428,
+            "switches": 3
+          },
+          "212773": {
+            "runtime_ns": 117000,
+            "switches": 2
+          },
+          "212774": {
+            "runtime_ns": 134654,
+            "switches": 2
+          },
+          "212775": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212776": {
+            "runtime_ns": 1153452,
+            "switches": 17
+          },
+          "212778": {
+            "runtime_ns": 3582418,
+            "switches": 34
+          },
+          "212780": {
+            "runtime_ns": 345130,
+            "switches": 30
+          },
+          "212781": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "212782": {
+            "runtime_ns": 2828715514,
+            "switches": 63404
+          },
+          "212783": {
+            "runtime_ns": 366794,
+            "switches": 30
+          },
+          "212784": {
+            "runtime_ns": 331755,
+            "switches": 30
+          },
+          "212785": {
+            "runtime_ns": 330803,
+            "switches": 30
+          },
+          "214372": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "214373": {
+            "runtime_ns": 2582115000,
+            "switches": 1430
+          }
+        },
+        "source_switches_per_received": 0.03775233306855649
+      },
+      "framework": {
+        "throughput": 176003.645694,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.015747,
+          "bandwidth_mb_s": 180.227733,
+          "client_cores": 1.749341,
+          "client_cpu_percent": 10.933382,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 28.960938,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 49,
+          "completed": 880539,
+          "completed_at_close": 880531,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 490.870703,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 3.592774,
+          "latency_p95_ms": 5.250913,
+          "latency_p99_ms": 6.13497,
+          "logical_cores": 16,
+          "non_submit_cores": 0.912481,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 15.944226,
+          "server_memory_mb": 51.808594,
+          "server_received_at_close": 880021,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.83686,
+          "submitted": 880539,
+          "throughput_per_second": 176003.645694,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793923079341,
+            "runId": "cdrain-main-3-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            176850.570224,
+            174822.814163,
+            185446.087926,
+            183645.09888,
+            178182.473754,
+            175435.433279,
+            178478.773761,
+            180026.420571,
+            176989.857995,
+            179205.060882
+          ],
+          "target_stats": {
+            "received": 880539,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 490.870703
+          },
+          "source_drain_ms": 47.870703,
+          "runner_settle_ms": 443.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/3/send-saturation/main/run1/zlink-framework-cpp-send-saturation-1024",
+        "captured_received": 538893,
+        "captured_completed": 538918,
+        "seconds": 3.090363265015185,
+        "threads": {
+          "214624": {
+            "runtime_ns": 261633,
+            "switches": 32
+          },
+          "214627": {
+            "runtime_ns": 83367,
+            "switches": 1
+          },
+          "214628": {
+            "runtime_ns": 110418,
+            "switches": 1
+          },
+          "214629": {
+            "runtime_ns": 87144,
+            "switches": 1
+          },
+          "214630": {
+            "runtime_ns": 88767,
+            "switches": 1
+          },
+          "214631": {
+            "runtime_ns": 121439,
+            "switches": 1
+          },
+          "214632": {
+            "runtime_ns": 205967,
+            "switches": 2
+          },
+          "214633": {
+            "runtime_ns": 82926,
+            "switches": 1
+          },
+          "214634": {
+            "runtime_ns": 76434,
+            "switches": 1
+          },
+          "214635": {
+            "runtime_ns": 19387302,
+            "switches": 2963
+          },
+          "214636": {
+            "runtime_ns": 12364373,
+            "switches": 1070
+          },
+          "214637": {
+            "runtime_ns": 12377020,
+            "switches": 1065
+          },
+          "214638": {
+            "runtime_ns": 12585452,
+            "switches": 1073
+          },
+          "214639": {
+            "runtime_ns": 12309429,
+            "switches": 1084
+          },
+          "214640": {
+            "runtime_ns": 12331173,
+            "switches": 1082
+          },
+          "214641": {
+            "runtime_ns": 12610902,
+            "switches": 1076
+          },
+          "214642": {
+            "runtime_ns": 12596850,
+            "switches": 1096
+          },
+          "214643": {
+            "runtime_ns": 12108011,
+            "switches": 1083
+          },
+          "214644": {
+            "runtime_ns": 339738,
+            "switches": 32
+          },
+          "214645": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "214646": {
+            "runtime_ns": 394370,
+            "switches": 32
+          },
+          "214647": {
+            "runtime_ns": 344891,
+            "switches": 32
+          },
+          "214648": {
+            "runtime_ns": 347776,
+            "switches": 32
+          },
+          "214649": {
+            "runtime_ns": 309664,
+            "switches": 32
+          },
+          "214650": {
+            "runtime_ns": 175680,
+            "switches": 3
+          },
+          "214651": {
+            "runtime_ns": 212781,
+            "switches": 3
+          },
+          "214652": {
+            "runtime_ns": 261632,
+            "switches": 3
+          },
+          "214653": {
+            "runtime_ns": 147979,
+            "switches": 2
+          },
+          "214654": {
+            "runtime_ns": 202040,
+            "switches": 3
+          },
+          "214655": {
+            "runtime_ns": 215173,
+            "switches": 3
+          },
+          "214656": {
+            "runtime_ns": 176171,
+            "switches": 3
+          },
+          "214657": {
+            "runtime_ns": 201649,
+            "switches": 3
+          },
+          "214658": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "214660": {
+            "runtime_ns": 1670772,
+            "switches": 23
+          },
+          "214662": {
+            "runtime_ns": 4795034,
+            "switches": 47
+          },
+          "214664": {
+            "runtime_ns": 19720803,
+            "switches": 2966
+          },
+          "214665": {
+            "runtime_ns": 339175,
+            "switches": 32
+          },
+          "214666": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "214667": {
+            "runtime_ns": 2594192405,
+            "switches": 2935
+          },
+          "214668": {
+            "runtime_ns": 382901,
+            "switches": 32
+          },
+          "214669": {
+            "runtime_ns": 26269698,
+            "switches": 1170
+          },
+          "214670": {
+            "runtime_ns": 364334,
+            "switches": 32
+          },
+          "214671": {
+            "runtime_ns": 298139,
+            "switches": 32
+          },
+          "214672": {
+            "runtime_ns": 77889195,
+            "switches": 2915
+          },
+          "214674": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "214675": {
+            "runtime_ns": 1479513,
+            "switches": 32
+          },
+          "214676": {
+            "runtime_ns": 297311,
+            "switches": 24
+          },
+          "216222": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "216223": {
+            "runtime_ns": 2616835381,
+            "switches": 778
+          }
+        },
+        "source_switches_per_received": 0.042372047883346045,
+        "submitter_tid": "216223",
+        "submitter_cpu_us_per_completed": 4.855720872192059,
+        "submitter_cpu_us_per_received": 4.85594613587484,
+        "submitter_cores": 0.8467727437172801
+      },
+      "ratio": 0.2813796075629539
+    },
+    {
+      "pattern": "send-saturation",
+      "run": 3,
+      "variant": "branch",
+      "binding": {
+        "throughput": 626503.19959,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.314447,
+          "bandwidth_mb_s": 641.539276,
+          "client_cores": 1.79033,
+          "client_cpu_percent": 11.18956,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 23.480469,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 43,
+          "completed": 3132893,
+          "completed_at_close": 3132885,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 716.092768,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-cpp",
+          "latency_mean_ms": 1.754736,
+          "latency_p95_ms": 7.128739,
+          "latency_p99_ms": 11.744963,
+          "logical_cores": 16,
+          "non_submit_cores": 0.943082,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 11.640658,
+          "server_memory_mb": 56.785156,
+          "server_received_at_close": 3132713,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; coroutine slots and binding completion poller",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.847247,
+          "submitted": 3132893,
+          "throughput_per_second": 626503.19959,
+          "trigger": {
+            "cellId": "zlink-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5285/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793923177717,
+            "runId": "cdrain-branch-3-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            637168.456223,
+            636233.020519,
+            626979.633415,
+            618441.994015,
+            613189.595908,
+            610106.309987,
+            614943.137745,
+            609571.565782,
+            617242.593237,
+            611296.816176
+          ],
+          "target_stats": {
+            "received": 3132893,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 716.092768
+          },
+          "source_drain_ms": 113.092768,
+          "runner_settle_ms": 603.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/3/send-saturation/branch/run1/zlink-cpp-send-saturation-1024",
+        "captured_received": 1801691,
+        "captured_completed": 1801584,
+        "seconds": 2.8824662999249995,
+        "threads": {
+          "219753": {
+            "runtime_ns": 247834,
+            "switches": 30
+          },
+          "219756": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219757": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219758": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219759": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219760": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219761": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219762": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219763": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219764": {
+            "runtime_ns": 16958945,
+            "switches": 2849
+          },
+          "219765": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219766": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219767": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219768": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219769": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219770": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219771": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219772": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219773": {
+            "runtime_ns": 344839,
+            "switches": 30
+          },
+          "219774": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219775": {
+            "runtime_ns": 385847,
+            "switches": 30
+          },
+          "219776": {
+            "runtime_ns": 432532,
+            "switches": 30
+          },
+          "219777": {
+            "runtime_ns": 402045,
+            "switches": 30
+          },
+          "219778": {
+            "runtime_ns": 358533,
+            "switches": 30
+          },
+          "219780": {
+            "runtime_ns": 171782,
+            "switches": 2
+          },
+          "219781": {
+            "runtime_ns": 126447,
+            "switches": 2
+          },
+          "219782": {
+            "runtime_ns": 140975,
+            "switches": 2
+          },
+          "219783": {
+            "runtime_ns": 130066,
+            "switches": 2
+          },
+          "219784": {
+            "runtime_ns": 131087,
+            "switches": 2
+          },
+          "219785": {
+            "runtime_ns": 181301,
+            "switches": 3
+          },
+          "219786": {
+            "runtime_ns": 137720,
+            "switches": 2
+          },
+          "219787": {
+            "runtime_ns": 168337,
+            "switches": 2
+          },
+          "219788": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219789": {
+            "runtime_ns": 1239449,
+            "switches": 17
+          },
+          "219791": {
+            "runtime_ns": 3247994,
+            "switches": 34
+          },
+          "219793": {
+            "runtime_ns": 310564,
+            "switches": 30
+          },
+          "219794": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "219795": {
+            "runtime_ns": 2814766081,
+            "switches": 63642
+          },
+          "219796": {
+            "runtime_ns": 303180,
+            "switches": 30
+          },
+          "219797": {
+            "runtime_ns": 325804,
+            "switches": 30
+          },
+          "219798": {
+            "runtime_ns": 390475,
+            "switches": 30
+          },
+          "221389": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "221390": {
+            "runtime_ns": 2535743313,
+            "switches": 1523
+          }
+        },
+        "source_switches_per_received": 0.03795434400238443
+      },
+      "framework": {
+        "throughput": 172930.877392,
+        "cell": {
+          "abandoned": 0,
+          "active_elapsed_ms": 5000.0035450000005,
+          "bandwidth_mb_s": 177.081218,
+          "client_cores": 1.731972,
+          "client_cpu_percent": 10.824824,
+          "client_error_other_count": 0,
+          "client_error_summary": [],
+          "client_memory_mb": 30.367188,
+          "client_parallelism_ceiling": 1.0,
+          "client_saturation_metric": "submit_thread_cores",
+          "client_threads": 49,
+          "completed": 865318,
+          "completed_at_close": 865318,
+          "contaminated": false,
+          "contamination_reason": null,
+          "drain_bound_hit": false,
+          "drain_ms": 489.001914,
+          "errors": 0,
+          "header_validation_failures": 0,
+          "implementation": "zlink-framework-cpp",
+          "latency_mean_ms": 3.538353,
+          "latency_p95_ms": 5.230415,
+          "latency_p99_ms": 6.164545,
+          "logical_cores": 16,
+          "non_submit_cores": 0.90572,
+          "pattern": "send-saturation",
+          "payload_size": 1024,
+          "peak_in_flight": 8,
+          "request_window": 8,
+          "role": "source",
+          "server_cpu_percent": 15.279684,
+          "server_memory_mb": 48.5,
+          "server_received_at_close": 864655,
+          "server_rejected_count": 0,
+          "streams": {
+            "count": 8,
+            "implementation": "one application thread; Framework task completion notifications",
+            "inFlightPerStream": 1
+          },
+          "submit_thread_cores": 0.826252,
+          "submitted": 865318,
+          "throughput_per_second": 172930.877392,
+          "trigger": {
+            "cellId": "zlink-framework-cpp-send-saturation-1024",
+            "durationMs": 5000,
+            "endpoint": "http://127.0.0.1:5292/bench/start",
+            "pattern": "send-saturation",
+            "payloadBytes": 1024,
+            "receivedAtUnixMs": 1793923214422,
+            "runId": "cdrain-branch-3-run1",
+            "warmup": 30000
+          },
+          "warmup_segment_throughput": [
+            174289.410403,
+            175285.681707,
+            177555.819011,
+            177526.949405,
+            176386.290177,
+            177127.575387,
+            177389.974929,
+            178956.098901,
+            172081.510245,
+            174820.905247
+          ],
+          "target_stats": {
+            "received": 865318,
+            "errors": 0,
+            "rejected": 0,
+            "drainMs": 489.001914
+          },
+          "source_drain_ms": 47.001914,
+          "runner_settle_ms": 442.0
+        },
+        "directory": "/root/jobs/fx/cx/v21/s033/csubmit/measure/3/send-saturation/branch/run1/zlink-framework-cpp-send-saturation-1024",
+        "captured_received": 530980,
+        "captured_completed": 530961,
+        "seconds": 3.1003316189162433,
+        "threads": {
+          "221663": {
+            "runtime_ns": 256150,
+            "switches": 32
+          },
+          "221666": {
+            "runtime_ns": 47038,
+            "switches": 1
+          },
+          "221667": {
+            "runtime_ns": 74951,
+            "switches": 1
+          },
+          "221668": {
+            "runtime_ns": 78087,
+            "switches": 1
+          },
+          "221669": {
+            "runtime_ns": 81323,
+            "switches": 1
+          },
+          "221670": {
+            "runtime_ns": 63810,
+            "switches": 1
+          },
+          "221671": {
+            "runtime_ns": 91291,
+            "switches": 1
+          },
+          "221672": {
+            "runtime_ns": 77015,
+            "switches": 1
+          },
+          "221673": {
+            "runtime_ns": 63730,
+            "switches": 1
+          },
+          "221674": {
+            "runtime_ns": 19405999,
+            "switches": 2971
+          },
+          "221675": {
+            "runtime_ns": 13526254,
+            "switches": 1146
+          },
+          "221676": {
+            "runtime_ns": 13245994,
+            "switches": 1168
+          },
+          "221677": {
+            "runtime_ns": 13671983,
+            "switches": 1169
+          },
+          "221678": {
+            "runtime_ns": 13110628,
+            "switches": 1151
+          },
+          "221679": {
+            "runtime_ns": 13814527,
+            "switches": 1173
+          },
+          "221680": {
+            "runtime_ns": 13684523,
+            "switches": 1161
+          },
+          "221681": {
+            "runtime_ns": 13654323,
+            "switches": 1157
+          },
+          "221682": {
+            "runtime_ns": 13362262,
+            "switches": 1167
+          },
+          "221683": {
+            "runtime_ns": 360630,
+            "switches": 32
+          },
+          "221684": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "221685": {
+            "runtime_ns": 380725,
+            "switches": 32
+          },
+          "221686": {
+            "runtime_ns": 370889,
+            "switches": 32
+          },
+          "221687": {
+            "runtime_ns": 389619,
+            "switches": 32
+          },
+          "221688": {
+            "runtime_ns": 382891,
+            "switches": 32
+          },
+          "221690": {
+            "runtime_ns": 221577,
+            "switches": 3
+          },
+          "221691": {
+            "runtime_ns": 191851,
+            "switches": 3
+          },
+          "221692": {
+            "runtime_ns": 198743,
+            "switches": 3
+          },
+          "221693": {
+            "runtime_ns": 129192,
+            "switches": 2
+          },
+          "221694": {
+            "runtime_ns": 182873,
+            "switches": 3
+          },
+          "221695": {
+            "runtime_ns": 220154,
+            "switches": 4
+          },
+          "221696": {
+            "runtime_ns": 195457,
+            "switches": 3
+          },
+          "221697": {
+            "runtime_ns": 179327,
+            "switches": 3
+          },
+          "221698": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "221699": {
+            "runtime_ns": 1488189,
+            "switches": 23
+          },
+          "221701": {
+            "runtime_ns": 4905297,
+            "switches": 49
+          },
+          "221703": {
+            "runtime_ns": 19114972,
+            "switches": 2971
+          },
+          "221704": {
+            "runtime_ns": 320534,
+            "switches": 32
+          },
+          "221705": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "221706": {
+            "runtime_ns": 2549703500,
+            "switches": 2536
+          },
+          "221707": {
+            "runtime_ns": 354177,
+            "switches": 32
+          },
+          "221708": {
+            "runtime_ns": 28238822,
+            "switches": 1253
+          },
+          "221709": {
+            "runtime_ns": 383361,
+            "switches": 32
+          },
+          "221710": {
+            "runtime_ns": 312218,
+            "switches": 32
+          },
+          "221711": {
+            "runtime_ns": 81287180,
+            "switches": 3090
+          },
+          "221713": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "221714": {
+            "runtime_ns": 1498746,
+            "switches": 32
+          },
+          "221715": {
+            "runtime_ns": 267344,
+            "switches": 24
+          },
+          "223219": {
+            "runtime_ns": 0,
+            "switches": 0
+          },
+          "223220": {
+            "runtime_ns": 2570178380,
+            "switches": 865
+          }
+        },
+        "source_switches_per_received": 0.04417868846284229,
+        "submitter_tid": "223220",
+        "submitter_cpu_us_per_completed": 4.8406161281148705,
+        "submitter_cpu_us_per_received": 4.840442916870692,
+        "submitter_cores": 0.829001118563709
+      },
+      "ratio": 0.2760255294867935
+    }
+  ],
+  "summary": [
+    {
+      "pattern": "request-backpressure",
+      "variant": "main",
+      "binding_median": 252320.285262,
+      "framework_median": 48321.122261,
+      "ratio_of_medians": 0.19150708477847964,
+      "median_run_ratio": 0.19138724784198996,
+      "submitter_cpu_us_per_completed_median": 19.292399224780254,
+      "submitter_cpu_us_per_received_median": 19.29382000589157
+    },
+    {
+      "pattern": "request-backpressure",
+      "variant": "branch",
+      "binding_median": 246826.093144,
+      "framework_median": 49602.023506,
+      "ratio_of_medians": 0.20095939968981255,
+      "median_run_ratio": 0.20321440491479076,
+      "submitter_cpu_us_per_completed_median": 18.32639835418591,
+      "submitter_cpu_us_per_received_median": 18.32923978474479
+    },
+    {
+      "pattern": "send-saturation",
+      "variant": "main",
+      "binding_median": 609125.080453,
+      "framework_median": 176003.645694,
+      "ratio_of_medians": 0.288944998887762,
+      "median_run_ratio": 0.2813796075629539,
+      "submitter_cpu_us_per_completed_median": 4.835973476901004,
+      "submitter_cpu_us_per_received_median": 4.830461638986395
+    },
+    {
+      "pattern": "send-saturation",
+      "variant": "branch",
+      "binding_median": 616973.975723,
+      "framework_median": 173203.971941,
+      "ratio_of_medians": 0.28073140643903366,
+      "median_run_ratio": 0.28073140643903366,
+      "submitter_cpu_us_per_completed_median": 4.883195122465488,
+      "submitter_cpu_us_per_received_median": 4.883841061367371
+    }
+  ]
+}

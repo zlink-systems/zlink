@@ -1,0 +1,30 @@
+Model gpt-6-luna, effort high: implement an approved, fully specified C++ change (parameter passing and one owner for the deferred encoder state) plus two test reshapes. Earlier job briefs are history, not instructions.
+
+# Task: #4143 — remove the avoidable header/metadata map copies and moves on the C++ node request path; make both allocation tests compare against the real path
+
+Folder JOB=/root/jobs/fx/cx/v21/s033/c4143. Worktree /root/worktree/zlink-v21-s033/c4143 on branch perf/4143-request-header-owner (= origin/main). Read first: /root/jobs/fx/cx/v21/s033/d4143/report.md (design survey) and /root/jobs/fx/cx/v21/s033/w4143c/report.md (every Windows allocation with file:line). Paths below are under framework/languages/cpp/framework/.
+
+## Approved design (PM approved; do not substitute another)
+1. Metadata: `route_client_t::submit_request_reply_message_erased` (src/runtime/channels/channel_runtime.cpp:1729-1737, declaration in the header that declares it, and the erased-submit type in include/.../channels/channel.hpp:1020-1027) takes `const std::map<std::string,std::string> &metadata` instead of a value. At channel_runtime.cpp:1861 replace `header.metadata = std::move (metadata)` with a copy-assign into the header create_envelope already built (`header.metadata = metadata;`). The caller's map (channel_request_call_t::_metadata, call.hpp:195-209) is alive for the whole erased submit (it consumes before its first suspension — confirm this from the code and say where). Metadata decision sites 2→1.
+2. Header chain: `request_encoder_t` (src/runtime/channels/channel_runtime.hpp:199-203), `client_call_codec_t::encode_payload_parts` 4-arg overload and `encode_service_payload_parts` (client_call_codec.hpp/.cpp:83-91), and `envelope_codec_t::prepare_service_payload` (envelope_codec.hpp:258, .cpp:565) take `envelope_header_t &&`. Other callers of encode_payload_parts (channel_runtime.cpp:1575,1633,1706,2014,2163 etc.) already pass std::move(header) and keep working; update any that pass an lvalue.
+3. One owner: in prepare_service_payload, move header, body, type, channel and size into ONE `std::make_shared<state_t>` (header moved exactly once), and return an encoder lambda that captures only that shared_ptr (so it fits std::function's small buffer on MSVC and libstdc++ — add a static_assert or comment stating the capture size; do not depend on implementation-specific SBO sizes in a static_assert if it would fail on one STL — comment instead). The encoder may run after the submit frame returns (service_wire_codec.cpp:3224-3228 per d4143) — the shared state keeps everything alive. Header move sites 5→1. No new flags, counters, locks or parameters.
+4. Node test (test_cpp_framework_request_call_allocations.cpp, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTransport, reference at ~:709-722): the encode reference measures the same path as the real request — create_envelope → metadata copy-assign → serializer payload → encode_service_payload_parts — not the eager encode_payload_parts. Keep the assertion actual.total == reference + target + receiver (sizes too if the test compares sizes).
+5. Registration test (LocalActorRequestCompletionRegistrationDoesNotExceedBaselineHeapCalls, ~:185-230): replace the fixed `<= 8` with actual == Σ components measured separately from the same initial state: the receiver-owned block, the completion object, the local completion sink, the registry item/entry, and the first enqueue on a cold state lane and a cold offload executor of the same kind as the real path uses (so the MSVC deque first allocation is in both sides and cancels). The real side is the actual local Actor request registration. Two sides running the same code is NOT allowed (it would always pass). If a component cannot be measured separately through existing test access, say so and stop that part — do not add a test-only API.
+6. Show each test catches a regression: temporarily add one extra allocation on the real path (e.g. a by-value header copy) and show the test fails on Linux; revert. Record the output.
+
+## Verify
+- Build (Release preset, binding from source, Core 1.24.0 release package):
+  P=/root/.cache/zlink/core-release/1.24.0/linux-x64; from framework/languages/cpp:
+  cmake --preset linux-ninja-release -B <worktree>/build-rel -DCMAKE_TOOLCHAIN_FILE=/root/.cache/zlink/vcpkg/scripts/buildsystems/vcpkg.cmake -DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX=$P -Dzlink_DIR=$P/lib/cmake/zlink -DZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE=ON -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
+  then /root/jobs/fx/cx/cpp-build-slot.sh cmake --build <dir> -j3 -k 0 (all targets must compile), run test_cpp_framework_request_call_allocations, test_cpp_framework_envelope_allocations and the full ctest unit set (ctest -j3 --output-on-failure, LD_LIBRARY_PATH=$P/lib). Linux before/after per-sample total and sizes for both tests (main numbers: /root/jobs/fx/cx/v21/s033/d4143/linux-run.log once it exists, else build main yourself in a second build dir).
+- Run scripts/dev/format.sh --check for C++ (find the exact invocation) and fix formatting.
+
+## Report sections
+결과(Linux 전/후 표), 판정 위치(전/후: metadata 2→1, header 5→1, deque 1+1 유지), 바꾼 것(파일:줄), 검증(명령·로그·수치, 회귀 주입 실패 출력), 리팩토링 점검 한 줄("리팩토링 점검: 성능 N건, POSDDD N건, 불필요 코드 N건 발견. 고친 항목, 넘긴 항목"), 남은 문제. Commit on the branch (message "perf(cpp): one owner for the deferred request header; allocation tests compare the real path (#4143)"), do not push.
+
+## Common rules
+- Do NOT run scripts/dev/internal-docs.sh or any git pull/fetch/push; no GitHub, no sub-agents or other AI tools.
+- C++ compiles only through /root/jobs/fx/cx/cpp-build-slot.sh (no outer flock), -j3, 25 GB cap, build dir inside your worktree; binding from source, never /root/.cache/zlink/zlink-cpp/<ver>. If a build gets stopped (SIGSTOP by the measurement guard) just wait; it resumes.
+- Keep every raw output in JOB. Every claim file:line or raw-file path. Report in Korean, short. Remove the build dir at the end; leave the worktree.
+
+## Output: /root/jobs/fx/cx/v21/s033/c4143/report.md

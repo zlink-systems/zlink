@@ -1,0 +1,32 @@
+{
+  "after-load-memory.log": {
+    "samples": 63,
+    "minimum_kB": 18395912,
+    "minimum_GiB": 17.54370880126953
+  },
+  "main-aborted-memory.log": {
+    "samples": 8,
+    "minimum_kB": 22980716,
+    "minimum_GiB": 21.916118621826172
+  },
+  "main-admission-memory.log": {
+    "samples": 1,
+    "minimum_kB": 16394636,
+    "minimum_GiB": 15.635143280029297
+  },
+  "main-memory.log": {
+    "samples": 47,
+    "minimum_kB": 19010772,
+    "minimum_GiB": 18.130084991455078
+  },
+  "main-reply-memory.log": {
+    "samples": 9,
+    "minimum_kB": 14800556,
+    "minimum_GiB": 14.114910125732422
+  },
+  "main-send-memory.log": {
+    "samples": 9,
+    "minimum_kB": 21410320,
+    "minimum_GiB": 20.418472290039062
+  }
+}

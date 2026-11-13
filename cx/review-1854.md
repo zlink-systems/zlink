@@ -1,0 +1,4 @@
+# #1854 감독자 리뷰
+- 2026-10-16 진단 리뷰: 근거 직접 확인(04-actor-model.ko.md:562-570, ZLinkManagedMeshNode.cs:4879-4883 listener 109 / :10479-10481 native 102 두 생산 경로, :614-650 Retire turn 안 Disconnect 후 listener turn 밖 — #1849). 결정적 red(holdIntentNotification barrier) 4/4, main에서도 red. 수정안 B 승인 — 지시 /root/jobs/fx/cx/z301/1854/approve.md.
+- 2026-10-16 3be83bf85d 승인: intent retirement turn 안에서 listener가 CancelAsync로 종료 사실(IsCancellationRequested)만 즉시 게시하고 cleanup(Action)은 turn 밖, listener의 직접 109 completion 삭제, native 실패 시 lane turn에서 lifetime.Ended를 읽어(retirement turn과 직렬화) 종료면 109 — 판정 경로 2→1. 시험: holdIntentNotification case 추가, 기존 case는 ready edge 대기로(단언 불변), event 시그니처 변경에 맞춘 reflection. 로그: deterministic-red 109/102, stress 60/60 exit 0, focused 19/19, unit 3007/3009(실패 2는 BorrowedPayload binding 회귀), contract 96/96.
+- zlink 승인·머지 #1861(17:41), #1854 종료.

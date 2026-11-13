@@ -1,0 +1,145 @@
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -36,6 +36,13 @@
+ 
+ using namespace zlink_cpp_bench;
+ using clock_t_ = std::chrono::steady_clock;
++
++
++namespace zlink::framework::detail::backend {
++void csend_floor_reset ();
++bool csend_floor_ready ();
++task_t<void> csend_floor_send ();
++}
+ 
+ namespace
+ {
+@@ -903,6 +910,9 @@
+                     counters_t &counters,
+                     latency_sampler_t *latency)
+     {
++        fw::detail::backend::csend_floor_reset ();
++        const char *floor_mode = std::getenv ("CSEND_FLOOR");
++        const bool direct_floor = floor_mode && std::string_view (floor_mode) == "direct";
+         const char *pace = std::getenv ("CSEND_PACE");
+         const double pace_rate = pace ? std::stod (pace) : 0;
+         const auto pace_start = clock_t_::now ();
+@@ -956,7 +966,15 @@
+                     slot = free_slots.back ();
+                     free_slots.pop_back ();
+                 }
+-                auto submission = submit<T> (std::move (payload));
++                auto submission = [&] {
++                    if constexpr (std::is_void_v<T>) {
++                        // The payload constructor/stamp remains observable in this floor.
++                        asm volatile ("" : : "g" (payload.body ().data ()) : "memory");
++                        if (direct_floor && fw::detail::backend::csend_floor_ready ())
++                            return fw::detail::backend::csend_floor_send ();
++                    }
++                    return submit<T> (std::move (payload));
++                } ();
+                 if constexpr (!std::is_void_v<T>) {
+                     preceding_admission.emplace (submission.admitted ());
+                     fw::detail::observe_task_completion (
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+@@ -33,6 +33,13 @@
+ #include <utility>
+ #include <variant>
+ #include <vector>
++
++
++namespace zlink::framework::detail::backend {
++void csend_floor_reset ();
++bool csend_floor_ready ();
++task_t<void> csend_floor_send ();
++}
+ 
+ namespace zlink::framework::detail
+ {
+@@ -1446,6 +1453,8 @@
+                                     payload_encoder_t encode_payload,
+                                     const route_send_call_t::metadata_map_t &metadata)
+ {
++    if (detail::backend::csend_floor_ready ())
++        return detail::backend::csend_floor_send ();
+     try {
+         auto submit_flow = runtime::flow_context_t::enter_current_or_create (
+           flow_origin_t::application,
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+@@ -7,6 +7,8 @@
+ #include <zlink/Contracts/Messaging/received.hpp>
+ #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
+ 
++#include <cstdio>
++#include <zlink.hpp>
+ #include <cerrno>
+ #include <exception>
+ #include <stdexcept>
+@@ -15,6 +17,47 @@
+ 
+ namespace zlink::framework::detail::backend
+ {
++
++namespace {
++struct csend_floor_state_t {
++    zlink::router_socket_t *socket = nullptr;
++    zlink::routing_id_t target = zlink::routing_id_t::from (std::string ("unset"));
++    std::vector<zlink::message_t> parts;
++    std::uint64_t sends = 0;
++    ~csend_floor_state_t () {
++        if (socket)
++            std::fprintf (stderr, "csend-floor final: sends=%llu parts=%zu\n",
++                          static_cast<unsigned long long> (sends), parts.size ());
++    }
++};
++thread_local csend_floor_state_t csend_floor_state;
++
++task_t<void> csend_floor_wait (zlink::async_result_t<void> admitted) {
++    co_await std::move (admitted);
++}
++}
++void csend_floor_reset () {
++    auto &s = csend_floor_state;
++    std::fprintf (stderr, "csend-floor reset: previous_sends=%llu parts=%zu\n",
++                  static_cast<unsigned long long> (s.sends), s.parts.size ());
++    s.socket = nullptr;
++    s.parts.clear ();
++    s.sends = 0;
++}
++bool csend_floor_ready () { return csend_floor_state.socket != nullptr; }
++task_t<void> csend_floor_send () {
++    auto &s = csend_floor_state;
++    auto op = s.socket->send (s.target).message (s.parts[0].copy ());
++    for (size_t i = 1; i < s.parts.size (); ++i)
++        op = std::move (op).message (s.parts[i].copy ());
++    auto submitted = std::move (op).async ();
++    ++s.sends;
++    if (submitted.result == ZLINK_SUBMIT_OK)
++        return task_t<void> (result_t<void>::success ());
++    if (submitted.result == ZLINK_SUBMIT_BACKPRESSURED)
++        return csend_floor_wait (std::move (submitted.admitted));
++    throw std::runtime_error ("unexpected floor submit result");
++}
+ namespace
+ {
+ const char *submit_result_name (zlink::submit_result_t result) noexcept
+@@ -189,6 +232,17 @@
+                   result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated),
+                   {}};
+             }
++            if constexpr (std::is_same_v<Parts, std::vector<zlink::message_t>>) {
++                auto &floor = csend_floor_state;
++                if (!floor.socket) {
++                    floor.socket = _socket;
++                    floor.target = zlink::routing_id_t::from (target_routing_id);
++                    for (const auto &part : parts)
++                        floor.parts.push_back (part.copy ());
++                    std::fprintf (stderr, "csend-floor captured: parts=%zu payload=%zu\n",
++                                  parts.size (), parts.back ().size ());
++                }
++            }
+             auto operation =
+               std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
+                 .message (materialize_binding_part (std::move (parts[0])));

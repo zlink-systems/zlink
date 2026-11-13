@@ -1,0 +1,14 @@
+
+2차 수정
+
+검토 finding은 확인했다. Java reply 제출은 framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java:526-543에서 state lane 밖으로 나가며 메시지 정리는 finally에서 계속 수행한다. 포트 close는 같은 파일 671-674행에서 poller를 닫은 뒤 router를 닫는다. Java binding의 NativeSocketRuntime.closeInternal은 bindings/java/src/main/java/systems/zlink/runtime/sockets/NativeSocketRuntime.java:615-622에서 Core close 결과가 OK가 아니면 ZlinkCloseException을 던진다. CompletionOwner.withNativeCall은 bindings/java/src/main/java/systems/zlink/runtime/sockets/CompletionOwner.java:254-260에서 closed를 확인하지만 in-flight native call을 세거나 기다리지 않는다. CompletionOwner.closeNativeSocket은 같은 파일 358-365행에서 native close를 호출한다. ZlinkException.mapCloseResult는 bindings/java/src/main/java/systems/zlink/contracts/errors/Errors/ZlinkException.java:154-160에서 EBUSY를 CloseResult.BUSY로 바꾼다. Core close 계약은 core/doc/spec/core/socket/README.ko.md:646-658에서 같은 handle의 in-flight API 동안 EBUSY, close accept 뒤 신규 API에 ESHUTDOWN을 정한다.
+
+수정 전 native 경합 재현은 확대한 16개 병렬 reply와 close를 port/runtime 각각 10회 반복했지만 실패를 재현하지 못했다. 따라서 실제 native call 안에서의 EBUSY가 발생한 재현은 확보하지 못했다. 단, binding이 BUSY를 포트까지 전달하는 경로는 코드상 확인했다. close가 BUSY를 받으면 기존 ZLinkJavaRawServicePort.close의 catch가 closeAttempt를 초기화하고 예외를 호출자에게 전달하므로 runtime close가 실패할 수 있다.
+
+Java binding 문서는 runtime이 native handle lifecycle과 close 규칙을 소유한다고 bindings/doc/spec/java/README.ko.md:499-503에서 정하고, 공통 binding 계약은 close와 in-flight 제출 경합의 소유자를 Core로 둔다(bindings/doc/spec/README.ko.md:1186-1193). close BUSY는 in-flight API 호출이라는 결과다(bindings/doc/spec/README.ko.md:2670-2678). 기존 Java binding에 in-flight close wait 기능은 없고, .NET도 framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkRawRouterServicePort.cs:171-179에서 socket DisposeAsync를 호출할 뿐이다. .NET binding의 SocketKernel.Lifecycle은 bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Lifecycle.cs:30-38에서 EBUSY를 기다리거나 재시도하지 않고 전달한다. 이에 Java Framework port는 Core가 close를 아직 accept하지 않은 BUSY만 현재 공유 CloseAttempt 안에서 재시도하고, 그 외 close 오류는 그대로 전달한다. Core가 close를 accept한 뒤 시작한 reply는 ESHUTDOWN으로 종료된다. 수정은 ZLinkJavaRawServicePort.java:711-722에 있다. reply 제출 경로에 gate를 되돌리지 않았다.
+
+경합 테스트는 ZLinkJavaRawServicePortContractTest.java:968-1089에서 port와 runtime 각각 10회 반복하고, 매 반복에 8개 reply thread가 32개 request token에 답하도록 했다. close는 제출과 동시에 시작한다. 모든 reply Message의 소비를 확인하고, reply 결과는 성공 또는 binding/Core 닫힘 오류인지 확인하며, close가 예외 없이 끝나는지 검사한다. 별도 BUSY 주입 테스트는 한 번 BUSY 뒤 성공하는 close가 같은 CloseAttempt 안에서 완료되는지 확인한다. 수정 전 native 경합 스트레스는 통과했으므로 실제 EBUSY 재현 결과는 없다.
+
+최종 검증은 /root/jobs/fx/cx/measure-shared.sh를 통해 :zlink-framework-core:test와 :zlink-framework-core:integrationTest를 실행했고 모두 통과했다. samples의 classes도 같은 스크립트 경유로 통과했다. scripts/format/format.sh --check java와 git diff --check도 통과했다. 확인된 남은 실패는 없다.
+
+리팩토링 점검 결과, reply hot path의 판정 위치와 동기화는 바꾸지 않았다. close 결과를 소유하는 Java port에는 BUSY 재시도 판정 위치 하나를 추가했다. 이 판정은 기존 CloseAttempt 범위에서 끝나며 새 queue, lock, cache, flag 또는 state를 추가하지 않았다.

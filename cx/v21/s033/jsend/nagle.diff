@@ -1,0 +1,10 @@
+--- direct/ZLinkJavaRawServicePort.java
++++ nagle/ZLinkJavaRawServicePort.java
+@@ -177,6 +177,7 @@
+         RouterSocket router = context.createRouterSocket();
+         boolean accepted = false;
+         try {
++            router.options().tcpNoDelay(false);
+             router.setRoutingId(Objects.requireNonNull(routingId, "routingId"));
+             receivePollers.put(router, receivePollerFactory.apply(router, observesRoutes));
+             accepted = true;

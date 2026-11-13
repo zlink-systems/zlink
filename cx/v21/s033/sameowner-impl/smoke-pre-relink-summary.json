@@ -1,0 +1,20 @@
+[
+  {
+    "case": "mailbox",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/smoke-pre-relink-mailbox-01.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/smoke-pre-relink-channel-01.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/smoke-pre-relink-actor-01.log"
+  }
+]

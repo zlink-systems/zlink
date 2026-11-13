@@ -1,0 +1,4 @@
+- 분류 B(기존 결함): mesh_node_vertical :1463 이전 주석 "same-node successor retains its permit until that node's first handler reaches terminal completion (02 §2)"은 S02 §2(02-handler-turn-and-execution-gate.ko.md:97–103, Node·ChannelName handler에는 execution gate가 없다)와 반대였다. 단언을 스펙대로 바꿨다.
+- 단언 변경 근거: S02 §2 :97–104 전문과 바뀐 줄(manual_dispatch_owner, mailbox_owner_dispatch, mesh_node_vertical :1463–1490).
+- 계수 시험: 129건 창 알림 ≤1(관측 200회: 0이 199회, 1이 1회), steady stream ≤W(handler를 발행 끝까지 붙잡아 타이밍 무관). 음성 대조 extra-notify, stream-wakes.
+- 2단계 완료 조건: service_mailbox_claim_t의 단일 record 표현과 prefix 표현을 하나로 줄인다(PM 리뷰 1차).

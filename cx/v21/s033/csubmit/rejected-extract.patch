@@ -1,0 +1,562 @@
+diff --git a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
+index 3aab7197de..b38915e368 100644
+--- a/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
++++ b/framework/languages/cpp/framework/src/runtime/foundation/operation_registry.cpp
+@@ -11,6 +11,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <bit>
++#include <cassert>
+ #include <cstdint>
+ #include <memory>
+ #include <new>
+@@ -20,11 +21,102 @@
+ namespace zlink::framework::runtime::foundation
+ {
+ 
++void completion_sink_t::operator() (operation_terminal_t terminal,
++                                    result_t<zlink::message_t> payload) const
++{
++    if (_admitted && terminal != operation_terminal_t::completed) {
++        if (terminal == operation_terminal_t::cancelled)
++            _admitted->complete (detail::result_access_t::failure<void> (
++              detail::make_cancellation_exception ("request was cancelled")));
++        else
++            _admitted->complete (detail::boundary_failure<void> (
++              terminal == operation_terminal_t::timed_out  ? detail::boundary_error_t::timed_out
++              : terminal == operation_terminal_t::shutdown ? detail::boundary_error_t::shutdown
++                                                           : detail::boundary_error_t::disconnected,
++              "request ended before admission"));
++    }
++    _complete (terminal, std::move (payload));
++}
++
++struct operation_completion_item_t;
++
++struct operation_completion_deleter_t
++{
++    void operator() (operation_completion_item_t *item) const noexcept;
++};
++using operation_completion_ptr_t =
++  std::unique_ptr<operation_completion_item_t, operation_completion_deleter_t>;
++
++struct operation_registry_drain_state_t
++{
++    void admit () noexcept { outstanding.fetch_add (1, std::memory_order_relaxed); }
++    void release () noexcept
++    {
++        if (outstanding.fetch_sub (1, std::memory_order_release) == 1)
++            outstanding.notify_all ();
++    }
++    void wait () noexcept
++    {
++        auto count = outstanding.load (std::memory_order_acquire);
++        while (count != 0) {
++            outstanding.wait (count, std::memory_order_acquire);
++            count = outstanding.load (std::memory_order_acquire);
++        }
++    }
++    std::atomic<std::size_t> outstanding{0};
++};
++
++struct operation_cancellation_t
++{
++    operation_registry_state_t *registry;
++    call_id_t id;
++    void operator() () const noexcept;
++};
++
++struct operation_completion_item_t
++{
++    explicit operation_completion_item_t (
++      operation_registry_t::callback_t callback,
++      std::shared_ptr<operation_registry_drain_state_t> drain_state,
++      detail::completion_dispatcher_borrow_t dispatcher) :
++        callback (std::move (callback)),
++        drain_state (std::move (drain_state)),
++        dispatcher (std::move (dispatcher))
++    {
++        this->drain_state->admit ();
++    }
++
++    operation_completion_item_t () = default;
++    operation_completion_item_t (operation_completion_item_t &&) noexcept = default;
++    operation_completion_item_t &operator= (operation_completion_item_t &&) noexcept = default;
++
++    ~operation_completion_item_t ()
++    {
++        callback = nullptr;
++        if (drain_state)
++            drain_state->release ();
++    }
++
++    void finish_metrics (operation_terminal_t terminal) noexcept
++    {
++        request_metric.complete (terminal);
++    }
++
++    std::unique_ptr<std::stop_callback<operation_cancellation_t>> cancellation;
++    detail::completion_dispatcher_borrow_t dispatcher{};
++    operation_registry_t::callback_t callback;
++    std::shared_ptr<operation_registry_drain_state_t> drain_state;
++    operation_terminal_t terminal = operation_terminal_t::transport_failed;
++    std::optional<result_t<zlink::message_t>> payload;
++    operation_completion_ptr_t next;
++    mesh_request_metric_t request_metric;
++};
++
+ class operation_registry_state_t : public std::enable_shared_from_this<operation_registry_state_t>
+ {
+   public:
+     using clock_t = std::chrono::steady_clock;
+-    using callback_t = std::function<void (operation_terminal_t, result_t<zlink::message_t>)>;
++    using callback_t = operation_registry_t::callback_t;
+     using before_dispatch_t = std::function<void ()>;
+     // The management budget reads this clock; tests inject a deterministic one.
+     using now_t = clock_t::time_point (*) ();
+@@ -80,9 +172,27 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
+     static constexpr std::size_t deadline_slot_count = 256;
+     static constexpr auto deadline_tick_duration = std::chrono::milliseconds (1);
+ 
+-    struct pending_t
++    struct pending_t : operation_completion_item_t
+     {
+-        std::unique_ptr<operation_completion_item_t> completion;
++        pending_t () = default;
++        explicit pending_t (operation_completion_item_t completion) :
++            operation_completion_item_t (std::move (completion))
++        {
++        }
++        pending_t (pending_t &&other) noexcept { *this = std::move (other); }
++        pending_t &operator= (pending_t &&other) noexcept
++        {
++            operation_completion_item_t::operator= (std::move (other));
++            target_routing_id = std::move (other.target_routing_id);
++            id = other.id;
++            deadline = other.deadline;
++            request = std::move (other.request);
++            return *this;
++        }
++        // Terminal-table/dispatcher ownership and the C2 index each retain one
++        // reference. Extract transfers the former without changing the latter.
++        std::atomic_uint references{2};
++        alignas (std::max_align_t) std::byte extracted_node[4 * sizeof (void *)];
+         std::vector<std::uint8_t> target_routing_id;
+         call_id_t id;
+         clock_t::time_point deadline;
+@@ -92,22 +202,14 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
+         std::optional<request_identity_t> request;
+     };
+ 
+-    template <typename Map> static auto find_pending (Map &pending, const call_id_t &id)
++    bool is_pending (const pending_t &pending) const
+     {
+-        const auto [begin, end] = pending.equal_range (id);
+-        const auto found = std::find_if (
+-          begin, end, [] (const auto &entry) { return bool (entry.second.completion); });
+-        return found == end ? pending.end () : found;
++        const auto found = _entries.find (pending.id);
++        return found != _entries.end () && &found->second == &pending;
+     }
+-    // C1's single terminal take; an empty completion is the only settled marker.
+-    std::unique_ptr<operation_completion_item_t> take_completion (pending_t &pending)
+-    {
+-        auto completion = std::exchange (pending.completion, {});
+-        if (completion)
+-            --_pending_count;
+-        return completion;
+-    }
+-    bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
++    operation_completion_ptr_t take_completion (pending_t &pending);
++    static void release_node (pending_t &pending) noexcept;
++    bool take (const call_id_t &id, operation_completion_ptr_t &completion);
+     bool index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
+     void unindex_deadline (pending_t &pending) noexcept;
+     void clear_deadlines () noexcept;
+@@ -116,12 +218,10 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
+     runtime::state_lane_t *_owner = nullptr;
+     std::shared_ptr<operation_registry_drain_state_t> _drain_state;
+     mutable std::mutex _mutex;
+-    // C1 owns completion take. A taken entry remains as index storage until
+-    // management visits it; a reused identity may coexist with its taken entry.
+-    std::unordered_multimap<call_id_t, pending_t, id_hash_t> _entries;
+-    // Observation only: terminal authority remains the completion slot above.
+-    // Map size also includes taken entries retained solely as index storage.
+-    std::size_t _pending_count = 0;
++    // C1 table membership is the only terminal authority. C2 retains references
++    // to extracted nodes until its next visit, independently of callback delivery.
++    using entries_t = std::unordered_map<call_id_t, pending_t, id_hash_t>;
++    entries_t _entries;
+     const now_t _now;
+     const clock_t::time_point _deadline_origin;
+     std::function<void ()> _deadline_changed;
+@@ -139,70 +239,52 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
+ };
+ 
+ 
+-struct operation_registry_drain_state_t
++void operation_cancellation_t::operator() () const noexcept
+ {
+-    void admit () noexcept { outstanding.fetch_add (1, std::memory_order_relaxed); }
+-    void release () noexcept
+-    {
+-        if (outstanding.fetch_sub (1, std::memory_order_release) == 1)
+-            outstanding.notify_all ();
+-    }
+-    void wait () noexcept
+-    {
+-        auto count = outstanding.load (std::memory_order_acquire);
+-        while (count != 0) {
+-            outstanding.wait (count, std::memory_order_acquire);
+-            count = outstanding.load (std::memory_order_acquire);
+-        }
+-    }
+-    std::atomic<std::size_t> outstanding{0};
+-};
++    registry->cancel (id);
++}
+ 
+-struct operation_cancellation_t
++operation_completion_ptr_t operation_registry_state_t::take_completion (pending_t &pending)
+ {
+-    operation_registry_state_t *registry;
+-    call_id_t id;
+-    void operator() () const noexcept { registry->cancel (id); }
+-};
++    using node_t = entries_t::node_type;
++    static_assert (sizeof (node_t) <= sizeof (pending.extracted_node));
++    static_assert (alignof (node_t) <= alignof (pending_t));
++    auto node = _entries.extract (pending.id);
++    assert (!node.empty () && &node.mapped () == &pending);
++    std::construct_at (reinterpret_cast<node_t *> (pending.extracted_node), std::move (node));
++    return operation_completion_ptr_t (&pending);
++}
+ 
+-struct operation_completion_item_t
++void operation_registry_state_t::release_node (pending_t &pending) noexcept
+ {
+-    explicit operation_completion_item_t (
+-      operation_registry_state_t::callback_t callback,
+-      std::shared_ptr<operation_registry_drain_state_t> drain_state,
+-      detail::completion_dispatcher_borrow_t dispatcher) :
+-        callback (std::move (callback)),
+-        drain_state (std::move (drain_state)),
+-        dispatcher (std::move (dispatcher))
+-    {
+-        this->drain_state->admit ();
+-    }
+-
+-    ~operation_completion_item_t ()
+-    {
+-        callback = nullptr;
+-        if (drain_state)
+-            drain_state->release ();
+-    }
++    if (pending.references.fetch_sub (1, std::memory_order_acq_rel) != 1)
++        return;
++    using node_t = entries_t::node_type;
++    auto *storage = std::launder (reinterpret_cast<node_t *> (pending.extracted_node));
++    auto node = std::move (*storage);
++    std::destroy_at (storage);
++    // The local node handle destroys its own pending value after the last borrow.
++}
+ 
+-    void finish_metrics (operation_terminal_t terminal) noexcept
+-    {
+-        request_metric.complete (terminal);
+-    }
++void operation_completion_deleter_t::operator() (operation_completion_item_t *item) const noexcept
++{
++    if (!item)
++        return;
++    auto &pending = *static_cast<operation_registry_state_t::pending_t *> (item);
++    // A retained index reference must not retain callback captures or reply bytes.
++    item->callback = nullptr;
++    item->payload.reset ();
++    pending.request.reset ();
++    auto drain = std::move (item->drain_state);
++    operation_registry_state_t::release_node (pending);
++    if (drain)
++        drain->release ();
++}
+ 
+-    std::optional<std::stop_callback<operation_cancellation_t>> cancellation;
+-    detail::completion_dispatcher_borrow_t dispatcher{};
+-    operation_registry_state_t::callback_t callback;
+-    std::shared_ptr<operation_registry_drain_state_t> drain_state;
+-    operation_terminal_t terminal = operation_terminal_t::transport_failed;
+-    std::optional<result_t<zlink::message_t>> payload;
+-    std::unique_ptr<operation_completion_item_t> next;
+-    mesh_request_metric_t request_metric;
+-};
+ 
+ struct operation_completion_chain_t
+ {
+-    void append (std::unique_ptr<operation_completion_item_t> completion,
++    void append (operation_completion_ptr_t completion,
+                  operation_terminal_t terminal,
+                  result_t<zlink::message_t> payload = result_t<zlink::message_t>::success ({}),
+                  std::optional<operation_terminal_t> request_terminal = {}) noexcept
+@@ -219,7 +301,7 @@ struct operation_completion_chain_t
+         ++size;
+     }
+ 
+-    std::unique_ptr<operation_completion_item_t> head;
++    operation_completion_ptr_t head;
+     operation_completion_item_t *tail = nullptr;
+     std::size_t size = 0;
+ };
+@@ -243,7 +325,7 @@ void post_completions (operation_completion_chain_t completions) noexcept
+           [item = completion.get ()] {
+               // Keep the TLS drain identity valid through callback-capture destruction.
+               const auto drain_lifetime = item->drain_state;
+-              const std::unique_ptr<operation_completion_item_t> completion (item);
++              const operation_completion_ptr_t completion (item);
+               try {
+                   completion->callback (completion->terminal, std::move (*completion->payload));
+               }
+@@ -329,7 +411,7 @@ void operation_registry_state_t::clear_deadlines () noexcept
+ 
+ namespace
+ {
+-void notify (std::unique_ptr<operation_completion_item_t> completion,
++void notify (operation_completion_ptr_t completion,
+              operation_terminal_t terminal,
+              result_t<zlink::message_t> payload,
+              std::optional<operation_terminal_t> request_terminal = {}) noexcept
+@@ -354,47 +436,45 @@ bool operation_registry_state_t::register_operation (call_id_t id,
+     if (id.high == 0 && id.low == 0) {
+         throw std::invalid_argument ("operation id must not be zero");
+     }
+-    pending_t prepared;
++    pending_t prepared (operation_completion_item_t (std::move (callback), _drain_state,
++                                                     detail::borrow_completion_dispatcher ()));
+     prepared.target_routing_id = std::move (target_routing_id);
+     prepared.request = std::move (request);
+     prepared.id = id;
+     prepared.deadline = deadline;
+-    prepared.completion = std::make_unique<operation_completion_item_t> (
+-      std::move (callback), _drain_state, detail::borrow_completion_dispatcher ());
+-    prepared.completion->request_metric = std::move (request_metric);
++    prepared.request_metric = std::move (request_metric);
+     if (cancellation.stop_possible ())
+-        prepared.completion->cancellation.emplace (cancellation,
+-                                                   operation_cancellation_t{this, id});
++        prepared.cancellation = std::make_unique<std::stop_callback<operation_cancellation_t>> (
++          cancellation, operation_cancellation_t{this, id});
+     bool earlier = false;
+     bool accepted = true;
+     std::exception_ptr publication_error;
++    operation_completion_ptr_t rejected;
+     {
+         std::lock_guard lock (_mutex);
+-        if (_closed || find_pending (_entries, id) != _entries.end ())
++        if (_closed || _entries.find (id) != _entries.end ())
+             return false;
+         // Allocate the node and any buckets before transferring the stop
+         // subscription. Allocation failure must not join cancellation under C1.
+-        auto position = _entries.emplace (id, pending_t{});
++        auto position = _entries.try_emplace (id).first;
+         position->second = std::move (prepared);
+         auto *entry = &position->second;
+-        ++_pending_count;
+-        entry->completion->request_metric.start ();
++        entry->request_metric.start ();
+         if (_owner && runtime::state_lane_t::current () != _owner) {
+             try {
+-                accepted = _owner->try_post ([self = shared_from_this (), id, entry] {
++                // The queued publication retains C2's future index reference even
++                // when lane close discards its callable before it can run.
++                auto publication = std::shared_ptr<pending_t> (
++                  entry, [] (pending_t *pending) { release_node (*pending); });
++                accepted = _owner->try_post ([self = shared_from_this (), id, publication] {
++                    auto *entry = publication.get ();
+                     bool earlier = false;
+                     {
+                         std::lock_guard lock (self->_mutex);
+-                        if (self->_closed)
+-                            return;
+-                        // Compare addresses without dereferencing a possibly retired
+-                        // capture. A close on the current lane may precede this turn.
+-                        const auto [begin, end] = self->_entries.equal_range (id);
+-                        const auto found = std::find_if (
+-                          begin, end, [entry] (const auto &item) { return &item.second == entry; });
+-                        if (found == end || found->second.deadline_slot != deadline_slot_count)
++                        if (self->_closed || !self->is_pending (*entry))
+                             return;
+-                        earlier = self->index_deadline (id, found->second.deadline, found->second);
++                        entry->references.fetch_add (1, std::memory_order_relaxed);
++                        earlier = self->index_deadline (id, entry->deadline, *entry);
+                     }
+                     if (earlier && self->_deadline_changed)
+                         self->_deadline_changed ();
+@@ -405,13 +485,14 @@ bool operation_registry_state_t::register_operation (call_id_t id,
+                 accepted = false;
+             }
+             if (!accepted) {
+-                prepared.completion = take_completion (position->second);
+-                _entries.erase (position);
++                rejected = take_completion (position->second);
+             }
+         } else {
+             earlier = index_deadline (id, deadline, *entry);
+         }
+     }
++    if (rejected)
++        rejected->cancellation.reset ();
+     if (publication_error)
+         std::rethrow_exception (publication_error);
+     if (!accepted)
+@@ -428,7 +509,7 @@ std::optional<operation_registry_state_t::request_identity_t>
+ operation_registry_state_t::request_identity (call_id_t id, call_id_t operation) const
+ {
+     std::lock_guard lock (_mutex);
+-    const auto found = find_pending (_entries, id);
++    const auto found = _entries.find (id);
+     if (found == _entries.end () || !found->second.request
+         || found->second.request->operation != operation)
+         return std::nullopt;
+@@ -480,18 +561,14 @@ void operation_registry_state_t::unindex_deadline (pending_t &pending) noexcept
+     else
+         _deadline_tails[slot] = previous;
+     --_index_size;
+-    const auto [begin, end] = _entries.equal_range (pending.id);
+-    const auto found = std::find_if (
+-      begin, end, [&pending] (const auto &entry) { return &entry.second == &pending; });
+-    _entries.erase (found);
++    release_node (pending);
+ }
+ 
+-bool operation_registry_state_t::take (const call_id_t &id,
+-                                       std::unique_ptr<operation_completion_item_t> &completion)
++bool operation_registry_state_t::take (const call_id_t &id, operation_completion_ptr_t &completion)
+ {
+     {
+         std::lock_guard lock (_mutex);
+-        const auto found = find_pending (_entries, id);
++        const auto found = _entries.find (id);
+         if (found == _entries.end ())
+             return false;
+         completion = take_completion (found->second);
+@@ -510,7 +587,7 @@ bool operation_registry_state_t::complete (const call_id_t &id,
+                                            before_dispatch_t before_dispatch,
+                                            operation_terminal_t request_terminal)
+ {
+-    std::unique_ptr<operation_completion_item_t> completion;
++    operation_completion_ptr_t completion;
+     if (!take (id, completion)) {
+         return false;
+     }
+@@ -531,7 +608,7 @@ bool operation_registry_state_t::complete (const call_id_t &id,
+ 
+ namespace
+ {
+-task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_t> completion,
++task_t<void> finish_completion_async (operation_completion_ptr_t completion,
+                                       std::function<task_t<void> ()> before_dispatch)
+ {
+     const auto prepared = co_await runtime::await_result (before_dispatch ());
+@@ -544,7 +621,7 @@ task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_
+ bool operation_registry_state_t::complete_async (const call_id_t &id,
+                                                  std::function<task_t<void> ()> before_dispatch)
+ {
+-    std::unique_ptr<operation_completion_item_t> completion;
++    operation_completion_ptr_t completion;
+     if (!take (id, completion))
+         return false;
+     // The existing completion reservation retains the drain until preparation ends.
+@@ -554,7 +631,7 @@ bool operation_registry_state_t::complete_async (const call_id_t &id,
+ 
+ bool operation_registry_state_t::cancel (const call_id_t &id)
+ {
+-    std::unique_ptr<operation_completion_item_t> completion;
++    operation_completion_ptr_t completion;
+     if (!take (id, completion)) {
+         return false;
+     }
+@@ -579,7 +656,7 @@ bool operation_registry_state_t::fail (const call_id_t &id,
+     if (terminal == operation_terminal_t::completed) {
+         throw std::invalid_argument ("failure terminal cannot be completed");
+     }
+-    std::unique_ptr<operation_completion_item_t> completion;
++    operation_completion_ptr_t completion;
+     if (!take (id, completion)) {
+         return false;
+     }
+@@ -598,7 +675,7 @@ bool operation_registry_state_t::fail (const call_id_t &id,
+ 
+ bool operation_registry_state_t::unregister (const call_id_t &id)
+ {
+-    std::unique_ptr<operation_completion_item_t> completion;
++    operation_completion_ptr_t completion;
+     if (!take (id, completion))
+         return false;
+     completion.reset ();
+@@ -608,7 +685,7 @@ bool operation_registry_state_t::unregister (const call_id_t &id)
+ bool operation_registry_state_t::contains (const call_id_t &id) const
+ {
+     std::lock_guard lock (_mutex);
+-    return find_pending (_entries, id) != _entries.end ();
++    return _entries.find (id) != _entries.end ();
+ }
+ 
+ std::size_t
+@@ -621,12 +698,12 @@ operation_registry_state_t::fail_target (const std::vector<std::uint8_t> &target
+     {
+         std::lock_guard lock (_mutex);
+         for (auto entry = _entries.begin (); entry != _entries.end ();) {
+-            if (!entry->second.completion || entry->second.target_routing_id != target_routing_id) {
++            if (entry->second.target_routing_id != target_routing_id) {
+                 ++entry;
+                 continue;
+             }
+-            completions.append (take_completion (entry->second), terminal);
+-            ++entry;
++            auto &pending = (entry++)->second;
++            completions.append (take_completion (pending), terminal);
+         }
+     }
+     const auto failed = completions.size;
+@@ -698,10 +775,11 @@ std::size_t operation_registry_state_t::expire_on_owner (clock_t::time_point now
+                 break;
+             auto *current = _deadline_cursor;
+             _deadline_cursor = current->deadline_next;
+-            std::unique_ptr<operation_completion_item_t> completion;
+-            if (current->completion && current->deadline <= now)
++            operation_completion_ptr_t completion;
++            const bool pending = is_pending (*current);
++            const bool live = pending && current->deadline > now;
++            if (pending && !live)
+                 completion = take_completion (*current);
+-            const bool live = bool (current->completion);
+             if (completion)
+                 completions.append (std::move (completion), operation_terminal_t::timed_out);
+             if (!live)
+@@ -745,13 +823,11 @@ std::size_t operation_registry_state_t::shutdown ()
+         std::lock_guard lock (_mutex);
+         if (!_closed) {
+             _closed = true;
+-            for (auto &[id, pending] : _entries) {
+-                static_cast<void> (id);
+-                if (pending.completion)
+-                    completions.append (take_completion (pending), operation_terminal_t::shutdown);
+-            }
+-            // Entries also own storage for publications not yet indexed on the lane.
+-            if (!_entries.empty ()) {
++            while (!_entries.empty ())
++                completions.append (take_completion (_entries.begin ()->second),
++                                    operation_terminal_t::shutdown);
++            // C2 owns the remaining index references, including extracted nodes.
++            if (_index_size != 0) {
+                 if (_owner && runtime::state_lane_t::current () != _owner) {
+                     // FIFO follows every accepted index publication. The state, including
+                     // retired entries, outlives the public registry until cleanup finishes.
+@@ -779,7 +855,7 @@ std::size_t operation_registry_state_t::shutdown ()
+ std::size_t operation_registry_state_t::size () const
+ {
+     std::lock_guard lock (_mutex);
+-    return _pending_count;
++    return _entries.size ();
+ }
+ 
+ operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::now)

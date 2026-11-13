@@ -1,0 +1,7 @@
+- L6(활성화) 측정 때 Java Spot 인스턴스 활성화 비용 포함: #4391 이후 createScannedRegistration·serializer.prepare가 활성화마다 돔 (PM 동의 2026-11-13 08:57)
+- 2026-11-13 12:05:35Z: tightened quiet guard started (all-language builds/tests paused, other agents SCHED_IDLE). Runs before this time with G5 failures are discarded; C++ l3868-l0f runs started before 12:05:35Z must be re-measured before judging.
+- PM 12:08Z: all verdicts before 12:08 UTC are 잠정 (provisional), pass cells included. Next session per language = binding + previous step + new step together (Node, C++ too).
+- .NET L0 client (Client/Program.cs:385-391): frameworkTarget sends RawEnvelopeHeaders.FrameworkRequest (+"formatMarker":242, ~20 B, kind 1 for commands too) instead of raw Command header — NOT a restored feature (call-shape2). Fix in the next .NET session (after l1b).
+- PM 12:13Z: l1b continues; its L0÷binding marked 잠정(L0 header 차이). Next .NET session first output: fix L0 send header to binding's, then measure binding·L0·L1·L2 together.
+- Node module-load cost: L1 → L0R variant (Framework core); L4 → codec require-only variant; L6 → Nest require-only variant. Each session reports require-only vs previous step separately.
+- Guard milestones (UTC 11-13): 12:05:35 builds/tests of all languages paused + agents SCHED_IDLE (main thread only); ~13:50 guard itself SCHED_IDLE, 1 s poll; 15:01 SCHED_IDLE applied to ALL threads (chrt -a). Mark each run's start time against these when accepting results.

@@ -1,0 +1,1076 @@
+diff --git a/framework/bench/grpc/cpp/run_local.sh b/framework/bench/grpc/cpp/run_local.sh
+index edb5410cf2..ecda846f29 100755
+--- a/framework/bench/grpc/cpp/run_local.sh
++++ b/framework/bench/grpc/cpp/run_local.sh
+@@ -61,7 +61,7 @@ for run in $(seq 1 "${RUNS}"); do
+         mkdir -p "${cell_dir}"
+         log "cell=${cell_id} run=${run}: start target B then source A"
+ 
+-        setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -76,7 +76,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
++        setsid taskset -c 0-7 "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/dotnet/run_local.sh b/framework/bench/grpc/dotnet/run_local.sh
+index 4874eb88a9..a1bf2e8534 100755
+--- a/framework/bench/grpc/dotnet/run_local.sh
++++ b/framework/bench/grpc/dotnet/run_local.sh
+@@ -62,7 +62,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -80,7 +80,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/java/run_local.sh b/framework/bench/grpc/java/run_local.sh
+index e9ab239086..11621d900b 100755
+--- a/framework/bench/grpc/java/run_local.sh
++++ b/framework/bench/grpc/java/run_local.sh
+@@ -70,7 +70,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -88,7 +88,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/node/run_local.sh b/framework/bench/grpc/node/run_local.sh
+index a04f4b1708..172a2ce554 100644
+--- a/framework/bench/grpc/node/run_local.sh
++++ b/framework/bench/grpc/node/run_local.sh
+@@ -68,7 +68,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run} starting target B then source A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -94,7 +94,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/languages/node/packages/framework/src/runtime/backend/node/node-backend-adapter-support.ts b/framework/languages/node/packages/framework/src/runtime/backend/node/node-backend-adapter-support.ts
+index 2651418b0c..af75e6c132 100644
+--- a/framework/languages/node/packages/framework/src/runtime/backend/node/node-backend-adapter-support.ts
++++ b/framework/languages/node/packages/framework/src/runtime/backend/node/node-backend-adapter-support.ts
+@@ -7,6 +7,7 @@ import {
+ } from '../../messaging/submission-result';
+ import { loadBinding } from '../node-backend-adapter';
+ import { SubmitResult, ZLinkBackendResultError } from '../runtime-values';
++import { closeNativeMessages } from '../runtime-message';
+ const nativeErrnoValues = osConstants.errno;
+ const completedSend: Promise<void> = Promise.resolve();
+ 
+@@ -91,6 +92,7 @@ export function submitBindingPublish(
+     }
+     current!.submit();
+   } catch (error) {
++    closeNativeMessages(payload);
+     const translated = translateBindingResultError(error);
+     if (
+       translated instanceof ZLinkBackendResultError &&
+@@ -117,6 +119,7 @@ export function submitBindingReply(operation: ZLinkBindingReplyOperation, payloa
+     }
+     current!.submit();
+   } catch (error) {
++    closeNativeMessages(payload);
+     throw translateBindingResultError(error);
+   }
+ }
+@@ -148,6 +151,7 @@ export function submitBindingSend(
+     current ??= operation.message(Buffer.alloc(0));
+     submission = current.submit();
+   } catch (error) {
++    closeNativeMessages(payload);
+     throw translateBindingResultError(error, 'submit');
+   }
+   if (submission.result === SubmitResult.Backpressured) {
+@@ -176,6 +180,7 @@ export function submitBindingSyncSend(
+     current ??= operation.message(Buffer.alloc(0));
+     current.submit_sync();
+   } catch (error) {
++    closeNativeMessages(payload);
+     throw translateBindingResultError(error);
+   }
+ }
+@@ -208,6 +213,7 @@ export function submitBindingRequest(
+     }
+     bindingRequestReply(current.submit(), receiver, pending, recordReceived, onAdmitted);
+   } catch (error) {
++    closeNativeMessages(payload);
+     receiver.operationFailed(pending.id, translateBindingResultError(error), undefined);
+   }
+ }
+diff --git a/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts b/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts
+index 4e33d3fbe1..012f2c857c 100644
+--- a/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts
++++ b/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts
+@@ -27,6 +27,7 @@ import {
+   submitBindingAsyncSend,
+   submitBindingSend
+ } from './node-backend-adapter-support';
++import { closeNativeMessages } from '../runtime-message';
+ import { disconnectSocketPeer, isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
+ import { SubmitResult } from '../runtime-values';
+ import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
+@@ -253,11 +254,11 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
+   private readonly replyParts = (
+     targetRid: BindingRoutingId,
+     replyToken: ReplyToken,
+-    parts: readonly (Uint8Array | string)[]
++    parts: readonly (Uint8Array | string | Message)[]
+   ) => {
+     // The receive record keeps the binding RoutingId it was delivered with,
+     // so the reply addresses that route without rebuilding the identity.
+-    appendReplyParts(this.socket.reply(targetRid, replyToken), parts).submit();
++    submitReplyParts(this.socket.reply(targetRid, replyToken), parts);
+   };
+ 
+   private preparedRoutingId(routingId: string | Uint8Array): BindingRoutingId {
+@@ -320,13 +321,13 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
+     this.connect(endpoint);
+   }
+ 
+-  send(targetRid: string, parts: readonly Uint8Array[]): Promise<void> {
++  send(targetRid: string, parts: readonly (Uint8Array | Message)[]): Promise<void> {
+     this.requireOpen();
+     requireParts(parts);
+     return submitBindingAsyncSend(this.socket.send(this.preparedRoutingId(targetRid)), parts);
+   }
+ 
+-  submitSend(targetRid: string, parts: readonly Uint8Array[]) {
++  submitSend(targetRid: string, parts: readonly (Uint8Array | Message)[]) {
+     this.requireOpen();
+     requireParts(parts);
+     return submitBindingSend(this.socket.send(this.preparedRoutingId(targetRid)), parts);
+@@ -334,7 +335,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
+ 
+   request<T>(
+     targetRid: string,
+-    parts: readonly Uint8Array[],
++    parts: readonly (Uint8Array | Message)[],
+     timeoutMs: number,
+     onReply: (parts: readonly Buffer[]) => T,
+     onFailed: (error: unknown) => T,
+@@ -344,10 +345,10 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
+   ): Promise<T> {
+     if (existing !== undefined) {
+       this.requireOpen();
+-      const submission = submitRawRequest(
+-        appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts).timeout(
+-          remainingRequestTimeout('Request', existing.deadlineMs) ?? timeoutMs
+-        )
++      const submission = submitRequestParts(
++        this.socket.request(this.preparedRoutingId(targetRid)),
++        parts,
++        remainingRequestTimeout('Request', existing.deadlineMs) ?? timeoutMs
+       );
+       return requestReply(submission, 0, onReply, onFailed, recordReceived, onAdmitted);
+     }
+@@ -355,10 +356,10 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
+       timeoutMs,
+       (entry, receiver) => {
+         this.requireOpen();
+-        const submission = submitRawRequest(
+-          appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts).timeout(
+-            remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+-          )
++        const submission = submitRequestParts(
++          this.socket.request(this.preparedRoutingId(targetRid)),
++          parts,
++          remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+         );
+         void requestReply(
+           submission,
+@@ -413,14 +414,14 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
+     this.socket.setRoutingId(bindingRoutingId(routingId));
+   }
+ 
+-  send(parts: readonly Uint8Array[]): Promise<void> {
++  send(parts: readonly (Uint8Array | Message)[]): Promise<void> {
+     this.requireOpen();
+     requireParts(parts);
+     return submitBindingAsyncSend(this.socket.send(), parts);
+   }
+ 
+   request(
+-    parts: readonly Uint8Array[],
++    parts: readonly (Uint8Array | Message)[],
+     timeoutMs: number,
+     onAdmitted?: () => void
+   ): Promise<readonly Buffer[]> {
+@@ -428,10 +429,10 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
+       timeoutMs,
+       (entry, receiver) => {
+         this.requireOpen();
+-        const submission = submitRawRequest(
+-          appendRequestParts(this.socket.request(), parts).timeout(
+-            remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+-          )
++        const submission = submitRequestParts(
++          this.socket.request(),
++          parts,
++          remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+         );
+         void requestReply(
+           submission,
+@@ -491,7 +492,7 @@ class NodeRawMonitorPort implements ZLinkRawMonitorPort {
+ 
+ function appendRequestParts(
+   operation: RequestOperation,
+-  parts: readonly Uint8Array[]
++  parts: readonly (Uint8Array | Message)[]
+ ): RequestSubmitOperation {
+   requireParts(parts);
+   let next = operation.message(parts[0]);
+@@ -503,7 +504,7 @@ function appendRequestParts(
+ 
+ function appendReplyParts(
+   operation: ReplyOperation,
+-  parts: readonly (Uint8Array | string)[]
++  parts: readonly (Uint8Array | string | Message)[]
+ ): ReplySubmitOperation {
+   requireParts(parts);
+   let next = operation.message(parts[0]);
+@@ -513,7 +514,7 @@ function appendReplyParts(
+   return next;
+ }
+ 
+-function requireParts<T extends Uint8Array | string>(parts: readonly T[]): [T, ...T[]] {
++function requireParts<T extends Uint8Array | string | Message>(parts: readonly T[]): [T, ...T[]] {
+   if (parts.length === 0)
+     throw new TypeError('Raw multipart operation requires at least one part.');
+   return parts as [T, ...T[]];
+@@ -522,7 +523,7 @@ function requireParts<T extends Uint8Array | string>(parts: readonly T[]): [T, .
+ type RawReceivedReply = (
+   targetRid: BindingRoutingId,
+   replyToken: ReplyToken,
+-  parts: readonly (Uint8Array | string)[]
++  parts: readonly (Uint8Array | string | Message)[]
+ ) => void;
+ 
+ const EMPTY_SOURCE_ROUTE = Buffer.alloc(0);
+@@ -537,7 +538,7 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
+   readonly sourceRoute: Uint8Array;
+   readonly routeGeneration: bigint;
+   readonly requestSeq?: bigint;
+-  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
++  readonly reply?: (parts: readonly (Uint8Array | string | Message)[]) => void;
+   readonly parts: readonly Buffer[];
+ 
+   constructor(
+@@ -554,7 +555,7 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
+       this.requestSeq = nextRequestSequence?.();
+       if (reply === undefined) {
+         const operation = received.reply();
+-        this.reply = (parts) => appendReplyParts(operation, parts).submit();
++        this.reply = (parts) => submitReplyParts(operation, parts);
+       } else {
+         const target = routingId ?? bindingRoutingId(EMPTY_SOURCE_ROUTE);
+         this.reply = (parts) => reply(target, replyToken, parts);
+@@ -695,12 +696,27 @@ function copyMonitorEvent(event: MonitorEvent): ZLinkRawMonitorRecord {
+   };
+ }
+ 
+-function submitRawRequest(
+-  operation: RequestSubmitOperation
++function submitReplyParts(
++  operation: ReplyOperation,
++  parts: readonly (Uint8Array | string | Message)[]
++): void {
++  try {
++    appendReplyParts(operation, parts).submit();
++  } catch (error) {
++    closeNativeMessages(parts);
++    throw translateBindingResultError(error);
++  }
++}
++
++function submitRequestParts(
++  operation: RequestOperation,
++  parts: readonly (Uint8Array | Message)[],
++  timeoutMs: number
+ ): ReturnType<RequestSubmitOperation['submit']> {
+   try {
+-    return operation.submit();
++    return appendRequestParts(operation, parts).timeout(timeoutMs).submit();
+   } catch (error) {
++    closeNativeMessages(parts);
+     throw translateBindingResultError(error, 'submit');
+   }
+ }
+diff --git a/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-mesh-backend.ts b/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-mesh-backend.ts
+index 56d6dd8f18..b5f01a5047 100644
+--- a/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-mesh-backend.ts
++++ b/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-mesh-backend.ts
+@@ -128,7 +128,7 @@ import {
+   decodeMultipartApplicationPayloadView,
+   decodeMultipartApplicationParts,
+   decodeMultipartParts,
+-  encodeMultipartApplicationPayload,
++  encodeMultipartApplicationMessage,
+   encodeMultipartPayload,
+   ServiceWireProtocolError,
+   type ServiceApplicationPayload
+@@ -2947,10 +2947,10 @@ function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
+   };
+ }
+ 
+-function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLike[]): Buffer {
++function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLike[]): Message {
+   const values = Array.isArray(parts) ? parts : [parts];
+   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
+-  return encodeMultipartApplicationPayload(
++  return encodeMultipartApplicationMessage(
+     values.map(messagePayloadView),
+     MULTIPART_PACKET_NAME,
+     MULTIPART_CONTENT_TYPE
+diff --git a/framework/languages/node/packages/framework/src/runtime/backend/raw-binding-port.ts b/framework/languages/node/packages/framework/src/runtime/backend/raw-binding-port.ts
+index 1cfa44a312..06ad555c53 100644
+--- a/framework/languages/node/packages/framework/src/runtime/backend/raw-binding-port.ts
++++ b/framework/languages/node/packages/framework/src/runtime/backend/raw-binding-port.ts
+@@ -1,4 +1,4 @@
+-import type { ConnectionAttempt } from '@zlink-systems/zlink';
++import type { ConnectionAttempt, Message } from '@zlink-systems/zlink';
+ import type { OperationHandle } from '../foundation/operation-registry';
+ import type { SubmitResult } from './runtime-values';
+ 
+@@ -16,7 +16,7 @@ export interface ZLinkRawReceivedRecord {
+    * record (Core ROUTER §10.1); 0n for a non-ROUTER receive. Equality only.
+    */
+   readonly routeGeneration: bigint;
+-  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
++  readonly reply?: (parts: readonly (Uint8Array | string | Message)[]) => void;
+   readonly parts: readonly Buffer[];
+   /** Releases the ordinary Framework-owned receive record exactly once. */
+   close(): void;
+@@ -61,15 +61,15 @@ export interface ZLinkRawRouterRoute {
+ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
+   setReceiveFlowState(state: 'running' | 'paused'): void;
+   /** Reports Core submit synchronously; admitted observes only pending admission. */
+-  submitSend(targetRid: string, parts: readonly Uint8Array[]): ZLinkRawSendSubmission;
++  submitSend(targetRid: string, parts: readonly (Uint8Array | Message)[]): ZLinkRawSendSubmission;
+   disconnectRid?(routingId: string): void;
+   localEndpoint(): string;
+   setRoutingId(routingId: string): void;
+   connectToRoutingId(routingId: string, endpoint: string): void;
+-  send(targetRid: string, parts: readonly Uint8Array[]): Promise<void>;
++  send(targetRid: string, parts: readonly (Uint8Array | Message)[]): Promise<void>;
+   request<T>(
+     targetRid: string,
+-    parts: readonly Uint8Array[],
++    parts: readonly (Uint8Array | Message)[],
+     timeoutMs: number,
+     onReply: (parts: readonly Buffer[]) => T,
+     onFailed: (error: unknown) => T,
+@@ -85,9 +85,9 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
+ 
+ export interface ZLinkRawDealerPort extends ZLinkRawSocketPort {
+   setRoutingId(routingId: string): void;
+-  send(parts: readonly Uint8Array[]): Promise<void>;
++  send(parts: readonly (Uint8Array | Message)[]): Promise<void>;
+   request(
+-    parts: readonly Uint8Array[],
++    parts: readonly (Uint8Array | Message)[],
+     timeoutMs: number,
+     onAdmitted?: () => void
+   ): Promise<readonly Buffer[]>;
+diff --git a/framework/languages/node/packages/framework/src/runtime/backend/runtime-message.ts b/framework/languages/node/packages/framework/src/runtime/backend/runtime-message.ts
+index 667447ee7e..2fbb0b9e3f 100644
+--- a/framework/languages/node/packages/framework/src/runtime/backend/runtime-message.ts
++++ b/framework/languages/node/packages/framework/src/runtime/backend/runtime-message.ts
+@@ -1,4 +1,12 @@
+ import type { Message } from '../../contracts/Common/Message';
++import { Message as NativeMessage } from '@zlink-systems/zlink';
++
++export function closeNativeMessages(payload: unknown): void {
++  const parts = Array.isArray(payload) ? payload : [payload];
++  for (const part of parts) {
++    if (part instanceof NativeMessage) part.close();
++  }
++}
+ 
+ export class ZLinkBufferMessage implements Message {
+   private readonly bytes: Buffer;
+diff --git a/framework/languages/node/packages/framework/src/runtime/foundation/durable-service-request.ts b/framework/languages/node/packages/framework/src/runtime/foundation/durable-service-request.ts
+index f380dd983e..759f0a9009 100644
+--- a/framework/languages/node/packages/framework/src/runtime/foundation/durable-service-request.ts
++++ b/framework/languages/node/packages/framework/src/runtime/foundation/durable-service-request.ts
+@@ -1,4 +1,6 @@
+ import { ConnectionAttemptState, type ConnectionAttempt } from '@zlink-systems/zlink';
++import type { Message } from '@zlink-systems/zlink';
++import { closeNativeMessages } from '../backend/runtime-message';
+ import type { OperationHandle, PendingOperation } from './operation-registry';
+ import { remainingRequestTimeout } from '../messaging/request-deadline';
+ import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
+@@ -24,7 +26,7 @@ export interface DurableServiceRequestPort {
+   observePeerConnectionIntentRemoved(listener: (target: string) => void): () => void;
+   requestService(
+     target: string,
+-    parts: readonly Uint8Array[],
++    parts: readonly (Uint8Array | Message)[],
+     timeoutMs: number,
+     onAdmitted?: () => void,
+     existing?: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'>,
+@@ -181,7 +183,7 @@ export function admitServiceRequest(
+ export function requestDurableService(
+   port: DurableServiceRequestPort,
+   target: string,
+-  parts: readonly Uint8Array[],
++  parts: readonly (Uint8Array | Message)[],
+   pending: PendingOperation<unknown>,
+   operationKind: string,
+   signal?: AbortSignal,
+@@ -203,6 +205,7 @@ export function requestDurableService(
+   void pending.promise.then(complete, complete);
+   return new Promise((resolve, reject) => {
+     if (cancellation.aborted) {
++      closeNativeMessages(parts);
+       cancelled();
+       reject(cancellation.reason);
+       return;
+@@ -236,11 +239,13 @@ export function requestDurableService(
+           },
+           (error) => {
+             finished();
++            closeNativeMessages(parts);
+             reject(error);
+           }
+         );
+       },
+       (error) => {
++        closeNativeMessages(parts);
+         pending.fail(error);
+         reject(error);
+       },
+diff --git a/framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts b/framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts
+index eeef273aab..df4a453cd4 100644
+--- a/framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts
++++ b/framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts
+@@ -2,7 +2,8 @@ import {
+   createInternalFrameworkException,
+   ZLinkFrameworkInternalErrorKind
+ } from '../framework-errors-internal';
+-import type { ConnectionAttempt } from '@zlink-systems/zlink';
++import { Message, type ConnectionAttempt } from '@zlink-systems/zlink';
++import { closeNativeMessages } from '../backend/runtime-message';
+ import { admitServiceRequest } from './durable-service-request';
+ import { remainingRequestTimeout, requestTerminalError } from '../messaging/request-deadline';
+ import type { OperationHandle } from './operation-registry';
+@@ -110,7 +111,11 @@ type RawServiceChannelTargetSelection =
+     };
+ 
+ /** An M6A application frame already owned by the Framework runtime. */
+-type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
++type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer | Message;
++
++function closeUnsubmittedFrame(value: unknown): void {
++  closeNativeMessages(value);
++}
+ 
+ export interface RawServiceIngressRecord {
+   /** Source identity recorded once by the first accepting owner (Location runtime §9.3). */
+@@ -650,7 +655,10 @@ export class RawServiceMeshRuntime {
+     payload: ServiceApplicationPayloadInput
+   ): SubmitResult | Promise<SubmitResult> {
+     const selection = this.selectChannelTarget(channelName);
+-    if (selection.kind !== 'selected') return selection.submitResult;
++    if (selection.kind !== 'selected') {
++      closeUnsubmittedFrame(payload);
++      return selection.submitResult;
++    }
+     const selected = selection.peer;
+     const applicationFrame = this.applicationFrame(payload);
+     const submitted = this.send(selected.descriptor.nodeRoutingId, [
+@@ -724,6 +732,7 @@ export class RawServiceMeshRuntime {
+   ): RawServiceObservedRequest {
+     const selection = this.selectChannelTarget(channelName);
+     if (selection.kind !== 'selected') {
++      closeUnsubmittedFrame(payload);
+       const pending = this.registerRequest(timeoutMs, observer, operationKind, requestOperation);
+       this.completeRequest(
+         pending,
+@@ -848,7 +857,10 @@ export class RawServiceMeshRuntime {
+     return ApplicationIngressRecordOwner.create(this.applicationJobQueue, permit, { close() {} });
+   }
+ 
+-  async sendService(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
++  async sendService(
++    targetNodeRoutingId: string,
++    parts: readonly (Uint8Array | Message)[]
++  ): Promise<boolean> {
+     try {
+       await this.requireStarted().send(targetNodeRoutingId, parts);
+       return true;
+@@ -859,7 +871,7 @@ export class RawServiceMeshRuntime {
+ 
+   requestService(
+     targetNodeRoutingId: string,
+-    parts: readonly Uint8Array[],
++    parts: readonly (Uint8Array | Message)[],
+     timeoutMs: number,
+     onAdmitted?: () => void,
+     existing?: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'>,
+@@ -868,7 +880,7 @@ export class RawServiceMeshRuntime {
+   ): Promise<readonly Buffer[]>;
+   requestService(
+     targetNodeRoutingId: string,
+-    parts: readonly Uint8Array[],
++    parts: readonly (Uint8Array | Message)[],
+     timeoutMs: number,
+     onAdmitted: (() => void) | undefined,
+     existing: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'> | undefined,
+@@ -876,7 +888,7 @@ export class RawServiceMeshRuntime {
+   ): void;
+   requestService(
+     targetNodeRoutingId: string,
+-    parts: readonly Uint8Array[],
++    parts: readonly (Uint8Array | Message)[],
+     timeoutMs: number,
+     onAdmitted?: () => void,
+     existing?: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'>,
+@@ -926,7 +938,7 @@ export class RawServiceMeshRuntime {
+       RawServiceIngressRecord,
+       'sourceRoutingId' | 'sourceRoute' | 'requestSequence' | 'reply'
+     >,
+-    parts: readonly (Uint8Array | string)[]
++    parts: readonly (Uint8Array | string | Message)[]
+   ): void {
+     if (record.requestSequence === undefined) {
+       throw new TypeError('Service reply requires a request sequence.');
+@@ -944,11 +956,15 @@ export class RawServiceMeshRuntime {
+     failureCode = 0
+   ): void {
+     if (request.localReply !== undefined) {
+-      request.localReply(
+-        terminalResult,
+-        failureCode,
+-        terminalResult === 0 ? this.applicationPayload(payload) : undefined
+-      );
++      try {
++        request.localReply(
++          terminalResult,
++          failureCode,
++          terminalResult === 0 ? this.applicationPayload(payload) : undefined
++        );
++      } finally {
++        closeUnsubmittedFrame(payload);
++      }
+       return;
+     }
+     if (request.reply === undefined || request.correlation === undefined) {
+@@ -1729,7 +1745,16 @@ export class RawServiceMeshRuntime {
+       }
+     }
+     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
+-      encodedPayload = copyPayloadBytes(encodedPayload);
++      if (encodedPayload instanceof Message) {
++        const message = encodedPayload;
++        try {
++          encodedPayload = copyPayloadBytes(message.data());
++        } finally {
++          message.close();
++        }
++      } else {
++        encodedPayload = copyPayloadBytes(encodedPayload);
++      }
+       // The local admission path aborts its capacity wait on the terminal
+       // Promise, so a local request always keeps the Promise entry.
+       const pending =
+@@ -1809,6 +1834,7 @@ export class RawServiceMeshRuntime {
+       !this.expectedPeers.has(selectedTargetNodeRoutingId) &&
+       this.topology.peer(selectedTargetNodeRoutingId) === undefined
+     ) {
++      closeUnsubmittedFrame(payload);
+       this.completeRequest(
+         pending,
+         {
+@@ -1915,12 +1941,18 @@ export class RawServiceMeshRuntime {
+    * The generic node/channel backend may supply its single owned M6A frame
+    * directly. All other callers keep the typed application-payload boundary.
+    */
+-  private applicationFrame(payload: ServiceApplicationPayloadInput): Buffer {
+-    return Buffer.isBuffer(payload) ? payload : encodeApplicationPayload(payload);
++  private applicationFrame(payload: ServiceApplicationPayloadInput): Buffer | Message {
++    return Buffer.isBuffer(payload) || payload instanceof Message
++      ? payload
++      : encodeApplicationPayload(payload);
+   }
+ 
+   private applicationPayload(payload: ServiceApplicationPayloadInput): ServiceApplicationPayload {
+-    return Buffer.isBuffer(payload) ? decodeApplicationPayload(payload) : payload;
++    return Buffer.isBuffer(payload)
++      ? decodeApplicationPayload(payload)
++      : payload instanceof Message
++        ? decodeApplicationPayload(payload.data())
++        : payload;
+   }
+ 
+   admitPeer(
+@@ -2123,11 +2155,21 @@ export class RawServiceMeshRuntime {
+ 
+   private send(
+     targetNodeRoutingId: string,
+-    parts: readonly Uint8Array[]
++    parts: readonly (Uint8Array | Message)[]
+   ): boolean | Promise<boolean> {
+-    if (!this.isPeerRouteReady(targetNodeRoutingId)) return false;
++    if (!this.isPeerRouteReady(targetNodeRoutingId)) {
++      for (const part of parts) closeUnsubmittedFrame(part);
++      return false;
++    }
++    let started: ZLinkRawRouterPort;
++    try {
++      started = this.requireStarted();
++    } catch (error) {
++      for (const part of parts) closeUnsubmittedFrame(part);
++      return this.sendFailure(error);
++    }
+     try {
+-      const submission = this.requireStarted().submitSend(targetNodeRoutingId, parts);
++      const submission = started.submitSend(targetNodeRoutingId, parts);
+       if (submission.result === SubmitResult.Ok) return true;
+       return submission.admitted.then(
+         () => true,
+diff --git a/framework/languages/node/packages/framework/src/runtime/foundation/service-mailbox.ts b/framework/languages/node/packages/framework/src/runtime/foundation/service-mailbox.ts
+index 75f7392069..d02d971e2b 100644
+--- a/framework/languages/node/packages/framework/src/runtime/foundation/service-mailbox.ts
++++ b/framework/languages/node/packages/framework/src/runtime/foundation/service-mailbox.ts
+@@ -1,3 +1,4 @@
++import type { Message } from '@zlink-systems/zlink';
+ import type { ApplicationJobRecordLease } from '../application-jobs/application-ingress-record-owner';
+ import type { ReceiveRecord } from './service-runtime-contracts';
+ import type { RawServiceIngressRecord } from './raw-service-mesh-runtime';
+@@ -19,7 +20,7 @@ export interface ServiceMailboxRecord {
+   readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
+   readonly sourceRoute?: Uint8Array;
+   readonly requestSequence?: bigint;
+-  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
++  readonly reply?: (parts: readonly (Uint8Array | string | Message)[]) => void;
+   readonly correlation?: bigint;
+   readonly localReply?: (
+     terminalResult: number,
+diff --git a/framework/languages/node/packages/framework/src/runtime/foundation/service-stateful-runtime.ts b/framework/languages/node/packages/framework/src/runtime/foundation/service-stateful-runtime.ts
+index 2f8634ffbb..0ee47ee333 100644
+--- a/framework/languages/node/packages/framework/src/runtime/foundation/service-stateful-runtime.ts
++++ b/framework/languages/node/packages/framework/src/runtime/foundation/service-stateful-runtime.ts
+@@ -4,7 +4,7 @@ import type { RequestRuntime } from './request-runtime';
+ import { inspectRuntime } from '../internal-observation';
+ import { awaitWithAbort, isAbortError } from '../abort';
+ import { decodeChannelHeader } from '../channels/channel-envelope';
+-import { ZLinkBufferMessage } from '../backend/runtime-message';
++import { closeNativeMessages, ZLinkBufferMessage } from '../backend/runtime-message';
+ import {
+   dispatchErrorDetails,
+   dispatchReasonFromError
+@@ -12,6 +12,7 @@ import {
+ import { encodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.generated';
+ import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+ import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
++import { Message } from '@zlink-systems/zlink';
+ import { AsyncLocalStorage } from 'node:async_hooks';
+ import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
+ import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
+@@ -1720,7 +1721,7 @@ export class ServiceStatefulRuntime {
+ 
+   async sendToMissingInstanceSpotFrame(
+     target: ServiceInstanceColdActivationTarget,
+-    payloadFrame: Buffer,
++    payloadFrame: Buffer | Message,
+     deadlineUnixMs: bigint,
+     sourceSpotId?: string,
+     metadataFrame?: Uint8Array
+@@ -1814,7 +1815,7 @@ export class ServiceStatefulRuntime {
+ 
+   requestToMissingInstanceSpotFrame(
+     target: ServiceInstanceColdActivationTarget,
+-    payloadFrame: Buffer,
++    payloadFrame: Buffer | Message,
+     deadlineUnixMs: bigint,
+     sourceSpotId?: string,
+     metadataFrame?: Uint8Array,
+@@ -4813,7 +4814,11 @@ export class ServiceStatefulRuntime {
+   ): Promise<readonly Buffer[]> {
+     return new Promise((resolve, reject) => {
+       const finish: NonNullable<ServiceMailboxRecord['reply']> = (parts) => {
+-        resolve(parts.map((part) => Buffer.from(part)));
++        resolve(
++          parts.map((part) =>
++            part instanceof Message ? Buffer.from(part.data()) : Buffer.from(part)
++          )
++        );
+       };
+       void (async () => {
+         const applicationJobOwner = await this.raw.reserveLocalIngress();
+@@ -4843,10 +4848,18 @@ export class ServiceStatefulRuntime {
+     });
+   }
+ 
+-  private async submitOneWay(targetNodeRid: string, parts: readonly Buffer[]): Promise<number> {
+-    this.requireOpen();
++  private async submitOneWay(
++    targetNodeRid: string,
++    parts: readonly (Buffer | Message)[]
++  ): Promise<number> {
++    try {
++      this.requireOpen();
++    } catch (error) {
++      closeUnsubmittedServiceMessages(parts);
++      throw error;
++    }
+     if (targetNodeRid === this.nodeRid) {
+-      parts = copyRetainedServiceFrames(parts);
++      const localParts = copyRetainedServiceFrames(parts);
+       const applicationJobOwner = await this.raw.reserveLocalIngress();
+       if (captureZLinkExecutionTurn() !== undefined) {
+         //  The sender is inside a Spot serial turn. Running ingress inline
+@@ -4860,11 +4873,11 @@ export class ServiceStatefulRuntime {
+         void ServiceStatefulRuntime.detachedIngressScope(async () => {
+           try {
+             await this.ingress({
+-              command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+-              flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
++              command: localParts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
++              flags: localParts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
+               sourceRoutingId: this.nodeRid,
+               sourceNodeGeneration: this.nodeGeneration,
+-              parts,
++              parts: localParts,
+               applicationJobOwner
+             });
+           } catch {
+@@ -4879,11 +4892,11 @@ export class ServiceStatefulRuntime {
+       }
+       try {
+         const result = await this.ingress({
+-          command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+-          flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
++          command: localParts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
++          flags: localParts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
+           sourceRoutingId: this.nodeRid,
+           sourceNodeGeneration: this.nodeGeneration,
+-          parts,
++          parts: localParts,
+           applicationJobOwner
+         });
+         return result === 'application' || result === 'infrastructure'
+@@ -4906,7 +4919,7 @@ export class ServiceStatefulRuntime {
+   private submitRequest(
+     pending: ServiceStatefulPendingOperation,
+     targetNodeRid: string,
+-    parts: readonly Buffer[],
++    parts: readonly (Buffer | Message)[],
+     timeoutMs: number,
+     operationKind:
+       | 'spotRequest'
+@@ -4921,8 +4934,14 @@ export class ServiceStatefulRuntime {
+     onAdmitted?: () => void,
+     receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
+   ): void {
++    try {
++      this.requireOpen();
++    } catch (error) {
++      closeUnsubmittedServiceMessages(parts);
++      throw error;
++    }
+     if (targetNodeRid === this.nodeRid) {
+-      parts = copyRetainedServiceFrames(parts);
++      const localParts = copyRetainedServiceFrames(parts);
+       const deadlineUnixMs = BigInt(Date.now() + Math.max(0, timeoutMs));
+       const capacityStop = new AbortController();
+       void pending.promise.then(
+@@ -4934,12 +4953,12 @@ export class ServiceStatefulRuntime {
+         try {
+           if (!pending.isPending()) return;
+           const localIngress: RawServiceIngressRecord = {
+-            command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+-            flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
++            command: localParts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
++            flags: localParts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
+             sourceRoutingId: this.nodeRid,
+             requestSequence: pending.id,
+             onAdmitted,
+-            parts,
++            parts: localParts,
+             applicationJobOwner
+           };
+           await this.submitLocalRequest(
+@@ -6474,8 +6493,19 @@ function emptyPayload(): ServiceApplicationPayload {
+   };
+ }
+ 
+-function copyRetainedServiceFrames(parts: readonly Buffer[]): Buffer[] {
+-  return parts.map((part) => copyPayloadBytes(part));
++function copyRetainedServiceFrames(parts: readonly (Buffer | Message)[]): Buffer[] {
++  return parts.map((part) => {
++    if (!(part instanceof Message)) return copyPayloadBytes(part);
++    try {
++      return copyPayloadBytes(part.data());
++    } finally {
++      part.close();
++    }
++  });
++}
++
++function closeUnsubmittedServiceMessages(parts: readonly (Buffer | Message)[]): void {
++  closeNativeMessages(parts);
+ }
+ 
+ /**
+@@ -6518,9 +6548,9 @@ function decodeCanonicalRoutingId(bytes: Uint8Array): string {
+ }
+ 
+ function instanceOperationParts(
+-  headerAndPayload: readonly Buffer[],
++  headerAndPayload: readonly (Buffer | Message)[],
+   metadataFrame?: Uint8Array
+-): readonly Buffer[] {
++): readonly (Buffer | Message)[] {
+   if (headerAndPayload.length !== 2) {
+     throw new TypeError('Instance operation requires one header and one payload frame.');
+   }
+diff --git a/framework/languages/node/packages/framework/src/runtime/foundation/service-wire-m6a-codec.ts b/framework/languages/node/packages/framework/src/runtime/foundation/service-wire-m6a-codec.ts
+index 7f3ad23d84..26b5ced31a 100644
+--- a/framework/languages/node/packages/framework/src/runtime/foundation/service-wire-m6a-codec.ts
++++ b/framework/languages/node/packages/framework/src/runtime/foundation/service-wire-m6a-codec.ts
+@@ -1,4 +1,5 @@
+ import { UINT32_MAX, UINT64_MAX } from '@zlink-systems/stream-wire';
++import { Message } from '@zlink-systems/zlink';
+ import { allocatePayloadBytes } from '../../contracts/Common/payload-slab';
+ import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
+ import {
+@@ -229,6 +230,26 @@ export function encodeMultipartApplicationPayload(
+   return result;
+ }
+ 
++/** Encodes an outgoing multipart application frame into binding-owned storage. */
++export function encodeMultipartApplicationMessage(
++  parts: readonly (Uint8Array | string)[],
++  packetName: string,
++  contentType: string
++): Message {
++  const multipartLength = multipartPayloadLength(parts);
++  const layout = applicationPayloadLayout(packetName, contentType, multipartLength);
++  const message = Message.allocate(layout.frameLength);
++  try {
++    const result = message.data();
++    writeApplicationPayloadHeader(result, packetName, contentType, multipartLength, layout);
++    writeMultipartPayload(result, result.byteLength - multipartLength, parts);
++    return message;
++  } catch (error) {
++    message.close();
++    throw error;
++  }
++}
++
+ /** Encodes bare multipart bytes with the same writer as application frames. */
+ export function encodeMultipartPayload(parts: readonly (Uint8Array | string)[]): Buffer {
+   const result = Buffer.alloc(multipartPayloadLength(parts));
+@@ -277,6 +298,23 @@ function allocateApplicationPayload(
+   payloadLength: number,
+   allocate: (length: number) => Buffer
+ ): Buffer {
++  const layout = applicationPayloadLayout(packetName, contentType, payloadLength);
++  const result = allocate(layout.frameLength);
++  writeApplicationPayloadHeader(result, packetName, contentType, payloadLength, layout);
++  return result;
++}
++
++interface ApplicationPayloadLayout {
++  readonly frameLength: number;
++  readonly packetNameLength: number;
++  readonly contentTypeLength: number;
++}
++
++function applicationPayloadLayout(
++  packetName: string,
++  contentType: string,
++  payloadLength: number
++): ApplicationPayloadLayout {
+   const packetNameLength = canonicalServiceWireTextLength(
+     packetName,
+     'packetName',
+@@ -295,14 +333,23 @@ function allocateApplicationPayload(
+   const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
+   const bodyLength = frameLength - prefixLength;
+   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
+-  // Both callers write every payload byte after these header fields.
+-  const result = allocate(frameLength);
++  return { frameLength, packetNameLength, contentTypeLength };
++}
++
++function writeApplicationPayloadHeader(
++  result: Buffer,
++  packetName: string,
++  contentType: string,
++  payloadLength: number,
++  layout: ApplicationPayloadLayout
++): void {
++  const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
++  const bodyLength = layout.frameLength - prefixLength;
+   result[0] = APPLICATION_PAYLOAD_VERSION;
+   result.writeUInt32BE(bodyLength, 1);
+-  let offset = writeText8(result, prefixLength, packetName, packetNameLength);
+-  offset = writeText8(result, offset, contentType, contentTypeLength);
++  let offset = writeText8(result, prefixLength, packetName, layout.packetNameLength);
++  offset = writeText8(result, offset, contentType, layout.contentTypeLength);
+   result.writeUInt32BE(payloadLength, offset);
+-  return result;
+ }
+ 
+ function allocateOwnedPayloadBytes(length: number): Buffer {
+diff --git a/framework/languages/node/test/contract/node-ingress-payload-ownership.test.js b/framework/languages/node/test/contract/node-ingress-payload-ownership.test.js
+index b8f4766c4b..13c6b04a4d 100644
+--- a/framework/languages/node/test/contract/node-ingress-payload-ownership.test.js
++++ b/framework/languages/node/test/contract/node-ingress-payload-ownership.test.js
+@@ -226,7 +226,9 @@ test('generic channel send writes one valid multipart application frame before s
+   try {
+     assert.ok(sentParts);
+     const frame = sentParts[1];
+-    const application = decodeApplicationPayloadView(frame);
++    const application = decodeApplicationPayloadView(
++      frame instanceof zlink.Message ? frame.data() : frame
++    );
+     assert.equal(application.packetName, 'ZLinkFrameworkMultipart');
+     assert.equal(application.contentType, 'application/x-zlink-multipart');
+     assert.deepEqual(
+diff --git a/framework/languages/node/test/m6a/m6a-runtime.contract.ts b/framework/languages/node/test/m6a/m6a-runtime.contract.ts
+index ce62b081ab..e545ed2b71 100644
+--- a/framework/languages/node/test/m6a/m6a-runtime.contract.ts
++++ b/framework/languages/node/test/m6a/m6a-runtime.contract.ts
+@@ -1,4 +1,4 @@
+-import { ConnectError, ConnectResult } from '@zlink-systems/zlink';
++import { ConnectError, ConnectResult, Message } from '@zlink-systems/zlink';
+ import { disconnectSocketPeer } from '../../packages/framework/src/runtime/backend/node/node-socket-backend-adapter';
+ import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
+ import assert from 'node:assert/strict';
+@@ -18,6 +18,7 @@ import {
+   ServiceStatefulRuntime
+ } from '../../packages/framework/src/internal';
+ import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
++import { submitBindingSend } from '../../packages/framework/src/runtime/backend/node/node-backend-adapter-support';
+ import type {
+   ZLinkRawBindingPort,
+   ZLinkRawHostPort,
+@@ -53,6 +54,8 @@ import {
+   decodeRouteMeshAdmission,
+   decodeReplyHeader,
+   encodeApplicationPayload,
++  encodeMultipartApplicationMessage,
++  encodeMultipartPayload,
+   encodeReject,
+   encodeNodeRequestHeader,
+   encodeReplyHeader,
+@@ -422,6 +425,75 @@ test('application payload encoding writes an offset Uint8Array into one owned fr
+   });
+ });
+ 
++test('outgoing multipart application frame writes into allocated Message storage', async () => {
++  const originalFrom = Message.from;
++  try {
++    Message.from = () => {
++      throw new Error('outgoing frame must not materialize through Message.from');
++    };
++    const message = encodeMultipartApplicationMessage(
++      [Buffer.from('header'), Buffer.from('body')],
++      'ZLinkFrameworkMultipart',
++      'application/x-zlink-multipart'
++    );
++    const host = new ZLinkNodeRawBindingPort().createHost();
++    const router = host.createRouter();
++    router.setRoutingId('native-frame-router');
++    const endpoint = `inproc://native-frame-${process.pid}`;
++    router.bind(endpoint);
++    const dealer = host.createDealer();
++    dealer.setRoutingId('native-frame-dealer');
++    dealer.connect(endpoint);
++    try {
++      const decoded = decodeApplicationPayload(message.data());
++      assert.equal(decoded.packetName, 'ZLinkFrameworkMultipart');
++      assert.equal(decoded.contentType, 'application/x-zlink-multipart');
++      assert.deepEqual(
++        decoded.payload,
++        encodeMultipartPayload([Buffer.from('header'), Buffer.from('body')])
++      );
++      await dealer.send([message]);
++      assert.equal(message.refCount(), 0);
++    } finally {
++      host.close();
++    }
++  } finally {
++    Message.from = originalFrom;
++  }
++});
++
++test('closing an allocated outgoing frame releases its payload', () => {
++  const message = Message.allocate(4);
++  message.data().set([1, 2, 3, 4]);
++  let closed = false;
++  const close = message.close.bind(message);
++  message.close = () => {
++    closed = true;
++    close();
++  };
++  message.close();
++  assert.equal(closed, true);
++});
++
++test('failed submit closes an allocated outgoing Message', () => {
++  const message = Message.allocate(4);
++  let closed = false;
++  const close = message.close.bind(message);
++  message.close = () => {
++    closed = true;
++    close();
++  };
++  const operation = {
++    message: () => ({
++      submit: () => {
++        throw new Error('forced submit failure');
++      }
++    })
++  } as never;
++  assert.throws(() => submitBindingSend(operation, [message]), /forced submit failure/);
++  assert.equal(closed, true);
++});
++
+ test('topology snapshots fence reconnect and exclude retiring placement targets', () => {
+   const topology = new ServiceTopologyRegistry(descriptor('local'));
+   const peer = { ...descriptor('peer'), state: 'serving' as const };

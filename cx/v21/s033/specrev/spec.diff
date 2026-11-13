@@ -1,0 +1,104 @@
+diff --git a/framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.en.md b/framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.en.md
+index 32390c56ed..e065ac5a0c 100644
+--- a/framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.en.md
++++ b/framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.en.md
+@@ -82,7 +82,8 @@ Missing this structure breaks in the following two ways.
+ A [handler turn](../00-foundation/02-glossary.en.md#handler-turn) is the following interval. For a
+ scope with a gate, it extends from gate acquisition to release, and a continuation after `Yield`
+ runs in a new turn. For a Node or ChannelName handler without a gate, it extends from the record's
+-handler start through terminal completion.
++handler start through terminal completion, and may run side by side with other turns of the same
++owner ([Messaging Hot Path §4.3](08-messaging-hot-path.en.md#43-the-handler-execution-unit)).
+ 
+ - **Actor payloads are submitted to that Actor's queue regardless of execution mode.** Keeping
+   queues separate from execution authority preserves each Actor's waiting order and relocation work.
+diff --git a/framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md b/framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md
+index a32643a9d4..acdf8e1665 100644
+--- a/framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md
++++ b/framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md
+@@ -78,7 +78,8 @@ flowchart TB
+ [Handler turn](../00-foundation/02-glossary.ko.md#handler-turn)은 다음 구간이다.
+ Gate가 있는 실행 범위에서는 gate 획득부터 반납까지이며, `Yield` 뒤 continuation은 새 turn에서
+ 실행한다. Gate가 없는 Node·ChannelName handler에서는 record의 handler 시작부터 terminal
+-completion까지다.
++completion까지이며, 같은 owner의 다른 turn과 나란히 실행될 수 있다
++([Messaging hot path §4.3](08-messaging-hot-path.ko.md#43-handler-실행-단위)).
+ 
+ - **Actor payload는 실행 mode와 무관하게 해당 Actor queue에 제출한다.** Actor별 대기
+   순서와 이동할 때 보관할 작업을 구분하기 위해 queue와 실행 권한을 분리한다.
+diff --git a/framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.en.md b/framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.en.md
+index 01dcda1b5c..8fa6e406b8 100644
+--- a/framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.en.md
++++ b/framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.en.md
+@@ -212,7 +212,9 @@ must know that this owner currently has work to do.
+ 
+ - **Maintain as state the set of owners that currently have work to do.** This state represents
+   "this is the current state," not a one-time "something changed" notification, and the
+-  same owner never enters it twice. Because an owner with remaining work must
++  same owner never enters it twice. An owner without a gate may stay in the set while a
++  worker is taking one of its records, if records remain
++  ([Messaging Hot Path §4.3](08-messaging-hot-path.en.md#43-the-handler-execution-unit)); it is still present once. Because an owner with remaining work must
+   eventually be processed even if a notification is lost, a woken execution resource
+   always rechecks this state.
+ 
+diff --git a/framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.ko.md b/framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.ko.md
+index 4b24240a36..c8bd9f3f8e 100644
+--- a/framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.ko.md
++++ b/framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.ko.md
+@@ -190,7 +190,9 @@ Record가 permit을 얻어 owner queue로 들어가려면, 그 owner에 지금 
+ 실행 자원이 알아야 한다.
+ 
+ - **지금 처리할 일이 있는 owner를 상태로 유지한다.** 이 상태는 "무엇이 바뀌었다"는 1회성
+-  알림이 아니라 "지금 이 상태다"를 나타내며, 같은 owner가 중복해서 들어가지 않는다. 알림이
++  알림이 아니라 "지금 이 상태다"를 나타내며, 같은 owner가 중복해서 들어가지 않는다. Gate가 없는
++  owner는 한 worker가 record를 꺼내는 중에도 record가 남아 있으면 집합에 남을 수 있지만
++  ([Messaging hot path §4.3](08-messaging-hot-path.ko.md#43-handler-실행-단위)), 이때도 한 번만 들어 있다. 알림이
+   유실돼도 처리할 일이 남은 owner는 결국 처리돼야 하므로, 깨어난 실행 자원은 언제나 이
+   상태를 다시 확인한다.
+ 
+diff --git a/framework/doc/framework/common/spec/server/01-execution/08-messaging-hot-path.en.md b/framework/doc/framework/common/spec/server/01-execution/08-messaging-hot-path.en.md
+index e4f1f1bf32..4fc59efb60 100644
+--- a/framework/doc/framework/common/spec/server/01-execution/08-messaging-hot-path.en.md
++++ b/framework/doc/framework/common/spec/server/01-execution/08-messaging-hot-path.en.md
+@@ -247,7 +247,17 @@ Records in an owner queue are taken and run by application workers.
+ | W5 next | Within the time budget ([Handler Turn "9"](02-handler-turn-and-execution-gate.en.md#9-time-budget-and-batch-processing-implementation)) processes the same owner's next record; otherwise releases the gate if one is held and moves to the next owner. | One owner cannot monopolise a worker. |
+ 
+ A Node or ChannelName owner without a gate starts handlers in owner-queue FIFO order, and the next
+-record does not wait for the preceding handler's terminal completion. When the W3 handler suspends,
++record does not wait for the preceding handler's terminal completion.
++
++**Several workers may start the records of an owner without a gate.** A worker that takes such an owner
++in W1 does not hold the owner exclusively. Taking one record from the owner-queue head fixes the start
++order; if records remain after the take, the owner stays in the ready set and another worker may take
++the next record. A single owner's handlers therefore start in FIFO order, but started handlers may run
++side by side on different workers, and their completion order is not defined. Another worker is woken
++only when that owner still has records and an idle worker exists, never once per record. An owner with
++a gate is processed by the one worker holding the gate, through W1–W5 as before.
++
++When the W3 handler suspends,
+ the worker proceeds to W5; W4 reply runs after that handler completes, in that handler's turn context.
+ 
+ **The Framework creates no separate dispatch task or supervisor wrapper per record; it reuses the
+diff --git a/framework/doc/framework/common/spec/server/01-execution/08-messaging-hot-path.ko.md b/framework/doc/framework/common/spec/server/01-execution/08-messaging-hot-path.ko.md
+index 159284a02c..85e85f5dd6 100644
+--- a/framework/doc/framework/common/spec/server/01-execution/08-messaging-hot-path.ko.md
++++ b/framework/doc/framework/common/spec/server/01-execution/08-messaging-hot-path.ko.md
+@@ -224,7 +224,17 @@ Owner queue에 들어온 record는 application worker가 꺼내 실행한다.
+ | W5 next | 시간 예산([Handler turn 「9」](02-handler-turn-and-execution-gate.ko.md#9-시간-예산과-batch-처리-구현)) 안이면 같은 owner의 다음 record를 처리하고, 아니면 보유한 gate가 있을 때 반납하고 다음 owner로 간다. | 한 owner가 worker를 독점하지 않는다. |
+ 
+ Gate가 없는 Node·ChannelName owner는 owner queue의 FIFO 순서로 handler를 시작하며, 다음 record는 앞
+-handler의 terminal completion을 기다리지 않는다. W3의 handler가 suspend하면 worker는 W5로 가고, W4 reply는
++handler의 terminal completion을 기다리지 않는다.
++
++**Gate가 없는 owner의 record는 여러 worker가 나눠 시작할 수 있다.** W1에서 이 owner를 얻은 worker는
++owner를 독점하지 않는다. Owner queue head에서 record 하나를 꺼내는 동작이 시작 순서를 정하고, 꺼낸 뒤
++record가 남아 있으면 그 owner는 준비된 owner 집합에 남아 다른 worker가 다음 record를 꺼낼 수 있다.
++그래서 한 owner의 handler 시작 순서는 FIFO이지만, 시작한 handler들은 서로 다른 worker에서 나란히
++실행될 수 있고 종료 순서는 정하지 않는다. 다른 worker를 깨우는 것은 그 owner에 record가 남아 있고
++쉬는 worker가 있을 때뿐이며, record마다 깨우지 않는다. Gate가 있는 owner는 W1~W5 그대로 gate를 가진
++worker 하나가 처리한다.
++
++W3의 handler가 suspend하면 worker는 W5로 가고, W4 reply는
+ 그 handler가 완료된 뒤 그 handler의 turn 문맥에서 한다.
+ 
+ **Framework는 record마다 별도 dispatch task나 supervisor wrapper를 만들지 않고 공유 worker의 drain을

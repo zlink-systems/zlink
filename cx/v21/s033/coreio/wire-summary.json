@@ -1,0 +1,1510 @@
+[
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-framework-cpp-request-backpressure/run1/zlink-framework-cpp-request-backpressure-1024/capture-strace",
+    "role": "source",
+    "streams": [
+      {
+        "fd": 42,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:40720-",
+        "bytes": 344064,
+        "frames": 485,
+        "records": 242,
+        "record_hist": [
+          {
+            "part_sizes": [
+              21,
+              1372
+            ],
+            "kinds": [
+              2,
+              0
+            ],
+            "wire_bytes": 1417,
+            "count": 242
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 2,
+              "body_bytes": 21,
+              "wire_bytes": 37,
+              "prefix_hex": "5a4d0114000000000000143f030000000000000000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1372,
+              "wire_bytes": 1380,
+              "prefix_hex": "0100000557175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051d000000020000010e7b226368616e6e656c"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 2,
+              "body_bytes": 21,
+              "wire_bytes": 37,
+              "prefix_hex": "5a4d0114000000000000143f040000000000000000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1372,
+              "wire_bytes": 1380,
+              "prefix_hex": "0100000557175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051d000000020000010e7b226368616e6e656c"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 1113
+      },
+      {
+        "fd": 38,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:40710-",
+        "bytes": 1278592,
+        "frames": 1792,
+        "records": 896,
+        "record_hist": [
+          {
+            "part_sizes": [
+              13,
+              1390
+            ],
+            "kinds": [
+              1,
+              0
+            ],
+            "wire_bytes": 1427,
+            "count": 896
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 1,
+              "body_bytes": 13,
+              "wire_bytes": 29,
+              "prefix_hex": "5a4d01110000000000001441c2"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1390,
+              "wire_bytes": 1398,
+              "prefix_hex": "0100000569175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000052f00000002000001207b226368616e6e656c"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 1,
+              "body_bytes": 13,
+              "wire_bytes": 29,
+              "prefix_hex": "5a4d01110000000000001441c3"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1390,
+              "wire_bytes": 1398,
+              "prefix_hex": "0100000569175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000052f00000002000001207b226368616e6e656c"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 38,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:40710-",
+        "bytes": 21,
+        "frames": 1,
+        "records": 1,
+        "record_hist": [
+          {
+            "part_sizes": [
+              13
+            ],
+            "kinds": [
+              0
+            ],
+            "wire_bytes": 21,
+            "count": 1
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 13,
+              "wire_bytes": 21,
+              "prefix_hex": "5a4d0105000000000000000008"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5293-",
+        "bytes": 129,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 129,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5293-",
+        "bytes": 266,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 266,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 232,
+      "recvfrom": 55,
+      "sendto": 101,
+      "read": 6,
+      "write": 3,
+      "epoll_ctl": 4,
+      "recvmsg": 1,
+      "sendmsg": 1
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-framework-cpp-request-backpressure/run1/zlink-framework-cpp-request-backpressure-1024/capture-strace",
+    "role": "target",
+    "streams": [
+      {
+        "fd": 20,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5294-",
+        "bytes": 311296,
+        "frames": 437,
+        "records": 218,
+        "record_hist": [
+          {
+            "part_sizes": [
+              21,
+              1372
+            ],
+            "kinds": [
+              2,
+              0
+            ],
+            "wire_bytes": 1417,
+            "count": 218
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 2,
+              "body_bytes": 21,
+              "wire_bytes": 37,
+              "prefix_hex": "5a4d0114000000000000143f1b0000000000000000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1372,
+              "wire_bytes": 1380,
+              "prefix_hex": "0100000557175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051d000000020000010e7b226368616e6e656c"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 2,
+              "body_bytes": 21,
+              "wire_bytes": 37,
+              "prefix_hex": "5a4d0114000000000000143f1c0000000000000000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1372,
+              "wire_bytes": 1380,
+              "prefix_hex": "0100000557175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051d000000020000010e7b226368616e6e656c"
+            }
+          ]
+        ],
+        "resync_bytes": 1240,
+        "tail_bytes": 1113
+      },
+      {
+        "fd": 19,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5294-",
+        "bytes": 278528,
+        "frames": 391,
+        "records": 195,
+        "record_hist": [
+          {
+            "part_sizes": [
+              13,
+              1390
+            ],
+            "kinds": [
+              1,
+              0
+            ],
+            "wire_bytes": 1427,
+            "count": 195
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 1,
+              "body_bytes": 13,
+              "wire_bytes": 29,
+              "prefix_hex": "5a4d01110000000000001441c2"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1390,
+              "wire_bytes": 1398,
+              "prefix_hex": "0100000569175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000052f00000002000001207b226368616e6e656c"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 1,
+              "body_bytes": 13,
+              "wire_bytes": 29,
+              "prefix_hex": "5a4d01110000000000001441c3"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1390,
+              "wire_bytes": 1398,
+              "prefix_hex": "0100000569175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000052f00000002000001207b226368616e6e656c"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 234
+      },
+      {
+        "fd": 19,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5294-",
+        "bytes": 21,
+        "frames": 1,
+        "records": 1,
+        "record_hist": [
+          {
+            "part_sizes": [
+              13
+            ],
+            "kinds": [
+              0
+            ],
+            "wire_bytes": 21,
+            "count": 1
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 13,
+              "wire_bytes": 21,
+              "prefix_hex": "5a4d0105000000000000000008"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 23,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5295-",
+        "bytes": 129,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 129,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 23,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5295-",
+        "bytes": 485,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 485,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 57,
+      "sendto": 20,
+      "recvfrom": 34,
+      "write": 3,
+      "read": 75,
+      "epoll_ctl": 3,
+      "recvmsg": 1,
+      "sendmsg": 1
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-cpp-request-backpressure/run1/zlink-cpp-request-backpressure-1024/capture-strace",
+    "role": "source",
+    "streams": [
+      {
+        "fd": 40,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:35076-",
+        "bytes": 510980,
+        "frames": 816,
+        "records": 408,
+        "record_hist": [
+          {
+            "part_sizes": [
+              201,
+              1027
+            ],
+            "kinds": [
+              2,
+              0
+            ],
+            "wire_bytes": 1252,
+            "count": 408
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 2,
+              "body_bytes": 201,
+              "wire_bytes": 217,
+              "prefix_hex": "7b226b696e64223a322c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5ad2b071270100040000a9e8860000000000cf1eb846c3a30600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 2,
+              "body_bytes": 201,
+              "wire_bytes": 217,
+              "prefix_hex": "7b226b696e64223a322c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5ad2b071270100040000aae88600000000000f34b846c3a30600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 164
+      },
+      {
+        "fd": 33,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:35074-",
+        "bytes": 1458176,
+        "frames": 2329,
+        "records": 1164,
+        "record_hist": [
+          {
+            "part_sizes": [
+              201,
+              1027
+            ],
+            "kinds": [
+              1,
+              0
+            ],
+            "wire_bytes": 1252,
+            "count": 1164
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 1,
+              "body_bytes": 201,
+              "wire_bytes": 217,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5ad2b071270100040000b2e886000000000043f7ba46c3a30600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 1,
+              "body_bytes": 201,
+              "wire_bytes": 217,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5ad2b071270100040000b3e88600000000001002bb46c3a30600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 631
+      },
+      {
+        "fd": 15,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5286-",
+        "bytes": 129,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 129,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5286-",
+        "bytes": 268,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 268,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "read": 75,
+      "recvfrom": 63,
+      "epoll_wait": 213,
+      "sendto": 89,
+      "write": 39,
+      "epoll_ctl": 4,
+      "recvmsg": 1,
+      "sendmsg": 1
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-cpp-request-backpressure/run1/zlink-cpp-request-backpressure-1024/capture-strace",
+    "role": "target",
+    "streams": [
+      {
+        "fd": 13,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5287-",
+        "bytes": 753664,
+        "frames": 1203,
+        "records": 601,
+        "record_hist": [
+          {
+            "part_sizes": [
+              201,
+              1027
+            ],
+            "kinds": [
+              1,
+              0
+            ],
+            "wire_bytes": 1252,
+            "count": 601
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 1,
+              "body_bytes": 201,
+              "wire_bytes": 217,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5ad2b071270100040000b2e886000000000043f7ba46c3a30600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 1,
+              "body_bytes": 201,
+              "wire_bytes": 217,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5ad2b071270100040000b3e88600000000001002bb46c3a30600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 995
+      },
+      {
+        "fd": 14,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5287-",
+        "bytes": 736176,
+        "frames": 1176,
+        "records": 588,
+        "record_hist": [
+          {
+            "part_sizes": [
+              201,
+              1027
+            ],
+            "kinds": [
+              2,
+              0
+            ],
+            "wire_bytes": 1252,
+            "count": 588
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 2,
+              "body_bytes": 201,
+              "wire_bytes": 217,
+              "prefix_hex": "7b226b696e64223a322c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5ad2b071270100040000b2e886000000000043f7ba46c3a30600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 2,
+              "body_bytes": 201,
+              "wire_bytes": 217,
+              "prefix_hex": "7b226b696e64223a322c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5ad2b071270100040000b3e88600000000001002bb46c3a30600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5289-",
+        "bytes": 129,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 129,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5289-",
+        "bytes": 488,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 488,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 291,
+      "recvfrom": 92,
+      "epoll_ctl": 80,
+      "sendto": 90,
+      "recvmsg": 1,
+      "write": 1,
+      "read": 1,
+      "sendmsg": 1
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-framework-cpp-send-saturation/run1/zlink-framework-cpp-send-saturation-1024/capture-strace",
+    "role": "source",
+    "streams": [
+      {
+        "fd": 42,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:40352-",
+        "bytes": 27,
+        "frames": 1,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [
+          {
+            "flags": 2,
+            "kind": 0,
+            "body_bytes": 19,
+            "prefix_hex": "464c4f57535441544501000000000000000a29",
+            "count": 1
+          }
+        ],
+        "first_records": [],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 38,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:40344-",
+        "bytes": 1529268,
+        "frames": 2201,
+        "records": 1100,
+        "record_hist": [
+          {
+            "part_sizes": [
+              5,
+              1368
+            ],
+            "kinds": [
+              0,
+              0
+            ],
+            "wire_bytes": 1389,
+            "count": 1100
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 5,
+              "wire_bytes": 13,
+              "prefix_hex": "5a4d011000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1368,
+              "wire_bytes": 1376,
+              "prefix_hex": "0100000553175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c74697061727400000519000000020000010a7b226368616e6e656c"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 5,
+              "wire_bytes": 13,
+              "prefix_hex": "5a4d011000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1368,
+              "wire_bytes": 1376,
+              "prefix_hex": "0100000553175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c74697061727400000519000000020000010a7b226368616e6e656c"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 1355
+      },
+      {
+        "fd": 38,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:40344-",
+        "bytes": 21,
+        "frames": 1,
+        "records": 1,
+        "record_hist": [
+          {
+            "part_sizes": [
+              13
+            ],
+            "kinds": [
+              0
+            ],
+            "wire_bytes": 21,
+            "count": 1
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 13,
+              "wire_bytes": 21,
+              "prefix_hex": "5a4d0105000000000000000008"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5293-",
+        "bytes": 129,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 129,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5293-",
+        "bytes": 262,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 262,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 185,
+      "recvfrom": 4,
+      "write": 8,
+      "read": 23,
+      "epoll_ctl": 5,
+      "sendto": 96,
+      "recvmsg": 1,
+      "sendmsg": 1
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-framework-cpp-send-saturation/run1/zlink-framework-cpp-send-saturation-1024/capture-strace",
+    "role": "target",
+    "streams": [
+      {
+        "fd": 20,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5294-",
+        "bytes": 27,
+        "frames": 1,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [
+          {
+            "flags": 2,
+            "kind": 0,
+            "body_bytes": 19,
+            "prefix_hex": "464c4f57535441544501000000000000000a29",
+            "count": 1
+          }
+        ],
+        "first_records": [],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 19,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5294-",
+        "bytes": 529844,
+        "frames": 763,
+        "records": 381,
+        "record_hist": [
+          {
+            "part_sizes": [
+              5,
+              1368
+            ],
+            "kinds": [
+              0,
+              0
+            ],
+            "wire_bytes": 1389,
+            "count": 381
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 5,
+              "wire_bytes": 13,
+              "prefix_hex": "5a4d011000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1368,
+              "wire_bytes": 1376,
+              "prefix_hex": "0100000553175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c74697061727400000519000000020000010a7b226368616e6e656c"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 5,
+              "wire_bytes": 13,
+              "prefix_hex": "5a4d011000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1368,
+              "wire_bytes": 1376,
+              "prefix_hex": "0100000553175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c74697061727400000519000000020000010a7b226368616e6e656c"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 622
+      },
+      {
+        "fd": 19,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5294-",
+        "bytes": 21,
+        "frames": 1,
+        "records": 1,
+        "record_hist": [
+          {
+            "part_sizes": [
+              13
+            ],
+            "kinds": [
+              0
+            ],
+            "wire_bytes": 21,
+            "count": 1
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 13,
+              "wire_bytes": 21,
+              "prefix_hex": "5a4d0105000000000000000008"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 23,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5295-",
+        "bytes": 129,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 129,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 23,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5295-",
+        "bytes": 488,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 488,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "epoll_ctl": 4,
+      "epoll_wait": 100,
+      "sendto": 2,
+      "recvfrom": 66,
+      "write": 3,
+      "read": 81,
+      "recvmsg": 1,
+      "sendmsg": 1
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-cpp-send-saturation/run1/zlink-cpp-send-saturation-1024/capture-strace",
+    "role": "source",
+    "streams": [
+      {
+        "fd": 33,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:45440-",
+        "bytes": 2490368,
+        "frames": 4003,
+        "records": 2001,
+        "record_hist": [
+          {
+            "part_sizes": [
+              201,
+              1027
+            ],
+            "kinds": [
+              0,
+              0
+            ],
+            "wire_bytes": 1244,
+            "count": 2001
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 201,
+              "wire_bytes": 209,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5af06f2fa00100040000e65d3a01000000009cb234e540a40600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 201,
+              "wire_bytes": 209,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5af06f2fa00100040000e75d3a010000000010bb34e540a40600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ]
+        ],
+        "resync_bytes": 876,
+        "tail_bytes": 39
+      },
+      {
+        "fd": 15,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5286-",
+        "bytes": 129,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 129,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5286-",
+        "bytes": 264,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 264,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "read": 60,
+      "epoll_wait": 232,
+      "write": 12,
+      "sendto": 152,
+      "epoll_ctl": 4,
+      "recvmsg": 1,
+      "sendmsg": 1
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-cpp-send-saturation/run1/zlink-cpp-send-saturation-1024/capture-strace",
+    "role": "target",
+    "streams": [
+      {
+        "fd": 13,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5288-",
+        "bytes": 2310144,
+        "frames": 3713,
+        "records": 1856,
+        "record_hist": [
+          {
+            "part_sizes": [
+              201,
+              1027
+            ],
+            "kinds": [
+              0,
+              0
+            ],
+            "wire_bytes": 1244,
+            "count": 1856
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 201,
+              "wire_bytes": 209,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5af06f2fa00100040000e65d3a01000000009cb234e540a40600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 201,
+              "wire_bytes": 209,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5af06f2fa00100040000e75d3a010000000010bb34e540a40600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ]
+        ],
+        "resync_bytes": 876,
+        "tail_bytes": 195
+      },
+      {
+        "fd": 15,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5289-",
+        "bytes": 129,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 129,
+        "tail_bytes": 0
+      },
+      {
+        "fd": 15,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:5289-",
+        "bytes": 492,
+        "frames": 0,
+        "records": 0,
+        "record_hist": [],
+        "control_hist": [],
+        "first_records": [],
+        "resync_bytes": 492,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 320,
+      "recvfrom": 285,
+      "epoll_ctl": 3,
+      "recvmsg": 1,
+      "write": 1,
+      "read": 1,
+      "sendmsg": 1
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-java-perf-zlink-framework-java-send-saturation/run1/zlink-framework-java-send-saturation-1024/capture-strace",
+    "role": "source",
+    "streams": [
+      {
+        "fd": 93,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:35144-",
+        "bytes": 369528,
+        "frames": 534,
+        "records": 267,
+        "record_hist": [
+          {
+            "part_sizes": [
+              5,
+              1363
+            ],
+            "kinds": [
+              0,
+              0
+            ],
+            "wire_bytes": 1384,
+            "count": 267
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 5,
+              "wire_bytes": 13,
+              "prefix_hex": "5a4d011000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1363,
+              "wire_bytes": 1371,
+              "prefix_hex": "010000054e175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051400000002000001057b22666f726d61744d"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 5,
+              "wire_bytes": 13,
+              "prefix_hex": "5a4d011000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1363,
+              "wire_bytes": 1371,
+              "prefix_hex": "010000054e175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051400000002000001057b22666f726d61744d"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 261,
+      "sendto": 182,
+      "epoll_ctl": 2,
+      "read": 2,
+      "write": 2
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-java-perf-zlink-framework-java-send-saturation/run1/zlink-framework-java-send-saturation-1024/capture-strace",
+    "role": "target",
+    "streams": [
+      {
+        "fd": 81,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5254-",
+        "bytes": 381984,
+        "frames": 552,
+        "records": 276,
+        "record_hist": [
+          {
+            "part_sizes": [
+              5,
+              1363
+            ],
+            "kinds": [
+              0,
+              0
+            ],
+            "wire_bytes": 1384,
+            "count": 276
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 5,
+              "wire_bytes": 13,
+              "prefix_hex": "5a4d011000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1363,
+              "wire_bytes": 1371,
+              "prefix_hex": "010000054e175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051400000002000001057b22666f726d61744d"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 5,
+              "wire_bytes": 13,
+              "prefix_hex": "5a4d011000"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1363,
+              "wire_bytes": 1371,
+              "prefix_hex": "010000054e175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051400000002000001057b22666f726d61744d"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 0
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 145,
+      "write": 114,
+      "read": 232,
+      "recvfrom": 115,
+      "epoll_ctl": 2
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-java-perf-zlink-java-send-saturation/run1/zlink-java-send-saturation-1024/capture-strace",
+    "role": "source",
+    "streams": [
+      {
+        "fd": 91,
+        "direction": "send",
+        "label": "TCP:[127.0.0.1:48778-",
+        "bytes": 2146304,
+        "frames": 3451,
+        "records": 1725,
+        "record_hist": [
+          {
+            "part_sizes": [
+              201,
+              1027
+            ],
+            "kinds": [
+              0,
+              0
+            ],
+            "wire_bytes": 1244,
+            "count": 1725
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 201,
+              "wire_bytes": 209,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5aee064a020100040000b43971000000000012e482b7aba40600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 201,
+              "wire_bytes": 209,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5aee064a020100040000a239710000000000b39781b7aba40600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 195
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 208,
+      "sendto": 131,
+      "read": 86,
+      "write": 7,
+      "epoll_ctl": 2
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-java-perf-zlink-java-send-saturation/run1/zlink-java-send-saturation-1024/capture-strace",
+    "role": "target",
+    "streams": [
+      {
+        "fd": 45,
+        "direction": "recv",
+        "label": "TCP:[127.0.0.1:5248-",
+        "bytes": 2080768,
+        "frames": 3345,
+        "records": 1672,
+        "record_hist": [
+          {
+            "part_sizes": [
+              201,
+              1027
+            ],
+            "kinds": [
+              0,
+              0
+            ],
+            "wire_bytes": 1244,
+            "count": 1672
+          }
+        ],
+        "control_hist": [],
+        "first_records": [
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 201,
+              "wire_bytes": 209,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5aee064a020100040000b43971000000000012e482b7aba40600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ],
+          [
+            {
+              "flags": 1,
+              "kind": 0,
+              "body_bytes": 201,
+              "wire_bytes": 209,
+              "prefix_hex": "7b226b696e64223a312c226368616e6e656c4e616d65223a2262656e6368222c226d6573736167654e616d65223a2242656e63685061796c6f6164222c22636f6e74656e7454797065223a226170706c"
+            },
+            {
+              "flags": 0,
+              "kind": 0,
+              "body_bytes": 1027,
+              "wire_bytes": 1035,
+              "prefix_hex": "0a80084b4e4c5aee064a020100040000a239710000000000b39781b7aba40600abababababababababababababababababababababababababababababababababababababababababababababababab"
+            }
+          ]
+        ],
+        "resync_bytes": 0,
+        "tail_bytes": 591
+      }
+    ],
+    "syscalls": {
+      "epoll_wait": 289,
+      "recvfrom": 258,
+      "epoll_ctl": 2,
+      "read": 5,
+      "write": 2
+    }
+  }
+]

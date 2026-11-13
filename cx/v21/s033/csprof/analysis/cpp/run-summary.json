@@ -1,0 +1,98 @@
+[
+  {
+    "impl": "framework",
+    "run": 1,
+    "rate": 136884.399508,
+    "profile_seconds": 12.08132564323023,
+    "profile_source_messages": 1654109,
+    "samples": {
+      "source": 2833,
+      "target": 3194
+    },
+    "affinity_ok": true,
+    "data_bytes": {
+      "source": 47437718,
+      "target": 53384698
+    }
+  },
+  {
+    "impl": "framework",
+    "run": 2,
+    "rate": 136888.608873,
+    "profile_seconds": 12.122468805871904,
+    "profile_source_messages": 1662263,
+    "samples": {
+      "source": 2734,
+      "target": 3975
+    },
+    "affinity_ok": true,
+    "data_bytes": {
+      "source": 45786182,
+      "target": 66367278
+    }
+  },
+  {
+    "impl": "framework",
+    "run": 3,
+    "rate": 136888.619427,
+    "profile_seconds": 12.12119095493108,
+    "profile_source_messages": 1659246,
+    "samples": {
+      "source": 2812,
+      "target": 3199
+    },
+    "affinity_ok": true,
+    "data_bytes": {
+      "source": 47096134,
+      "target": 53458474
+    }
+  },
+  {
+    "impl": "binding",
+    "run": 1,
+    "rate": 136888.803199,
+    "profile_seconds": 12.122758267913014,
+    "profile_source_messages": 1659456,
+    "samples": {
+      "source": 765,
+      "target": 679
+    },
+    "affinity_ok": true,
+    "data_bytes": {
+      "source": 12857774,
+      "target": 11449226
+    }
+  },
+  {
+    "impl": "binding",
+    "run": 2,
+    "rate": 136888.628209,
+    "profile_seconds": 12.049846643116325,
+    "profile_source_messages": 1649502,
+    "samples": {
+      "source": 748,
+      "target": 664
+    },
+    "affinity_ok": true,
+    "data_bytes": {
+      "source": 12574834,
+      "target": 11198706
+    }
+  },
+  {
+    "impl": "binding",
+    "run": 3,
+    "rate": 136888.648167,
+    "profile_seconds": 12.15183302294463,
+    "profile_source_messages": 1663424,
+    "samples": {
+      "source": 768,
+      "target": 666
+    },
+    "affinity_ok": true,
+    "data_bytes": {
+      "source": 12907862,
+      "target": 11232166
+    }
+  }
+]

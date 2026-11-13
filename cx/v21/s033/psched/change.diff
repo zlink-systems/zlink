@@ -1,0 +1,1918 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index 579f291898..766466dee8 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -2324,6 +2324,32 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+   target_include_directories(test_cpp_framework_receive_role_completion PRIVATE
+     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+   zlink_framework_cpp_add_boost_headers(test_cpp_framework_receive_role_completion)
++  if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
++    add_zlink_framework_test(
++      test_cpp_framework_scheduler_drain
++      tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
++      "framework-unit;framework-contract;execution;resource"
++      unit)
++    target_include_directories(test_cpp_framework_scheduler_drain PRIVATE
++      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
++    zlink_framework_cpp_add_boost_headers(test_cpp_framework_scheduler_drain)
++    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
++      target_compile_definitions(test_cpp_framework_scheduler_drain PRIVATE ZLINK_TEST_WRAP_NOTIFY_ONE)
++      target_link_options(test_cpp_framework_scheduler_drain PRIVATE
++        "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv")
++      foreach(_negative IN ITEMS items wakes terminal spot-gate actor-gate)
++        zlink_framework_cpp_add_test(
++          NAME test_cpp_framework_scheduler_drain_negative_${_negative}
++          COMMAND ${CMAKE_COMMAND}
++            "-DPROGRAM=$<TARGET_FILE:test_cpp_framework_scheduler_drain>"
++            "-DMODE=${_negative}"
++            -P "${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/expect_scheduler_rejection.cmake"
++          LABELS "framework-unit;framework-contract;execution;negative-control"
++          TIER unit
++          TIMEOUT 30)
++      endforeach()
++    endif()
++  endif()
+   # The wait-entry hook uses GNU's 64-bit libstdc++ chrono ABI.
+   if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+      AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+@@ -2337,8 +2363,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
+     target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
+-      "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
+-      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
+       "LINKER:--wrap=zlink_router_recv")
+     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
+       "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
+index 600716a7c9..325535d26f 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
+@@ -62,6 +62,36 @@ class channel_host_service_t::server_loop_t
+   public:
+     friend struct manual_channel_server_test_access_t;
+ 
++    struct owner_drain_t final : offload_executor_t::drain_source_t
++    {
++        owner_drain_t (server_loop_t &server, std::string owner) :
++            drain_source_t (&server, std::move (owner)), server (server)
++        {
++        }
++        std::size_t pending () const override
++        {
++            return server._source->mailbox ().pending_application_records (owner);
++        }
++        record_t take () override
++        {
++            bool more;
++            auto claim = server._source->mailbox ().try_claim_application_record (owner, more);
++            return {std::move (claim), more};
++        }
++        void run (record_t record) override
++        {
++            server.drain_owner (
++              owner,
++              std::static_pointer_cast<mesh::service_mailbox_claim_t> (std::move (record.value)),
++              false, shared_from_this (), record.turn_started);
++        }
++        void failed (std::exception_ptr error) override
++        {
++            server._runtime.runtime_failures ()->report (std::move (error));
++        }
++        server_loop_t &server;
++    };
++
+     static std::unique_ptr<offload_executor_t> make_handler_executor ()
+     {
+         const auto workers = static_cast<std::size_t> (
+@@ -135,40 +165,14 @@ class channel_host_service_t::server_loop_t
+         _source->start (*_router);
+         _source->mailbox ().bind_application_dispatch ({}, [this] (const std::string &owner) {
+             try {
+-                if (_handler_executor->try_submit_internal ([this, owner] { drain_owner (owner); }))
++                if (_handler_executor->try_submit_drain (
++                      std::make_shared<owner_drain_t> (*this, owner)))
+                     return;
+             }
+             catch (...) {
+                 _runtime.runtime_failures ()->report (std::current_exception ());
+             }
+-            // A rejected work item accepted no invocation. The mailbox remains the
+-            // sole claim/settlement owner; each queued permit dies with its record.
+-            auto &mailbox = _source->mailbox ();
+-            if (!mailbox.begin_application_drain (owner))
+-                return;
+-            try {
+-                while (auto claim =
+-                         mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
+-                                                  owner, dispatch_limits::receive_batch_messages,
+-                                                  dispatch_limits::receive_batch_bytes)) {
+-                    try {
+-                        for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
+-                            if (auto record = mailbox.take ({claim, index}))
+-                                report_dispatch_rejection (
+-                                  messaging::message_parts_t (record->take_parts ()));
+-                        }
+-                    }
+-                    catch (...) {
+-                        mailbox.release (*claim);
+-                        throw;
+-                    }
+-                    mailbox.release (*claim);
+-                }
+-            }
+-            catch (...) {
+-                _runtime.runtime_failures ()->report (std::current_exception ());
+-            }
+-            mailbox.end_application_drain (owner);
++            drain_owner (owner, {}, true);
+         });
+         if (_listener_statuses)
+             _listener_statuses->update (
+@@ -376,39 +380,49 @@ class channel_host_service_t::server_loop_t
+             report_dispatch_rejection (messaging::message_parts_t (record.take_parts ()));
+     }
+ 
+-    void drain_owner (const std::string &owner)
++    void drain_owner (const std::string &owner,
++                      std::shared_ptr<mesh::service_mailbox_claim_t> claim = {},
++                      bool reject_only = false,
++                      std::shared_ptr<offload_executor_t::drain_source_t> source = {},
++                      std::chrono::steady_clock::time_point turn_started = {})
+     {
+         auto &mailbox = _source->mailbox ();
+-        if (!mailbox.begin_application_drain (owner))
+-            return;
+-        const auto deadline =
+-          std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
+-        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
++        const auto deadline = (source ? turn_started : std::chrono::steady_clock::now ())
++                              + dispatch_limits::owner_time_budget;
+         try {
+             do {
+-                claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner,
+-                                                 dispatch_limits::receive_batch_messages,
+-                                                 dispatch_limits::receive_batch_bytes);
++                if (!claim) {
++                    if (source) {
++                        auto record = _handler_executor->try_take_drain (source);
++                        claim = std::static_pointer_cast<mesh::service_mailbox_claim_t> (
++                          std::move (record.value));
++                    } else {
++                        bool more;
++                        claim = mailbox.try_claim_application_record (owner, more);
++                    }
++                }
+                 if (!claim)
+                     break;
+                 for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
+                     if (auto record = mailbox.take ({claim, index})) {
+-                        // An ordinary Channel claim reserves FIFO entry, not terminal lifetime.
+                         // Preserve the drain ambient while a suspended pipeline keeps its own.
+                         flow_context_t::scope_t flow_scope (flow_context_t::current ());
+-                        dispatch_application (std::move (*record));
++                        if (reject_only)
++                            report_dispatch_rejection (
++                              messaging::message_parts_t (record->take_parts ()));
++                        else
++                            dispatch_application (std::move (*record));
+                     }
+                 }
+                 mailbox.release (*claim);
+                 claim.reset ();
+-            } while (std::chrono::steady_clock::now () < deadline);
++            } while (reject_only || std::chrono::steady_clock::now () < deadline);
+         }
+         catch (...) {
+             if (claim)
+                 mailbox.release (*claim);
+             _runtime.runtime_failures ()->report (std::current_exception ());
+         }
+-        mailbox.end_application_drain (owner);
+     }
+ 
+     void dispatch_application (mesh::service_mailbox_record_t record)
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+index 59d8ae6570..1ca4bb2e45 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+@@ -91,23 +91,150 @@ bool offload_executor_t::try_submit (std::function<void ()> work)
+ 
+ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
+ {
++    notifications_t notifications;
+     {
+         std::lock_guard lock (_mutex);
+-        // Already-admitted owner queues keep draining through scheduler
+-        // continuations. Teardown closes this path only after quiescence;
+-        // public work submission remains sealed as soon as stopping begins.
+-        if (_stopping && _active == _role_active && _queue.empty ()) {
++        // Continuations of admitted work may publish until application quiescence.
++        if (_stopping && _active == _role_active && _queue.empty ())
+             return false;
++        _queue.push_back (work_item_t{std::move (work), std::nullopt});
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++        ++_submitted_items;
++#endif
++        notifications = reserve_workers_locked (true);
++    }
++    notify_workers (notifications);
++    return true;
++}
++
++bool offload_executor_t::try_submit_drain (std::shared_ptr<drain_source_t> source)
++{
++    notifications_t notifications;
++    {
++        std::lock_guard lock (_mutex);
++        if (_stopping && _active == _role_active && _queue.empty ())
++            return false;
++        const auto found = find_drain_locked (*source);
++        if (found == _queue.end ()) {
++            _queue.push_back (work_item_t{std::move (source), std::nullopt});
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++            ++_submitted_items;
++#endif
+         }
+-        if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
+-            start_worker_locked ();
+-        }
+-        _queue.push (work_item_t{std::move (work), std::nullopt});
++        notifications = reserve_workers_locked (true);
+     }
+-    _ready.notify_one ();
++    notify_workers (notifications);
+     return true;
+ }
+ 
++std::deque<offload_executor_t::work_item_t>::iterator
++offload_executor_t::find_drain_locked (const drain_source_t &source)
++{
++    return std::find_if (_queue.begin (), _queue.end (), [&] (const auto &entry) {
++        const auto existing = std::get_if<std::shared_ptr<drain_source_t>> (&entry.work);
++        return existing && (*existing)->group == source.group && (*existing)->owner == source.owner;
++    });
++}
++
++offload_executor_t::drain_source_t::record_t
++offload_executor_t::take_drain_locked (std::deque<work_item_t>::iterator entry)
++{
++    drain_source_t::record_t record;
++    try {
++        record = std::get<std::shared_ptr<drain_source_t>> (entry->work)->take ();
++    }
++    catch (...) {
++        _queue.erase (entry);
++        throw;
++    }
++    if (!record.more)
++        _queue.erase (entry);
++    else
++        std::rotate (entry, entry + 1, _queue.end ());
++    return record;
++}
++
++offload_executor_t::drain_source_t::record_t
++offload_executor_t::try_take_drain (const std::shared_ptr<drain_source_t> &source)
++{
++    // Retain captures outside the lock even if a later publication replaced this
++    // running turn's exhausted source with another entry for the same owner.
++    std::shared_ptr<drain_source_t> selected;
++    drain_source_t::record_t record;
++    {
++        std::lock_guard lock (_mutex);
++        const auto found = find_drain_locked (*source);
++        if (found != _queue.end ()) {
++            selected = std::get<std::shared_ptr<drain_source_t>> (found->work);
++            record = take_drain_locked (found);
++        }
++    }
++    return record;
++}
++
++// Only publication can grow the existing elastic pool. A take never wakes or
++// starts another worker. The worker phase is the sole wake-reservation state.
++offload_executor_t::notifications_t offload_executor_t::reserve_workers_locked (bool grow,
++                                                                                worker_t *current)
++{
++    std::size_t demand = std::min (_max_worker_count, _roles.size ());
++    for (const auto &entry : _queue) {
++        if (demand == _max_worker_count)
++            break;
++        const auto source = std::get_if<std::shared_ptr<drain_source_t>> (&entry.work);
++        // An exhausted entry still needs one selection to release its captures.
++        const auto count = source ? std::max<std::size_t> (1, (*source)->pending ()) : 1;
++        demand += std::min (count, _max_worker_count - demand);
++    }
++    std::size_t available = 0, reserved = 0;
++    for (const auto &worker : _workers) {
++        if (worker->phase == worker_phase_t::reserved) {
++            ++available;
++            ++reserved;
++        } else if (worker->phase == worker_phase_t::idle)
++            ++available;
++    }
++    if (grow && available < demand && _live_workers < _max_worker_count) {
++        start_worker_locked ();
++        ++reserved;
++    }
++    demand -= std::min (demand, reserved);
++    // A worker about to wait first rechecks ready work for itself.
++    if (current && demand != 0) {
++        current->phase = worker_phase_t::reserved;
++        --demand;
++    }
++    notifications_t notifications;
++    for (const auto &worker : _workers) {
++        if (demand == 0)
++            break;
++        if (worker->phase == worker_phase_t::idle) {
++            notifications.push_back (worker);
++            worker->phase = worker_phase_t::reserved;
++            --demand;
++        }
++    }
++    return notifications;
++}
++
++offload_executor_t::notifications_t offload_executor_t::stop_workers_locked ()
++{
++    notifications_t notifications;
++    for (const auto &worker : _workers) {
++        if (worker->phase == worker_phase_t::idle || worker->phase == worker_phase_t::reserved) {
++            notifications.push_back (worker);
++            worker->phase = worker_phase_t::reserved;
++        }
++    }
++    return notifications;
++}
++
++void offload_executor_t::notify_workers (const notifications_t &notifications)
++{
++    for (const auto &worker : notifications)
++        worker->ready.notify_one ();
++}
++
+ offload_executor_t::retained_work_t::retained_work_t (offload_executor_t &executor) noexcept :
+     _executor (&executor)
+ {
+@@ -155,40 +282,45 @@ bool offload_executor_t::try_submit_cancellable (std::function<void (std::stop_t
+ 
+ bool offload_executor_t::try_submit_application (work_t work)
+ {
++    notifications_t notifications;
+     {
+         std::lock_guard lock (_mutex);
+-        if (_stopping) {
++        if (_stopping)
+             return false;
+-        }
+-        if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
+-            start_worker_locked ();
+-        }
+-        _queue.push (work_item_t{std::move (work), std::stop_source{}});
++        _queue.push_back (work_item_t{std::move (work), std::stop_source{}});
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++        ++_submitted_items;
++#endif
++        notifications = reserve_workers_locked (true);
+     }
+-    _ready.notify_one ();
++    notify_workers (notifications);
+     return true;
+ }
+ 
+ bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
+ {
++    notifications_t notifications;
+     {
+         std::lock_guard lock (_mutex);
+         if (_stopping)
+             return false;
+         _roles.push (std::move (role));
++        notifications = reserve_workers_locked (false);
+     }
+-    _ready.notify_one ();
++    notify_workers (notifications);
+     return true;
+ }
+ 
+ void offload_executor_t::drain_application ()
+ {
++    notifications_t notifications;
+     {
+         std::lock_guard lock (_mutex);
+         _stopping = true;
++        notifications = stop_workers_locked ();
+     }
+     request_stop ();
+-    _ready.notify_all ();
++    notify_workers (notifications);
+     std::unique_lock lock (_mutex);
+     _empty.wait (lock, [this] { return _queue.empty () && _active == _role_active; });
+ }
+@@ -224,12 +356,14 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
+         std::cerr << "zlink-cpp-host-stop stage=offload-drain-begin name=" << _thread_name
+                   << " workers=" << _workers.size () << std::endl;
+     }
++    notifications_t notifications;
+     {
+         std::unique_lock lock (_mutex);
+         _stopping = true;
++        notifications = stop_workers_locked ();
+     }
+     request_stop ();
+-    _ready.notify_all ();
++    notify_workers (notifications);
+     {
+         std::unique_lock lock (_mutex);
+         if (!_empty.wait_until (lock, deadline, [this] {
+@@ -273,18 +407,19 @@ std::size_t offload_executor_t::owned_thread_count () const
+ void offload_executor_t::start_worker_locked ()
+ {
+     join_retired_workers_locked ();
+-    _workers.emplace_back ([this] { worker_loop (); });
++    auto worker = std::make_shared<worker_t> ();
++    worker->thread = std::thread ([this, worker] { worker_loop (worker); });
++    _workers.push_back (std::move (worker));
+     ++_live_workers;
+ }
+ 
+ // A returning worker leaves the running range. It no longer needs the mutex,
+ // so joining it while holding the mutex waits only for its thread exit.
+-void offload_executor_t::retire_current_worker_locked ()
++void offload_executor_t::retire_current_worker_locked (worker_t &worker)
+ {
+     const auto running = _workers.begin () + static_cast<std::ptrdiff_t> (_live_workers);
+-    const auto self = std::find_if (_workers.begin (), running, [] (const std::thread &worker) {
+-        return worker.get_id () == std::this_thread::get_id ();
+-    });
++    const auto self = std::find_if (_workers.begin (), running,
++                                    [&] (const auto &entry) { return entry.get () == &worker; });
+     std::iter_swap (self, running - 1);
+     --_live_workers;
+     _empty.notify_all ();
+@@ -294,7 +429,7 @@ void offload_executor_t::join_retired_workers_locked ()
+ {
+     const auto retired = _workers.begin () + static_cast<std::ptrdiff_t> (_live_workers);
+     for (auto worker = retired; worker != _workers.end (); ++worker)
+-        worker->join ();
++        (*worker)->thread.join ();
+     _workers.erase (retired, _workers.end ());
+ }
+ 
+@@ -305,7 +440,7 @@ void offload_executor_t::complete_work_locked ()
+         _empty.notify_all ();
+ }
+ 
+-void offload_executor_t::worker_loop ()
++void offload_executor_t::worker_loop (const std::shared_ptr<worker_t> &worker)
+ {
+ #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+     struct current_worker_scope_t
+@@ -329,46 +464,68 @@ void offload_executor_t::worker_loop ()
+     };
+     while (true) {
+         work_item_t work;
++        drain_source_t::record_t record;
++        std::exception_ptr preparation_failure;
+         std::shared_ptr<role_t> role;
++        notifications_t notifications;
+         {
+             std::unique_lock lock (_mutex);
+-            ++_idle_workers;
+-            bool ready = false;
+-            if (_idle_timeout.count () == 0) {
+-                _ready.wait (lock,
+-                             [this] { return _stopping || !_roles.empty () || !_queue.empty (); });
+-                ready = true;
+-            } else {
+-                ready = _ready.wait_for (lock, _idle_timeout, [this] {
+-                    return _stopping || !_roles.empty () || !_queue.empty ();
+-                });
+-            }
+-            --_idle_workers;
++            worker->phase = worker_phase_t::idle;
++            notifications = reserve_workers_locked (false, worker.get ());
++            const auto reserved = [&] {
++                return _stopping || worker->phase == worker_phase_t::reserved;
++            };
++            bool ready = true;
++            if (_idle_timeout.count () == 0)
++                worker->ready.wait (lock, reserved);
++            else
++                ready = worker->ready.wait_for (lock, _idle_timeout, reserved);
++            worker->phase = worker_phase_t::running;
+             if (!ready && _roles.empty () && _queue.empty ()) {
+                 if (_live_workers > _min_worker_count) {
+-                    retire_current_worker_locked ();
++                    retire_current_worker_locked (*worker);
+                     trace_exit ();
+                     return;
+                 }
+                 continue;
+             }
+             if (_stopping && _roles.empty () && _queue.empty ()) {
+-                retire_current_worker_locked ();
++                retire_current_worker_locked (*worker);
+                 trace_exit ();
+                 return;
+             }
++            // Another reserved worker can have consumed the last ready record.
++            if (_roles.empty () && _queue.empty ())
++                continue;
+             if (!_roles.empty ()) {
+                 role = std::move (_roles.front ());
+                 _roles.pop ();
+                 ++_role_active;
++            } else if (const auto source =
++                         std::get_if<std::shared_ptr<drain_source_t>> (&_queue.front ().work)) {
++                // This entry stays scheduled while an untaken record remains.
++                work.work = *source;
++                // Capture turn entry before W1 preparation. The owner drain
++                // retains its existing budget and deadline decision.
++                const auto turn_started = std::chrono::steady_clock::now ();
++                try {
++                    record = take_drain_locked (_queue.begin ());
++                    record.turn_started = turn_started;
++                }
++                catch (...) {
++                    // Preserve application failure isolation even when preparing
++                    // a claim allocates. Report through its owner after unlock.
++                    preparation_failure = std::current_exception ();
++                }
+             } else {
+                 work = std::move (_queue.front ());
+-                _queue.pop ();
++                _queue.pop_front ();
+                 if (work.cancellation)
+                     _active_cancellations.push_back (&*work.cancellation);
+             }
+             ++_active;
+         }
++        notify_workers (notifications);
+ 
+         // A receive role is deliberately outside the application exception
+         // boundary.
+@@ -379,7 +536,14 @@ void offload_executor_t::worker_loop ()
+                 std::visit (
+                   [&] (auto &callback) {
+                       if (callback) {
+-                          if constexpr (std::is_invocable_v<decltype (callback), std::stop_token>)
++                          if constexpr (std::is_same_v<std::decay_t<decltype (callback)>,
++                                                       std::shared_ptr<drain_source_t>>) {
++                              if (preparation_failure)
++                                  callback->failed (std::move (preparation_failure));
++                              else if (record.value)
++                                  callback->run (std::move (record));
++                          } else if constexpr (std::is_invocable_v<decltype (callback),
++                                                                   std::stop_token>)
+                               callback (work.cancellation ? work.cancellation->get_token ()
+                                                           : std::stop_token{});
+                           else
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
+index 008ee473d8..daec4c7501 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
+@@ -5,14 +5,17 @@
+ #include <condition_variable>
+ #include <cstddef>
+ #include <functional>
++#include <exception>
+ #include <memory>
+ #include <mutex>
+ #include <optional>
++#include <deque>
+ #include <queue>
+ #include <stop_token>
+ #include <string>
+ #include <thread>
+ #include <variant>
++#include <utility>
+ #include <vector>
+ 
+ namespace zlink::framework::runtime
+@@ -29,6 +32,33 @@ class offload_executor_t
+         virtual void run () = 0;
+     };
+ 
++    // One queue entry represents a ready owner, independently of its running turns.
++    // take() only transfers ownership; run() executes outside scheduler state.
++    class drain_source_t : public std::enable_shared_from_this<drain_source_t>
++    {
++      public:
++        struct record_t
++        {
++            std::shared_ptr<void> value;
++            bool more = false;
++            std::chrono::steady_clock::time_point turn_started{};
++        };
++        drain_source_t (const void *group, std::string owner) :
++            group (group), owner (std::move (owner))
++        {
++        }
++        virtual ~drain_source_t () = default;
++        virtual std::size_t pending () const = 0;
++        virtual record_t take () = 0;
++        virtual void run (record_t record) = 0;
++        virtual void failed (std::exception_ptr error) { std::rethrow_exception (error); }
++        const void *const group;
++        const std::string owner;
++    };
++    virtual bool try_submit_drain (std::shared_ptr<drain_source_t> source);
++    // The running owner's existing W5 loop uses the same take/membership step.
++    virtual drain_source_t::record_t try_take_drain (const std::shared_ptr<drain_source_t> &source);
++
+     template <typename Work> static void run_application_turn (Work &&work) noexcept
+     {
+         try {
+@@ -99,7 +129,9 @@ class offload_executor_t
+ #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+     static thread_local const offload_executor_t *_current_worker_executor;
+ #endif
+-    using work_t = std::variant<std::function<void ()>, std::function<void (std::stop_token)>>;
++    using work_t = std::variant<std::function<void ()>,
++                                std::function<void (std::stop_token)>,
++                                std::shared_ptr<drain_source_t>>;
+     struct work_item_t
+     {
+         work_t work;
+@@ -107,19 +139,36 @@ class offload_executor_t
+     };
+ 
+     bool try_submit_application (work_t work);
+-    void worker_loop ();
++    std::deque<work_item_t>::iterator find_drain_locked (const drain_source_t &source);
++    drain_source_t::record_t take_drain_locked (std::deque<work_item_t>::iterator entry);
++    enum class worker_phase_t
++    {
++        idle,
++        reserved,
++        running
++    };
++    struct worker_t
++    {
++        std::thread thread;
++        std::condition_variable ready;
++        worker_phase_t phase = worker_phase_t::reserved;
++    };
++    using notifications_t = std::vector<std::shared_ptr<worker_t>>;
++    notifications_t reserve_workers_locked (bool grow, worker_t *current = nullptr);
++    notifications_t stop_workers_locked ();
++    static void notify_workers (const notifications_t &notifications);
++    void worker_loop (const std::shared_ptr<worker_t> &worker);
+     void complete_work_locked ();
+     void start_worker_locked ();
+-    void retire_current_worker_locked ();
++    void retire_current_worker_locked (worker_t &worker);
+     void join_retired_workers_locked ();
+ 
+     mutable std::mutex _mutex;
+-    std::condition_variable _ready;
+     std::condition_variable _empty;
+-    std::queue<work_item_t> _queue;
++    std::deque<work_item_t> _queue;
+     std::queue<std::shared_ptr<role_t>> _roles;
+     // [0, _live_workers) run worker_loop; the rest have returned.
+-    std::vector<std::thread> _workers;
++    std::vector<std::shared_ptr<worker_t>> _workers;
+     std::vector<std::stop_source *> _active_cancellations;
+     std::size_t _min_worker_count = 1;
+     std::size_t _max_worker_count = 1;
+@@ -128,8 +177,11 @@ class offload_executor_t
+     bool _stopping = false;
+     std::size_t _active = 0;
+     std::size_t _role_active = 0;
++#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
++    // Counts queue publications, including entries already consumed by workers.
++    std::size_t _submitted_items = 0;
++#endif
+     std::size_t _live_workers = 0;
+-    std::size_t _idle_workers = 0;
+ };
+ 
+ // Runtimes share one process pool and retain it until their lanes have drained.
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index ab034f1847..93678e6648 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -2127,19 +2127,75 @@ auto mesh_node_host_service_t::make_application_owner_work (
+   std::shared_ptr<detail::mesh_node_builder_state_t> registration,
+   std::string owner)
+ {
+-    return [node = std::move (node), registration = std::move (registration),
+-            owner = std::move (owner), services = _services, serializers = _serializers,
+-            filters = _filters, failures = _runtime_failures, options = _dispatch_options,
+-            executor = _application_dispatch.get ()] (bool reject_only) {
+-        detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
+-        auto pending = drain_application_owner (node, registration, owner, reject_only, services,
+-                                                serializers, filters, options, executor);
+-        detail::observe_task_terminal (pending, [failures] (const result_t<void> &result) {
+-            failures->capture ([&] { result.value (); });
+-        });
+-    };
++    return
++      [node = std::move (node), registration = std::move (registration), owner = std::move (owner),
++       services = _services, serializers = _serializers, filters = _filters,
++       failures = _runtime_failures, options = _dispatch_options,
++       executor = _application_dispatch.get ()] (
++        bool reject_only, std::shared_ptr<mesh::service_mailbox_claim_t> prepared = {},
++        std::shared_ptr<offload_executor_t::drain_source_t> source = {},
++        std::exception_ptr failure = {}, std::chrono::steady_clock::time_point turn_started = {}) {
++          if (failure) {
++              failures->report (std::move (failure));
++              return;
++          }
++          detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
++          auto pending = drain_application_owner (
++            node, registration, owner, reject_only, services, serializers, filters, options,
++            executor, std::move (prepared), std::move (source), turn_started);
++          detail::observe_task_terminal (pending, [failures] (const result_t<void> &result) {
++              failures->capture ([&] { result.value (); });
++          });
++      };
+ }
+ 
++struct mesh_node_host_service_t::application_owner_drain_t final
++    : offload_executor_t::drain_source_t
++{
++    using start_t = std::function<void (bool,
++                                        std::shared_ptr<mesh::service_mailbox_claim_t>,
++                                        std::shared_ptr<offload_executor_t::drain_source_t>,
++                                        std::exception_ptr,
++                                        std::chrono::steady_clock::time_point)>;
++    application_owner_drain_t (std::shared_ptr<detail::mesh_node_runtime_t> node,
++                               std::string owner,
++                               start_t start) :
++        drain_source_t (node.get (), std::move (owner)),
++        node (std::move (node)),
++        start (std::move (start))
++    {
++    }
++    std::size_t pending () const override
++    {
++        return node->native_node ().transport ().mailbox ().pending_application_records (owner);
++    }
++    record_t take () override
++    {
++        bool more;
++        auto claim =
++          node->native_node ().transport ().mailbox ().try_claim_application_record (owner, more);
++        return {std::move (claim), more};
++    }
++    void run (record_t record) override
++    {
++        auto claim =
++          std::static_pointer_cast<mesh::service_mailbox_claim_t> (std::move (record.value));
++        try {
++            start (false, claim, shared_from_this (), {}, record.turn_started);
++        }
++        catch (...) {
++            node->native_node ().transport ().mailbox ().release (*claim);
++            throw;
++        }
++    }
++    void failed (std::exception_ptr error) override
++    {
++        start (false, {}, {}, std::move (error), {});
++    }
++    std::shared_ptr<detail::mesh_node_runtime_t> node;
++    start_t start;
++};
++
+ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t::role_t
+ {
+     node_receive_role_t (
+@@ -3357,7 +3413,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+               [this, executor = _application_dispatch, node,
+                registration] (const std::string &owner) {
+                   auto start = make_application_owner_work (node, registration, owner);
+-                  if (!executor->try_submit_internal ([start] { start (false); }))
++                  if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
++                      auto source =
++                        std::make_shared<application_owner_drain_t> (node, owner, start);
++                      if (!executor->try_submit_drain (std::move (source)))
++                          start (true);
++                  } else if (!executor->try_submit_internal ([start] { start (false); }))
+                       start (true);
+               };
+             auto role =
+@@ -3867,16 +3928,23 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+   serializer_registry_t *serializers,
+   const handler_registry_t *filters,
+   detail::retained_dispatch_options_t dispatch_options,
+-  offload_executor_t *executor)
++  offload_executor_t *executor,
++  std::shared_ptr<mesh::service_mailbox_claim_t> prepared,
++  std::shared_ptr<offload_executor_t::drain_source_t> source,
++  std::chrono::steady_clock::time_point turn_started)
+ {
+     offload_executor_t::retained_work_t physical_work;
+     // Move parameter dependencies into locals so they are destroyed before credit.
++    auto owned_source = std::move (source);
++    auto prepared_claim = std::move (prepared);
+     auto owned_node = std::move (node);
+     auto owned_registration = std::move (registration);
+     auto &mailbox = owned_node->native_node ().transport ().mailbox ();
+-    if (!mailbox.begin_application_drain (owner))
++    const bool concurrent = mesh::service_mailbox_t::concurrent_application_owner (owner);
++    if (!concurrent && !mailbox.begin_application_drain (owner))
+         co_return;
+-    const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
++    const auto deadline = (owned_source ? turn_started : std::chrono::steady_clock::now ())
++                          + dispatch_limits::owner_time_budget;
+     try {
+         const mesh::service_mailbox_t::application_dispatch_t dispatch =
+           [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
+@@ -3892,8 +3960,16 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+             owned_node->application_work_finished ();
+         };
+         while (true) {
++            if (owned_source && !prepared_claim) {
++                auto record = executor->try_take_drain (owned_source);
++                prepared_claim = std::static_pointer_cast<mesh::service_mailbox_claim_t> (
++                  std::move (record.value));
++                if (!prepared_claim)
++                    break;
++            }
+             auto pending = owned_node->native_node ().dispatch_application_owner (
+-              owner, dispatch, started, rejected);
++              owner, dispatch, started, rejected, prepared_claim);
++            prepared_claim.reset ();
+             bool claimed;
+             if (const auto ready = std::get_if<bool> (&pending))
+                 claimed = *ready;
+@@ -3910,10 +3986,14 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
+         }
+     }
+     catch (...) {
+-        mailbox.end_application_drain (owner);
++        if (prepared_claim)
++            mailbox.release (*prepared_claim);
++        if (!concurrent)
++            mailbox.end_application_drain (owner);
+         throw;
+     }
+-    mailbox.end_application_drain (owner);
++    if (!concurrent)
++        mailbox.end_application_drain (owner);
+ }
+ 
+ task_t<zlink::submit_result_t>
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
+index 5c10f4de24..987162db76 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.hpp
+@@ -163,7 +163,11 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
+                              serializer_registry_t *serializers,
+                              const handler_registry_t *filters,
+                              detail::retained_dispatch_options_t dispatch_options,
+-                             offload_executor_t *executor);
++                             offload_executor_t *executor,
++                             std::shared_ptr<mesh::service_mailbox_claim_t> prepared = {},
++                             std::shared_ptr<offload_executor_t::drain_source_t> source = {},
++                             std::chrono::steady_clock::time_point turn_started = {});
++    struct application_owner_drain_t;
+ 
+     std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> _registrations;
+     serializer_registry_t *_serializers;
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+index 14782e13d8..5a3f8df25f 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+@@ -161,6 +161,13 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+     if (queue.phase == owner_phase_t::idle) {
+         queue.phase = owner_phase_t::ready;
+         target.ready.push_back (owner);
++    } else if (&target == &_state->application && concurrent_application_owner (owner)
++               && queue.phase != owner_phase_t::draining) {
++        // ready carries publication notifications. The executor's persistent
++        // entry retains ready membership after this notification list is taken.
++        queue.phase = owner_phase_t::ready;
++        if (std::find (target.ready.begin (), target.ready.end (), owner) == target.ready.end ())
++            target.ready.push_back (owner);
+     }
+     const bool notify = &target == &_state->application && !_state->application_receive_turn;
+     lock.unlock ();
+@@ -222,6 +229,69 @@ service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
+     return claim;
+ }
+ 
++bool service_mailbox_t::concurrent_application_owner (std::string_view owner) noexcept
++{
++    return owner == "node" || owner.starts_with ("channel:");
++}
++
++std::size_t service_mailbox_t::pending_application_records (const std::string &owner) const
++{
++    std::lock_guard lock (_state->mutex);
++    const auto found = _state->application.owners.find (owner);
++    return found == _state->application.owners.end () ? 0 : found->second.messages;
++}
++
++std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_application_record (
++  const std::string &owner, bool &more, const claimed_t &claimed)
++{
++    if (!concurrent_application_owner (owner))
++        throw std::invalid_argument ("independent application take requires Node/Channel owner");
++    std::unique_lock lock (_state->mutex);
++    auto &source = _state->application;
++    const auto found = source.owners.find (owner);
++    more = false;
++    if (found == source.owners.end () || found->second.records.empty ())
++        return nullptr;
++    auto &queue = found->second;
++    auto claim = std::make_shared<service_mailbox_claim_t> ();
++    claim->owner = owner;
++    claim->domain = service_mailbox_domain_t::application;
++    claim->records.push_back (&queue.records.front ());
++    claim->claimed_messages = 1;
++    claim->claimed_bytes = retained_bytes (queue.records.front ());
++    claim->record_bytes.push_back (claim->claimed_bytes);
++    claim->_settled = std::make_unique<std::atomic_bool[]> (1);
++    claim->_remaining.store (1, std::memory_order_relaxed);
++    claim->_mailbox = _state;
++    // No new payload storage: splice the existing node. Later head claims cannot
++    // erase this node, and the settlement credit keeps the existing claim alive.
++    claim->_detached_records.splice (claim->_detached_records.end (), queue.records,
++                                     queue.records.begin ());
++    claim->records.front ()->transferred = service_mailbox_settlement_t (claim, 0);
++    --queue.messages;
++    queue.bytes -= claim->claimed_bytes;
++    --source.messages;
++    source.bytes -= claim->claimed_bytes;
++    ++queue.active_messages;
++    queue.active_bytes += claim->claimed_bytes;
++    ++source.active_messages;
++    source.active_bytes += claim->claimed_bytes;
++    more = !queue.records.empty ();
++    queue.phase = more ? owner_phase_t::ready : owner_phase_t::retained;
++    if (!more)
++        source.ready.remove (owner);
++    try {
++        if (claimed)
++            claimed (claim);
++    }
++    catch (...) {
++        lock.unlock ();
++        release (*claim);
++        throw;
++    }
++    return claim;
++}
++
+ std::shared_ptr<service_mailbox_claim_t>
+ service_mailbox_t::claim_owner_locked (domain_t &source,
+                                        service_mailbox_domain_t domain_value,
+@@ -461,13 +531,22 @@ bool service_mailbox_t::finish_locked (state_t &state, const service_mailbox_cla
+     if (found == target.owners.end ())
+         return false;
+     auto &queue = found->second;
+-    // Every slot of the prefix was taken or discarded before its credit settled.
+-    queue.records.erase (queue.records.begin (),
+-                         std::next (queue.records.begin (), claim.claimed_messages));
++    // Every claimed slot was taken or discarded before its credit settled.
++    const bool detached = !claim._detached_records.empty ();
++    if (!detached)
++        queue.records.erase (queue.records.begin (),
++                             std::next (queue.records.begin (), claim.claimed_messages));
+     queue.active_messages -= claim.claimed_messages;
+     queue.active_bytes -= claim.claimed_bytes;
+     target.active_messages -= claim.claimed_messages;
+     target.active_bytes -= claim.claimed_bytes;
++    if (detached) {
++        if (queue.records.empty () && queue.active_messages == 0)
++            target.owners.erase (found);
++        // Publication already registered any remaining runnable records. A
++        // terminal credit neither resubmits the source nor wakes a worker.
++        return false;
++    }
+     if (queue.phase != owner_phase_t::draining) {
+         if (queue.records.empty ())
+             target.owners.erase (found);
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+index d29ad0f56a..0e6bd1d284 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+@@ -358,6 +358,12 @@ class service_mailbox_t
+                                                               std::size_t message_budget,
+                                                               std::size_t byte_budget,
+                                                               const claimed_t &claimed = {});
++    // Scheduler-only Node/Channel take. The original list node stays in its
++    // existing claim until settlement, independently of later owner records.
++    static bool concurrent_application_owner (std::string_view owner) noexcept;
++    std::shared_ptr<service_mailbox_claim_t> try_claim_application_record (
++      const std::string &owner, bool &more, const claimed_t &claimed = {});
++    std::size_t pending_application_records (const std::string &owner) const;
+     using claim_handle_t = service_mailbox_slot_t;
+     // A missing source belongs to its original. Claims and cut share one lookup; the
+     // existing producer mutex transfers its starter, and Store work runs outside it.
+@@ -434,8 +440,8 @@ class service_mailbox_t
+         retained
+     };
+ 
+-    // A claim is the front prefix of records; it leaves the FIFO when its last
+-    // credit settles.
++    // Gated claims retain their prefix here until settlement. Independent
++    // Node/Channel claims transfer the taken list node into the claim.
+     struct owner_queue_t
+     {
+         std::list<service_mailbox_record_t> records;
+@@ -494,8 +500,9 @@ class service_mailbox_t
+     utc_clock_t _utc_clock = [] { return std::chrono::system_clock::now (); };
+ };
+ 
+-// One claim of an owner's FIFO prefix. records views the claimed slots until the
+-// claim settles; read them only before their take. Each slot credit settles once.
++// records views claimed slots until settlement: a gated prefix stays in its
++// FIFO; an independent Node/Channel take keeps the same list node in this claim.
++// Read a slot only before its take. Each credit settles once.
+ struct service_mailbox_claim_t
+ {
+     std::string owner;
+@@ -514,6 +521,7 @@ struct service_mailbox_claim_t
+   private:
+     friend class service_mailbox_t;
+     std::weak_ptr<service_mailbox_t::state_t> _mailbox;
++    std::list<service_mailbox_record_t> _detached_records;
+     std::unique_ptr<std::atomic_bool[]> _settled;
+     std::atomic_size_t _remaining{0};
+ };
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index 21ecf741b9..894f60620f 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -8530,7 +8530,8 @@ public_host_runtime_t::dispatch_application_owner (
+   std::string owner,
+   mesh::service_mailbox_t::application_dispatch_t dispatch,
+   std::function<void ()> started,
+-  std::function<void ()> rejected)
++  std::function<void ()> rejected,
++  std::shared_ptr<mesh::service_mailbox_claim_t> prepared)
+ {
+     std::shared_ptr<application_claim_batch_t> batch;
+     std::size_t claimed = 0;
+@@ -8546,10 +8547,23 @@ public_host_runtime_t::dispatch_application_owner (
+     };
+     try {
+         // Account the accepted claim even if its consumer storage cannot be allocated.
+-        auto claim = _transport->mailbox ().try_claim_owner (
+-          mesh::service_mailbox_domain_t::application, owner,
+-          dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
+-          std::ref (transfer));
++        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
++        if (prepared) {
++            // Scheduler ownership excludes relocation for this detached Node/
++            // Channel node. No other consumer can access its original.
++            claim = prepared;
++            transfer (claim);
++            prepared.reset ();
++        } else if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
++            bool more;
++            claim = _transport->mailbox ().try_claim_application_record (owner, more,
++                                                                         std::ref (transfer));
++        } else {
++            claim = _transport->mailbox ().try_claim_owner (
++              mesh::service_mailbox_domain_t::application, owner,
++              dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
++              std::ref (transfer));
++        }
+         if (!claim)
+             return false;
+         auto result = dispatch_application_claim (batch);
+@@ -8564,6 +8578,8 @@ public_host_runtime_t::dispatch_application_owner (
+         }(std::get<task_t<std::size_t>> (std::move (result)));
+     }
+     catch (...) {
++        if (prepared)
++            _transport->mailbox ().release (*prepared);
+         if (batch) {
+             batch->finish ();
+             recycle_application_claim_batch (batch);
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
+index f5d3e6e300..e5360a015c 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
+@@ -913,7 +913,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
+     dispatch_application_owner (std::string owner,
+                                 const mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                 std::function<void ()> started,
+-                                std::function<void ()> rejected);
++                                std::function<void ()> rejected,
++                                std::shared_ptr<mesh::service_mailbox_claim_t> prepared = {});
+     std::optional<zlink::poll_event_flag_t> wait_for_dispatch_activity (
+       std::chrono::milliseconds timeout,
+       bool accept_application_receive,
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+index 9e3e2d5099..132f52a41f 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+@@ -9,6 +9,7 @@
+ #include "runtime/messaging/client_call_codec.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+ #include <zlink.h>
++#include <array>
+ #include <cassert>
+ #include <future>
+ #include <iostream>
+@@ -17,21 +18,8 @@
+ namespace fw = zlink::framework;
+ namespace rt = fw::runtime;
+ using namespace std::chrono_literals;
+-namespace zlink::framework::runtime
+-{
+-struct offload_executor_test_access_t
+-{
+-    static std::condition_variable *ready (offload_executor_t &executor)
+-    {
+-        return &executor._ready;
+-    }
+-};
+-}
+ namespace
+ {
+-std::atomic<std::condition_variable *> application_ready{nullptr};
+-std::atomic_size_t worker_notifications{0};
+-std::atomic_bool watch_notifications{false};
+ std::mutex observation_mutex;
+ std::thread::id received_on;
+ std::promise<std::thread::id> handled;
+@@ -39,6 +27,7 @@ std::atomic_bool handler_blocked{false};
+ constexpr std::size_t queued_records = 128;
+ std::atomic_size_t received_queued{0};
+ std::atomic_size_t handled_queued{0};
++std::array<std::atomic_bool, queued_records> queued_seen{};
+ std::promise<void> queue_drained;
+ std::promise<void> parallel_started;
+ std::shared_future<void> release_handler_turn;
+@@ -56,8 +45,8 @@ struct handler_t
+         }
+         if (probe.value.starts_with ("queued-probe-")) {
+             const auto index = std::stoul (probe.value.substr (13));
+-            assert (handled_queued.fetch_add (1) == index);
+-            if (index + 1 == queued_records)
++            assert (index < queued_records && !queued_seen[index].exchange (true));
++            if (handled_queued.fetch_add (1) + 1 == queued_records)
+                 queue_drained.set_value ();
+             return;
+         }
+@@ -95,40 +84,11 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
+                 && std::string_view (data, bytes).find (marker) != std::string_view::npos) {
+                 std::lock_guard lock (observation_mutex);
+                 received_on = std::this_thread::get_id ();
+-                watch_notifications = true;
+             }
+         }
+     }
+     return result;
+ }
+-extern "C" bool real_start_role (
+-  rt::offload_executor_t *,
+-  std::shared_ptr<rt::offload_executor_t::
+-                    role_t>) __asm__ ("__real__ZN5zlink9framework7runtime18offload_executor_"
+-                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
+-extern "C" bool wrapped_start_role (
+-  rt::offload_executor_t *,
+-  std::shared_ptr<rt::offload_executor_t::
+-                    role_t>) __asm__ ("__wrap__ZN5zlink9framework7runtime18offload_executor_"
+-                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
+-extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
+-                                    std::shared_ptr<rt::offload_executor_t::role_t> role)
+-{
+-    application_ready = rt::offload_executor_test_access_t::ready (*executor);
+-    return real_start_role (executor, std::move (role));
+-}
+-
+-extern "C" void
+-real_notify (std::condition_variable *) __asm__ ("__real__ZNSt18condition_variable10notify_oneEv");
+-extern "C" void wrapped_notify (std::condition_variable *) __asm__ (
+-  "__wrap__ZNSt18condition_variable10notify_oneEv");
+-extern "C" void wrapped_notify (std::condition_variable *ready)
+-{
+-    if (watch_notifications.load () && ready == application_ready.load ())
+-        ++worker_notifications;
+-    real_notify (ready);
+-}
+-
+ int main ()
+ {
+     bool correct = true;
+@@ -137,6 +97,8 @@ int main ()
+         handled = {};
+         received_queued = 0;
+         handled_queued = 0;
++        for (auto &seen : queued_seen)
++            seen.store (false);
+         queue_drained = {};
+         auto drained = queue_drained.get_future ();
+         handler_blocked = false;
+@@ -248,11 +210,10 @@ int main ()
+                 assert (std::chrono::steady_clock::now () < receive_deadline);
+                 std::this_thread::yield ();
+             }
+-            assert (handled_queued.load () == 0);
+-            const auto notifications_while_busy = worker_notifications.load ();
+-            std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
+-                      << std::endl;
+-            correct = correct && notifications_while_busy == 1;
++            // S02: the same Node must progress while its earlier handler blocks.
++            const bool same_owner = drained.wait_for (5s) == std::future_status::ready;
++            correct = correct && same_owner;
++            std::cout << "blocked_handler_same_node_progress=" << same_owner << '\n';
+             auto completed = std::make_shared<std::promise<void>> ();
+             auto terminal = completed->get_future ();
+             const auto operation =
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp
+index 98b2a3957c..16c8e4f6cc 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp
+@@ -21,6 +21,7 @@
+ 
+ #include <gtest/gtest.h>
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <chrono>
+ #include <future>
+@@ -552,6 +553,15 @@ void check_native_fifo (bool held_worker, bool async_filter, bool reject = false
+         EXPECT_EQ (3u, server.pending_messages ());
+         held->run_all ();
+     }
++    // S02 §2 orders mailbox takes, not pipeline entry on different workers.
++    // The manual single-worker adapter still has a deterministic entry order.
++    const auto expect_entries = [held_worker] (std::vector<int> expected, std::vector<int> actual) {
++        if (!held_worker) {
++            std::sort (expected.begin (), expected.end ());
++            std::sort (actual.begin (), actual.end ());
++        }
++        EXPECT_EQ (expected, actual);
++    };
+     {
+         std::unique_lock lock (handler.mutex);
+         ASSERT_TRUE (handler.changed.wait_for (lock, 2s, [&] {
+@@ -560,9 +570,9 @@ void check_native_fifo (bool held_worker, bool async_filter, bool reject = false
+                                 : handler.entries.size () == 3;
+         }));
+         if (async_filter)
+-            EXPECT_EQ ((std::vector<int>{1, 2, 3}), handler.pipeline_entries);
++            expect_entries ({1, 2, 3}, handler.pipeline_entries);
+         else
+-            EXPECT_EQ ((std::vector<int>{1, 2, 3}), handler.entries);
++            expect_entries ({1, 2, 3}, handler.entries);
+     }
+     EXPECT_FALSE (executor->drain_until (std::chrono::steady_clock::now ()))
+       << "an actual native invocation must retain physical-terminal drain ownership";
+@@ -575,7 +585,8 @@ void check_native_fifo (bool held_worker, bool async_filter, bool reject = false
+         std::unique_lock lock (handler.mutex);
+         ASSERT_TRUE (
+           handler.changed.wait_for (lock, 2s, [&] { return handler.entries.size () == 3; }));
+-        EXPECT_EQ ((std::vector<int>{2, 3, 1}), handler.entries);
++        EXPECT_EQ (1, handler.entries.back ());
++        expect_entries ({2, 3, 1}, handler.entries);
+     }
+     EXPECT_FALSE (replies[0].await_ready ());
+     EXPECT_EQ (0u, jobs->snapshot ().queued_application_jobs);
+@@ -611,7 +622,7 @@ TEST (ManualDispatchOwner, AsyncFilterRetainsPermitAndScopeWhileLaterPipelinesEn
+     check_native_fifo (true, true);
+ }
+ 
+-TEST (ManualDispatchOwner, NativeMultiworkerDrainStartsPipelinesInFifo)
++TEST (ManualDispatchOwner, NativeMultiworkerDrainStartsIndependentPipelines)
+ {
+     check_native_fifo (false, true);
+ }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
+index 8f72695aee..df059ba24f 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
+@@ -5,6 +5,7 @@
+ #include "runtime/dispatch/offload_executor.hpp"
+ #include "allocation_counter.hpp"
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <cassert>
+ #include <cstdio>
+@@ -20,11 +21,17 @@ using namespace std::chrono_literals;
+ 
+ #ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
+ std::atomic_bool suppress_notify_one{false};
++std::mutex suppressed_mutex;
++std::vector<std::condition_variable *> suppressed;
+ extern "C" void __real__ZNSt18condition_variable10notify_oneEv (std::condition_variable *);
+ extern "C" void __wrap__ZNSt18condition_variable10notify_oneEv (std::condition_variable *condition)
+ {
+     if (!suppress_notify_one.load ())
+         __real__ZNSt18condition_variable10notify_oneEv (condition);
++    else {
++        std::lock_guard lock (suppressed_mutex);
++        suppressed.push_back (condition);
++    }
+ }
+ #endif
+ 
+@@ -35,14 +42,16 @@ struct offload_executor_test_access_t
+     static std::size_t idle (offload_executor_t &executor)
+     {
+         std::lock_guard lock (executor._mutex);
+-        return executor._idle_workers;
++        return std::count_if (executor._workers.begin (), executor._workers.end (),
++                              [] (const auto &worker) {
++                                  return worker->phase == offload_executor_t::worker_phase_t::idle;
++                              });
+     }
+     static bool stopping (offload_executor_t &executor)
+     {
+         std::lock_guard lock (executor._mutex);
+         return executor._stopping;
+     }
+-    static void wake_workers (offload_executor_t &executor) { executor._ready.notify_all (); }
+ };
+ }
+ 
+@@ -88,7 +97,12 @@ void queued_work_reserves_independent_workers (bool internal_first)
+     }
+     const auto workers = executor.live_worker_count ();
+     suppress_notify_one.store (false);
+-    rt::offload_executor_test_access_t::wake_workers (executor);
++    {
++        std::lock_guard lock (suppressed_mutex);
++        for (auto *condition : suppressed)
++            __real__ZNSt18condition_variable10notify_oneEv (condition);
++        suppressed.clear ();
++    }
+     const bool progressed = second.wait_for (5s) == std::future_status::ready;
+     release.set_value ();
+     executor.drain ();
+diff --git a/framework/languages/cpp/tests/support/manual_internal_scheduler.hpp b/framework/languages/cpp/tests/support/manual_internal_scheduler.hpp
+index 6d12c3384a..a03c59622c 100644
+--- a/framework/languages/cpp/tests/support/manual_internal_scheduler.hpp
++++ b/framework/languages/cpp/tests/support/manual_internal_scheduler.hpp
+@@ -13,7 +13,9 @@
+ #include <functional>
+ #include <mutex>
+ #include <optional>
+-#include <queue>
++#include <deque>
++#include <variant>
++#include <algorithm>
+ 
+ namespace zlink::framework::test
+ {
+@@ -28,11 +30,51 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
+         std::lock_guard lock (_wake->mutex);
+         if (!_accepting)
+             return false;
+-        _ready.push (std::move (work));
++        _ready.emplace_back (std::move (work));
+         _wake->ready_changed.notify_all ();
+         return true;
+     }
+ 
++    bool try_submit_drain (std::shared_ptr<drain_source_t> source) override
++    {
++        std::lock_guard lock (_wake->mutex);
++        if (!_accepting)
++            return false;
++        const auto found = std::find_if (_ready.begin (), _ready.end (), [&] (const auto &entry) {
++            const auto existing = std::get_if<std::shared_ptr<drain_source_t>> (&entry);
++            return existing && (*existing)->group == source->group
++                   && (*existing)->owner == source->owner;
++        });
++        if (found == _ready.end ())
++            _ready.emplace_back (std::move (source));
++        _wake->ready_changed.notify_all ();
++        return true;
++    }
++
++    drain_source_t::record_t try_take_drain (const std::shared_ptr<drain_source_t> &source) override
++    {
++        std::shared_ptr<drain_source_t> selected;
++        drain_source_t::record_t record;
++        {
++            std::lock_guard lock (_wake->mutex);
++            const auto found =
++              std::find_if (_ready.begin (), _ready.end (), [&] (const auto &entry) {
++                  const auto existing = std::get_if<std::shared_ptr<drain_source_t>> (&entry);
++                  return existing && (*existing)->group == source->group
++                         && (*existing)->owner == source->owner;
++              });
++            if (found != _ready.end ()) {
++                selected = std::get<std::shared_ptr<drain_source_t>> (*found);
++                record = selected->take ();
++                if (record.more)
++                    std::rotate (found, found + 1, _ready.end ());
++                else
++                    _ready.erase (found);
++            }
++        }
++        return record;
++    }
++
+     std::size_t pending_work () const
+     {
+         std::lock_guard lock (_wake->mutex);
+@@ -50,14 +92,32 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
+     bool run_one ()
+     {
+         std::function<void ()> work;
++        std::shared_ptr<drain_source_t> source;
++        drain_source_t::record_t record;
+         {
+             std::lock_guard lock (_wake->mutex);
+             if (_ready.empty ())
+                 return false;
+-            work = std::move (_ready.front ());
+-            _ready.pop ();
++            if (const auto drain =
++                  std::get_if<std::shared_ptr<drain_source_t>> (&_ready.front ())) {
++                source = *drain;
++                const auto turn_started = std::chrono::steady_clock::now ();
++                record = source->take ();
++                record.turn_started = turn_started;
++                if (record.more)
++                    std::rotate (_ready.begin (), _ready.begin () + 1, _ready.end ());
++                else
++                    _ready.pop_front ();
++            } else {
++                work = std::move (std::get<std::function<void ()>> (_ready.front ()));
++                _ready.pop_front ();
++            }
+         }
+-        work ();
++        if (source) {
++            if (record.value)
++                source->run (std::move (record));
++        } else
++            work ();
+         if (_publication_fence)
+             _publication_fence ();
+         return true;
+@@ -128,7 +188,7 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
+         std::condition_variable ready_changed;
+     };
+     std::shared_ptr<wake_state_t> _wake = std::make_shared<wake_state_t> ();
+-    std::queue<std::function<void ()>> _ready;
++    std::deque<std::variant<std::function<void ()>, std::shared_ptr<drain_source_t>>> _ready;
+     bool _accepting = true;
+ };
+ // Preserve the original single available worker precondition on the shared pool.
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
+new file mode 100644
+index 0000000000..bef4457de8
+--- /dev/null
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
+@@ -0,0 +1,435 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#ifdef NDEBUG
++#undef NDEBUG
++#endif
++#include "runtime/dispatch/offload_executor.hpp"
++#include "runtime/dispatch/dispatch_limits.hpp"
++#include "runtime/mesh/service_mailbox.hpp"
++#include "runtime/execution/serial_execution_queue.hpp"
++
++#include <algorithm>
++#include <atomic>
++#include <cassert>
++#include <cstdio>
++#include <future>
++#include <latch>
++#include <stdexcept>
++
++namespace fw = zlink::framework;
++namespace rt = fw::runtime;
++namespace mesh = rt::mesh;
++using namespace std::chrono_literals;
++
++namespace zlink::framework::runtime
++{
++struct offload_executor_test_access_t
++{
++    static std::size_t items (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        return executor._submitted_items;
++    }
++    static std::size_t entries (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        return executor._queue.size ();
++    }
++    static bool stopping (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        return executor._stopping;
++    }
++    static std::vector<std::condition_variable *> idle (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        std::vector<std::condition_variable *> ready;
++        for (const auto &worker : executor._workers)
++            if (worker->phase == offload_executor_t::worker_phase_t::idle)
++                ready.push_back (&worker->ready);
++        return ready;
++    }
++};
++}
++
++namespace
++{
++std::atomic_bool count_wakes{false};
++std::atomic_size_t wakes{0};
++// Fixed-size executors keep these addresses stable until drain().
++std::vector<std::condition_variable *> worker_conditions;
++void require (bool condition, const char *message)
++{
++    if (!condition)
++        throw std::runtime_error (message);
++}
++template <typename Predicate> void await (Predicate predicate)
++{
++    const auto deadline = std::chrono::steady_clock::now () + 5s;
++    while (!predicate ()) {
++        require (std::chrono::steady_clock::now () < deadline, "scheduler transition timed out");
++        std::this_thread::yield ();
++    }
++}
++template <typename T> void await (std::future<T> &future)
++{
++    require (future.wait_for (5s) == std::future_status::ready, "future timed out");
++    future.get ();
++}
++
++struct source_t final : rt::offload_executor_t::drain_source_t
++{
++    using claim_t = mesh::service_mailbox_claim_t;
++    explicit source_t (rt::offload_executor_t &executor,
++                       mesh::service_mailbox_t &mailbox,
++                       std::string owner = "node") :
++        drain_source_t (&mailbox, std::move (owner)), executor (executor), mailbox (mailbox)
++    {
++    }
++    std::size_t pending () const override { return mailbox.pending_application_records (owner); }
++    record_t take () override
++    {
++        bool more;
++        auto claim = mailbox.try_claim_application_record (owner, more, [&] (const auto &claimed) {
++            taken.push_back (
++              std::stoul (claimed->records.front ()->parts ().front ().to_string ()));
++        });
++        return {std::move (claim), terminal_serial ? false : more};
++    }
++    void run (record_t record) override
++    {
++        ++turns;
++        auto claim = std::static_pointer_cast<claim_t> (std::move (record.value));
++        const auto deadline = record.turn_started + rt::dispatch_limits::owner_time_budget;
++        do {
++            try {
++                auto original = mailbox.take ({claim, 0});
++                require (original.has_value (), "scheduled record lost its original");
++                rt::handler_entry_t entry (original->application_permit
++                                             ? std::move (*original->application_permit)
++                                             : rt::application_job_queue_t::permit_t{});
++                entry ();
++                if (handle)
++                    handle (std::stoul (original->parts ().front ().to_string ()));
++                require (original->transferred (), "record did not settle");
++                ++completed;
++            }
++            catch (...) {
++                mailbox.release (*claim);
++                throw;
++            }
++            claim.reset ();
++            if (terminal_serial) {
++                // The mutant publishes the next drain only after A's terminal.
++                if (pending () != 0)
++                    require (executor.try_submit_drain (shared_from_this ()),
++                             "terminal-serial continuation was rejected");
++                break;
++            }
++            if (std::chrono::steady_clock::now () >= deadline)
++                break;
++            if (one_item_per_record)
++                break;
++            auto next = executor.try_take_drain (shared_from_this ());
++            claim = std::static_pointer_cast<claim_t> (std::move (next.value));
++        } while (claim);
++    }
++    rt::offload_executor_t &executor;
++    mesh::service_mailbox_t &mailbox;
++    std::function<void (std::size_t)> handle;
++    std::vector<std::size_t> taken; // written only under the mailbox mutex
++    std::atomic_size_t completed{0}, turns{0};
++    bool terminal_serial = false;
++    bool one_item_per_record = false;
++};
++
++void enqueue (mesh::service_mailbox_t &mailbox,
++              const std::string &owner,
++              std::size_t id,
++              const std::shared_ptr<rt::application_job_queue_t> &jobs = {})
++{
++    std::vector<zlink::message_t> parts;
++    parts.push_back (zlink::message_t::from (std::to_string (id)));
++    auto record = mesh::service_mailbox_record_t::from_parts (
++      owner, mesh::service_mailbox_domain_t::application, std::move (parts));
++    if (jobs) {
++        auto permit = jobs->try_reserve_supply ();
++        require (permit.has_value (), "test exhausted application permits");
++        permit->mark_queued ();
++        record.application_permit.emplace (std::move (*permit));
++    }
++    require (mailbox.try_enqueue (std::move (record)), "enqueue was rejected");
++}
++
++bool burst (std::string_view negative)
++{
++    constexpr std::size_t count = 1024, workers = 4;
++    rt::offload_executor_t executor (workers);
++    await ([&] { return rt::offload_executor_test_access_t::idle (executor).size () == workers; });
++    worker_conditions = rt::offload_executor_test_access_t::idle (executor);
++    mesh::service_mailbox_t mailbox;
++    auto source = std::make_shared<source_t> (executor, mailbox);
++    std::latch entered (workers);
++    std::promise<void> release;
++    auto released = release.get_future ().share ();
++    source->one_item_per_record = negative == "items";
++    source->handle = [&] (std::size_t id) {
++        if (id < workers) {
++            entered.count_down ();
++            released.wait ();
++        }
++    };
++    mailbox.begin_application_receive_turn ();
++    for (std::size_t id = 0; id != count; ++id)
++        enqueue (mailbox, "node", id);
++    wakes = 0;
++    count_wakes = true;
++    if (negative == "items") {
++        for (std::size_t id = 0; id != count; ++id)
++            require (executor.try_submit_internal ([source] {
++                auto record = source->take ();
++                if (record.value)
++                    source->run (std::move (record));
++            }),
++                     "negative item publication rejected");
++    } else
++        require (executor.try_submit_drain (source), "source publication rejected");
++    // All four workers are held in handlers; subsequent publications must retain
++    // one existing entry and cannot reserve these workers again.
++    await ([&] { return entered.try_wait (); });
++    for (std::size_t id = 1; id != count; ++id) {
++        if (negative != "items")
++            require (executor.try_submit_drain (source), "duplicate publication rejected");
++        if (negative == "wakes")
++            worker_conditions.front ()->notify_one ();
++    }
++    const auto queued = rt::offload_executor_test_access_t::entries (executor);
++    release.set_value ();
++    await ([&] { return source->completed.load () == count; });
++    // Fence work capture destruction and the final persistent entry selection.
++    await ([&] { return executor.drained (); });
++    count_wakes = false;
++    const auto items = rt::offload_executor_test_access_t::items (executor);
++    const auto notifications = wakes.load ();
++    executor.drain ();
++#ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
++    require (notifications != 0, "worker wake instrumentation did not observe notifications");
++#endif
++    require (source->taken.size () == count, "take count differs");
++    for (std::size_t id = 0; id != count; ++id)
++        require (source->taken[id] == id, "record take order is not FIFO");
++    std::fprintf (stderr,
++                  "burst records=%zu items=%zu wakes=%zu queued=%zu turns=%zu bound=1/%zu\n", count,
++                  items, notifications, queued, source->turns.load (), workers);
++    return items == 1 && notifications <= workers && queued == 1;
++}
++
++bool independent (bool wait_for_terminal, const std::string &owner)
++{
++    rt::offload_executor_t executor (2);
++    mesh::service_mailbox_t mailbox;
++    auto source = std::make_shared<source_t> (executor, mailbox, owner);
++    source->terminal_serial = wait_for_terminal;
++    std::promise<void> first, second, release;
++    auto a = first.get_future (), b = second.get_future ();
++    auto released = release.get_future ().share ();
++    std::thread::id a_thread, b_thread;
++    source->handle = [&] (std::size_t id) {
++        if (id == 0) {
++            a_thread = std::this_thread::get_id ();
++            first.set_value ();
++            released.wait ();
++        } else {
++            b_thread = std::this_thread::get_id ();
++            second.set_value ();
++        }
++    };
++    mailbox.begin_application_receive_turn ();
++    enqueue (mailbox, owner, 0);
++    enqueue (mailbox, owner, 1);
++    require (executor.try_submit_drain (source), "independent source rejected");
++    await (a);
++    const bool progressed = b.wait_for (5s) == std::future_status::ready;
++    release.set_value ();
++    executor.drain ();
++    require (source->completed == 2, "independent dispatch lost a record");
++    std::fprintf (stderr, "owner=%s B_before_A_terminal=%d different_worker=%d\n", owner.c_str (),
++                  progressed, a_thread != b_thread);
++    return progressed && a_thread != b_thread;
++}
++
++void shutdown (bool running)
++{
++    constexpr std::size_t count = 64;
++    rt::offload_executor_t executor (1);
++    mesh::service_mailbox_t mailbox;
++    auto source = std::make_shared<source_t> (executor, mailbox);
++    auto jobs =
++      std::make_shared<rt::application_job_queue_t> (rt::application_job_queue_configuration_t{
++        fw::application_job_queue_profile_t::balanced, std::uint32_t{count}, 1, count});
++    std::promise<void> entered, release;
++    auto started = entered.get_future ();
++    auto released = release.get_future ().share ();
++    if (!running) {
++        require (executor.try_submit_internal ([&] {
++            entered.set_value ();
++            released.wait ();
++        }),
++                 "shutdown blocker rejected");
++        await (started);
++    } else
++        source->handle = [&] (std::size_t id) {
++            if (id == 0) {
++                entered.set_value ();
++                released.wait ();
++            }
++        };
++    mailbox.begin_application_receive_turn ();
++    for (std::size_t id = 0; id != count; ++id)
++        enqueue (mailbox, "node", id, jobs);
++    require (executor.try_submit_drain (source), "shutdown source rejected");
++    if (running)
++        await (started);
++    auto draining = std::async (std::launch::async, [&] { executor.drain_application (); });
++    await ([&] { return rt::offload_executor_test_access_t::stopping (executor); });
++    const bool returned_early = draining.wait_for (0ms) == std::future_status::ready;
++    const auto queued_permits = jobs->snapshot ().permits_in_use;
++    release.set_value ();
++    await (draining);
++    executor.drain ();
++    require (!returned_early, "shutdown returned before scheduled/running work");
++    require (queued_permits == count - (running ? 1 : 0), "queued permits escaped shutdown");
++    require (jobs->snapshot ().permits_in_use == 0, "shutdown retained permits");
++    require (source->completed == count, "shutdown lost queued records");
++    require (mailbox.pending_messages (mesh::service_mailbox_domain_t::application) == 0,
++             "shutdown left mailbox records");
++    std::fprintf (stderr, "shutdown running=%d records=%zu permits=0\n", running, count);
++}
++
++void last_take_publication_races ()
++{
++    for (const auto &owner : {std::string ("node"), std::string ("channel:test")}) {
++        rt::offload_executor_t executor (2);
++        mesh::service_mailbox_t mailbox;
++        auto source = std::make_shared<source_t> (executor, mailbox, owner);
++        mailbox.bind_application_dispatch ({}, [&] (const auto &) {
++            require (executor.try_submit_drain (source), "racing source publication rejected");
++        });
++        for (std::size_t id = 0; id != 1000; ++id) {
++            enqueue (mailbox, owner, id);
++            if ((id & 1) == 0)
++                await ([&] { return source->completed.load () == id + 1; });
++        }
++        await ([&] { return source->completed == 1000; });
++        executor.drain ();
++        require (source->taken.size () == 1000, "last-take race lost or duplicated records");
++        for (std::size_t id = 0; id != 1000; ++id)
++            require (source->taken[id] == id, "last-take race reordered takes");
++    }
++}
++
++void preparation_failure_is_reported_outside_scheduler ()
++{
++    rt::offload_executor_t executor (1);
++    struct failing_source_t final : rt::offload_executor_t::drain_source_t
++    {
++        explicit failing_source_t (rt::offload_executor_t &executor) :
++            drain_source_t (&executor, "failing"), executor (executor)
++        {
++        }
++        std::size_t pending () const override { return 1; }
++        record_t take () override { throw std::runtime_error ("claim preparation"); }
++        void run (record_t) override { throw std::logic_error ("unexpected run"); }
++        void failed (std::exception_ptr error) override
++        {
++            require (error != nullptr, "preparation failure was lost");
++            // Reentry would deadlock if failure delivery held the scheduler mutex.
++            require (executor.try_submit_internal ([this] { delivered.set_value (); }),
++                     "failure continuation was rejected");
++        }
++        rt::offload_executor_t &executor;
++        std::promise<void> delivered;
++    };
++    auto source = std::make_shared<failing_source_t> (executor);
++    auto delivered = source->delivered.get_future ();
++    require (executor.try_submit_drain (source), "failing source was rejected");
++    await (delivered);
++    executor.drain ();
++}
++
++bool gated (bool actor, bool bypass)
++{
++    rt::offload_executor_t executor (2);
++    rt::serial_execution_queue_t queue (executor, {}, {},
++                                        actor ? rt::serial_lane_policy_t::actor_delivery ()
++                                              : rt::serial_lane_policy_t::spot_wide ());
++    std::promise<void> entered, second, release, sentinel;
++    auto started = entered.get_future (), b = second.get_future (), fence = sentinel.get_future ();
++    auto released = release.get_future ().share ();
++    auto first = [&] {
++        entered.set_value ();
++        released.wait ();
++    };
++    auto next = [&] { second.set_value (); };
++    require (queue.try_post ("A", first), "gate A rejected");
++    await (started);
++    if (bypass)
++        require (executor.try_submit_internal (next), "negative gate B rejected");
++    else
++        require (queue.try_post ("B", next), "gate B rejected");
++    // An independent worker must be available while the gated A runs.
++    require (executor.try_submit_internal ([&] { sentinel.set_value (); }),
++             "gate sentinel rejected");
++    await (fence);
++    // With A occupying one of two workers, B and the sentinel use the other
++    // worker in FIFO order when the gate is bypassed. No absence timer is needed.
++    const bool overlapped = b.wait_for (0ms) == std::future_status::ready;
++    release.set_value ();
++    await (b);
++    queue.drain ();
++    executor.drain ();
++    std::fprintf (stderr, "%s_gate_overlap=%d\n", actor ? "actor" : "spot", overlapped);
++    return !overlapped;
++}
++}
++
++#ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
++extern "C" void __real__ZNSt18condition_variable10notify_oneEv (std::condition_variable *);
++extern "C" void __wrap__ZNSt18condition_variable10notify_oneEv (std::condition_variable *condition)
++{
++    if (count_wakes.load ()
++        && std::find (worker_conditions.begin (), worker_conditions.end (), condition)
++             != worker_conditions.end ())
++        ++wakes;
++    __real__ZNSt18condition_variable10notify_oneEv (condition);
++}
++#endif
++
++int main (int argc, char **argv)
++{
++    try {
++        const std::string_view mode = argc > 1 ? argv[1] : "";
++        if (mode == "--negative-items")
++            return burst ("items") ? 0 : 1;
++        if (mode == "--negative-wakes")
++            return burst ("wakes") ? 0 : 1;
++        if (mode == "--negative-terminal")
++            return independent (true, "node") ? 0 : 1;
++        if (mode == "--negative-spot-gate")
++            return gated (false, true) ? 0 : 1;
++        if (mode == "--negative-actor-gate")
++            return gated (true, true) ? 0 : 1;
++        require (burst (""), "burst exceeded item/wake bound");
++        require (independent (false, "node"), "same Node waited for A terminal");
++        require (independent (false, "channel:test"), "same Channel waited for A terminal");
++        shutdown (false);
++        shutdown (true);
++        last_take_publication_races ();
++        preparation_failure_is_reported_outside_scheduler ();
++        require (gated (false, false), "Spot gate allowed overlapping handlers");
++        require (gated (true, false), "Actor gate allowed overlapping handlers");
++    }
++    catch (const std::exception &error) {
++        std::fprintf (stderr, "scheduler drain failed: %s\n", error.what ());
++        return 2;
++    }
++}
+diff --git a/framework/languages/cpp/tests/support/expect_scheduler_rejection.cmake b/framework/languages/cpp/tests/support/expect_scheduler_rejection.cmake
+new file mode 100644
+index 0000000000..d71c6e150e
+--- /dev/null
++++ b/framework/languages/cpp/tests/support/expect_scheduler_rejection.cmake
+@@ -0,0 +1,12 @@
++# Only an oracle rejection (exit 1) validates the negative control. A timeout,
++# exception, crash or setup failure must fail this CTest entry.
++execute_process(
++  COMMAND "${PROGRAM}" "--negative-${MODE}"
++  RESULT_VARIABLE result
++  OUTPUT_VARIABLE output
++  ERROR_VARIABLE errors
++  TIMEOUT 25)
++message(STATUS "negative-${MODE}: exit=${result}\n${output}${errors}")
++if(NOT "${result}" STREQUAL "1")
++  message(FATAL_ERROR "negative-${MODE} did not reach the expected oracle rejection")
++endif()

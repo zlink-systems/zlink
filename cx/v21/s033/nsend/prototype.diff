@@ -1,0 +1,97 @@
+diff --git a/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts b/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts
+index 4e33d3fbe1..0e1cc3e04b 100644
+--- a/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts
++++ b/framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts
+@@ -528,9 +528,9 @@ type RawReceivedReply = (
+ const EMPTY_SOURCE_ROUTE = Buffer.alloc(0);
+ 
+ /**
+- * One received binding record. The payload Buffers are the binding's own
+- * `data()` storage, retained under the runtime payload policy. The socket owns
+- * the reusable binding envelope; snapshots survive its next receive or close.
++ * One received binding record. Each Buffer view retains binding-owned storage
++ * through a reference-counted Message copy. The socket owns the reusable
++ * binding envelope; snapshots survive its next receive or close.
+  */
+ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
+   readonly sourceRid: string;
+@@ -562,15 +562,20 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
+     }
+     const parts = received.parts;
+     const retained = new Array<Buffer>(parts.length);
+-    for (let index = 0; index < parts.length; index++)
+-      retained[index] = ZLinkBufferMessage.retainPayload(parts[index]!);
++    for (let index = 0; index < parts.length; index++) {
++      const part = parts[index]!.copy();
++      try {
++        retained[index] = ZLinkBufferMessage.retainPayload(part);
++      } finally {
++        part.close();
++      }
++    }
+     this.parts = retained;
+   }
+ 
+   close(): void {
+-    // Reading each binding payload above retained JS-owned storage and released
+-    // its native frame. The socket clears its reusable envelope; these record
+-    // snapshots need no native cleanup.
++    // Buffer views retain storage independently of the reusable envelope.
++    // The binding owns the native references and their Buffer lifetime.
+   }
+ }
+ 
+diff --git a/framework/languages/node/test/contract/node-raw-receive-storage-cost.test.js b/framework/languages/node/test/contract/node-raw-receive-storage-cost.test.js
+index eb385ea3ab..9fc9467c55 100644
+--- a/framework/languages/node/test/contract/node-raw-receive-storage-cost.test.js
++++ b/framework/languages/node/test/contract/node-raw-receive-storage-cost.test.js
+@@ -6,9 +6,14 @@ const {
+   ZLinkNodeRawBindingPort
+ } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+ 
+-// Spec 08 I3/I4 and binding Received: snapshots own their managed payload,
++// Spec 08 I3/I4 and binding Received: snapshots retain their payload storage,
+ // while the socket reuses its receive envelope. Delayed replies retain tokens.
+-test('raw router reuses receive storage while earlier requests keep payload and reply tokens', async (t) => {
++const storageContractName = 'raw router reuses receive storage while earlier requests keep payload and reply tokens';
++test(storageContractName, (t) => receiveStorageContract(t, 0));
++test(`${storageContractName} with 4KiB payloads`, (t) => receiveStorageContract(t, 4096));
++
++async function receiveStorageContract(t, payloadBytes) {
++  const requestBody = (index) => `request-${index}`.padEnd(payloadBytes, '.');
+   const context = zlink.createContext();
+   const source = zlink.createRouterSocket(context);
+   const create = zlink.createRouterSocket;
+@@ -43,7 +48,7 @@ test('raw router reuses receive storage while earlier requests keep payload and
+       requests.push(
+         source
+           .request(targetId)
+-          .message(Buffer.from(`request-${index}`))
++          .message(Buffer.from(requestBody(index)))
+           .submit()
+       );
+     }
+@@ -54,7 +59,7 @@ test('raw router reuses receive storage while earlier requests keep payload and
+     }
+     assert.equal(target.receive(true), undefined);
+     for (let index = count - 1; index >= 0; index--) {
+-      assert.equal(records[index].parts[0].toString(), `request-${index}`);
++      assert.equal(records[index].parts[0].toString(), requestBody(index));
+       records[index].reply([Buffer.from(`reply-${index}`)]);
+       records[index].close();
+     }
+@@ -72,7 +77,7 @@ test('raw router reuses receive storage while earlier requests keep payload and
+       for (const part of parts) part.close();
+     });
+     host.close();
+-    assert.equal(records[0].parts[0].toString(), 'request-0');
++    assert.equal(records[0].parts[0].toString(), requestBody(0));
+     t.diagnostic(`binding Received instances for ${count} requests: ${storage.size}`);
+     assert.equal(storage.size, 1);
+   } finally {
+@@ -83,4 +88,4 @@ test('raw router reuses receive storage while earlier requests keep payload and
+     source.close();
+     context.close();
+   }
+-});
++}

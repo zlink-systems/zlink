@@ -1,0 +1,201 @@
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+index 3c1bf53f19..917c69d17f 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+@@ -1023,7 +1023,7 @@ class route_client_t
+                                          std::string packet_name,
+                                          node_payload_encoder_t encode_payload,
+                                          std::chrono::milliseconds timeout,
+-                                         std::map<std::string, std::string> metadata,
++                                         const std::map<std::string, std::string> &metadata,
+                                          detail::request_receiver_t<encoded_payload_t> receiver);
+ 
+     static request_task_t<zlink::message_t> submit_channel_request_reply_message_erased (
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+index 06ab6fd5e3..f2faa5040e 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+@@ -1733,7 +1733,7 @@ void route_client_t::submit_request_reply_message_erased (
+   std::string packet_name,
+   node_payload_encoder_t encode_payload,
+   std::chrono::milliseconds timeout,
+-  std::map<std::string, std::string> metadata,
++  const std::map<std::string, std::string> &metadata,
+   detail::request_receiver_t<encoded_payload_t> receiver)
+ {
+     const auto request_started = std::chrono::steady_clock::now ();
+@@ -1858,7 +1858,7 @@ void route_client_t::submit_request_reply_message_erased (
+         auto header = codec.create_envelope (
+           runtime::messaging::message_kind_t::request, decode.router_channel_id, decode.packet_name,
+           runtime::messaging::remaining_request_timeout (deadline), std::nullopt, std::nullopt, {});
+-        header.metadata = std::move (metadata);
++        header.metadata = metadata;
+         if (detail::message_flow_tracer_t (state->runtime->dispatch)
+               .enabled_for (message_flow_outcome_t::sent)) {
+             detail::message_flow_tracer_t (state->runtime->dispatch)
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
+index 8ab4885d97..562538d722 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
+@@ -197,7 +197,7 @@ class channel_runtime_state_t
+         {
+             using request_encoder_t =
+               runtime::messaging::message_parts_t (runtime::messaging::client_call_codec_t::*) (
+-                runtime::messaging::envelope_header_t,
++                runtime::messaging::envelope_header_t &&,
+                 encoded_payload_t,
+                 std::shared_ptr<const request_type_plan_t>,
+                 std::shared_ptr<const prepared_header_fragment_t>) const;
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+index 826a50bec2..b58cc683bd 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+@@ -71,7 +71,7 @@ message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header
+ }
+ 
+ message_parts_t client_call_codec_t::encode_payload_parts (
+-  envelope_header_t header,
++  envelope_header_t &&header,
+   encoded_payload_t payload,
+   std::shared_ptr<const detail::request_type_plan_t> type,
+   std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+@@ -81,7 +81,7 @@ message_parts_t client_call_codec_t::encode_payload_parts (
+ }
+ 
+ message_parts_t client_call_codec_t::encode_service_payload_parts (
+-  envelope_header_t header,
++  envelope_header_t &&header,
+   encoded_payload_t payload,
+   std::shared_ptr<const detail::request_type_plan_t> type,
+   std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+index 558fa28295..5100708e60 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+@@ -41,12 +41,12 @@ class client_call_codec_t
+                                           std::string_view content_type) const;
+ 
+     message_parts_t
+-    encode_payload_parts (envelope_header_t header,
++    encode_payload_parts (envelope_header_t &&header,
+                           encoded_payload_t payload,
+                           std::shared_ptr<const detail::request_type_plan_t> type,
+                           std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+     message_parts_t encode_service_payload_parts (
+-      envelope_header_t header,
++      envelope_header_t &&header,
+       encoded_payload_t payload,
+       std::shared_ptr<const detail::request_type_plan_t> type,
+       std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+index ba73b13c14..7086107c6d 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+@@ -563,7 +563,7 @@ envelope_codec_t::encode_header (const envelope_header_t &header,
+ }
+ 
+ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_payload (
+-  envelope_header_t header,
++  envelope_header_t &&header,
+   zlink::message_t body,
+   std::shared_ptr<const detail::request_type_plan_t> type,
+   std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+@@ -576,16 +576,42 @@ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_paylo
+     header_writer_t measure;
+     write_header (measure, header, header.flow_id ? &*header.flow_id : nullptr, header.flow_origin,
+                   channel->bytes, type->middle, type->prefix);
+-    return [header = std::move (header), body = std::move (body), type = std::move (type),
+-            channel = std::move (channel), size = measure.size ()] (
+-             const std::optional<std::string> &flow_id, std::optional<flow_origin_t> flow_origin) {
++    struct state_t
++    {
++        state_t (envelope_header_t &&selected_header,
++                 zlink::message_t selected_body,
++                 std::shared_ptr<const detail::request_type_plan_t> selected_type,
++                 std::shared_ptr<const detail::prepared_header_fragment_t> selected_channel,
++                 std::size_t selected_size) :
++            header (std::move (selected_header)),
++            body (std::move (selected_body)),
++            type (std::move (selected_type)),
++            channel (std::move (selected_channel)),
++            size (selected_size)
++        {
++        }
++
++        envelope_header_t header;
++        zlink::message_t body;
++        std::shared_ptr<const detail::request_type_plan_t> type;
++        std::shared_ptr<const detail::prepared_header_fragment_t> channel;
++        std::size_t size;
++    };
++    auto state = std::make_shared<state_t> (std::move (header), std::move (body), std::move (type),
++                                            std::move (channel), measure.size ());
++    // The encoder captures only one shared_ptr (16 bytes on supported targets),
++    // keeping std::function's target within the common small capture range.
++    return [state] (const std::optional<std::string> &flow_id,
++                    std::optional<flow_origin_t> flow_origin) {
+         auto write = [&] (std::span<std::byte> destination) {
+             header_writer_t writer (reinterpret_cast<char *> (destination.data ()));
+-            write_header (writer, header, header.flow_id ? &*header.flow_id : nullptr,
+-                          header.flow_origin, channel->bytes, type->middle, type->prefix);
++            write_header (writer, state->header,
++                          state->header.flow_id ? &*state->header.flow_id : nullptr,
++                          state->header.flow_origin, state->channel->bytes, state->type->middle,
++                          state->type->prefix);
+         };
+-        return protocol::encode_application_envelope_message (size, std::ref (write), body.bytes (),
+-                                                              flow_id, flow_origin);
++        return protocol::encode_application_envelope_message (
++          state->size, std::ref (write), state->body.bytes (), flow_id, flow_origin);
+     };
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+index b451f97508..d09cbaf784 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+@@ -256,7 +256,7 @@ class envelope_codec_t
+                                     const detail::request_type_plan_t &type,
+                                     const detail::prepared_header_fragment_t &channel) const;
+     protocol::application_envelope_encoder_t prepare_service_payload (
+-      envelope_header_t header,
++      envelope_header_t &&header,
+       zlink::message_t body,
+       std::shared_ptr<const detail::request_type_plan_t> type,
+       std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+index 830aac2319..481babce7a 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+@@ -703,15 +703,21 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
+         fw::detail::observe_task_terminal (reply, std::move (receiver.complete));
+     });
+     auto client = builder.route_client (serializers);
++    fw::channel_request_call_t::metadata_map_t metadata{{"allocation-probe", "node-request"}};
++    const auto prepared_channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
++      fw::detail::prepare_request_channel ("m"));
+     const auto encode_node = [&] {
+         return sample_allocations ([&] {
+             fw::runtime::messaging::client_call_codec_t codec;
+             auto header = codec.create_envelope (
+               fw::runtime::messaging::message_kind_t::request, "m", payload_t::packet_name,
+               fw::runtime::configuration::default_request_timeout, std::nullopt, std::nullopt, {});
++            header.metadata = metadata;
+             const auto serializer = serializers.get<payload_t> ();
+-            (void) codec.encode_payload_parts (
+-              std::move (header), serializer.serialize (payload_t{}), serializer.content_type ());
++            (void) codec.encode_service_payload_parts (
++              std::move (header), serializer.serialize (payload_t{}),
++              fw::detail::serializer_registry_access_t::request_plan (serializer),
++              prepared_channel);
+         });
+     };
+     const auto first_encode = encode_node ().total;
+@@ -732,6 +738,7 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
+     SCOPED_TRACE ("node receiver reference\n" + receiver.diagnostics);
+ 
+     auto call = client.request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
++    call.metadata ("allocation-probe", "node-request");
+     std::optional<fw::request_task_t<payload_t>> pending;
+     const auto actual = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
+     print_allocation_sizes ("node request above transport", actual);

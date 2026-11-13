@@ -1,0 +1,43 @@
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java
+index 915cc2b80a..b335c6480f 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java
+@@ -177,6 +177,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
+         RouterSocket router = context.createRouterSocket();
+         boolean accepted = false;
+         try {
++            router.options().tcpNoDelay(false);
+             router.setRoutingId(Objects.requireNonNull(routingId, "routingId"));
+             receivePollers.put(router, receivePollerFactory.apply(router, observesRoutes));
+             accepted = true;
+@@ -528,21 +529,15 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
+             List<Message> replyMessages) {
+         List<Message> messages = claimMessages(replyMessages);
+         try {
+-            inStateLane(
+-                    () -> {
+-                        ensureOwnedOnLane(router);
+-                        if (requestSequence == null || messages.isEmpty()) {
+-                            throw new IllegalArgumentException(
+-                                    "service reply requires request sequence and frames");
+-                        }
+-                        var submit =
+-                                router.reply(target, requestSequence).message(messages.getFirst());
+-                        for (int index = 1; index < messages.size(); index++) {
+-                            submit.message(messages.get(index));
+-                        }
+-                        submit.submit();
+-                        return null;
+-                    });
++            if (requestSequence == null || messages.isEmpty()) {
++                throw new IllegalArgumentException(
++                        "service reply requires request sequence and frames");
++            }
++            var submit = router.reply(target, requestSequence).message(messages.getFirst());
++            for (int index = 1; index < messages.size(); index++) {
++                submit.message(messages.get(index));
++            }
++            submit.submit();
+         } finally {
+             Message.closeAll(messages);
+         }

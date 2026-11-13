@@ -1,0 +1,250 @@
+diff --git a/framework/bench/grpc/cpp/CMakeLists.txt b/framework/bench/grpc/cpp/CMakeLists.txt
+index eeceb8a42c..5680b355fe 100644
+--- a/framework/bench/grpc/cpp/CMakeLists.txt
++++ b/framework/bench/grpc/cpp/CMakeLists.txt
+@@ -173,3 +173,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   target_link_options(bench_cpp_framework_completion_test PRIVATE -Wl,--wrap=pthread_mutex_lock)
+ endif()
+ add_test(NAME bench_cpp_framework_completion COMMAND bench_cpp_framework_completion_test)
++
++# Measurement-only close race fixture.
++add_executable(creply_close_probe measurement/creply_close_probe.cpp)
++bench_target(creply_close_probe)
++target_include_directories(creply_close_probe PRIVATE "${BENCH_REPO_ROOT}/framework/languages/cpp/framework/src")
++target_link_libraries(creply_close_probe PRIVATE zlink::cpp Threads::Threads)
++target_link_options(creply_close_probe PRIVATE -Wl,--wrap=zlink_reply)
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..a09fc3cafb 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -21,6 +21,7 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cstdio>
++#include <cstdlib>
+ #include <deque>
+ #include <functional>
+ #include <limits>
+@@ -435,6 +436,12 @@ bool grpc_driver_t::validate<google::protobuf::Empty> (
+ // typed protobuf `BenchPayload`, serialized for every message (Issue #66).
+ // ---------------------------------------------------------------------------
+ 
++static uint64_t measurement_request_rate ()
++{
++    const char *value = std::getenv ("ZLINK_CPP_BENCH_REQUEST_RATE");
++    return value && *value ? std::stoull (value) : 0;
++}
++
+ class zlink_raw_driver_t : public driver_t
+ {
+   public:
+@@ -674,7 +681,17 @@ class zlink_raw_driver_t : public driver_t
+     {
+         co_await _ready.schedule ();
+         size_t submitted_since_progress = 0;
++        const auto rate = measurement_request_rate ();
++        const auto interval = rate ? std::chrono::nanoseconds (1000000000 / rate) : std::chrono::nanoseconds (0);
++        auto next_submission = clock_t_::now ();
+         while (clock_t_::now () < _deadline) {
++            if (rate) {
++                if (clock_t_::now () < next_submission) {
++                    co_await _ready.schedule ();
++                    continue;
++                }
++                next_submission += interval;
++            }
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -903,6 +920,9 @@ class framework_driver_t final : public driver_t
+             uint64_t sent_ns;
+             uint64_t seq;
+         };
++        const auto rate = measurement_request_rate ();
++        const auto interval = rate ? std::chrono::nanoseconds (1000000000 / rate) : std::chrono::nanoseconds (0);
++        auto next_submission = clock_t_::now ();
+         std::vector<std::optional<pending_t>> pending;
+         std::vector<size_t> free_slots;
+         std::vector<size_t> completed_slots;
+@@ -912,7 +932,7 @@ class framework_driver_t final : public driver_t
+         auto completion_signal = std::make_shared<completion_signal_t> ();
+         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
+         const auto can_submit = [&] (clock_t_::time_point now) {
+-            return can_submit_framework_task<T> (now, deadline, in_flight, _window, [&] {
++            return (!rate || now >= next_submission) && can_submit_framework_task<T> (now, deadline, in_flight, _window, [&] {
+                 return !preceding_admission || preceding_admission->await_ready ();
+             });
+         };
+@@ -923,6 +943,8 @@ class framework_driver_t final : public driver_t
+                 completion_signal->take_completed (completed_slots);
+             // Admission sequences submits; the pattern window bounds replies.
+             if (can_submit (clock_t_::now ())) {
++                if (rate)
++                    next_submission += interval;
+                 uint64_t sent = 0;
+                 if constexpr (!std::is_void_v<T>)
+                     sent = now_ns ();
+@@ -992,7 +1014,9 @@ class framework_driver_t final : public driver_t
+             const auto now = clock_t_::now ();
+             if (now >= hard_stop)
+                 break;
+-            if (in_flight != 0 && !can_submit (now))
++            if (rate && now < deadline && now < next_submission)
++                continue;
++            else if (in_flight != 0 && !can_submit (now))
+                 completion_signal->wait_until (now < deadline ? deadline : hard_stop);
+         } while (clock_t_::now () < deadline || in_flight != 0);
+         close_window (deadline);
+--- /dev/null
++++ b/framework/bench/grpc/cpp/measurement/creply_mutex.c
+@@ -0,0 +1,45 @@
++#define _GNU_SOURCE
++#include <dlfcn.h>
++#include <link.h>
++#include <pthread.h>
++#include <stdatomic.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <time.h>
++#include <errno.h>
++/* Measurement interposer. Only direct lock call sites within reply's symbol range count.
++   EBUSY from trylock distinguishes contention before paying for a timestamp. */
++static int (*real_lock)(pthread_mutex_t *);
++static int (*real_trylock)(pthread_mutex_t *);
++static uintptr_t low,high,base;
++static atomic_ullong calls,contended,wait_ns,errors;
++static int image_base(struct dl_phdr_info *info,size_t size,void *data) {
++ (void)size;(void)data;if (!info->dlpi_name || !*info->dlpi_name) {base=info->dlpi_addr;return 1;}return 0;
++}
++__attribute__((constructor)) static void init(void) {
++ real_lock=dlsym(RTLD_NEXT,"pthread_mutex_lock");real_trylock=dlsym(RTLD_NEXT,"pthread_mutex_trylock");
++ const char *range=getenv("CREPLY_LOCK_RANGE");if (!range)return;
++ unsigned long long a,b;if(sscanf(range,"%llx-%llx",&a,&b)!=2)abort();
++ dl_iterate_phdr(image_base,NULL);low=base+a;high=base+b;
++}
++static uint64_t ns(void) {struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (uint64_t)t.tv_sec*1000000000+t.tv_nsec;}
++int pthread_mutex_lock(pthread_mutex_t *mutex) {
++ uintptr_t caller=(uintptr_t)__builtin_return_address(0);
++ if (!low || caller<low || caller>=high)return real_lock(mutex);
++ atomic_fetch_add_explicit(&calls,1,memory_order_relaxed);
++ int rc=real_trylock(mutex);
++ if(!rc)return 0;
++ if(rc!=EBUSY){atomic_fetch_add_explicit(&errors,1,memory_order_relaxed);return rc;}
++ uint64_t begin=ns();rc=real_lock(mutex);uint64_t end=ns();
++ atomic_fetch_add_explicit(&contended,1,memory_order_relaxed);
++ atomic_fetch_add_explicit(&wait_ns,end-begin,memory_order_relaxed);
++ if(rc)atomic_fetch_add_explicit(&errors,1,memory_order_relaxed);return rc;
++}
++__attribute__((destructor)) static void done(void) {
++ if(!low)return;
++ const char *path=getenv("CREPLY_LOCK_OUTPUT");FILE *f=path?fopen(path,"w"):stderr;if(!f)return;
++ fprintf(f,"{\"calls\":%llu,\"contended\":%llu,\"wait_ns\":%llu,\"errors\":%llu,\"low\":%llu,\"high\":%llu}\n",
++ atomic_load(&calls),atomic_load(&contended),atomic_load(&wait_ns),atomic_load(&errors),(unsigned long long)low,(unsigned long long)high);
++ if(path)fclose(f);
++}
+--- /dev/null
++++ b/framework/bench/grpc/cpp/measurement/creply_mutex_test.c
+@@ -0,0 +1,12 @@
++#define _GNU_SOURCE
++#include <pthread.h>
++#include <stdatomic.h>
++#include <unistd.h>
++static pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER;
++static atomic_int ready;
++__attribute__((noinline)) void marked(void) {pthread_mutex_lock(&mutex);pthread_mutex_unlock(&mutex);}
++static void *holder(void *unused) {(void)unused;pthread_mutex_lock(&mutex);atomic_store(&ready,1);usleep(50000);pthread_mutex_unlock(&mutex);return 0;}
++int main(int argc,char **argv) {
++ (void)argv;for(int i=0;i<100;i++)marked();
++ if(argc>1){pthread_t t;pthread_create(&t,0,holder,0);while(!atomic_load(&ready)){}marked();pthread_join(t,0);}return 0;
++}
+--- /dev/null
++++ b/framework/bench/grpc/cpp/measurement/creply_close_probe.cpp
+@@ -0,0 +1,87 @@
++#include "runtime/backend/raw_route_port.hpp"
++#include <zlink.hpp>
++#include <atomic>
++#include <cerrno>
++#include <chrono>
++#include <cstdio>
++#include <memory>
++#include <stdexcept>
++#include <string_view>
++#include <thread>
++#include <vector>
++using namespace std::chrono_literals;
++namespace backend = zlink::framework::detail::backend;
++static std::atomic<bool> entered{false}, released{false};
++static std::atomic<int> native_result{-999}, native_errno{0};
++extern "C" zlink_submit_result_t __real_zlink_reply(void *, const zlink_routing_id_t *, zlink_reply_token_t, zlink_msg_t *, size_t);
++extern "C" zlink_submit_result_t __wrap_zlink_reply(void *s, const zlink_routing_id_t *rid, zlink_reply_token_t token, zlink_msg_t *parts, size_t n)
++{
++    entered.store(true, std::memory_order_release);
++    while (!released.load(std::memory_order_acquire)) std::this_thread::yield();
++    const auto rc = __real_zlink_reply(s, rid, token, parts, n);
++    native_result.store(static_cast<int>(rc)); native_errno.store(errno);
++    return rc;
++}
++static bool ready(zlink::socket_monitor_t &monitor)
++{
++    zlink::poller_t p; p.add(monitor,zlink::poll_event_flag_t::pollin,1);
++    const auto end=std::chrono::steady_clock::now()+2s;
++    while(std::chrono::steady_clock::now()<end) {
++        zlink::poll_event_t e; p.wait(&e,1,10ms);
++        const auto event=monitor.recv(zlink::recv_flags_t::dontwait);
++        if(event && event->event==zlink::monitor_event::connection_ready)return true;
++    }
++    return false;
++}
++static std::vector<zlink::message_t> body()
++{
++    std::vector<zlink::message_t> p; p.push_back(zlink::message_t::from("reply"));return p;
++}
++int main(int argc,char **argv)
++{
++    const bool direct=argc>1 && std::string_view(argv[1])=="direct";
++    try {
++        zlink::context_t context;
++        zlink::router_socket_t source(context);
++        auto target=std::make_unique<zlink::router_socket_t>(context);
++        const auto sr=zlink::routing_id_t::from("creply-source"),tr=zlink::routing_id_t::from("creply-target");
++        source.set_routing_id(sr); target->set_routing_id(tr);
++        source.options().linger(0ms);target->options().linger(0ms);
++        target->bind("inproc://creply-close-probe");
++        auto monitor=source.monitor_open(zlink::monitor_event::connection_ready);
++        source.options().connect_routing_id(tr);source.connect("inproc://creply-close-probe");
++        if(!ready(monitor))throw std::runtime_error("route readiness failed");
++        monitor.close();
++        zlink::poller_t source_poller;source_poller.add(source,zlink::poll_event_flag_t::pollcompletion,1);
++        backend::raw_route_port_t port(*target);
++        auto request_part=zlink::message_t::from("request");
++        auto submission=source.request(tr).message(request_part).timeout(2s).async();
++        if(submission.result!=ZLINK_SUBMIT_OK)throw std::runtime_error("initial request not admitted");
++        std::optional<backend::raw_received_t> received;
++        const auto deadline=std::chrono::steady_clock::now()+2s;
++        while(!received && std::chrono::steady_clock::now()<deadline)
++            received=port.receive_if_ready(port.poll(10ms).value_or(zlink::poll_event_flag_t::none));
++        if(!received || !received->reply_token)throw std::runtime_error("request context missing");
++        std::atomic<bool> reply_ok{false},closed{false},reply_error{false},close_error{false};
++        std::thread sender([&] {
++            try { reply_ok.store(port.reply(*received,body())); }
++            catch(const std::exception &e) { std::fprintf(stderr,"reply: %s\n",e.what());reply_error=true; }
++        });
++        while(!entered.load(std::memory_order_acquire) && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
++        if(!entered) { released=true;sender.join();throw std::runtime_error("native reply not reached"); }
++        std::thread closer([&] {
++            try { port.close();target->close();target.reset();closed=true; }
++            catch(const std::exception &e) { std::fprintf(stderr,"close: %s\n",e.what());close_error=true; }
++        });
++        const auto observation=std::chrono::steady_clock::now()+200ms;
++        while(!closed && !close_error && std::chrono::steady_clock::now()<observation)std::this_thread::yield();
++        const bool close_during_submit=closed.load();
++        released=true;sender.join();closer.join();
++        const bool closed_reply=port.reply(*received,body());
++        context.shutdown();source_poller.close();source.close();
++        std::printf("{\"mode\":\"%s\",\"close_during_submit\":%s,\"reply_ok\":%s,\"native_result\":%d,\"native_errno\":%d,\"reply_error\":%s,\"close_error\":%s,\"reply_after_close\":%s}\n",direct?"direct":"main",close_during_submit?"true":"false",reply_ok?"true":"false",native_result.load(),native_errno.load(),reply_error?"true":"false",close_error?"true":"false",closed_reply?"true":"false");
++        if(reply_error || close_error || closed_reply)return 2;
++        if(direct)return close_during_submit && !reply_ok && native_result==static_cast<int>(zlink::submit_result_t::terminated)?0:3;
++        return !close_during_submit && reply_ok && native_result==static_cast<int>(zlink::submit_result_t::ok)?0:4;
++    } catch(const std::exception &e) {std::fprintf(stderr,"fixture: %s\n",e.what());return 5;}
++}

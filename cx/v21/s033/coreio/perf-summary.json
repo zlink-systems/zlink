@@ -1,0 +1,6147 @@
+[
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-framework-cpp-request-backpressure/run1/zlink-framework-cpp-request-backpressure-1024/capture",
+    "messages": 368256,
+    "seconds": 10.061236737063155,
+    "rate": 36601.464573776924,
+    "roles": {
+      "source": {
+        "threads": {
+          "2645601": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 0.004475503454118874,
+            "cores": 0.00016380998112574825,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.004475503454118874
+            },
+            "bucket_counts": {}
+          },
+          "2645602": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.004358305092109837,
+            "cores": 0.00015952034943056978,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.004358305092109837
+            },
+            "bucket_counts": {}
+          },
+          "2645603": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.00446685457942301,
+            "cores": 0.00016349341964496452,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00446685457942301
+            },
+            "bucket_counts": {}
+          },
+          "2645605": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0045275895029544665,
+            "cores": 0.0001657164067969922,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0045275895029544665
+            },
+            "bucket_counts": {}
+          },
+          "2645622": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 21.826277809458638,
+            "cores": 0.7988737340203138,
+            "samples": 1061,
+            "stages": {
+              "send": 15.819422842105272,
+              "userspace_other": 4.895998226815416,
+              "epoll_wait": 0.9051425293272196,
+              "other_syscall": 0.20571421121073175
+            },
+            "bucket_counts": {
+              "send": 769,
+              "userspace_other": 238,
+              "epoll_wait": 44,
+              "other_syscall": 10
+            }
+          },
+          "2645623": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0043847595151199166,
+            "cores": 0.0001604886200571929,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0043847595151199166
+            },
+            "bucket_counts": {}
+          },
+          "2645624": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 16.74045694842718,
+            "cores": 0.6127252419466952,
+            "samples": 788,
+            "stages": {
+              "epoll_wait": 1.6995387764900691,
+              "userspace_other": 3.4203217876862637,
+              "write": 0.6585712758899017,
+              "recv": 10.770826996005813,
+              "other_syscall": 0.19119811235513276
+            },
+            "bucket_counts": {
+              "epoll_wait": 80,
+              "userspace_other": 161,
+              "write": 31,
+              "recv": 507,
+              "other_syscall": 9
+            }
+          },
+          "2645625": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.004522541384254432,
+            "cores": 0.00016553163825922863,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.004522541384254432
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 38.593470311413796,
+        "io_stage_us_per_message": {
+          "not_sampled": 0.026735553527980533,
+          "send": 15.819422842105272,
+          "userspace_other": 8.31632001450168,
+          "epoll_wait": 2.6046813058172886,
+          "other_syscall": 0.3969123235658645,
+          "write": 0.6585712758899017,
+          "recv": 10.770826996005813
+        },
+        "self_us_per_message": [
+          [
+            "_raw_spin_unlock_irqrestore",
+            1.8881468480589247
+          ],
+          [
+            "nft_do_chain",
+            1.6406169810209932
+          ],
+          [
+            "do_syscall_64",
+            0.7951702743018351
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.7287463158432467
+          ],
+          [
+            "epoll_wait",
+            0.6093546706271233
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.49573254766091435
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.46064502768424204
+          ],
+          [
+            "__fdget",
+            0.4394007929781162
+          ],
+          [
+            "mod_memcg_state",
+            0.4161381175168323
+          ],
+          [
+            "nf_hook_slow",
+            0.39556669639575914
+          ],
+          [
+            "ip_finish_output2",
+            0.39422106922565375
+          ],
+          [
+            "tcp_v4_rcv",
+            0.3763409024447913
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.3524054133984547
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::run(long, boost::asio::detail::op_queue<boost::asio::detail::scheduler_operation>&) [clone .lto_priv.0]",
+            0.3351980602026449
+          ],
+          [
+            "net_rx_action",
+            0.3318339922773816
+          ],
+          [
+            "_int_free",
+            0.3304883651072762
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.31462663908157174
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            0.31462663908157174
+          ],
+          [
+            "expr_call_ops_eval",
+            0.31260819832641373
+          ],
+          [
+            "tcp_sendmsg_locked",
+            0.3085713168160977
+          ],
+          [
+            "read_tsc",
+            0.29540084513060394
+          ],
+          [
+            "kmem_cache_free",
+            0.2927095907903932
+          ],
+          [
+            "nft_match_eval",
+            0.2927095907903932
+          ],
+          [
+            "kmem_cache_alloc_node",
+            0.29001833645018255
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            0.2879998956950245
+          ],
+          [
+            "__netif_receive_skb_core.constprop.0",
+            0.27213816966932003
+          ],
+          [
+            "__libc_recv",
+            0.2549308164735103
+          ],
+          [
+            "_raw_spin_unlock_irq",
+            0.25358518930340496
+          ],
+          [
+            "__dev_queue_xmit",
+            0.25223956213329957
+          ],
+          [
+            "__virt_addr_valid",
+            0.25223956213329957
+          ],
+          [
+            "release_sock",
+            0.2515667485482469
+          ],
+          [
+            "__memset",
+            0.24887549420803615
+          ],
+          [
+            "__GI___libc_free",
+            0.24685705345287814
+          ],
+          [
+            "__local_bh_enable_ip",
+            0.23032251384212102
+          ],
+          [
+            "tcp_rcv_established",
+            0.22830407308696296
+          ],
+          [
+            "_copy_to_iter",
+            0.21244234706125859
+          ],
+          [
+            "aa_inet_msg_perm",
+            0.21042390630610053
+          ],
+          [
+            "__nf_conntrack_find_get",
+            0.20773265196588978
+          ],
+          [
+            "validate_xmit_skb",
+            0.20773265196588978
+          ],
+          [
+            "ip_protocol_deliver_rcu",
+            0.2070598383808371
+          ],
+          [
+            "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*)",
+            0.20638702479578444
+          ],
+          [
+            "_copy_from_iter",
+            0.20571421121073177
+          ],
+          [
+            "zlink::encoder_base_t<zlink::zmp_encoder_t>::encode(unsigned char**, unsigned long)",
+            0.20571421121073177
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.19119811235513273
+          ],
+          [
+            "tcp_clean_rtx_queue.constprop.0",
+            0.18917967159997467
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            38.5667347578841
+          ],
+          [
+            "start_thread",
+            38.5667347578841
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            38.5667347578841
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            38.5667347578841
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            38.54616333676302
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            29.178396604316383
+          ],
+          [
+            "do_syscall_64",
+            29.116682340953165
+          ],
+          [
+            "x64_sys_call",
+            28.109742533175186
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            18.185136271028433
+          ],
+          [
+            "zlink::asio_engine_t::start_async_write()",
+            17.897136375333417
+          ],
+          [
+            "zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            16.374851212374047
+          ],
+          [
+            "__tcp_transmit_skb",
+            16.29715616878512
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*) [clone .constprop.0]",
+            16.127994158921176
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op_base<boost::asio::const_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            15.881137105468303
+          ],
+          [
+            "__libc_send",
+            15.819422842105086
+          ],
+          [
+            "__x64_sys_sendto",
+            15.53142294641007
+          ],
+          [
+            "ip_queue_xmit",
+            15.44430851263042
+          ],
+          [
+            "__sys_sendto",
+            15.407994419683634
+          ],
+          [
+            "__ip_queue_xmit",
+            15.339432966269896
+          ],
+          [
+            "ip_local_out",
+            15.090557472061866
+          ],
+          [
+            "inet_sendmsg",
+            14.955423155020037
+          ],
+          [
+            "tcp_sendmsg",
+            14.873137470535747
+          ],
+          [
+            "tcp_sendmsg_locked",
+            13.803423572239973
+          ],
+          [
+            "ip_output",
+            12.112512318155595
+          ],
+          [
+            "__tcp_push_pending_frames",
+            11.78742430237486
+          ],
+          [
+            "tcp_push",
+            11.78742430237486
+          ],
+          [
+            "tcp_write_xmit",
+            11.746281460132716
+          ],
+          [
+            "ip_finish_output",
+            11.714927181004674
+          ],
+          [
+            "__ip_finish_output",
+            11.672438711592422
+          ],
+          [
+            "ip_finish_output2",
+            11.360503326851058
+          ],
+          [
+            "neigh_hh_output",
+            10.945710836504327
+          ],
+          [
+            "__dev_queue_xmit",
+            10.903895180677127
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op_base<boost::asio::mutable_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            10.89829240424259
+          ],
+          [
+            "__libc_recv",
+            10.770826996005834
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            10.553139035110506
+          ],
+          [
+            "__x64_sys_recvfrom",
+            10.175988424234308
+          ],
+          [
+            "__sys_recvfrom",
+            10.11225572011593
+          ],
+          [
+            "sock_recvmsg",
+            9.772347964817916
+          ],
+          [
+            "boost::asio::detail::executor_op<boost::asio::detail::binder0<zlink::mailbox_t::schedule_if_needed_unlocked()::{lambda()#1}>, std::allocator<void>, boost::asio::detail::scheduler_operation>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            9.70971076914653
+          ],
+          [
+            "zlink::io_thread_t::process_mailbox()",
+            9.668567926904386
+          ],
+          [
+            "__local_bh_enable_ip",
+            9.652116760201356
+          ],
+          [
+            "zlink::object_t::process_command(zlink::command_t const&)",
+            9.483425136814732
+          ],
+          [
+            "do_softirq.part.0",
+            9.464282715771485
+          ],
+          [
+            "__do_softirq",
+            9.381324217702138
+          ],
+          [
+            "handle_softirqs",
+            9.360079982996012
+          ],
+          [
+            "net_rx_action",
+            9.214734407978394
+          ],
+          [
+            "inet_recvmsg",
+            9.156265158340265
+          ],
+          [
+            "tcp_recvmsg",
+            9.02879975010351
+          ],
+          [
+            "__napi_poll",
+            8.572983471714801
+          ],
+          [
+            "process_backlog",
+            8.531167815887603
+          ],
+          [
+            "__netif_receive_skb",
+            8.364578006163857
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            8.302190929215584
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::descriptor_state::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            7.966588014797214
+          ],
+          [
+            "tcp_recvmsg_locked",
+            7.88161107597271
+          ],
+          [
+            "ip_rcv",
+            7.862117322652413
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            6.521980054780652
+          ],
+          [
+            "tcp_cleanup_rbuf",
+            6.415758881250023
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            6.373270411837771
+          ],
+          [
+            "ip_local_deliver",
+            6.36348184872376
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            6.308192080549288
+          ]
+        ]
+      },
+      "target": {
+        "threads": {
+          "2645557": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 17.08939042405283,
+            "cores": 0.6254967181934122,
+            "samples": 819,
+            "stages": {
+              "recv": 10.537414119837214,
+              "epoll_wait": 1.7110256590626767,
+              "write": 0.7511819966616629,
+              "userspace_other": 3.714177650160444,
+              "other_syscall": 0.3755909983308314
+            },
+            "bucket_counts": {
+              "recv": 505,
+              "epoll_wait": 82,
+              "write": 36,
+              "userspace_other": 178,
+              "other_syscall": 18
+            }
+          },
+          "2645558": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 21.667768804853146,
+            "cores": 0.7930720723036212,
+            "samples": 1059,
+            "stages": {
+              "send": 15.938802548612465,
+              "userspace_other": 4.665015380081697,
+              "epoll_wait": 0.9002661259806783,
+              "other_syscall": 0.16368475017830517
+            },
+            "bucket_counts": {
+              "send": 779,
+              "userspace_other": 228,
+              "epoll_wait": 44,
+              "other_syscall": 8
+            }
+          },
+          "2645559": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.005491218065693431,
+            "cores": 0.00020098662349836194,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.005491218065693431
+            },
+            "bucket_counts": {}
+          },
+          "2645560": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.005352382581682308,
+            "cores": 0.00019590504144874568,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.005352382581682308
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 38.76800282955335,
+        "io_stage_us_per_message": {
+          "recv": 10.537414119837214,
+          "epoll_wait": 2.6112917850433552,
+          "write": 0.7511819966616629,
+          "userspace_other": 8.379193030242142,
+          "other_syscall": 0.5392757485091366,
+          "send": 15.938802548612465,
+          "not_sampled": 0.010843600647375738
+        },
+        "self_us_per_message": [
+          [
+            "_raw_spin_unlock_irqrestore",
+            2.2841042383766856
+          ],
+          [
+            "nft_do_chain",
+            1.8131050088124117
+          ],
+          [
+            "do_syscall_64",
+            0.7463151230418997
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.7217988012531422
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.6399564261639896
+          ],
+          [
+            "nf_hook_slow",
+            0.5781690720454783
+          ],
+          [
+            "mod_memcg_state",
+            0.47464938477909674
+          ],
+          [
+            "_raw_spin_unlock_irq",
+            0.45702780061833714
+          ],
+          [
+            "_copy_to_iter",
+            0.43818949805263674
+          ],
+          [
+            "expr_call_ops_eval",
+            0.43251147882957963
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            0.4132676034622323
+          ],
+          [
+            "read_tsc",
+            0.39280700968994414
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.3891568544751217
+          ],
+          [
+            "epoll_wait",
+            0.3735631343225968
+          ],
+          [
+            "tcp_rcv_established",
+            0.35066910374042704
+          ],
+          [
+            "__GI___libc_free",
+            0.34864123973219235
+          ],
+          [
+            "_int_free",
+            0.3478300941288985
+          ],
+          [
+            "__rcu_read_unlock",
+            0.3306140827697858
+          ],
+          [
+            "tcp_v4_rcv",
+            0.32980293716649195
+          ],
+          [
+            "__dev_queue_xmit",
+            0.30893677059255686
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::run(long, boost::asio::detail::op_queue<boost::asio::detail::scheduler_operation>&) [clone .lto_priv.0]",
+            0.29131518643179727
+          ],
+          [
+            "tcp_in_window",
+            0.2880706040186218
+          ],
+          [
+            "net_rx_action",
+            0.2872594584153279
+          ],
+          [
+            "__memset",
+            0.26801558304798057
+          ],
+          [
+            "aa_inet_msg_perm",
+            0.24958285328392713
+          ],
+          [
+            "__fdget",
+            0.24836613487898632
+          ],
+          [
+            "kmem_cache_free",
+            0.24836613487898632
+          ],
+          [
+            "__virt_addr_valid",
+            0.24796056207733938
+          ],
+          [
+            "tcp_sendmsg_locked",
+            0.24552712526745776
+          ],
+          [
+            "ip_finish_output2",
+            0.22749996830505123
+          ],
+          [
+            "boost::asio::detail::scheduler::task_cleanup::~task_cleanup() [clone .lto_priv.0]",
+            0.22749996830505123
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.2270943955034043
+          ],
+          [
+            "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*)",
+            0.2250665314951696
+          ],
+          [
+            "zlink::encoder_base_t<zlink::zmp_encoder_t>::encode(unsigned char**, unsigned long)",
+            0.2250665314951696
+          ],
+          [
+            "__libc_recv",
+            0.20866166573935083
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            0.20866166573935083
+          ],
+          [
+            "__nf_conntrack_find_get",
+            0.20541708332617534
+          ],
+          [
+            "_copy_from_iter",
+            0.20460593772288146
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            0.20460593772288146
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.18779549916541574
+          ],
+          [
+            "tcp_clean_rtx_queue.constprop.0",
+            0.1873899263637688
+          ],
+          [
+            "nf_nat_inet_fn",
+            0.18576763515718106
+          ],
+          [
+            "nft_match_eval",
+            0.18576763515718106
+          ],
+          [
+            "nf_conntrack_in",
+            0.18536206235553412
+          ],
+          [
+            "kmem_cache_alloc_node",
+            0.18536206235553412
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            38.69577744758784
+          ],
+          [
+            "start_thread",
+            38.69577744758784
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            38.69577744758784
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            38.69577744758784
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            38.65445068724162
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            29.506454076178247
+          ],
+          [
+            "do_syscall_64",
+            29.422989409882508
+          ],
+          [
+            "x64_sys_call",
+            28.36611522504147
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            17.780255988118398
+          ],
+          [
+            "zlink::asio_engine_t::start_async_write()",
+            17.65749242548467
+          ],
+          [
+            "__tcp_transmit_skb",
+            17.49474381717492
+          ],
+          [
+            "ip_queue_xmit",
+            16.546256193220024
+          ],
+          [
+            "__ip_queue_xmit",
+            16.484063266299867
+          ],
+          [
+            "zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            16.45031739291967
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*) [clone .constprop.0]",
+            16.163869080107634
+          ],
+          [
+            "ip_local_out",
+            16.09409526622145
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op_base<boost::asio::const_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            15.959263142384755
+          ],
+          [
+            "__libc_send",
+            15.938802548612466
+          ],
+          [
+            "__x64_sys_sendto",
+            15.79557839220645
+          ],
+          [
+            "__sys_sendto",
+            15.754657204661873
+          ],
+          [
+            "inet_sendmsg",
+            15.386366516760686
+          ],
+          [
+            "tcp_sendmsg",
+            15.324984735443822
+          ],
+          [
+            "tcp_sendmsg_locked",
+            14.445179203235432
+          ],
+          [
+            "ip_output",
+            13.268281842525756
+          ],
+          [
+            "ip_finish_output",
+            12.834959218092884
+          ],
+          [
+            "__ip_finish_output",
+            12.711384509855861
+          ],
+          [
+            "tcp_push",
+            12.68556813881865
+          ],
+          [
+            "__tcp_push_pending_frames",
+            12.644646951274074
+          ],
+          [
+            "tcp_write_xmit",
+            12.542343982412634
+          ],
+          [
+            "ip_finish_output2",
+            12.442557781204588
+          ],
+          [
+            "neigh_hh_output",
+            12.215057812899538
+          ],
+          [
+            "__dev_queue_xmit",
+            12.111943698434803
+          ],
+          [
+            "__local_bh_enable_ip",
+            10.793948668173778
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            10.721351136678988
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op_base<boost::asio::mutable_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            10.704343452428631
+          ],
+          [
+            "do_softirq.part.0",
+            10.690428980907397
+          ],
+          [
+            "handle_softirqs",
+            10.608181033016598
+          ],
+          [
+            "__do_softirq",
+            10.58772043924431
+          ],
+          [
+            "__libc_recv",
+            10.537414119837152
+          ],
+          [
+            "net_rx_action",
+            10.484606324779575
+          ],
+          [
+            "__x64_sys_recvfrom",
+            10.015759955488779
+          ],
+          [
+            "__sys_recvfrom",
+            9.953161455766974
+          ],
+          [
+            "__napi_poll",
+            9.910492980750567
+          ],
+          [
+            "process_backlog",
+            9.828245032859767
+          ],
+          [
+            "sock_recvmsg",
+            9.577570457436146
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            9.519308262267211
+          ],
+          [
+            "__netif_receive_skb",
+            9.49803652289163
+          ],
+          [
+            "boost::asio::detail::executor_op<boost::asio::detail::binder0<zlink::mailbox_t::schedule_if_needed_unlocked()::{lambda()#1}>, std::allocator<void>, boost::asio::detail::scheduler_operation>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            9.26864897884653
+          ],
+          [
+            "zlink::io_thread_t::process_mailbox()",
+            9.207267197529665
+          ],
+          [
+            "inet_recvmsg",
+            9.160247125957447
+          ],
+          [
+            "zlink::object_t::process_command(zlink::command_t const&)",
+            9.145885416212801
+          ],
+          [
+            "ip_rcv",
+            9.126501252577269
+          ],
+          [
+            "tcp_recvmsg",
+            9.035050126513838
+          ],
+          [
+            "tcp_recvmsg_locked",
+            8.179537296982506
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::descriptor_state::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            7.908277131521352
+          ],
+          [
+            "ip_local_deliver",
+            7.328178818314096
+          ],
+          [
+            "tcp_send_ack",
+            6.693983742216659
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            6.673117575642724
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            6.635440970511322
+          ],
+          [
+            "tcp_cleanup_rbuf",
+            6.572842470789517
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-cpp-request-backpressure/run1/zlink-cpp-request-backpressure-1024/capture",
+    "messages": 2692387,
+    "seconds": 10.072327367030084,
+    "rate": 267305.3507785137,
+    "roles": {
+      "source": {
+        "threads": {
+          "2658070": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 0.0007111117383942204,
+            "cores": 0.00019008397267418579,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0007111117383942204
+            },
+            "bucket_counts": {}
+          },
+          "2658071": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0006856997155312368,
+            "cores": 0.00018329120298880432,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006856997155312368
+            },
+            "bucket_counts": {}
+          },
+          "2658072": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0006823859274316806,
+            "cores": 0.00018240540969844678,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006823859274316806
+            },
+            "bucket_counts": {}
+          },
+          "2658073": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0006196813459580662,
+            "cores": 0.00016564413955222237,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006196813459580662
+            },
+            "bucket_counts": {}
+          },
+          "2658089": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 2.538213341544139,
+            "cores": 0.6784780076121596,
+            "samples": 916,
+            "stages": {
+              "send": 1.540662246614128,
+              "userspace_other": 0.7453923459338136,
+              "other_syscall": 0.19951021898600219,
+              "epoll_wait": 0.052648530010195024
+            },
+            "bucket_counts": {
+              "send": 556,
+              "userspace_other": 269,
+              "other_syscall": 72,
+              "epoll_wait": 19
+            }
+          },
+          "2658090": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0005979671570246031,
+            "cores": 0.00015983982066249212,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0005979671570246031
+            },
+            "bucket_counts": {}
+          },
+          "2658091": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 2.884932546101285,
+            "cores": 0.7711579062079547,
+            "samples": 1029,
+            "stages": {
+              "recv": 2.015808066712171,
+              "userspace_other": 0.7233358570399724,
+              "epoll_wait": 0.14578862234914172
+            },
+            "bucket_counts": {
+              "recv": 719,
+              "userspace_other": 258,
+              "epoll_wait": 52
+            }
+          },
+          "2658092": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0006560825022554336,
+            "cores": 0.0001753743634050337,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006560825022554336
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 5.42709881603202,
+        "io_stage_us_per_message": {
+          "not_sampled": 0.003952928386595241,
+          "send": 1.540662246614128,
+          "userspace_other": 1.468728202973786,
+          "other_syscall": 0.19951021898600219,
+          "epoll_wait": 0.19843715235933673,
+          "recv": 2.015808066712171
+        },
+        "self_us_per_message": [
+          [
+            "_copy_to_iter",
+            0.1682176411720865
+          ],
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.15599091699623144
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.1468943410649808
+          ],
+          [
+            "nft_do_chain",
+            0.1450049722089745
+          ],
+          [
+            "do_syscall_64",
+            0.11693604659111982
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.08088071607391797
+          ],
+          [
+            "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*)",
+            0.08039093473631345
+          ],
+          [
+            "nf_hook_slow",
+            0.0783056533452653
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.07546937390322356
+          ],
+          [
+            "_int_free",
+            0.07481633211975086
+          ],
+          [
+            "_copy_from_iter",
+            0.07481633211975086
+          ],
+          [
+            "zlink::asio_engine_t::process_input()",
+            0.07289431117457089
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.06448342911596655
+          ],
+          [
+            "clear_page_erms",
+            0.058190480537584
+          ],
+          [
+            "expr_call_ops_eval",
+            0.05310565925862593
+          ],
+          [
+            "zlink::session_base_t::push_msg_internal(zlink::msg_t*, void**)",
+            0.050465292351625994
+          ],
+          [
+            "nft_match_eval",
+            0.04733514410702153
+          ],
+          [
+            "__GI___libc_free",
+            0.047204535750326994
+          ],
+          [
+            "tcp_rcv_established",
+            0.044564168843327055
+          ],
+          [
+            "zlink::decoder_base_t<zlink::zmp_decoder_t, zlink::shared_message_memory_allocator>::decode(unsigned char const*, unsigned long, unsigned long&)",
+            0.042054410293021656
+          ],
+          [
+            "read_tsc",
+            0.04189114984715348
+          ],
+          [
+            "zlink::(anonymous namespace)::saturating_add(std::atomic<unsigned long>*, unsigned long, std::atomic<bool>*) [clone .isra.0]",
+            0.03925078294015354
+          ],
+          [
+            "__libc_recv",
+            0.03925078294015354
+          ],
+          [
+            "nf_conntrack_in",
+            0.038924262048417195
+          ],
+          [
+            "zlink::msg_t::close()",
+            0.03889160995924356
+          ],
+          [
+            "futex_wait",
+            0.038793653691722656
+          ],
+          [
+            "zlink::zmp_decoder_t::size_ready(unsigned int, unsigned char const*)",
+            0.03644715558728543
+          ],
+          [
+            "mod_memcg_state",
+            0.03638185140893816
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.036283895141417256
+          ],
+          [
+            "__memset",
+            0.03625124305224362
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::read(zlink::msg_t*, bool*)",
+            0.03602267842802818
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.03351291987772278
+          ],
+          [
+            "check_heap_object",
+            0.03351291987772278
+          ],
+          [
+            "__rcu_read_unlock",
+            0.03351291987772278
+          ],
+          [
+            "kmem_cache_free",
+            0.03344761569937551
+          ],
+          [
+            "tcp_v4_rcv",
+            0.03344761569937551
+          ],
+          [
+            "kmem_cache_alloc_node",
+            0.033414963610201874
+          ],
+          [
+            "tcp_recvmsg",
+            0.030839900881549205
+          ],
+          [
+            "__fdget",
+            0.030643988346507396
+          ],
+          [
+            "__virt_addr_valid",
+            0.03061133625733376
+          ],
+          [
+            "_int_free_merge_chunk",
+            0.030513379989812857
+          ],
+          [
+            "__GI___libc_malloc",
+            0.028036273528681096
+          ],
+          [
+            "__skb_datagram_iter",
+            0.028036273528681096
+          ],
+          [
+            "_int_malloc",
+            0.028036273528681096
+          ],
+          [
+            "[unknown]",
+            0.027970969350333826
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            5.4231458876455365
+          ],
+          [
+            "start_thread",
+            5.4231458876455365
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            5.4231458876455365
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            5.4231458876455365
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            5.420342260292668
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            3.8678970618027257
+          ],
+          [
+            "do_syscall_64",
+            3.8595188318332956
+          ],
+          [
+            "x64_sys_call",
+            3.728793213102062
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            2.3303901967670546
+          ],
+          [
+            "zlink::asio_engine_t::start_async_write()",
+            2.313764345184887
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            2.0477507198702023
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op_base<boost::asio::mutable_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            2.0466479675937506
+          ],
+          [
+            "__tcp_transmit_skb",
+            2.0336242363295427
+          ],
+          [
+            "__libc_recv",
+            2.0158080667122027
+          ],
+          [
+            "ip_queue_xmit",
+            1.9498419366352346
+          ],
+          [
+            "__x64_sys_recvfrom",
+            1.9457173828904988
+          ],
+          [
+            "__ip_queue_xmit",
+            1.9442673340186718
+          ],
+          [
+            "__sys_recvfrom",
+            1.934502873479026
+          ],
+          [
+            "sock_recvmsg",
+            1.9120738546560803
+          ],
+          [
+            "ip_local_out",
+            1.9107870662301212
+          ],
+          [
+            "inet_recvmsg",
+            1.8756266990687935
+          ],
+          [
+            "tcp_recvmsg",
+            1.8700194443630571
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            1.8700194443630571
+          ],
+          [
+            "tcp_recvmsg_locked",
+            1.6653546476036778
+          ],
+          [
+            "zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            1.5849978508332323
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*) [clone .constprop.0]",
+            1.5517461476688994
+          ],
+          [
+            "__libc_send",
+            1.5406622466141218
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op_base<boost::asio::const_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            1.5406622466141218
+          ],
+          [
+            "ip_output",
+            1.5398637536490642
+          ],
+          [
+            "__x64_sys_sendto",
+            1.5074105434497889
+          ],
+          [
+            "__sys_sendto",
+            1.5074105434497889
+          ],
+          [
+            "inet_sendmsg",
+            1.4713878650217616
+          ],
+          [
+            "ip_finish_output",
+            1.4700995907190948
+          ],
+          [
+            "tcp_sendmsg",
+            1.4575329887032895
+          ],
+          [
+            "__ip_finish_output",
+            1.4477358760744963
+          ],
+          [
+            "ip_finish_output2",
+            1.4337830434885024
+          ],
+          [
+            "neigh_hh_output",
+            1.4142556082859457
+          ],
+          [
+            "__dev_queue_xmit",
+            1.4114519809330774
+          ],
+          [
+            "zlink::asio_engine_t::start_async_read()",
+            1.34854475672957
+          ],
+          [
+            "tcp_sendmsg_locked",
+            1.3217552007822635
+          ],
+          [
+            "zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            1.2868649549664695
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*)",
+            1.2616323087906556
+          ],
+          [
+            "__local_bh_enable_ip",
+            1.2552651514017972
+          ],
+          [
+            "tcp_cleanup_rbuf",
+            1.2476141720263145
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            1.242006917320578
+          ],
+          [
+            "do_softirq.part.0",
+            1.2356724120208933
+          ],
+          [
+            "tcp_send_ack",
+            1.2335960352619735
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            1.2251851532033688
+          ],
+          [
+            "handle_softirqs",
+            1.221752231524073
+          ],
+          [
+            "__do_softirq",
+            1.2189486041712048
+          ],
+          [
+            "net_rx_action",
+            1.199421168968648
+          ],
+          [
+            "__napi_poll",
+            1.1383291048106725
+          ],
+          [
+            "process_backlog",
+            1.118703713340595
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            1.0823871661100029
+          ],
+          [
+            "__netif_receive_skb",
+            1.079648842935482
+          ],
+          [
+            "ip_rcv",
+            1.0294447672972433
+          ],
+          [
+            "tcp_push",
+            0.983696218611545
+          ],
+          [
+            "__tcp_push_pending_frames",
+            0.9753832928204614
+          ],
+          [
+            "tcp_write_xmit",
+            0.9670703670293779
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::descriptor_state::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            0.8158555596846174
+          ]
+        ]
+      },
+      "target": {
+        "threads": {
+          "2658016": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 0.0007270674683840028,
+            "cores": 0.00019434902467603177,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0007270674683840028
+            },
+            "bucket_counts": {}
+          },
+          "2658017": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0006623171186014491,
+            "cores": 0.00017704090971437482,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006623171186014491
+            },
+            "bucket_counts": {}
+          },
+          "2658018": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0006700619190331851,
+            "cores": 0.0001791111363104896,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006700619190331851
+            },
+            "bucket_counts": {}
+          },
+          "2658019": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0007041361438753047,
+            "cores": 0.00018821935893441832,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0007041361438753047
+            },
+            "bucket_counts": {}
+          },
+          "2658032": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 2.256365969305304,
+            "cores": 0.6031386969098554,
+            "samples": 800,
+            "stages": {
+              "recv": 1.4045878158925518,
+              "userspace_other": 0.6317824714054852,
+              "epoll_wait": 0.1861501924676876,
+              "other_syscall": 0.03384548953957956
+            },
+            "bucket_counts": {
+              "recv": 498,
+              "userspace_other": 224,
+              "epoll_wait": 66,
+              "other_syscall": 12
+            }
+          },
+          "2658033": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 3.3909789324491615,
+            "cores": 0.906426813020873,
+            "samples": 1262,
+            "stages": {
+              "send": 2.4317241948228934,
+              "userspace_other": 0.7953484659310236,
+              "epoll_wait": 0.08060964181733347,
+              "other_syscall": 0.08329662987791125
+            },
+            "bucket_counts": {
+              "send": 905,
+              "userspace_other": 296,
+              "epoll_wait": 30,
+              "other_syscall": 31
+            }
+          },
+          "2658034": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0005183069892998295,
+            "cores": 0.0001385462315857463,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0005183069892998295
+            },
+            "bucket_counts": {}
+          },
+          "2658035": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0005575298053363056,
+            "cores": 0.00014903070018489764,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0005575298053363056
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 5.651184321198996,
+        "io_stage_us_per_message": {
+          "not_sampled": 0.003839419444530077,
+          "recv": 1.4045878158925518,
+          "userspace_other": 1.4271309373365089,
+          "epoll_wait": 0.2667598342850211,
+          "other_syscall": 0.11714211941749081,
+          "send": 2.4317241948228934
+        },
+        "self_us_per_message": [
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.26035330303443677
+          ],
+          [
+            "_copy_to_iter",
+            0.20025247977584554
+          ],
+          [
+            "nft_do_chain",
+            0.19049161345941423
+          ],
+          [
+            "do_syscall_64",
+            0.10974850224102664
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.10559335076885655
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.08947142240538987
+          ],
+          [
+            "clear_page_erms",
+            0.07523566569617789
+          ],
+          [
+            "zlink::session_base_t::push_msg_internal(zlink::msg_t*, void**)",
+            0.07333189400242236
+          ],
+          [
+            "nf_hook_slow",
+            0.06797551792076763
+          ],
+          [
+            "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*)",
+            0.05642674927213342
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.054807516419986414
+          ],
+          [
+            "tcp_v4_rcv",
+            0.05440710821682487
+          ],
+          [
+            "tcp_sendmsg_locked",
+            0.05373976121155564
+          ],
+          [
+            "mod_memcg_state",
+            0.05238746716151633
+          ],
+          [
+            "_copy_from_iter",
+            0.05105277315097786
+          ],
+          [
+            "epoll_wait",
+            0.049433540298830854
+          ],
+          [
+            "expr_call_ops_eval",
+            0.04903313209566931
+          ],
+          [
+            "_int_free",
+            0.04876619329356162
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.04876619329356162
+          ],
+          [
+            "nft_match_eval",
+            0.04688002163930692
+          ],
+          [
+            "__GI___libc_free",
+            0.046212674634037686
+          ],
+          [
+            "ip_rcv",
+            0.044059564177675294
+          ],
+          [
+            "skb_release_data",
+            0.043525686573459905
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::read(zlink::msg_t*, bool*)",
+            0.04299180896924452
+          ],
+          [
+            "__libc_recv",
+            0.039486404462842815
+          ],
+          [
+            "__fdget",
+            0.038552118655465886
+          ],
+          [
+            "__libc_send",
+            0.03761783284808896
+          ],
+          [
+            "zlink::decoder_base_t<zlink::zmp_decoder_t, zlink::shared_message_memory_allocator>::decode(unsigned char const*, unsigned long, unsigned long&)",
+            0.03666594700121119
+          ],
+          [
+            "check_heap_object",
+            0.036399008199103494
+          ],
+          [
+            "net_rx_action",
+            0.03533125299067272
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.03384548953957956
+          ],
+          [
+            "_int_malloc",
+            0.03384548953957956
+          ],
+          [
+            "nft_do_chain_ipv4",
+            0.032777734331148785
+          ],
+          [
+            "kmem_cache_free",
+            0.03264426493009494
+          ],
+          [
+            "zlink::msg_t::close()",
+            0.0322438567269334
+          ],
+          [
+            "boost::asio::detail::scheduler::task_cleanup::~task_cleanup() [clone .lto_priv.0]",
+            0.030491154473732546
+          ],
+          [
+            "nf_nat_inet_fn",
+            0.029957276869517154
+          ],
+          [
+            "tcp_clean_rtx_queue.constprop.0",
+            0.029957276869517154
+          ],
+          [
+            "__inet_lookup_established",
+            0.029823807468463307
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            0.029556868666355613
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            0.029556868666355613
+          ],
+          [
+            "__skb_datagram_iter",
+            0.028204574616316303
+          ],
+          [
+            "zlink::session_base_t::reserve_decoder_frame(void*, unsigned int, unsigned char, void**)",
+            0.028204574616316303
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            0.027670697012100915
+          ],
+          [
+            "__ip_queue_xmit",
+            0.027537227611047068
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            5.647344901754747
+          ],
+          [
+            "start_thread",
+            5.647344901754747
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            5.647344901754747
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            5.647344901754747
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            5.574662754718088
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            4.079840838302317
+          ],
+          [
+            "do_syscall_64",
+            4.071512935318475
+          ],
+          [
+            "x64_sys_call",
+            3.95048260323091
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            3.0658533771193213
+          ],
+          [
+            "zlink::asio_engine_t::start_async_write()",
+            3.0497314487558533
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            2.926129997969266
+          ],
+          [
+            "zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            2.5015858843979437
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*) [clone .constprop.0]",
+            2.46665503961043
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op_base<boost::asio::const_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            2.437098170944072
+          ],
+          [
+            "__libc_send",
+            2.431724194822916
+          ],
+          [
+            "__x64_sys_sendto",
+            2.3779844336113563
+          ],
+          [
+            "__sys_sendto",
+            2.3726104574902003
+          ],
+          [
+            "inet_sendmsg",
+            2.3000617798545946
+          ],
+          [
+            "tcp_sendmsg",
+            2.2973747917940166
+          ],
+          [
+            "__tcp_transmit_skb",
+            2.1400994591574984
+          ],
+          [
+            "ip_queue_xmit",
+            2.0018618434585362
+          ],
+          [
+            "__ip_queue_xmit",
+            1.9991748553979583
+          ],
+          [
+            "tcp_sendmsg_locked",
+            1.9829971887063935
+          ],
+          [
+            "ip_local_out",
+            1.9633097248030702
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            1.6161221255149432
+          ],
+          [
+            "ip_output",
+            1.6055751046220672
+          ],
+          [
+            "tcp_push",
+            1.553079099013951
+          ],
+          [
+            "ip_finish_output",
+            1.550767588202081
+          ],
+          [
+            "__tcp_push_pending_frames",
+            1.5503921109533731
+          ],
+          [
+            "tcp_write_xmit",
+            1.5450181348322176
+          ],
+          [
+            "__ip_finish_output",
+            1.5314247941738213
+          ],
+          [
+            "ip_finish_output2",
+            1.5013340479032504
+          ],
+          [
+            "neigh_hh_output",
+            1.4793042658144129
+          ],
+          [
+            "__dev_queue_xmit",
+            1.4766172777538351
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op_base<boost::asio::mutable_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            1.4243310181239854
+          ],
+          [
+            "__libc_recv",
+            1.4045878158925633
+          ],
+          [
+            "__x64_sys_recvfrom",
+            1.3312559218901383
+          ],
+          [
+            "__local_bh_enable_ip",
+            1.32025569267561
+          ],
+          [
+            "__sys_recvfrom",
+            1.3171536345819796
+          ],
+          [
+            "do_softirq.part.0",
+            1.3147482471534004
+          ],
+          [
+            "__do_softirq",
+            1.2956723919272484
+          ],
+          [
+            "handle_softirqs",
+            1.2872110195423536
+          ],
+          [
+            "net_rx_action",
+            1.2791500553606203
+          ],
+          [
+            "sock_recvmsg",
+            1.2692058577342402
+          ],
+          [
+            "inet_recvmsg",
+            1.2353603681946594
+          ],
+          [
+            "tcp_recvmsg",
+            1.2212580808865008
+          ],
+          [
+            "__napi_poll",
+            1.2035139814612812
+          ],
+          [
+            "process_backlog",
+            1.1953195478784941
+          ],
+          [
+            "zlink::asio_engine_t::start_async_read()",
+            1.1817716764236565
+          ],
+          [
+            "__netif_receive_skb",
+            1.165362271008977
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            1.1517938613050345
+          ],
+          [
+            "ip_rcv",
+            1.1352715247384062
+          ],
+          [
+            "tcp_recvmsg_locked",
+            1.1310034421142854
+          ],
+          [
+            "zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            1.1281829846526537
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*)",
+            1.0943374951130729
+          ],
+          [
+            "ip_local_deliver",
+            0.8692949068202087
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            0.743933422865479
+          ],
+          [
+            "tcp_cleanup_rbuf",
+            0.7417803124091167
+          ],
+          [
+            "tcp_send_ack",
+            0.7411129654038474
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            0.7333189400242218
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-framework-cpp-send-saturation/run1/zlink-framework-cpp-send-saturation-1024/capture",
+    "messages": 1842667,
+    "seconds": 10.051091357832775,
+    "rate": 183330.04192266316,
+    "roles": {
+      "source": {
+        "threads": {
+          "2671326": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 0.0009391458141921465,
+            "cores": 0.00017217364148733983,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0009391458141921465
+            },
+            "bucket_counts": {}
+          },
+          "2671327": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0009224634727815715,
+            "cores": 0.00016911526713717093,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0009224634727815715
+            },
+            "bucket_counts": {}
+          },
+          "2671328": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0009167890888587032,
+            "cores": 0.00016807498209470622,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0009167890888587032
+            },
+            "bucket_counts": {}
+          },
+          "2671329": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0008729075844957336,
+            "cores": 0.0001600301840602135,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0008729075844957336
+            },
+            "bucket_counts": {}
+          },
+          "2671346": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 4.9512573682602445,
+            "cores": 0.9077142208930457,
+            "samples": 1242,
+            "stages": {
+              "send": 3.4642855499341003,
+              "other_syscall": 0.17939338290797988,
+              "userspace_other": 1.2119019645339084,
+              "epoll_wait": 0.09567647088425593
+            },
+            "bucket_counts": {
+              "send": 869,
+              "other_syscall": 45,
+              "userspace_other": 304,
+              "epoll_wait": 24
+            }
+          },
+          "2671347": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0007731315533408913,
+            "cores": 0.00014173824008571927,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0007731315533408913
+            },
+            "bucket_counts": {}
+          },
+          "2671348": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.008565090165504673,
+            "cores": 0.0015702383391133618,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.008565090165504673
+            },
+            "bucket_counts": {}
+          },
+          "2671349": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0008131773131010649,
+            "cores": 0.00014907983090137682,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0008131773131010649
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 4.965060073252519,
+        "io_stage_us_per_message": {
+          "not_sampled": 0.013802704992274784,
+          "send": 3.4642855499341003,
+          "other_syscall": 0.17939338290797988,
+          "userspace_other": 1.2119019645339084,
+          "epoll_wait": 0.09567647088425593
+        },
+        "self_us_per_message": [
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.32290808923436337
+          ],
+          [
+            "_int_free",
+            0.21925857910975302
+          ],
+          [
+            "nft_do_chain",
+            0.1754068632878025
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.13952818670620662
+          ],
+          [
+            "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*)",
+            0.09567647088425599
+          ],
+          [
+            "do_syscall_64",
+            0.09168995126407865
+          ],
+          [
+            "tcp_rcv_established",
+            0.07574387278336932
+          ],
+          [
+            "__GI___libc_free",
+            0.07574387278336932
+          ],
+          [
+            "_copy_from_iter",
+            0.07175735316319198
+          ],
+          [
+            "clear_page_erms",
+            0.06378431392283732
+          ],
+          [
+            "tcp_sendmsg_locked",
+            0.05979779430265998
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::read(zlink::msg_t*, bool*)",
+            0.05979779430265998
+          ],
+          [
+            "tcp_v4_rcv",
+            0.05979779430265998
+          ],
+          [
+            "expr_call_ops_eval",
+            0.05581127468248265
+          ],
+          [
+            "__fdget",
+            0.051824755062305314
+          ],
+          [
+            "__sys_sendto",
+            0.051824755062305314
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.051824755062305314
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.051824755062305314
+          ],
+          [
+            "nf_hook_slow",
+            0.04783823544212798
+          ],
+          [
+            "tcp_write_xmit",
+            0.04783823544212798
+          ],
+          [
+            "tcp_event_new_data_sent",
+            0.043851715821950646
+          ],
+          [
+            "net_rx_action",
+            0.03986519620177331
+          ],
+          [
+            "_raw_spin_lock_bh",
+            0.03587867658159598
+          ],
+          [
+            "zlink::msg_t::close()",
+            0.03587867658159598
+          ],
+          [
+            "mod_memcg_state",
+            0.03587867658159598
+          ],
+          [
+            "nf_confirm",
+            0.031892156961418644
+          ],
+          [
+            "__dev_queue_xmit",
+            0.031892156961418644
+          ],
+          [
+            "handle_softirqs",
+            0.031892156961418644
+          ],
+          [
+            "tcp_rearm_rto.part.0",
+            0.031892156961418644
+          ],
+          [
+            "kmem_cache_free",
+            0.031892156961418644
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.031892156961418644
+          ],
+          [
+            "__libc_send",
+            0.031892156961418644
+          ],
+          [
+            "read_tsc",
+            0.031892156961418644
+          ],
+          [
+            "__memset",
+            0.031892156961418644
+          ],
+          [
+            "ip_finish_output",
+            0.027905637341241313
+          ],
+          [
+            "__ip_queue_xmit",
+            0.027905637341241313
+          ],
+          [
+            "zlink::pipe_t::account_inbound_frame(zlink::msg_t const*, bool)",
+            0.027905637341241313
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.027905637341241313
+          ],
+          [
+            "ip_rcv_finish_core.isra.0",
+            0.027905637341241313
+          ],
+          [
+            "__nf_conntrack_find_get",
+            0.027905637341241313
+          ],
+          [
+            "__GI___lll_lock_wake_private",
+            0.027905637341241313
+          ],
+          [
+            "ip_finish_output2",
+            0.027905637341241313
+          ],
+          [
+            "zlink::framework::detail::backend::materialize_binding_part(std::vector<unsigned char, std::allocator<unsigned char> >)::{lambda(void*, void*)#1}::_FUN(void*, void*)",
+            0.027905637341241313
+          ],
+          [
+            "__alloc_skb",
+            0.027905637341241313
+          ],
+          [
+            "tcp_clean_rtx_queue.constprop.0",
+            0.023919117721063983
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            4.947270848640116
+          ],
+          [
+            "start_thread",
+            4.947270848640116
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            4.947270848640116
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            4.947270848640116
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            4.680174034088232
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            4.648281877126813
+          ],
+          [
+            "zlink::asio_engine_t::start_async_write()",
+            4.620376239785571
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            4.345306385993332
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            3.691517168284243
+          ],
+          [
+            "do_syscall_64",
+            3.679557609423711
+          ],
+          [
+            "x64_sys_call",
+            3.5878676581596314
+          ],
+          [
+            "zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            3.5440159423376802
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*) [clone .constprop.0]",
+            3.5041507461359065
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op_base<boost::asio::const_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            3.46827206955431
+          ],
+          [
+            "__libc_send",
+            3.4642855499341327
+          ],
+          [
+            "__x64_sys_sendto",
+            3.404487755631472
+          ],
+          [
+            "__sys_sendto",
+            3.3885416771507626
+          ],
+          [
+            "inet_sendmsg",
+            3.264959568925264
+          ],
+          [
+            "tcp_sendmsg",
+            3.2370539315840223
+          ],
+          [
+            "tcp_sendmsg_locked",
+            2.882253685388236
+          ],
+          [
+            "__tcp_push_pending_frames",
+            2.3799522132458866
+          ],
+          [
+            "tcp_push",
+            2.375965693625709
+          ],
+          [
+            "tcp_write_xmit",
+            2.34407353666429
+          ],
+          [
+            "__tcp_transmit_skb",
+            2.1008958398334703
+          ],
+          [
+            "ip_queue_xmit",
+            2.0251519670501
+          ],
+          [
+            "__ip_queue_xmit",
+            2.0211654474299228
+          ],
+          [
+            "ip_local_out",
+            1.981300251228149
+          ],
+          [
+            "ip_output",
+            1.6384595638928947
+          ],
+          [
+            "ip_finish_output",
+            1.5866348088305888
+          ],
+          [
+            "__ip_finish_output",
+            1.5547426518691698
+          ],
+          [
+            "ip_finish_output2",
+            1.5427830930086377
+          ],
+          [
+            "neigh_hh_output",
+            1.5188639752875734
+          ],
+          [
+            "__dev_queue_xmit",
+            1.5069044164270413
+          ],
+          [
+            "__local_bh_enable_ip",
+            1.3514301512401237
+          ],
+          [
+            "__do_softirq",
+            1.3474436316199463
+          ],
+          [
+            "do_softirq.part.0",
+            1.3474436316199463
+          ],
+          [
+            "handle_softirqs",
+            1.3354840727594142
+          ],
+          [
+            "net_rx_action",
+            1.3155514746585273
+          ],
+          [
+            "__napi_poll",
+            1.2358210822549798
+          ],
+          [
+            "process_backlog",
+            1.2238615233944476
+          ],
+          [
+            "__netif_receive_skb",
+            1.195955886053206
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            1.1760232879523191
+          ],
+          [
+            "ip_rcv",
+            1.1521041702312549
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            1.0564276993469979
+          ],
+          [
+            "ip_local_deliver",
+            0.928859071501322
+          ],
+          [
+            "zlink::encoder_base_t<zlink::zmp_encoder_t>::encode(unsigned char**, unsigned long)",
+            0.801290443655646
+          ],
+          [
+            "tcp_v4_do_rcv",
+            0.7375061297328079
+          ],
+          [
+            "tcp_rcv_established",
+            0.7215600512520984
+          ],
+          [
+            "ip_local_deliver_finish",
+            0.7135870120117437
+          ],
+          [
+            "ip_protocol_deliver_rcu",
+            0.7056139727713889
+          ],
+          [
+            "tcp_v4_rcv",
+            0.6737218158099699
+          ],
+          [
+            "zlink::msg_t::close()",
+            0.6458161784687283
+          ],
+          [
+            "nf_hook_slow",
+            0.6139240215073093
+          ],
+          [
+            "boost::asio::io_context::poll()",
+            0.5979779430265998
+          ],
+          [
+            "__GI___libc_free",
+            0.590004903786245
+          ],
+          [
+            "zlink::framework::detail::backend::materialize_binding_part(std::vector<unsigned char, std::allocator<unsigned char> >)::{lambda(void*, void*)#1}::_FUN(void*, void*)",
+            0.4664227955607469
+          ],
+          [
+            "_int_free",
+            0.4225710797387964
+          ],
+          [
+            "tcp_data_queue",
+            0.35878676581595925
+          ],
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.32290808923436337
+          ],
+          [
+            "__ip_local_out",
+            0.31892156961418605
+          ]
+        ]
+      },
+      "target": {
+        "threads": {
+          "2671279": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 3.89296691805953,
+            "cores": 0.7136977882913945,
+            "samples": 930,
+            "stages": {
+              "recv": 2.729262828575069,
+              "write": 0.16325345140249642,
+              "userspace_other": 0.7032456368107539,
+              "epoll_wait": 0.255345141937238,
+              "other_syscall": 0.04185985933397344
+            },
+            "bucket_counts": {
+              "recv": 652,
+              "write": 39,
+              "userspace_other": 168,
+              "epoll_wait": 61,
+              "other_syscall": 10
+            }
+          },
+          "2671280": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.009832701730697951,
+            "cores": 0.0018026296205018977,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.009832701730697951
+            },
+            "bucket_counts": {}
+          },
+          "2671281": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0008801069319632901,
+            "cores": 0.00016135004073325644,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0008801069319632901
+            },
+            "bucket_counts": {}
+          },
+          "2671282": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.000884377915271723,
+            "cores": 0.00016213304028224243,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.000884377915271723
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 3.9045641046374633,
+        "io_stage_us_per_message": {
+          "recv": 2.729262828575069,
+          "write": 0.16325345140249642,
+          "userspace_other": 0.7032456368107539,
+          "epoll_wait": 0.255345141937238,
+          "other_syscall": 0.04185985933397344,
+          "not_sampled": 0.011597186577932964
+        },
+        "self_us_per_message": [
+          [
+            "_copy_to_iter",
+            0.2260432404034564
+          ],
+          [
+            "nft_do_chain",
+            0.1506954936023044
+          ],
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.12139359206852303
+          ],
+          [
+            "_raw_spin_unlock_irq",
+            0.10046366240153629
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.08790570460134424
+          ],
+          [
+            "read_tsc",
+            0.07953373273454954
+          ],
+          [
+            "do_syscall_64",
+            0.07116176086775484
+          ],
+          [
+            "mod_memcg_state",
+            0.0669757749343575
+          ],
+          [
+            "__libc_recv",
+            0.06278978900096015
+          ],
+          [
+            "zlink::session_base_t::reserve_decoder_frame(void*, unsigned int, unsigned char, void**)",
+            0.05023183120076812
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.04604584526737078
+          ],
+          [
+            "refill_stock",
+            0.04604584526737078
+          ],
+          [
+            "tcp_ack",
+            0.04604584526737078
+          ],
+          [
+            "tcp_clean_rtx_queue.constprop.0",
+            0.04185985933397344
+          ],
+          [
+            "aa_inet_msg_perm",
+            0.0376738734005761
+          ],
+          [
+            "__fdget",
+            0.0376738734005761
+          ],
+          [
+            "__dev_queue_xmit",
+            0.033487887467178755
+          ],
+          [
+            "epoll_wait",
+            0.033487887467178755
+          ],
+          [
+            "__skb_datagram_iter",
+            0.033487887467178755
+          ],
+          [
+            "kmem_cache_free",
+            0.033487887467178755
+          ],
+          [
+            "tcp_rcv_space_adjust",
+            0.033487887467178755
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.033487887467178755
+          ],
+          [
+            "ktime_get",
+            0.033487887467178755
+          ],
+          [
+            "nf_hook_slow",
+            0.033487887467178755
+          ],
+          [
+            "tcp_mstamp_refresh",
+            0.029301901533781413
+          ],
+          [
+            "zlink::msg_t::init(void*, unsigned long, void (*)(void*, void*), void*, zlink::msg_t::content_t*) [clone .constprop.0]",
+            0.029301901533781413
+          ],
+          [
+            "__sys_recvfrom",
+            0.029301901533781413
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            0.029301901533781413
+          ],
+          [
+            "tcp_v4_rcv",
+            0.029301901533781413
+          ],
+          [
+            "skb_attempt_defer_free",
+            0.029301901533781413
+          ],
+          [
+            "__GI___libc_write",
+            0.025115915600384068
+          ],
+          [
+            "ip_output",
+            0.025115915600384068
+          ],
+          [
+            "zlink::decoder_base_t<zlink::zmp_decoder_t, zlink::shared_message_memory_allocator>::decode(unsigned char const*, unsigned long, unsigned long&)",
+            0.025115915600384068
+          ],
+          [
+            "skb_release_data",
+            0.025115915600384068
+          ],
+          [
+            "(anonymous namespace)::allocate_buffer(zlink::shared_message_memory_allocator_state_t*, unsigned long, unsigned long)",
+            0.025115915600384068
+          ],
+          [
+            "expr_call_ops_eval",
+            0.025115915600384068
+          ],
+          [
+            "sock_recvmsg",
+            0.025115915600384068
+          ],
+          [
+            "zlink::session_base_t::push_msg_internal(zlink::msg_t*, void**)",
+            0.025115915600384068
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.025115915600384068
+          ],
+          [
+            "__sk_mem_reduce_allocated",
+            0.025115915600384068
+          ],
+          [
+            "_int_malloc",
+            0.025115915600384068
+          ],
+          [
+            "tcp_data_queue",
+            0.025115915600384068
+          ],
+          [
+            "skb_copy_datagram_iter",
+            0.025115915600384068
+          ],
+          [
+            "tcp_in_window",
+            0.025115915600384068
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            0.025115915600384068
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            3.8929669180594693
+          ],
+          [
+            "start_thread",
+            3.8929669180594693
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            3.8929669180594693
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            3.8929669180594693
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            3.8845949461926748
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            3.0683276891802107
+          ],
+          [
+            "do_syscall_64",
+            3.055769731380019
+          ],
+          [
+            "x64_sys_call",
+            2.9804219845788684
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op_base<boost::asio::mutable_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            2.7501927582420196
+          ],
+          [
+            "__libc_recv",
+            2.7292628285750333
+          ],
+          [
+            "__x64_sys_recvfrom",
+            2.6287991661734993
+          ],
+          [
+            "__sys_recvfrom",
+            2.6120552224399103
+          ],
+          [
+            "sock_recvmsg",
+            2.5534514193723488
+          ],
+          [
+            "inet_recvmsg",
+            2.4697317007044037
+          ],
+          [
+            "tcp_recvmsg",
+            2.440429799170623
+          ],
+          [
+            "tcp_recvmsg_locked",
+            2.1683407134998016
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            1.8418338106948158
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::descriptor_state::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            1.7329981764264872
+          ],
+          [
+            "tcp_cleanup_rbuf",
+            1.4399791610886796
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            1.4274212032884879
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            1.4106772595548989
+          ],
+          [
+            "tcp_send_ack",
+            1.4106772595548989
+          ],
+          [
+            "__tcp_transmit_skb",
+            1.3520734564873373
+          ],
+          [
+            "ip_queue_xmit",
+            1.3227715549535566
+          ],
+          [
+            "__ip_queue_xmit",
+            1.3185855690201593
+          ],
+          [
+            "ip_local_out",
+            1.2934696534197758
+          ],
+          [
+            "zlink::asio_engine_t::start_async_read()",
+            1.1720760613512555
+          ],
+          [
+            "zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            1.0841703567499132
+          ],
+          [
+            "ip_output",
+            1.0757983848831187
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*)",
+            1.063240427082927
+          ],
+          [
+            "ip_finish_output",
+            1.01300859588216
+          ],
+          [
+            "__ip_finish_output",
+            1.0004506380819682
+          ],
+          [
+            "ip_finish_output2",
+            0.9711487365481868
+          ],
+          [
+            "neigh_hh_output",
+            0.9585907787479947
+          ],
+          [
+            "__dev_queue_xmit",
+            0.9544047928145973
+          ],
+          [
+            "__local_bh_enable_ip",
+            0.8330112007460738
+          ],
+          [
+            "do_softirq.part.0",
+            0.8288252148126765
+          ],
+          [
+            "handle_softirqs",
+            0.812081271079087
+          ],
+          [
+            "__do_softirq",
+            0.812081271079087
+          ],
+          [
+            "net_rx_action",
+            0.7995233132788949
+          ],
+          [
+            "__napi_poll",
+            0.7827793695453055
+          ],
+          [
+            "process_backlog",
+            0.7702214117451134
+          ],
+          [
+            "__netif_receive_skb",
+            0.7492914820781266
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            0.7451054961447292
+          ],
+          [
+            "ip_rcv",
+            0.7283615524111398
+          ],
+          [
+            "ip_local_deliver",
+            0.6362698618763978
+          ],
+          [
+            "zlink::asio_engine_t::on_read_complete(boost::system::error_code const&, unsigned long) [clone .part.0]",
+            0.5734800728754373
+          ],
+          [
+            "zlink::asio_engine_t::process_input()",
+            0.5609221150752453
+          ],
+          [
+            "tcp_v4_do_rcv",
+            0.5023183120076822
+          ],
+          [
+            "tcp_rcv_established",
+            0.48138838234069536
+          ],
+          [
+            "ip_local_deliver_finish",
+            0.4437145089401191
+          ],
+          [
+            "nf_hook_slow",
+            0.431156551139927
+          ],
+          [
+            "ip_protocol_deliver_rcu",
+            0.431156551139927
+          ],
+          [
+            "tcp_v4_rcv",
+            0.3976686636727481
+          ],
+          [
+            "skb_copy_datagram_iter",
+            0.33906486060518504
+          ],
+          [
+            "__skb_datagram_iter",
+            0.30557697313800614
+          ],
+          [
+            "tcp_ack",
+            0.30557697313800614
+          ],
+          [
+            "simple_copy_to_iter",
+            0.27208908567082724
+          ],
+          [
+            "zlink::pipe_t::flush_unlocked()",
+            0.2679030997374299
+          ],
+          [
+            "zlink::object_t::send_pipe_command(zlink::pipe_t*, zlink::command_t&, bool)",
+            0.25953112787063515
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-cpp-perf-zlink-cpp-send-saturation/run1/zlink-cpp-send-saturation-1024/capture",
+    "messages": 5980750,
+    "seconds": 10.0962025038898,
+    "rate": 592376.1927017387,
+    "roles": {
+      "source": {
+        "threads": {
+          "2683851": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 0.00026647226518413243,
+            "cores": 0.00015785182591038444,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00026647226518413243
+            },
+            "bucket_counts": {}
+          },
+          "2683852": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.00025273184801237307,
+            "cores": 0.00014971232990004403,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00025273184801237307
+            },
+            "bucket_counts": {}
+          },
+          "2683853": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0002676900054341011,
+            "cores": 0.00015857318624336054,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0002676900054341011
+            },
+            "bucket_counts": {}
+          },
+          "2683854": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0002512067884462651,
+            "cores": 0.00014880892092062963,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0002512067884462651
+            },
+            "bucket_counts": {}
+          },
+          "2683870": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 1.5976632741712997,
+            "cores": 0.9464176875729886,
+            "samples": 1320,
+            "stages": {
+              "send": 1.0287983204890945,
+              "other_syscall": 0.1355593081115042,
+              "epoll_wait": 0.019365615444500602,
+              "userspace_other": 0.41272967916091907,
+              "write": 0.0012103509652812876
+            },
+            "bucket_counts": {
+              "send": 850,
+              "other_syscall": 112,
+              "epoll_wait": 16,
+              "userspace_other": 341,
+              "write": 1
+            }
+          },
+          "2683871": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.00024724440914601013,
+            "cores": 0.00014646170175670442,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00024724440914601013
+            },
+            "bucket_counts": {}
+          },
+          "2683872": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.00023192325377252018,
+            "cores": 0.00013738581406876464,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00023192325377252018
+            },
+            "bucket_counts": {}
+          },
+          "2683873": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0002352671487689671,
+            "cores": 0.0001393666578555543,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0002352671487689671
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 1.5994158098900642,
+        "io_stage_us_per_message": {
+          "not_sampled": 0.0017525357187643691,
+          "send": 1.0287983204890945,
+          "other_syscall": 0.1355593081115042,
+          "epoll_wait": 0.019365615444500602,
+          "userspace_other": 0.41272967916091907,
+          "write": 0.0012103509652812876
+        },
+        "self_us_per_message": [
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.08472456756968999
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.06414860115990816
+          ],
+          [
+            "clear_page_erms",
+            0.05930719729878302
+          ],
+          [
+            "nft_do_chain",
+            0.05204509150709531
+          ],
+          [
+            "_int_free",
+            0.04962438957653274
+          ],
+          [
+            "_copy_from_iter",
+            0.04841403861125146
+          ],
+          [
+            "do_syscall_64",
+            0.04357263475012632
+          ],
+          [
+            "zlink::msg_t::close()",
+            0.033889827027876046
+          ],
+          [
+            "_int_free_merge_chunk",
+            0.030258774132032193
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.024207019305625754
+          ],
+          [
+            "tcp_sendmsg_locked",
+            0.02057596640978189
+          ],
+          [
+            "__GI___libc_free",
+            0.019365615444500602
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::read(zlink::msg_t*, bool*)",
+            0.018155264479219314
+          ],
+          [
+            "nf_hook_slow",
+            0.018155264479219314
+          ],
+          [
+            "expr_call_ops_eval",
+            0.018155264479219314
+          ],
+          [
+            "zlink::encoder_base_t<zlink::zmp_encoder_t>::encode(unsigned char**, unsigned long)",
+            0.016944913513938027
+          ],
+          [
+            "__GI___lll_lock_wake_private",
+            0.016944913513938027
+          ],
+          [
+            "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*)",
+            0.01573456254865674
+          ],
+          [
+            "tcp_v4_rcv",
+            0.01573456254865674
+          ],
+          [
+            "futex_wake",
+            0.01573456254865674
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            0.01573456254865674
+          ],
+          [
+            "futex_wait",
+            0.014524211583375453
+          ],
+          [
+            "kmem_cache_alloc_node",
+            0.013313860618094165
+          ],
+          [
+            "tcp_rcv_established",
+            0.013313860618094165
+          ],
+          [
+            "__get_user_nocheck_4",
+            0.013313860618094165
+          ],
+          [
+            "mod_memcg_state",
+            0.013313860618094165
+          ],
+          [
+            "nf_conntrack_in",
+            0.012103509652812877
+          ],
+          [
+            "free_unref_page_prepare",
+            0.012103509652812877
+          ],
+          [
+            "read_tsc",
+            0.012103509652812877
+          ],
+          [
+            "futex_q_lock",
+            0.010893158687531589
+          ],
+          [
+            "futex_hash",
+            0.010893158687531589
+          ],
+          [
+            "__libc_send",
+            0.010893158687531589
+          ],
+          [
+            "epoll_wait",
+            0.010893158687531589
+          ],
+          [
+            "zlink::pipe_t::read(zlink::msg_t*)",
+            0.010893158687531589
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.010893158687531589
+          ],
+          [
+            "zlink::zmp_encoder_t::header_ready()",
+            0.010893158687531589
+          ],
+          [
+            "__sys_sendto",
+            0.010893158687531589
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.010893158687531589
+          ],
+          [
+            "ip_rcv",
+            0.009682807722250301
+          ],
+          [
+            "unlink_chunk",
+            0.009682807722250301
+          ],
+          [
+            "nft_do_chain_ipv4",
+            0.009682807722250301
+          ],
+          [
+            "__memset",
+            0.009682807722250301
+          ],
+          [
+            "tcp_clean_rtx_queue.constprop.0",
+            0.008472456756969013
+          ],
+          [
+            "__rcu_read_unlock",
+            0.008472456756969013
+          ],
+          [
+            "tcp_schedule_loss_probe.part.0",
+            0.008472456756969013
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            1.5952425722407146
+          ],
+          [
+            "start_thread",
+            1.5952425722407146
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            1.5952425722407146
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            1.5952425722407146
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            1.5674045000392467
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            1.5540906394211533
+          ],
+          [
+            "zlink::asio_engine_t::start_async_write()",
+            1.5480388845947473
+          ],
+          [
+            "boost::asio::io_context::poll()",
+            1.5456181826641848
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            1.1619369266700397
+          ],
+          [
+            "do_syscall_64",
+            1.1558851718436336
+          ],
+          [
+            "x64_sys_call",
+            1.1123125370935099
+          ],
+          [
+            "zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            1.0433225320724806
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*) [clone .constprop.0]",
+            1.034850075315512
+          ],
+          [
+            "__libc_send",
+            1.028798320489106
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op_base<boost::asio::const_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            1.028798320489106
+          ],
+          [
+            "__x64_sys_sendto",
+            1.0070120031140442
+          ],
+          [
+            "__sys_sendto",
+            1.0045913011834817
+          ],
+          [
+            "inet_sendmsg",
+            0.9791739309125742
+          ],
+          [
+            "tcp_sendmsg",
+            0.9743325270514489
+          ],
+          [
+            "tcp_sendmsg_locked",
+            0.900501118169288
+          ],
+          [
+            "__tcp_push_pending_frames",
+            0.6790068915228054
+          ],
+          [
+            "tcp_push",
+            0.6790068915228054
+          ],
+          [
+            "tcp_write_xmit",
+            0.6681137328352734
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.6015444297448005
+          ],
+          [
+            "ip_queue_xmit",
+            0.580968463335018
+          ],
+          [
+            "__ip_queue_xmit",
+            0.5797581123697366
+          ],
+          [
+            "ip_local_out",
+            0.577337410439174
+          ],
+          [
+            "ip_output",
+            0.5071370544528571
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            0.4998749486611691
+          ],
+          [
+            "ip_finish_output",
+            0.4914024919042002
+          ],
+          [
+            "__ip_finish_output",
+            0.48898178997363767
+          ],
+          [
+            "ip_finish_output2",
+            0.4829300351472313
+          ],
+          [
+            "neigh_hh_output",
+            0.47808863128610624
+          ],
+          [
+            "__dev_queue_xmit",
+            0.47687828032082497
+          ],
+          [
+            "__local_bh_enable_ip",
+            0.43572634750126177
+          ],
+          [
+            "do_softirq.part.0",
+            0.43209529460541796
+          ],
+          [
+            "__do_softirq",
+            0.4296745926748554
+          ],
+          [
+            "handle_softirqs",
+            0.42846424170957415
+          ],
+          [
+            "net_rx_action",
+            0.42362283784844906
+          ],
+          [
+            "zlink::encoder_base_t<zlink::zmp_encoder_t>::encode(unsigned char**, unsigned long)",
+            0.3982054675775424
+          ],
+          [
+            "__napi_poll",
+            0.39094336178585476
+          ],
+          [
+            "process_backlog",
+            0.38368125599416714
+          ],
+          [
+            "__netif_receive_skb",
+            0.38247090502888587
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            0.38247090502888587
+          ],
+          [
+            "ip_rcv",
+            0.3727880973066357
+          ],
+          [
+            "zlink::msg_t::close()",
+            0.3122705490425722
+          ],
+          [
+            "ip_local_deliver",
+            0.3110601980772909
+          ],
+          [
+            "__GI___libc_free",
+            0.28443247684110295
+          ],
+          [
+            "tcp_v4_do_rcv",
+            0.25175300077850865
+          ],
+          [
+            "ip_local_deliver_finish",
+            0.24933229884794608
+          ],
+          [
+            "tcp_rcv_established",
+            0.24812194788266478
+          ],
+          [
+            "ip_protocol_deliver_rcu",
+            0.24812194788266478
+          ],
+          [
+            "tcp_v4_rcv",
+            0.2384391401604144
+          ],
+          [
+            "_int_free",
+            0.19607685637556896
+          ],
+          [
+            "nf_hook_slow",
+            0.19002510154916247
+          ],
+          [
+            "tcp_data_queue",
+            0.09803842818778412
+          ],
+          [
+            "__GI___lll_lock_wait_private",
+            0.09682807722250283
+          ],
+          [
+            "futex_wait",
+            0.09561772625722155
+          ],
+          [
+            "nft_do_chain",
+            0.09440737529194027
+          ],
+          [
+            "nft_do_chain_ipv4",
+            0.09319702432665898
+          ]
+        ]
+      },
+      "target": {
+        "threads": {
+          "2683803": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 0.00026170296367512434,
+            "cores": 0.00015502660524063157,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00026170296367512434
+            },
+            "bucket_counts": {}
+          },
+          "2683804": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.00023856640053504996,
+            "cores": 0.00014132105605551093,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00023856640053504996
+            },
+            "bucket_counts": {}
+          },
+          "2683805": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.00026086092881327593,
+            "cores": 0.00015452780383504768,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00026086092881327593
+            },
+            "bucket_counts": {}
+          },
+          "2683806": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.00024185294486477448,
+            "cores": 0.00014326792667269863,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00024185294486477448
+            },
+            "bucket_counts": {}
+          },
+          "2683819": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 1.1909390308907746,
+            "cores": 0.7054839288589754,
+            "samples": 930,
+            "stages": {
+              "userspace_other": 0.5211958984651024,
+              "recv": 0.48918140838739343,
+              "epoll_wait": 0.0986046294393437,
+              "other_syscall": 0.08195709459893502
+            },
+            "bucket_counts": {
+              "userspace_other": 407,
+              "recv": 382,
+              "epoll_wait": 77,
+              "other_syscall": 64
+            }
+          },
+          "2683820": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.00021467257450988588,
+            "cores": 0.00012716692236564652,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00021467257450988588
+            },
+            "bucket_counts": {}
+          },
+          "2683821": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.00019572762613384608,
+            "cores": 0.00011594438597571706,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00019572762613384608
+            },
+            "bucket_counts": {}
+          },
+          "2683822": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.00019815909375914395,
+            "cores": 0.00011738472951026855,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.00019815909375914395
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 1.1925505734230657,
+        "io_stage_us_per_message": {
+          "not_sampled": 0.0016115425322911004,
+          "userspace_other": 0.5211958984651024,
+          "recv": 0.48918140838739343,
+          "epoll_wait": 0.0986046294393437,
+          "other_syscall": 0.08195709459893502
+        },
+        "self_us_per_message": [
+          [
+            "_copy_to_iter",
+            0.10116578864556036
+          ],
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.06402898015541796
+          ],
+          [
+            "zlink::session_base_t::reserve_decoder_frame(void*, unsigned int, unsigned char, void**)",
+            0.057626082139876154
+          ],
+          [
+            "zlink::session_base_t::push_msg_internal(zlink::msg_t*, void**)",
+            0.056345502536767796
+          ],
+          [
+            "do_syscall_64",
+            0.046100865711900925
+          ],
+          [
+            "__libc_recv",
+            0.03713680849014241
+          ],
+          [
+            "zlink::zmp_decoder_t::size_ready(unsigned int, unsigned char const*)",
+            0.03201449007770898
+          ],
+          [
+            "epoll_wait",
+            0.024331012459058825
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::write(zlink::msg_t const&, bool)",
+            0.024331012459058825
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.024331012459058825
+          ],
+          [
+            "_int_malloc",
+            0.021769853252842107
+          ],
+          [
+            "tcp_recvmsg",
+            0.020489273649733748
+          ],
+          [
+            "(anonymous namespace)::allocate_buffer(zlink::shared_message_memory_allocator_state_t*, unsigned long, unsigned long)",
+            0.020489273649733748
+          ],
+          [
+            "zlink::decoder_base_t<zlink::zmp_decoder_t, zlink::shared_message_memory_allocator>::decode(unsigned char const*, unsigned long, unsigned long&)",
+            0.01792811444351703
+          ],
+          [
+            "zlink::pipe_t::get_transport_connection_id() const",
+            0.016647534840408672
+          ],
+          [
+            "aa_inet_msg_perm",
+            0.016647534840408672
+          ],
+          [
+            "zlink::msg_t::init(void*, unsigned long, void (*)(void*, void*), void*, zlink::msg_t::content_t*) [clone .constprop.0]",
+            0.015366955237300313
+          ],
+          [
+            "__sys_recvfrom",
+            0.015366955237300313
+          ],
+          [
+            "zlink::asio_engine_t::process_input()",
+            0.015366955237300313
+          ],
+          [
+            "__fdget",
+            0.015366955237300313
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            0.014086375634191954
+          ],
+          [
+            "zlink::zmp_decoder_t::header_ready(unsigned char const*)",
+            0.014086375634191954
+          ],
+          [
+            "zlink::pipe_t::publish_ledger_unlocked(std::atomic<unsigned long>*, std::atomic<unsigned long>*, std::atomic<unsigned long>*, unsigned long, unsigned long)",
+            0.014086375634191954
+          ],
+          [
+            "futex_wake",
+            0.014086375634191954
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.011525216427975236
+          ],
+          [
+            "zlink::pipe_t::publish_outbound_frame_unlocked(zlink::msg_t const&, bool)",
+            0.011525216427975236
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.011525216427975236
+          ],
+          [
+            "release_sock",
+            0.011525216427975236
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.010244636824866878
+          ],
+          [
+            "sock_recvmsg",
+            0.010244636824866878
+          ],
+          [
+            "check_heap_object",
+            0.010244636824866878
+          ],
+          [
+            "lock_sock_nested",
+            0.008964057221758519
+          ],
+          [
+            "read_tsc",
+            0.008964057221758519
+          ],
+          [
+            "zlink::mailbox_t::send(zlink::command_t const&)",
+            0.008964057221758519
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*)",
+            0.008964057221758519
+          ],
+          [
+            "__skb_datagram_iter",
+            0.008964057221758519
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::run(long, boost::asio::detail::op_queue<boost::asio::detail::scheduler_operation>&) [clone .lto_priv.0]",
+            0.007683477618650158
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::flush()",
+            0.007683477618650158
+          ],
+          [
+            "__GI___libc_malloc",
+            0.007683477618650158
+          ],
+          [
+            "zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            0.007683477618650158
+          ],
+          [
+            "zlink::asio_zmp_engine_t::decode_and_push(zlink::msg_t*)",
+            0.0064028980155417985
+          ],
+          [
+            "[unknown]",
+            0.0064028980155417985
+          ],
+          [
+            "zlink::asio_engine_t::on_read_complete(boost::system::error_code const&, unsigned long) [clone .part.0]",
+            0.0064028980155417985
+          ],
+          [
+            "__x64_sys_recvfrom",
+            0.0064028980155417985
+          ],
+          [
+            "ktime_get",
+            0.0064028980155417985
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "start_thread",
+            1.190939030890765
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            1.190939030890765
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            1.190939030890765
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            1.190939030890765
+          ],
+          [
+            "clone3",
+            1.190939030890765
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            0.8900028241603039
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            0.6005918338578179
+          ],
+          [
+            "do_syscall_64",
+            0.5980306746516012
+          ],
+          [
+            "x64_sys_call",
+            0.5429657517179424
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op_base<boost::asio::mutable_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            0.49174256759360857
+          ],
+          [
+            "__libc_recv",
+            0.4891814083873919
+          ],
+          [
+            "zlink::asio_engine_t::on_read_complete(boost::system::error_code const&, unsigned long) [clone .part.0]",
+            0.48277851037185016
+          ],
+          [
+            "zlink::asio_engine_t::process_input()",
+            0.4750950327532001
+          ],
+          [
+            "__x64_sys_recvfrom",
+            0.41362721180399953
+          ],
+          [
+            "__sys_recvfrom",
+            0.40594373418534946
+          ],
+          [
+            "zlink::asio_engine_t::start_async_read()",
+            0.3867350401387243
+          ],
+          [
+            "sock_recvmsg",
+            0.37136808490142414
+          ],
+          [
+            "zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            0.3636846072827741
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*)",
+            0.34831765204547394
+          ],
+          [
+            "inet_recvmsg",
+            0.3278283783957404
+          ],
+          [
+            "tcp_recvmsg",
+            0.318864321173982
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.25483534101856475
+          ],
+          [
+            "zlink::decoder_base_t<zlink::zmp_decoder_t, zlink::shared_message_memory_allocator>::decode(unsigned char const*, unsigned long, unsigned long&)",
+            0.19848983848179644
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::descriptor_state::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            0.15879187078543688
+          ],
+          [
+            "zlink::zmp_decoder_t::size_ready(unsigned int, unsigned char const*)",
+            0.15495013197611177
+          ],
+          [
+            "zlink::asio_zmp_engine_t::decode_and_push(zlink::msg_t*)",
+            0.1344608583263778
+          ],
+          [
+            "skb_copy_datagram_iter",
+            0.13189969912016106
+          ],
+          [
+            "__skb_datagram_iter",
+            0.13061911951705268
+          ],
+          [
+            "zlink::session_base_t::push_msg_internal(zlink::msg_t*, void**)",
+            0.12805796031083594
+          ],
+          [
+            "zlink::pipe_t::flush_unlocked()",
+            0.12293564189840246
+          ],
+          [
+            "simple_copy_to_iter",
+            0.11653274388286067
+          ],
+          [
+            "zlink::object_t::send_pipe_command(zlink::pipe_t*, zlink::command_t&, bool)",
+            0.11269100507353559
+          ],
+          [
+            "zlink::object_t::send_command(zlink::command_t const&) [clone .isra.0]",
+            0.11141042547042723
+          ],
+          [
+            "zlink::mailbox_t::send(zlink::command_t const&)",
+            0.11141042547042723
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::run(long, boost::asio::detail::op_queue<boost::asio::detail::scheduler_operation>&) [clone .lto_priv.0]",
+            0.1062881070579938
+          ],
+          [
+            "_copy_to_iter",
+            0.10116578864556036
+          ],
+          [
+            "epoll_wait",
+            0.09732404983623529
+          ],
+          [
+            "std::_V2::condition_variable_any::notify_all()",
+            0.07683477618650154
+          ],
+          [
+            "___pthread_cond_broadcast",
+            0.07683477618650154
+          ],
+          [
+            "futex_wake",
+            0.07555419658339319
+          ],
+          [
+            "tcp_cleanup_rbuf",
+            0.07043187817095975
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            0.06915129856785139
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            0.06787071896474303
+          ],
+          [
+            "tcp_send_ack",
+            0.06787071896474303
+          ],
+          [
+            "__x64_sys_futex",
+            0.06659013936163467
+          ],
+          [
+            "do_futex",
+            0.06659013936163467
+          ],
+          [
+            "(anonymous namespace)::allocate_buffer(zlink::shared_message_memory_allocator_state_t*, unsigned long, unsigned long)",
+            0.06402898015541796
+          ],
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.06402898015541796
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.06402898015541796
+          ],
+          [
+            "__ip_queue_xmit",
+            0.06146782094920123
+          ],
+          [
+            "ip_queue_xmit",
+            0.06146782094920123
+          ],
+          [
+            "ip_local_out",
+            0.05890666174298451
+          ],
+          [
+            "zlink::session_base_t::reserve_decoder_frame(void*, unsigned int, unsigned char, void**)",
+            0.057626082139876154
+          ],
+          [
+            "__x64_sys_epoll_wait",
+            0.05506492293365944
+          ],
+          [
+            "try_to_wake_up",
+            0.05378434333055108
+          ],
+          [
+            "wake_up_q",
+            0.05378434333055108
+          ],
+          [
+            "do_epoll_wait",
+            0.049942604521226
+          ],
+          [
+            "__local_bh_enable_ip",
+            0.04225912690257585
+          ],
+          [
+            "ep_poll",
+            0.04225912690257585
+          ],
+          [
+            "ip_output",
+            0.03841738809325077
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-java-perf-zlink-framework-java-send-saturation/run1/zlink-framework-java-send-saturation-1024/capture",
+    "messages": 903997,
+    "seconds": 10.181084908079356,
+    "rate": 88791.81424787248,
+    "roles": {
+      "source": {
+        "threads": {
+          "2693752": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 10.917542824810258,
+            "cores": 0.9693884345437455,
+            "samples": 1371,
+            "stages": {
+              "userspace_other": 1.5607865745170026,
+              "send": 8.871001244958881,
+              "epoll_wait": 0.4459390212905722,
+              "other_syscall": 0.039815984043801086
+            },
+            "bucket_counts": {
+              "userspace_other": 196,
+              "send": 1114,
+              "epoll_wait": 56,
+              "other_syscall": 5
+            }
+          },
+          "2693753": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.002100814493853409,
+            "cores": 0.00018653513030747013,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.002100814493853409
+            },
+            "bucket_counts": {}
+          },
+          "2693754": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0019213592522984036,
+            "cores": 0.000170600973833511,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0019213592522984036
+            },
+            "bucket_counts": {}
+          },
+          "2693755": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0018722329830740587,
+            "cores": 0.000166238963261852,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0018722329830740587
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 10.923437231539484,
+        "io_stage_us_per_message": {
+          "userspace_other": 1.5607865745170026,
+          "send": 8.871001244958881,
+          "epoll_wait": 0.4459390212905722,
+          "other_syscall": 0.039815984043801086,
+          "not_sampled": 0.005894406729225871
+        },
+        "self_us_per_message": [
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.764466893640982
+          ],
+          [
+            "nft_do_chain",
+            0.6689085319358592
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.22296951064528625
+          ],
+          [
+            "expr_call_ops_eval",
+            0.1831535266014851
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.1592639361752044
+          ],
+          [
+            "tcp_rcv_established",
+            0.1592639361752044
+          ],
+          [
+            "do_syscall_64",
+            0.15130073936644417
+          ],
+          [
+            "tcp_sendmsg_locked",
+            0.15130073936644417
+          ],
+          [
+            "nf_hook_slow",
+            0.1353743457489237
+          ],
+          [
+            "tcp_write_xmit",
+            0.1353743457489237
+          ],
+          [
+            "epoll_wait",
+            0.12741114894016348
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.11944795213140326
+          ],
+          [
+            "nft_do_chain_ipv4",
+            0.11944795213140326
+          ],
+          [
+            "__sys_sendto",
+            0.11944795213140326
+          ],
+          [
+            "mod_memcg_state",
+            0.11148475532264304
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.11148475532264304
+          ],
+          [
+            "kmem_cache_alloc_node",
+            0.11148475532264304
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.10352155851388282
+          ],
+          [
+            "__libc_send",
+            0.10352155851388282
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            0.09555836170512261
+          ],
+          [
+            "tcp_v4_rcv",
+            0.08759516489636239
+          ],
+          [
+            "skb_release_data",
+            0.08759516489636239
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::read(zlink::msg_t*, bool*)",
+            0.08759516489636239
+          ],
+          [
+            "net_rx_action",
+            0.08759516489636239
+          ],
+          [
+            "tcp_data_queue",
+            0.08759516489636239
+          ],
+          [
+            "kmem_cache_free",
+            0.08759516489636239
+          ],
+          [
+            "_copy_from_iter",
+            0.07963196808760217
+          ],
+          [
+            "_int_free",
+            0.07963196808760217
+          ],
+          [
+            "__dev_queue_xmit",
+            0.07963196808760217
+          ],
+          [
+            "nf_conntrack_in",
+            0.07963196808760217
+          ],
+          [
+            "__ip_queue_xmit",
+            0.07963196808760217
+          ],
+          [
+            "__memset",
+            0.07166877127884196
+          ],
+          [
+            "resolve_normal_ct",
+            0.07166877127884196
+          ],
+          [
+            "__fdget",
+            0.07166877127884196
+          ],
+          [
+            "__local_bh_enable_ip",
+            0.07166877127884196
+          ],
+          [
+            "ip_finish_output2",
+            0.07166877127884196
+          ],
+          [
+            "sock_def_readable",
+            0.07166877127884196
+          ],
+          [
+            "ip_rcv",
+            0.06370557447008174
+          ],
+          [
+            "process_backlog",
+            0.06370557447008174
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            0.06370557447008174
+          ],
+          [
+            "[unknown]",
+            0.06370557447008174
+          ],
+          [
+            "nft_match_eval",
+            0.06370557447008174
+          ],
+          [
+            "__sk_mem_raise_allocated",
+            0.06370557447008174
+          ],
+          [
+            "__inet_lookup_established",
+            0.05574237766132152
+          ],
+          [
+            "__alloc_skb",
+            0.05574237766132152
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "start_thread",
+            10.909579628001438
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            10.909579628001438
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            10.909579628001438
+          ],
+          [
+            "clone3",
+            10.909579628001438
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            10.88569003757516
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            9.754916090731285
+          ],
+          [
+            "zlink::asio_engine_t::start_async_write()",
+            9.691210516261208
+          ],
+          [
+            "zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            9.109897149221752
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            9.070081165177953
+          ],
+          [
+            "do_syscall_64",
+            9.038228377942914
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*) [clone .constprop.0]",
+            8.966559606664077
+          ],
+          [
+            "x64_sys_call",
+            8.878964441767721
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op_base<boost::asio::const_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            8.878964441767721
+          ],
+          [
+            "__libc_send",
+            8.871001244958961
+          ],
+          [
+            "__x64_sys_sendto",
+            8.66395812793121
+          ],
+          [
+            "__sys_sendto",
+            8.616178947078652
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            8.592289356652373
+          ],
+          [
+            "inet_sendmsg",
+            8.377283042815861
+          ],
+          [
+            "tcp_sendmsg",
+            8.353393452389582
+          ],
+          [
+            "tcp_sendmsg_locked",
+            7.47744180342596
+          ],
+          [
+            "tcp_push",
+            6.513894989565932
+          ],
+          [
+            "__tcp_push_pending_frames",
+            6.505931792757171
+          ],
+          [
+            "tcp_write_xmit",
+            6.4661158087133686
+          ],
+          [
+            "__tcp_transmit_skb",
+            5.829060064012523
+          ],
+          [
+            "ip_queue_xmit",
+            5.50256899485334
+          ],
+          [
+            "__ip_queue_xmit",
+            5.478679404427059
+          ],
+          [
+            "ip_local_out",
+            5.383121042721932
+          ],
+          [
+            "ip_output",
+            4.435500622479425
+          ],
+          [
+            "ip_finish_output",
+            4.3479054575830585
+          ],
+          [
+            "__ip_finish_output",
+            4.308089473539256
+          ],
+          [
+            "ip_finish_output2",
+            4.236420702260411
+          ],
+          [
+            "neigh_hh_output",
+            4.148825537364044
+          ],
+          [
+            "__dev_queue_xmit",
+            4.132899143746523
+          ],
+          [
+            "__local_bh_enable_ip",
+            3.782518484161071
+          ],
+          [
+            "do_softirq.part.0",
+            3.7427025001172702
+          ],
+          [
+            "handle_softirqs",
+            3.7108497128822298
+          ],
+          [
+            "__do_softirq",
+            3.7108497128822298
+          ],
+          [
+            "net_rx_action",
+            3.671033728838429
+          ],
+          [
+            "__napi_poll",
+            3.4878802022369464
+          ],
+          [
+            "process_backlog",
+            3.448064218193146
+          ],
+          [
+            "__netif_receive_skb",
+            3.3445426596792642
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            3.336579462870504
+          ],
+          [
+            "ip_rcv",
+            3.2330579043566225
+          ],
+          [
+            "ip_local_deliver",
+            2.588038962847053
+          ],
+          [
+            "tcp_v4_do_rcv",
+            2.062467973468885
+          ],
+          [
+            "nf_hook_slow",
+            2.0226519894250843
+          ],
+          [
+            "tcp_rcv_established",
+            1.998762398998804
+          ],
+          [
+            "ip_protocol_deliver_rcu",
+            1.9032040372936825
+          ],
+          [
+            "ip_local_deliver_finish",
+            1.9032040372936825
+          ],
+          [
+            "tcp_v4_rcv",
+            1.8235720692060813
+          ],
+          [
+            "boost::asio::detail::executor_op<boost::asio::detail::binder0<zlink::mailbox_t::schedule_if_needed_unlocked()::{lambda()#1}>, std::allocator<void>, boost::asio::detail::scheduler_operation>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            1.4811546064293961
+          ],
+          [
+            "zlink::io_thread_t::process_mailbox()",
+            1.4652282128118759
+          ],
+          [
+            "zlink::object_t::process_command(zlink::command_t const&)",
+            1.401522638341795
+          ],
+          [
+            "nft_do_chain",
+            1.0989211596089103
+          ],
+          [
+            "nft_do_chain_ipv4",
+            1.0909579628001502
+          ],
+          [
+            "tcp_data_queue",
+            1.011325994712549
+          ],
+          [
+            "__ip_local_out",
+            1.003362797903789
+          ],
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.764466893640982
+          ],
+          [
+            "tcp_data_ready",
+            0.660945335127099
+          ],
+          [
+            "sock_def_readable",
+            0.6450189415095785
+          ]
+        ]
+      },
+      "target": {
+        "threads": {
+          "2693609": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 8.681989591779619,
+            "cores": 0.7708896071352581,
+            "samples": 1030,
+            "stages": {
+              "recv": 5.925668624292303,
+              "epoll_wait": 0.7333331014415794,
+              "write": 0.5563216631625775,
+              "userspace_other": 1.3823750417979197,
+              "other_syscall": 0.08429116108523901
+            },
+            "bucket_counts": {
+              "recv": 703,
+              "epoll_wait": 87,
+              "write": 66,
+              "userspace_other": 164,
+              "other_syscall": 10
+            }
+          },
+          "2693610": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0020731694906067164,
+            "cores": 0.00018408048031430798,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0020731694906067164
+            },
+            "bucket_counts": {}
+          },
+          "2693611": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.002067347568631312,
+            "cores": 0.00018356354129970225,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.002067347568631312
+            },
+            "bucket_counts": {}
+          },
+          "2693612": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0020090984815215097,
+            "cores": 0.00017839149917694055,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0020090984815215097
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 8.68813920732038,
+        "io_stage_us_per_message": {
+          "recv": 5.925668624292303,
+          "epoll_wait": 0.7333331014415794,
+          "write": 0.5563216631625775,
+          "userspace_other": 1.3823750417979197,
+          "other_syscall": 0.08429116108523901,
+          "not_sampled": 0.0061496155407595385
+        },
+        "self_us_per_message": [
+          [
+            "_raw_spin_unlock_irq",
+            0.370881108775052
+          ],
+          [
+            "nft_do_chain",
+            0.26973171547276487
+          ],
+          [
+            "do_syscall_64",
+            0.252873483255717
+          ],
+          [
+            "skb_attempt_defer_free",
+            0.2360152510386692
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.2191570188216214
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.1601532060619541
+          ],
+          [
+            "_copy_to_iter",
+            0.1601532060619541
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            0.1517240899534302
+          ],
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.1517240899534302
+          ],
+          [
+            "__libc_recv",
+            0.1432949738449063
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.1348658577363824
+          ],
+          [
+            "__fdget",
+            0.1264367416278585
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.1264367416278585
+          ],
+          [
+            "refill_stock",
+            0.1180076255193346
+          ],
+          [
+            "zlink::zmp_decoder_t::size_ready(unsigned int, unsigned char const*)",
+            0.1095785094108107
+          ],
+          [
+            "tcp_v4_rcv",
+            0.1095785094108107
+          ],
+          [
+            "tcp_rcv_established",
+            0.1095785094108107
+          ],
+          [
+            "mod_memcg_state",
+            0.1011493933022868
+          ],
+          [
+            "__sk_mem_reduce_allocated",
+            0.084291161085239
+          ],
+          [
+            "read_tsc",
+            0.084291161085239
+          ],
+          [
+            "expr_call_ops_eval",
+            0.0758620449767151
+          ],
+          [
+            "zlink::session_base_t::reserve_decoder_frame(void*, unsigned int, unsigned char, void**)",
+            0.0758620449767151
+          ],
+          [
+            "kmem_cache_alloc_node",
+            0.0758620449767151
+          ],
+          [
+            "sock_recvmsg",
+            0.0758620449767151
+          ],
+          [
+            "zlink::decoder_base_t<zlink::zmp_decoder_t, zlink::shared_message_memory_allocator>::decode(unsigned char const*, unsigned long, unsigned long&)",
+            0.0758620449767151
+          ],
+          [
+            "nf_hook_slow",
+            0.0758620449767151
+          ],
+          [
+            "__sys_recvfrom",
+            0.0674329288681912
+          ],
+          [
+            "__nf_conntrack_find_get",
+            0.0674329288681912
+          ],
+          [
+            "_raw_spin_lock_bh",
+            0.0674329288681912
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            0.0674329288681912
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            0.0674329288681912
+          ],
+          [
+            "tcp_recvmsg",
+            0.0674329288681912
+          ],
+          [
+            "loopback_xmit",
+            0.059003812759667304
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.059003812759667304
+          ],
+          [
+            "release_sock",
+            0.059003812759667304
+          ],
+          [
+            "__memset",
+            0.059003812759667304
+          ],
+          [
+            "sock_rfree",
+            0.059003812759667304
+          ],
+          [
+            "__skb_datagram_iter",
+            0.059003812759667304
+          ],
+          [
+            "apparmor_file_permission",
+            0.050574696651143405
+          ],
+          [
+            "zlink::object_t::send_pipe_command(zlink::pipe_t*, zlink::command_t&, bool)",
+            0.050574696651143405
+          ],
+          [
+            "ip_local_deliver",
+            0.050574696651143405
+          ],
+          [
+            "ep_poll",
+            0.050574696651143405
+          ],
+          [
+            "_raw_write_unlock_irq",
+            0.050574696651143405
+          ],
+          [
+            "tcp_ack",
+            0.050574696651143405
+          ],
+          [
+            "apparmor_socket_recvmsg",
+            0.04214558054261951
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "start_thread",
+            8.673560475671119
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            8.673560475671119
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            8.673560475671119
+          ],
+          [
+            "clone3",
+            8.673560475671119
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            8.665131359562595
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            7.055170182834553
+          ],
+          [
+            "do_syscall_64",
+            7.029882834508981
+          ],
+          [
+            "x64_sys_call",
+            6.751722002927684
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op_base<boost::asio::mutable_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            5.984672437051986
+          ],
+          [
+            "__libc_recv",
+            5.925668624292317
+          ],
+          [
+            "__x64_sys_recvfrom",
+            5.630649560493972
+          ],
+          [
+            "__sys_recvfrom",
+            5.6053622121684
+          ],
+          [
+            "sock_recvmsg",
+            5.428350773889393
+          ],
+          [
+            "inet_recvmsg",
+            5.242910219501861
+          ],
+          [
+            "tcp_recvmsg",
+            5.192335522850716
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            4.46743153751764
+          ],
+          [
+            "tcp_recvmsg_locked",
+            4.147125125393722
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::descriptor_state::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            3.2957843984328203
+          ],
+          [
+            "tcp_cleanup_rbuf",
+            3.13563119237087
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            3.0681982635026803
+          ],
+          [
+            "zlink::asio_engine_t::start_async_read()",
+            2.9501906379833485
+          ],
+          [
+            "tcp_send_ack",
+            2.9249032896577773
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            2.90804505744073
+          ],
+          [
+            "zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            2.7816083158128744
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*)",
+            2.731033619161732
+          ],
+          [
+            "__tcp_transmit_skb",
+            2.672029806402066
+          ],
+          [
+            "ip_queue_xmit",
+            2.537163948665687
+          ],
+          [
+            "__ip_queue_xmit",
+            2.511876600340116
+          ],
+          [
+            "ip_local_out",
+            2.444443671471926
+          ],
+          [
+            "ip_output",
+            1.9892714016116457
+          ],
+          [
+            "ip_finish_output",
+            1.9218384727434543
+          ],
+          [
+            "__ip_finish_output",
+            1.8965511244178825
+          ],
+          [
+            "ip_finish_output2",
+            1.8965511244178825
+          ],
+          [
+            "neigh_hh_output",
+            1.8796928922008347
+          ],
+          [
+            "__dev_queue_xmit",
+            1.8628346599837868
+          ],
+          [
+            "__local_bh_enable_ip",
+            1.6605358733792126
+          ],
+          [
+            "do_softirq.part.0",
+            1.626819408945117
+          ],
+          [
+            "__do_softirq",
+            1.609961176728069
+          ],
+          [
+            "handle_softirqs",
+            1.6015320606195451
+          ],
+          [
+            "net_rx_action",
+            1.5678155961854494
+          ],
+          [
+            "__napi_poll",
+            1.5340991317513537
+          ],
+          [
+            "process_backlog",
+            1.5172408995343059
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            1.4582370867746384
+          ],
+          [
+            "__netif_receive_skb",
+            1.4498079706661144
+          ],
+          [
+            "ip_rcv",
+            1.4076623901234948
+          ],
+          [
+            "zlink::asio_engine_t::on_read_complete(boost::system::error_code const&, unsigned long) [clone .part.0]",
+            1.373945925689399
+          ],
+          [
+            "zlink::asio_engine_t::process_input()",
+            1.3233712290382555
+          ],
+          [
+            "ip_local_deliver",
+            1.0704977457825378
+          ],
+          [
+            "nf_hook_slow",
+            1.0283521652399181
+          ],
+          [
+            "tcp_v4_do_rcv",
+            0.8091951464182962
+          ],
+          [
+            "zlink::pipe_t::flush_unlocked()",
+            0.8091951464182962
+          ],
+          [
+            "zlink::object_t::send_pipe_command(zlink::pipe_t*, zlink::command_t&, bool)",
+            0.8007660303097722
+          ],
+          [
+            "tcp_rcv_established",
+            0.7754786819842004
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::run(long, boost::asio::detail::op_queue<boost::asio::detail::scheduler_operation>&) [clone .lto_priv.0]",
+            0.7586204497671526
+          ],
+          [
+            "zlink::object_t::send_command(zlink::command_t const&) [clone .isra.0]",
+            0.7501913336586287
+          ],
+          [
+            "epoll_wait",
+            0.7333331014415808
+          ],
+          [
+            "zlink::mailbox_t::send(zlink::command_t const&)",
+            0.7249039853330569
+          ],
+          [
+            "zlink::signaler_t::send()",
+            0.6827584047904373
+          ],
+          [
+            "ip_local_deliver_finish",
+            0.6321837081392937
+          ],
+          [
+            "ip_protocol_deliver_rcu",
+            0.6068963598137219
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "capture": "/root/jobs/fx/cx/v21/s033/coreio/out/coreio-java-perf-zlink-java-send-saturation/run1/zlink-java-send-saturation-1024/capture",
+    "messages": 3010223,
+    "seconds": 10.23312117997557,
+    "rate": 294164.69785293663,
+    "roles": {
+      "source": {
+        "threads": {
+          "2702905": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 3.3321720111765805,
+            "cores": 0.9802073728617711,
+            "samples": 1414,
+            "stages": {
+              "send": 2.3895490942949453,
+              "userspace_other": 0.7658811199663287,
+              "other_syscall": 0.08247950522714308,
+              "epoll_wait": 0.09426229168816352
+            },
+            "bucket_counts": {
+              "send": 1014,
+              "userspace_other": 325,
+              "other_syscall": 35,
+              "epoll_wait": 40
+            }
+          },
+          "2702906": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0005827741001248081,
+            "cores": 0.00017143156707973123,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0005827741001248081
+            },
+            "bucket_counts": {}
+          },
+          "2702907": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0006019427796545306,
+            "cores": 0.0001770703159018318,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006019427796545306
+            },
+            "bucket_counts": {}
+          },
+          "2702908": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0005882494419848629,
+            "cores": 0.00017304221936363578,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0005882494419848629
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 3.3339449774983447,
+        "io_stage_us_per_message": {
+          "send": 2.3895490942949453,
+          "userspace_other": 0.7658811199663287,
+          "other_syscall": 0.08247950522714308,
+          "epoll_wait": 0.09426229168816352,
+          "not_sampled": 0.0017729663217642014
+        },
+        "self_us_per_message": [
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.20973359900616345
+          ],
+          [
+            "nft_do_chain",
+            0.13196720836342896
+          ],
+          [
+            "__memcpy_avx_unaligned_erms",
+            0.08954917710375539
+          ],
+          [
+            "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*)",
+            0.07540983335053085
+          ],
+          [
+            "clear_page_erms",
+            0.07305327605832676
+          ],
+          [
+            "do_syscall_64",
+            0.05891393230510222
+          ],
+          [
+            "_copy_from_iter",
+            0.056557375012898134
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.049487703136285865
+          ],
+          [
+            "tcp_v4_rcv",
+            0.047131145844081776
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::read(zlink::msg_t*, bool*)",
+            0.0424180312596736
+          ],
+          [
+            "nf_hook_slow",
+            0.04006147396746951
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.03770491667526542
+          ],
+          [
+            "_int_free_merge_chunk",
+            0.03770491667526542
+          ],
+          [
+            "net_rx_action",
+            0.03770491667526542
+          ],
+          [
+            "_int_free",
+            0.03299180209085724
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            0.03299180209085724
+          ],
+          [
+            "tcp_sendmsg_locked",
+            0.03299180209085724
+          ],
+          [
+            "skb_release_data",
+            0.030635244798653153
+          ],
+          [
+            "zlink::encoder_base_t<zlink::zmp_encoder_t>::encode(unsigned char**, unsigned long)",
+            0.030635244798653153
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.028278687506449064
+          ],
+          [
+            "tcp_clean_rtx_queue.constprop.0",
+            0.028278687506449064
+          ],
+          [
+            "__GI___libc_free",
+            0.028278687506449064
+          ],
+          [
+            "zlink::pipe_t::read(zlink::msg_t*)",
+            0.028278687506449064
+          ],
+          [
+            "tcp_rcv_established",
+            0.028278687506449064
+          ],
+          [
+            "expr_call_ops_eval",
+            0.028278687506449064
+          ],
+          [
+            "kmem_cache_alloc_node",
+            0.025922130214244974
+          ],
+          [
+            "__sk_mem_raise_allocated",
+            0.025922130214244974
+          ],
+          [
+            "epoll_wait",
+            0.025922130214244974
+          ],
+          [
+            "do_epoll_wait",
+            0.025922130214244974
+          ],
+          [
+            "__libc_send",
+            0.025922130214244974
+          ],
+          [
+            "unlink_chunk",
+            0.023565572922040885
+          ],
+          [
+            "_int_free_create_chunk",
+            0.023565572922040885
+          ],
+          [
+            "nft_do_chain_ipv4",
+            0.023565572922040885
+          ],
+          [
+            "mod_memcg_state",
+            0.023565572922040885
+          ],
+          [
+            "__sys_sendto",
+            0.021209015629836795
+          ],
+          [
+            "__dev_queue_xmit",
+            0.021209015629836795
+          ],
+          [
+            "tcp_skb_entail",
+            0.021209015629836795
+          ],
+          [
+            "tcp_data_queue",
+            0.021209015629836795
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            0.018852458337632706
+          ],
+          [
+            "conntrack_mt_v3",
+            0.018852458337632706
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.018852458337632706
+          ],
+          [
+            "tcp_ack",
+            0.018852458337632706
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            0.018852458337632706
+          ],
+          [
+            "tcp_current_mss",
+            0.018852458337632706
+          ],
+          [
+            "zlink::mailbox_t::recv(zlink::command_t*, int, bool) [clone .constprop.0]",
+            0.016495901045428616
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            3.327458896592265
+          ],
+          [
+            "start_thread",
+            3.327458896592265
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            3.327458896592265
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            3.327458896592265
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op<boost::asio::const_buffer, boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            3.115368740293888
+          ],
+          [
+            "boost::asio::detail::write_op<boost::asio::basic_stream_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>, boost::asio::const_buffer, boost::asio::const_buffer const*, boost::asio::detail::transfer_all_t, zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}>::operator()(boost::system::error_code, unsigned long, int)",
+            3.0800203809108253
+          ],
+          [
+            "zlink::asio_engine_t::start_async_write()",
+            3.0540982506965793
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            2.7642417037554643
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            2.509733516197412
+          ],
+          [
+            "do_syscall_64",
+            2.507376958905208
+          ],
+          [
+            "x64_sys_call",
+            2.443749912015695
+          ],
+          [
+            "zlink::tcp_transport_t::async_write_some(unsigned char const*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            2.4390367974312865
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*) [clone .constprop.0]",
+            2.4131146672170405
+          ],
+          [
+            "boost::asio::detail::reactive_socket_send_op_base<boost::asio::const_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            2.394262208879407
+          ],
+          [
+            "__libc_send",
+            2.3895490942949986
+          ],
+          [
+            "__x64_sys_sendto",
+            2.344774505743119
+          ],
+          [
+            "__sys_sendto",
+            2.332991719282098
+          ],
+          [
+            "inet_sendmsg",
+            2.269364672392585
+          ],
+          [
+            "tcp_sendmsg",
+            2.2622950005159725
+          ],
+          [
+            "tcp_sendmsg_locked",
+            1.9960040264968997
+          ],
+          [
+            "__tcp_push_pending_frames",
+            1.557684370146921
+          ],
+          [
+            "tcp_push",
+            1.557684370146921
+          ],
+          [
+            "tcp_write_xmit",
+            1.5411884691014917
+          ],
+          [
+            "__tcp_transmit_skb",
+            1.3856556878160153
+          ],
+          [
+            "ip_queue_xmit",
+            1.3267417555109107
+          ],
+          [
+            "__ip_queue_xmit",
+            1.317315526342094
+          ],
+          [
+            "ip_local_out",
+            1.3008196252966646
+          ],
+          [
+            "ip_output",
+            1.0321720939853873
+          ],
+          [
+            "ip_finish_output",
+            0.9968237346023248
+          ],
+          [
+            "__ip_finish_output",
+            0.9897540627257125
+          ],
+          [
+            "ip_finish_output2",
+            0.973258161680284
+          ],
+          [
+            "neigh_hh_output",
+            0.9544057033426514
+          ],
+          [
+            "__dev_queue_xmit",
+            0.9473360314660392
+          ],
+          [
+            "__local_bh_enable_ip",
+            0.8577868543622843
+          ],
+          [
+            "do_softirq.part.0",
+            0.8460040679012639
+          ],
+          [
+            "__do_softirq",
+            0.8342212814402435
+          ],
+          [
+            "net_rx_action",
+            0.8295081668558354
+          ],
+          [
+            "handle_softirqs",
+            0.8295081668558354
+          ],
+          [
+            "__napi_poll",
+            0.7658811199663254
+          ],
+          [
+            "process_backlog",
+            0.7635245626741213
+          ],
+          [
+            "__netif_receive_skb",
+            0.7470286616286927
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            0.7399589897520805
+          ],
+          [
+            "ip_rcv",
+            0.7376024324598764
+          ],
+          [
+            "zlink::asio_engine_t::prepare_output_buffer()",
+            0.6032786668042441
+          ],
+          [
+            "ip_local_deliver",
+            0.5962089949276319
+          ],
+          [
+            "boost::asio::io_context::poll()",
+            0.5608606355445708
+          ],
+          [
+            "tcp_v4_do_rcv",
+            0.4972335886550607
+          ],
+          [
+            "tcp_rcv_established",
+            0.47838113031742807
+          ],
+          [
+            "nf_hook_slow",
+            0.4642417865642036
+          ],
+          [
+            "ip_protocol_deliver_rcu",
+            0.4265368698889384
+          ],
+          [
+            "ip_local_deliver_finish",
+            0.4265368698889384
+          ],
+          [
+            "tcp_v4_rcv",
+            0.39354506779808135
+          ],
+          [
+            "zlink::encoder_base_t<zlink::zmp_encoder_t>::encode(unsigned char**, unsigned long)",
+            0.3605532657072243
+          ],
+          [
+            "__ip_local_out",
+            0.25922130214244904
+          ],
+          [
+            "__GI___libc_free",
+            0.2521516302658368
+          ],
+          [
+            "nft_do_chain",
+            0.24743851568142866
+          ],
+          [
+            "zlink::msg_t::close()",
+            0.24036884380481643
+          ],
+          [
+            "nft_do_chain_ipv4",
+            0.2332991719282042
+          ],
+          [
+            "tcp_data_queue",
+            0.22858605734379606
+          ],
+          [
+            "release_sock",
+            0.2144467135905716
+          ]
+        ]
+      },
+      "target": {
+        "threads": {
+          "2702824": {
+            "comm": "ZLINKbg/IO/0",
+            "cpu_us_per_message": 2.874661190217469,
+            "cores": 0.8456238404498851,
+            "samples": 1174,
+            "stages": {
+              "recv": 1.8756307254740894,
+              "other_syscall": 0.1297760162534292,
+              "userspace_other": 0.6758147261499331,
+              "epoll_wait": 0.19343972234001708
+            },
+            "bucket_counts": {
+              "recv": 766,
+              "other_syscall": 53,
+              "userspace_other": 276,
+              "epoll_wait": 79
+            }
+          },
+          "2702825": {
+            "comm": "ZLINKbg/IO/1",
+            "cpu_us_per_message": 0.0006350901577723643,
+            "cores": 0.00018682110437048143,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006350901577723643
+            },
+            "bucket_counts": {}
+          },
+          "2702826": {
+            "comm": "ZLINKbg/IO/2",
+            "cpu_us_per_message": 0.0006126562716449911,
+            "cores": 0.00018022184703615548,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0006126562716449911
+            },
+            "bucket_counts": {}
+          },
+          "2702827": {
+            "comm": "ZLINKbg/IO/3",
+            "cpu_us_per_message": 0.0007263598078946311,
+            "cores": 0.00021366941342184127,
+            "samples": 0,
+            "stages": {
+              "not_sampled": 0.0007263598078946311
+            },
+            "bucket_counts": {}
+          }
+        },
+        "io_cpu_us_per_message": 2.876635296454781,
+        "io_stage_us_per_message": {
+          "recv": 1.8756307254740894,
+          "other_syscall": 0.1297760162534292,
+          "userspace_other": 0.6758147261499331,
+          "epoll_wait": 0.19343972234001708,
+          "not_sampled": 0.0019741062373119867
+        },
+        "self_us_per_message": [
+          [
+            "_copy_to_iter",
+            0.15671066113621637
+          ],
+          [
+            "_raw_spin_unlock_irqrestore",
+            0.1420190366546961
+          ],
+          [
+            "nft_do_chain",
+            0.09794416321013523
+          ],
+          [
+            "tcp_recvmsg_locked",
+            0.0759067264878548
+          ],
+          [
+            "zlink::session_base_t::reserve_decoder_frame(void*, unsigned int, unsigned char, void**)",
+            0.07345812240760143
+          ],
+          [
+            "do_syscall_64",
+            0.058766497926081136
+          ],
+          [
+            "nf_hook_slow",
+            0.041626269364307474
+          ],
+          [
+            "zlink::zmp_decoder_t::size_ready(unsigned int, unsigned char const*)",
+            0.041626269364307474
+          ],
+          [
+            "zlink::session_base_t::push_msg_internal(zlink::msg_t*, void**)",
+            0.041626269364307474
+          ],
+          [
+            "expr_call_ops_eval",
+            0.03917766528405409
+          ],
+          [
+            "release_sock",
+            0.03672906120380071
+          ],
+          [
+            "tcp_recvmsg",
+            0.03428045712354733
+          ],
+          [
+            "__skb_datagram_iter",
+            0.03428045712354733
+          ],
+          [
+            "zlink::pipe_t::get_transport_connection_id() const",
+            0.03428045712354733
+          ],
+          [
+            "mod_memcg_state",
+            0.03183185304329395
+          ],
+          [
+            "__libc_recv",
+            0.029383248963040568
+          ],
+          [
+            "zlink::decoder_base_t<zlink::zmp_decoder_t, zlink::shared_message_memory_allocator>::decode(unsigned char const*, unsigned long, unsigned long&)",
+            0.029383248963040568
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.026934644882787188
+          ],
+          [
+            "zlink::ypipe_t<zlink::msg_t, 64>::write(zlink::msg_t const&, bool)",
+            0.026934644882787188
+          ],
+          [
+            "srso_alias_safe_ret",
+            0.024486040802533807
+          ],
+          [
+            "zlink::msg_t::init(void*, unsigned long, void (*)(void*, void*), void*, zlink::msg_t::content_t*) [clone .constprop.0]",
+            0.024486040802533807
+          ],
+          [
+            "tcp_clean_rtx_queue.constprop.0",
+            0.024486040802533807
+          ],
+          [
+            "read_tsc",
+            0.024486040802533807
+          ],
+          [
+            "nf_conntrack_tcp_packet",
+            0.024486040802533807
+          ],
+          [
+            "aa_inet_msg_perm",
+            0.022037436722280427
+          ],
+          [
+            "__fdget",
+            0.022037436722280427
+          ],
+          [
+            "nf_conntrack_in",
+            0.019588832642027047
+          ],
+          [
+            "nft_match_eval",
+            0.019588832642027047
+          ],
+          [
+            "zlink::pipe_t::publish_ledger_unlocked(std::atomic<unsigned long>*, std::atomic<unsigned long>*, std::atomic<unsigned long>*, unsigned long, unsigned long)",
+            0.019588832642027047
+          ],
+          [
+            "check_heap_object",
+            0.019588832642027047
+          ],
+          [
+            "epoll_wait",
+            0.019588832642027047
+          ],
+          [
+            "native_queued_spin_lock_slowpath",
+            0.019588832642027047
+          ],
+          [
+            "futex_wake",
+            0.019588832642027047
+          ],
+          [
+            "zlink::asio_engine_t::on_read_complete(boost::system::error_code const&, unsigned long) [clone .part.0]",
+            0.019588832642027047
+          ],
+          [
+            "[unknown]",
+            0.017140228561773666
+          ],
+          [
+            "__inet_lookup_established",
+            0.017140228561773666
+          ],
+          [
+            "__dev_queue_xmit",
+            0.017140228561773666
+          ],
+          [
+            "_raw_spin_unlock_bh",
+            0.017140228561773666
+          ],
+          [
+            "zlink::asio_engine_t::process_input()",
+            0.017140228561773666
+          ],
+          [
+            "sock_poll",
+            0.017140228561773666
+          ],
+          [
+            "__sys_recvfrom",
+            0.017140228561773666
+          ],
+          [
+            "__ip_queue_xmit",
+            0.017140228561773666
+          ],
+          [
+            "nft_do_chain_ipv4",
+            0.017140228561773666
+          ],
+          [
+            "nf_confirm",
+            0.014691624481520284
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            0.014691624481520284
+          ]
+        ],
+        "inclusive_us_per_message": [
+          [
+            "clone3",
+            2.874661190217548
+          ],
+          [
+            "start_thread",
+            2.874661190217548
+          ],
+          [
+            "thread_routine.lto_priv.0",
+            2.874661190217548
+          ],
+          [
+            "zlink::asio_poller_t::loop()",
+            2.874661190217548
+          ],
+          [
+            "unsigned long boost::asio::io_context::run_one_until<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)",
+            2.869763982057041
+          ],
+          [
+            "entry_SYSCALL_64_after_hwframe",
+            2.1400799661414673
+          ],
+          [
+            "do_syscall_64",
+            2.130285549820453
+          ],
+          [
+            "x64_sys_call",
+            2.0543788233325913
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op<boost::asio::mutable_buffer, zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)::{lambda(boost::system::error_code const&, unsigned long)#2}, boost::asio::any_io_executor>::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            1.9123597866778903
+          ],
+          [
+            "boost::asio::detail::reactive_socket_recv_op_base<boost::asio::mutable_buffer>::do_perform(boost::asio::detail::reactor_op*)",
+            1.8854251417951031
+          ],
+          [
+            "__libc_recv",
+            1.8756307254740896
+          ],
+          [
+            "__x64_sys_recvfrom",
+            1.7923781867454747
+          ],
+          [
+            "__sys_recvfrom",
+            1.7825837704244611
+          ],
+          [
+            "sock_recvmsg",
+            1.7458547092206604
+          ],
+          [
+            "inet_recvmsg",
+            1.6895368153748327
+          ],
+          [
+            "tcp_recvmsg",
+            1.6577049623315387
+          ],
+          [
+            "tcp_recvmsg_locked",
+            1.4642652399915217
+          ],
+          [
+            "zlink::asio_engine_t::start_async_read()",
+            1.2904143502935317
+          ],
+          [
+            "zlink::tcp_transport_t::async_read_some(unsigned char*, unsigned long, std::function<void (boost::system::error_code const&, unsigned long)>)",
+            1.2634797054107445
+          ],
+          [
+            "boost::asio::detail::reactive_socket_service_base::do_start_op(boost::asio::detail::reactive_socket_service_base::base_implementation_type&, int, boost::asio::detail::reactor_op*, bool, bool, bool, void (*)(boost::asio::detail::scheduler_operation*, bool, void const*), void const*)",
+            1.2389936646082107
+          ],
+          [
+            "tcp_cleanup_rbuf",
+            1.0724885871509808
+          ],
+          [
+            "__tcp_cleanup_rbuf",
+            1.0626941708299673
+          ],
+          [
+            "tcp_send_ack",
+            1.0626941708299673
+          ],
+          [
+            "__tcp_send_ack.part.0",
+            1.0577969626694605
+          ],
+          [
+            "__tcp_transmit_skb",
+            0.9990304647433793
+          ],
+          [
+            "ip_queue_xmit",
+            0.964750007619832
+          ],
+          [
+            "__ip_queue_xmit",
+            0.9598527994593252
+          ],
+          [
+            "ip_local_out",
+            0.9378153627370448
+          ],
+          [
+            "ip_output",
+            0.7125437873537338
+          ],
+          [
+            "ip_finish_output",
+            0.6733661220696797
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::descriptor_state::do_complete(void*, boost::asio::detail::scheduler_operation*, boost::system::error_code const&, unsigned long)",
+            0.6660203098289196
+          ],
+          [
+            "__ip_finish_output",
+            0.6635717057486662
+          ],
+          [
+            "ip_finish_output2",
+            0.6513286853473993
+          ],
+          [
+            "neigh_hh_output",
+            0.6415342690263858
+          ],
+          [
+            "__dev_queue_xmit",
+            0.636637060865879
+          ],
+          [
+            "zlink::asio_engine_t::on_read_complete(boost::system::error_code const&, unsigned long) [clone .part.0]",
+            0.5876649792608114
+          ],
+          [
+            "__local_bh_enable_ip",
+            0.5705247506990377
+          ],
+          [
+            "zlink::asio_engine_t::process_input()",
+            0.565627542538531
+          ],
+          [
+            "do_softirq.part.0",
+            0.5631789384582776
+          ],
+          [
+            "handle_softirqs",
+            0.5533845221372641
+          ],
+          [
+            "__do_softirq",
+            0.5509359180570107
+          ],
+          [
+            "net_rx_action",
+            0.5460387098965039
+          ],
+          [
+            "__napi_poll",
+            0.5435901058162506
+          ],
+          [
+            "process_backlog",
+            0.5411415017359972
+          ],
+          [
+            "__netif_receive_skb",
+            0.5288984813347303
+          ],
+          [
+            "__netif_receive_skb_one_core",
+            0.5264498772544769
+          ],
+          [
+            "ip_rcv",
+            0.5019638364519431
+          ],
+          [
+            "ip_local_deliver",
+            0.39912246508130106
+          ],
+          [
+            "nf_hook_slow",
+            0.3917766528405409
+          ],
+          [
+            "ip_local_deliver_finish",
+            0.2791408651488854
+          ],
+          [
+            "ip_protocol_deliver_rcu",
+            0.2668978447476185
+          ],
+          [
+            "skb_copy_datagram_iter",
+            0.24730901210559145
+          ],
+          [
+            "__skb_datagram_iter",
+            0.2424118039450847
+          ],
+          [
+            "tcp_v4_rcv",
+            0.23016878354381778
+          ],
+          [
+            "zlink::decoder_base_t<zlink::zmp_decoder_t, zlink::shared_message_memory_allocator>::decode(unsigned char const*, unsigned long, unsigned long&)",
+            0.22282297130305764
+          ],
+          [
+            "tcp_v4_do_rcv",
+            0.22037436722280426
+          ],
+          [
+            "tcp_rcv_established",
+            0.21792576314255088
+          ],
+          [
+            "__ip_local_out",
+            0.21057995090179074
+          ],
+          [
+            "simple_copy_to_iter",
+            0.20813134682153736
+          ],
+          [
+            "boost::asio::detail::epoll_reactor::run(long, boost::asio::detail::op_queue<boost::asio::detail::scheduler_operation>&) [clone .lto_priv.0]",
+            0.20078553458077722
+          ]
+        ]
+      }
+    }
+  }
+]

@@ -1,0 +1,336 @@
+diff --git a/framework/bench/grpc/dotnet/Client/BenchMeasurement.cs b/framework/bench/grpc/dotnet/Client/BenchMeasurement.cs
+index d2b36cae67..2ce3bae5df 100644
+--- a/framework/bench/grpc/dotnet/Client/BenchMeasurement.cs
++++ b/framework/bench/grpc/dotnet/Client/BenchMeasurement.cs
+@@ -571,6 +571,7 @@ internal static class BenchMeasurement
+             sequence
+         );
+         var started = metrics.Begin();
++        DsegBenchTrace.BeforeNextRequest();
+         await ObserveRequestReplyAsync(
+             transport.RequestAsync(stream, payload, cancellationToken).AsTask(),
+             metrics,
+diff --git a/framework/bench/grpc/dotnet/Client/Program.cs b/framework/bench/grpc/dotnet/Client/Program.cs
+index b02510e180..b87107d18c 100644
+--- a/framework/bench/grpc/dotnet/Client/Program.cs
++++ b/framework/bench/grpc/dotnet/Client/Program.cs
+@@ -431,7 +431,9 @@ internal sealed class RawBenchTransport : IBenchTransport
+         CancellationToken cancellationToken
+     )
+     {
+-        return await SubmitRequest(payload, cancellationToken).Reply;
++        var reply = await SubmitRequest(payload, cancellationToken).Reply;
++        DsegBenchTrace.Mark('S', 1, DsegBenchTrace.CurrentSerial);
++        return reply;
+     }
+ 
+     public RawRequestSubmission SubmitRequest(
+@@ -620,7 +622,8 @@ internal sealed class RawBenchSocket : IDisposable
+ 
+     public void WaitCompletion(int timeoutMs)
+     {
+-        _ = completionPoller.Wait(completionEvents, TimeSpan.FromMilliseconds(timeoutMs));
++        if (completionPoller.Wait(completionEvents, TimeSpan.FromMilliseconds(timeoutMs)) > 0)
++            DsegBenchTrace.Mark('P', 1, DsegBenchTrace.CurrentSerial);
+     }
+ 
+     public RequestSubmission SubmitRequest(
+@@ -629,6 +632,7 @@ internal sealed class RawBenchSocket : IDisposable
+         CancellationToken cancellationToken
+     )
+     {
++        DsegBenchTrace.Mark('S', 4, DsegBenchTrace.CurrentSerial);
+         return Request().Message(header).Message(body).Async(cancellationToken);
+     }
+ 
+diff --git a/framework/bench/grpc/dotnet/ZLinkRawServer/Program.cs b/framework/bench/grpc/dotnet/ZLinkRawServer/Program.cs
+index 6fd9212119..ceb18796e4 100644
+--- a/framework/bench/grpc/dotnet/ZLinkRawServer/Program.cs
++++ b/framework/bench/grpc/dotnet/ZLinkRawServer/Program.cs
+@@ -1,5 +1,6 @@
+ using Google.Protobuf;
+ using Systems.Zlink;
++using WithGrpcBench.Client;
+ using WithGrpcBench.Shared;
+ 
+ var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5207";
+@@ -71,10 +72,12 @@ static void RunRequestRouter(
+                 continue;
+             }
+ 
++            var serial = DsegBenchTrace.BeginServerRequest();
+             var body = PayloadPart(received);
+             var payload = RawWire.Decode(body.AsReadOnlySpan());
+             metrics.RecordReceived(payload);
+             var reply = new BenchPayload { Body = payload.Body };
++            DsegBenchTrace.Mark('B', 4, serial);
+             if (received.ReplyToken is not null)
+             {
+                 ReplyMultipart(received, reply);
+diff --git a/framework/bench/grpc/dotnet/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj b/framework/bench/grpc/dotnet/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj
+index 4a94123d16..876756397b 100644
+--- a/framework/bench/grpc/dotnet/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj
++++ b/framework/bench/grpc/dotnet/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj
+@@ -8,6 +8,7 @@
+     </PropertyGroup>
+ 
+     <ItemGroup>
++        <Compile Include="..\Client\DsegBenchTrace.cs" Link="DsegBenchTrace.cs"/>
+         <ProjectReference Include="..\Shared\WithGrpcBench.Shared.csproj"/>
+         <PackageReference Include="Zlink"/>
+     </ItemGroup>
+diff --git a/framework/bench/grpc/dotnet/run_local.sh b/framework/bench/grpc/dotnet/run_local.sh
+index 4874eb88a9..a1bf2e8534 100755
+--- a/framework/bench/grpc/dotnet/run_local.sh
++++ b/framework/bench/grpc/dotnet/run_local.sh
+@@ -62,7 +62,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -80,7 +80,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/ZLinkCompletionDispatcher.cs b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/ZLinkCompletionDispatcher.cs
+index 728cf706ea..848f87251b 100644
+--- a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/ZLinkCompletionDispatcher.cs
++++ b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/ZLinkCompletionDispatcher.cs
+@@ -13,17 +13,22 @@ internal static class ZLinkCompletionDispatcher
+     internal static void Post(WorkItem work)
+     {
+         ArgumentNullException.ThrowIfNull(work);
++        if (work.TraceSerial != 0)
++            ZLinkDsegTrace.Record('D', 2, work.TraceSerial);
+         ThreadPool.UnsafeQueueUserWorkItem(work, preferLocal: false);
+     }
+ 
+     internal abstract class WorkItem : IThreadPoolWorkItem
+     {
++        internal long TraceSerial;
+         internal abstract void Execute();
+ 
+         internal abstract void Completed(Exception? failure);
+ 
+         void IThreadPoolWorkItem.Execute()
+         {
++            if (TraceSerial != 0)
++                ZLinkDsegTrace.Record('D', 3, TraceSerial);
+             _isCurrentExecution = true;
+             try
+             {
+diff --git a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkProcessExecutionPool.cs b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkProcessExecutionPool.cs
+index a9bba65243..1e6daeef70 100644
+--- a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkProcessExecutionPool.cs
++++ b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkProcessExecutionPool.cs
+@@ -399,7 +399,11 @@ internal sealed class ZLinkProcessExecutionPool
+                         return;
+                     }
+                 }
++                if (application is not null)
++                    Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(40);
+                 application?.Run(worker.Turn);
++                if (application is not null)
++                    Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(41);
+             }
+         }
+         catch (Exception failure)
+@@ -456,9 +460,11 @@ internal sealed class ZLinkProcessExecutionPool
+ 
+     private ApplicationSource? ReceiveUntilHandoff(Worker worker)
+     {
++        Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(30);
+         var readySources = _receiveReady;
+         while (true)
+         {
++            Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(31);
+             TimeSpan timeout = Timeout.InfiniteTimeSpan;
+             List<(Action<object?> Callback, object? State)>? failedContinuations = null;
+             var terminating = false;
+@@ -508,9 +514,12 @@ internal sealed class ZLinkProcessExecutionPool
+             if (terminating)
+             {
+                 NotifyFailedSources(failedContinuations);
++                Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(35);
+                 return null;
+             }
++            Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(32);
+             var count = _poller.Wait(_events, timeout);
++            Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(33);
+             lock (_gate)
+             {
+                 for (var index = 0; index < count; index++)
+@@ -561,10 +570,12 @@ internal sealed class ZLinkProcessExecutionPool
+                 }
+                 try
+                 {
++                    Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(34);
+                     continuation?.Invoke(continuationState);
+                 }
+                 finally
+                 {
++                    Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(36);
+                     lock (_gate)
+                     {
+                         if (source.Closing)
+@@ -589,6 +600,7 @@ internal sealed class ZLinkProcessExecutionPool
+                 replacement.Receiving = true;
+                 worker.Receiving = false;
+                 NotifyWorkerUnderLock(replacement);
++                Zlink.Framework.Runtime.Backend.DotNet.ZLinkDsegTrace.Marker(37);
+                 return application;
+             }
+         }
+diff --git a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs
+index 971e82993e..9daed27dda 100644
+--- a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs
++++ b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs
+@@ -6195,7 +6195,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
+             {
+                 try
+                 {
++                    if (ZLinkDsegTrace.Enabled)
++                        ZLinkDsegTrace.Marker(50);
+                     var count = await _poller!.WaitAsync(events, waitBound).ConfigureAwait(false);
++                    if (ZLinkDsegTrace.Enabled)
++                        ZLinkDsegTrace.Marker(51);
+                     var receiveReady =
+                         Volatile.Read(ref _reservedRawApplicationAdmission) is not null;
+                     var now = Stopwatch.GetTimestamp();
+@@ -6221,8 +6225,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
+                     if (cancellationToken.IsCancellationRequested)
+                         return;
+                     if (receiveReady)
++                    {
++                        if (ZLinkDsegTrace.Enabled)
++                            ZLinkDsegTrace.Marker(52);
+                         DrainRawSocket(cancellationToken);
++                        if (ZLinkDsegTrace.Enabled)
++                            ZLinkDsegTrace.Marker(53);
++                    }
++                    if (ZLinkDsegTrace.Enabled)
++                        ZLinkDsegTrace.Marker(54);
+                     var livenessDeadline = ProcessInfrastructure(now);
++                    if (ZLinkDsegTrace.Enabled)
++                        ZLinkDsegTrace.Marker(55);
+                     waitBound = ExpireOperations();
+                     if (livenessDeadline != TimeSpan.MaxValue)
+                     {
+@@ -6329,6 +6343,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
+         long bytes = 0;
+         for (var index = 0; reservation.Count != 0; index++)
+         {
++            var receiveAttemptStarted = ZLinkDsegTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
++            if (ZLinkDsegTrace.Enabled)
++                ZLinkDsegTrace.MarkerAt(20, ZLinkDsegTrace.CurrentBSerial, receiveAttemptStarted);
+             if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
+                 return;
+             if (_pendingRawMulticast is { } fanout)
+@@ -6341,7 +6358,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
+             try
+             {
+                 if (!_socket!.Recv(received, RecvFlags.DontWait))
++                {
++                    if (ZLinkDsegTrace.Enabled)
++                        ZLinkDsegTrace.Marker(22);
+                     return;
++                }
++                var dsegReceiveTimestamp = ZLinkDsegTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
++                if (ZLinkDsegTrace.Enabled)
++                    ZLinkDsegTrace.MarkerAt(21, ZLinkDsegTrace.CurrentBSerial, dsegReceiveTimestamp);
+                 admission = reservation.Claim();
+                 bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
+                 var ownership = new RawIngressOwnership(received, admission);
+@@ -6349,7 +6373,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
+                 admission = null;
+                 try
+                 {
+-                    ProcessReceived(ref ownership);
++                    ProcessReceived(ref ownership, dsegReceiveTimestamp);
+                 }
+                 finally
+                 {
+@@ -7052,7 +7076,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
+         return true;
+     }
+ 
+-    private bool ProcessReceived(ref RawIngressOwnership ownership)
++    private bool ProcessReceived(ref RawIngressOwnership ownership, long dsegReceiveTimestamp)
+     {
+         var received = ownership.Receipt;
+         if (received.RoutingId is not { } sourceRid || received.Parts.Count == 0)
+@@ -7387,9 +7411,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
+             ServiceWireConstants.Command.ChannelRequest => MeshRecordKind.ChannelRequest,
+             _ => throw new InvalidOperationException(),
+         };
++        var dsegSerial = request && kind == MeshRecordKind.NodeRequest
++            ? ZLinkDsegTrace.BeginB(dsegReceiveTimestamp)
++            : 0;
+         var replyHandler = request
+             ? CreateNativeReplyHandler(sourceRid, received.Reply(), application.Correlation)
+             : null;
++        if (dsegSerial != 0)
++            ZLinkDsegTrace.Record('B', 2, dsegSerial);
+         return EnqueueOwned(
+             MailboxKey.ForNode(MeshReadyDomains.Application, application.ChannelName),
+             new MeshReceiveRecord(
+@@ -11134,6 +11163,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
+         {
+             // The physical receiver owns its codec independently of the retired C1 entry.
+             replyParts = await physical.ConfigureAwait(false);
++            if (ZLinkDsegTrace.Enabled)
++            {
++                operation.TraceSerial = ZLinkDsegTrace.BeginD();
++                ZLinkDsegTrace.Record('D', 1, operation.TraceSerial);
++            }
+             reply = decode(new ManagedRequestCompletion(RequestResult.Ok, replyParts));
+         }
+         catch (Exception error)
+diff --git a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkMeshNodeRouteDispatcher.cs b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkMeshNodeRouteDispatcher.cs
+index 22ee8fca76..016b6dfe87 100644
+--- a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkMeshNodeRouteDispatcher.cs
++++ b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkMeshNodeRouteDispatcher.cs
+@@ -5,6 +5,7 @@ using Zlink.Framework.Runtime.Dispatch;
+ using Zlink.Framework.Runtime.Execution;
+ using Zlink.Framework.Runtime.Identifiers;
+ using Zlink.Framework.Runtime.Streams;
++using Zlink.Framework.Runtime.Backend.DotNet;
+ using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+ 
+ namespace Zlink.Framework.Runtime.Spots;
+@@ -608,6 +609,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
+     )
+     {
+         var isRequest = header.Kind == ZLinkMessageKind.Request;
++        if (isRequest)
++            ZLinkDsegTrace.Record('B', 3, ZLinkDsegTrace.CurrentBSerial);
+         var sourceRid = received.SourceNodeRid ?? default;
+         var scope = CreateScope(header, isRequest);
+         scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Received);
+diff --git a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotReplySubmitter.cs b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotReplySubmitter.cs
+index 53b6e41588..699c9b0ad7 100644
+--- a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotReplySubmitter.cs
++++ b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotReplySubmitter.cs
+@@ -1,3 +1,5 @@
++using Zlink.Framework.Runtime.Backend.DotNet;
++
+ namespace Zlink.Framework.Runtime.Spots;
+ 
+ internal static class ZLinkSpotReplySubmitter
+@@ -11,6 +13,7 @@ internal static class ZLinkSpotReplySubmitter
+         {
+             if (received.CanReply)
+             {
++                ZLinkDsegTrace.Record('B', 4, ZLinkDsegTrace.CurrentBSerial);
+                 var result = received.Reply(replyParts);
+                 if (result != SubmitResult.Ok)
+                     throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);

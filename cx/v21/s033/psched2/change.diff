@@ -1,0 +1,283 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index 47b06059db..c5d51e4333 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -2378,7 +2378,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+       target_compile_definitions(test_cpp_framework_scheduler_drain PRIVATE ZLINK_TEST_WRAP_NOTIFY_ONE)
+       target_link_options(test_cpp_framework_scheduler_drain PRIVATE
+         "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv")
+-      foreach(_negative IN ITEMS items wakes terminal spot-gate actor-gate)
++      foreach(_negative IN ITEMS items wakes stream-wakes terminal spot-gate actor-gate)
+         zlink_framework_cpp_add_test(
+           NAME test_cpp_framework_scheduler_drain_negative_${_negative}
+           COMMAND ${CMAKE_COMMAND}
+@@ -2404,7 +2404,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
+     target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
++      "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
++      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
+       "LINKER:--wrap=zlink_router_recv")
++    zlink_framework_cpp_add_test(
++      NAME test_cpp_framework_mailbox_owner_dispatch_negative_extra-notify
++      COMMAND ${CMAKE_COMMAND}
++        "-DPROGRAM=$<TARGET_FILE:test_cpp_framework_mailbox_owner_dispatch>"
++        "-DMODE=extra-notify"
++        -P "${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/expect_scheduler_rejection.cmake"
++      LABELS "framework-unit;framework-regression;execution;negative-control"
++      TIER unit
++      TIMEOUT 30)
+     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
+       "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
+     target_compile_definitions(test_cpp_framework_receive_role_completion PRIVATE
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+index 132f52a41f..2279e4b949 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+@@ -9,18 +9,56 @@
+ #include "runtime/messaging/client_call_codec.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+ #include <zlink.h>
++#include <algorithm>
+ #include <array>
+ #include <cassert>
++#include <condition_variable>
+ #include <future>
+ #include <iostream>
+ #include <mutex>
++#include <set>
++#include <string_view>
+ 
+ namespace fw = zlink::framework;
+ namespace rt = fw::runtime;
+ using namespace std::chrono_literals;
++namespace zlink::framework::runtime
++{
++struct offload_executor_test_access_t
++{
++    static std::size_t max_worker_count (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        return executor._max_worker_count;
++    }
++    static bool is_worker_ready (offload_executor_t &executor, const std::condition_variable *ready)
++    {
++        std::lock_guard lock (executor._mutex);
++        return std::any_of (executor._workers.begin (), executor._workers.end (),
++                            [&] (const auto &worker) { return &worker->ready == ready; });
++    }
++    // Negative control only: a spurious wake is harmless because workers wait on their phase.
++    static void notify_any_worker (offload_executor_t &executor)
++    {
++        std::condition_variable *ready = nullptr;
++        {
++            std::lock_guard lock (executor._mutex);
++            if (!executor._workers.empty ())
++                ready = &executor._workers.front ()->ready;
++        }
++        if (ready)
++            ready->notify_one ();
++    }
++};
++}
+ namespace
+ {
++std::atomic<rt::offload_executor_t *> application_executor{nullptr};
++std::atomic_bool watch_notifications{false};
++std::atomic_size_t worker_notifications{0};
+ std::mutex observation_mutex;
++std::mutex participation_mutex;
++std::set<std::thread::id> participating_workers;
+ std::thread::id received_on;
+ std::promise<std::thread::id> handled;
+ std::atomic_bool handler_blocked{false};
+@@ -46,6 +84,10 @@ struct handler_t
+         if (probe.value.starts_with ("queued-probe-")) {
+             const auto index = std::stoul (probe.value.substr (13));
+             assert (index < queued_records && !queued_seen[index].exchange (true));
++            {
++                std::lock_guard lock (participation_mutex);
++                participating_workers.insert (std::this_thread::get_id ());
++            }
+             if (handled_queued.fetch_add (1) + 1 == queued_records)
+                 queue_drained.set_value ();
+             return;
+@@ -89,14 +131,48 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
+     }
+     return result;
+ }
+-int main ()
++extern "C" bool real_start_role (
++  rt::offload_executor_t *,
++  std::shared_ptr<rt::offload_executor_t::
++                    role_t>) __asm__ ("__real__ZN5zlink9framework7runtime18offload_executor_"
++                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
++extern "C" bool wrapped_start_role (
++  rt::offload_executor_t *,
++  std::shared_ptr<rt::offload_executor_t::
++                    role_t>) __asm__ ("__wrap__ZN5zlink9framework7runtime18offload_executor_"
++                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
++extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
++                                    std::shared_ptr<rt::offload_executor_t::role_t> role)
++{
++    application_executor = executor;
++    return real_start_role (executor, std::move (role));
++}
++extern "C" void real_notify_one (std::condition_variable *) __asm__ (
++  "__real__ZNSt18condition_variable10notify_oneEv");
++extern "C" void wrapped_notify_one (std::condition_variable *) __asm__ (
++  "__wrap__ZNSt18condition_variable10notify_oneEv");
++extern "C" void wrapped_notify_one (std::condition_variable *ready)
+ {
++    const auto executor = application_executor.load ();
++    if (watch_notifications && executor
++        && rt::offload_executor_test_access_t::is_worker_ready (*executor, ready))
++        ++worker_notifications;
++    real_notify_one (ready);
++}
++int main (int argc, char **argv)
++{
++    const bool negative_extra_notify =
++      argc > 1 && std::string_view (argv[1]) == "--negative-extra-notify";
++    if (argc > 1 && !negative_extra_notify)
++        return 2;
+     bool correct = true;
+     {
+         fw::completion_owner_t completion;
+         handled = {};
+         received_queued = 0;
+         handled_queued = 0;
++        worker_notifications = 0;
++        participating_workers.clear ();
+         for (auto &seen : queued_seen)
+             seen.store (false);
+         queue_drained = {};
+@@ -194,6 +270,8 @@ int main ()
+         }
+         const auto handler = invocation.get ();
+         const bool same = receiver == handler;
++        worker_notifications = 0;
++        watch_notifications = true;
+         {
+             for (std::size_t index = 0; index < queued_records; ++index) {
+                 auto queued = codec.encode_envelope_parts (
+@@ -210,9 +288,39 @@ int main ()
+                 assert (std::chrono::steady_clock::now () < receive_deadline);
+                 std::this_thread::yield ();
+             }
++            // A plus 128 queued records is the 129-record busy window.
++            {
++                std::lock_guard lock (participation_mutex);
++                participating_workers.insert (handler);
++            }
+             // S02: the same Node must progress while its earlier handler blocks.
+             const bool same_owner = drained.wait_for (5s) == std::future_status::ready;
+             correct = correct && same_owner;
++            const auto executor = application_executor.load ();
++            assert (executor != nullptr);
++            const auto max_workers =
++              rt::offload_executor_test_access_t::max_worker_count (*executor);
++            // A occupies one worker, so the other max_workers - 1 reservations are the limit.
++            const auto wake_bound = max_workers - 1;
++            if (negative_extra_notify) {
++                // Raise the count to exactly one over the bound through counted worker CV wakes.
++                const auto observed = worker_notifications.load ();
++                const auto extra = observed <= wake_bound ? wake_bound - observed + 1 : 0;
++                std::cout << "negative_observed_notifications=" << observed << '\n'
++                          << "negative_extra_notifications=" << extra << '\n';
++                for (std::size_t index = 0; index < extra; ++index)
++                    rt::offload_executor_test_access_t::notify_any_worker (*executor);
++            }
++            watch_notifications = false;
++            const auto notifications = worker_notifications.load ();
++            std::size_t participants;
++            {
++                std::lock_guard lock (participation_mutex);
++                participants = participating_workers.size ();
++            }
++            std::cout << "worker_notifications_for_129_records=" << notifications << '\n'
++                      << "workers_participating=" << participants << '\n';
++            correct = correct && notifications <= wake_bound && participants <= max_workers;
+             std::cout << "blocked_handler_same_node_progress=" << same_owner << '\n';
+             auto completed = std::make_shared<std::promise<void>> ();
+             auto terminal = completed->get_future ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
+index bef4457de8..d280f71b4e 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
+@@ -13,7 +13,10 @@
+ #include <cstdio>
+ #include <future>
+ #include <latch>
++#include <mutex>
++#include <set>
+ #include <stdexcept>
++#include <thread>
+ 
+ namespace fw = zlink::framework;
+ namespace rt = fw::runtime;
+@@ -223,6 +226,47 @@ bool burst (std::string_view negative)
+     return items == 1 && notifications <= workers && queued == 1;
+ }
+ 
++bool steady_stream (bool notify_every_publication)
++{
++    constexpr std::size_t count = 1000, workers = 4;
++    rt::offload_executor_t executor (workers);
++    await ([&] { return rt::offload_executor_test_access_t::idle (executor).size () == workers; });
++    worker_conditions = rt::offload_executor_test_access_t::idle (executor);
++    mesh::service_mailbox_t mailbox;
++    auto source = std::make_shared<source_t> (executor, mailbox);
++    std::mutex participants_mutex;
++    std::set<std::thread::id> participants;
++    source->handle = [&] (std::size_t) {
++        {
++            std::lock_guard lock (participants_mutex);
++            participants.insert (std::this_thread::get_id ());
++        }
++        std::this_thread::sleep_for (500us);
++    };
++    mailbox.begin_application_receive_turn ();
++    wakes = 0;
++    count_wakes = true;
++    for (std::size_t id = 0; id != count; ++id) {
++        enqueue (mailbox, "node", id);
++        require (executor.try_submit_drain (source), "stream publication rejected");
++        if (notify_every_publication)
++            worker_conditions[id % worker_conditions.size ()]->notify_one ();
++        std::this_thread::sleep_for (50us);
++    }
++    await ([&] { return source->completed.load () == count; });
++    await ([&] { return executor.drained (); });
++    count_wakes = false;
++    const auto notifications = wakes.load ();
++    const auto distinct_workers = participants.size ();
++    executor.drain ();
++    std::fprintf (stderr,
++                  "steady_stream records=%zu worker_notifications=%zu notifications_per_record="
++                  "%zu/%zu workers_participating=%zu workers_per_record=%zu/%zu bound=%zu\n",
++                  count, notifications, notifications, count, distinct_workers, distinct_workers,
++                  count, workers);
++    return notifications <= workers && distinct_workers != 0 && distinct_workers <= workers;
++}
++
+ bool independent (bool wait_for_terminal, const std::string &owner)
+ {
+     rt::offload_executor_t executor (2);
+@@ -412,6 +456,8 @@ int main (int argc, char **argv)
+             return burst ("items") ? 0 : 1;
+         if (mode == "--negative-wakes")
+             return burst ("wakes") ? 0 : 1;
++        if (mode == "--negative-stream-wakes")
++            return steady_stream (true) ? 0 : 1;
+         if (mode == "--negative-terminal")
+             return independent (true, "node") ? 0 : 1;
+         if (mode == "--negative-spot-gate")
+@@ -419,6 +465,7 @@ int main (int argc, char **argv)
+         if (mode == "--negative-actor-gate")
+             return gated (true, true) ? 0 : 1;
+         require (burst (""), "burst exceeded item/wake bound");
++        require (steady_stream (false), "steady stream exceeded wake/worker bound");
+         require (independent (false, "node"), "same Node waited for A terminal");
+         require (independent (false, "channel:test"), "same Channel waited for A terminal");
+         shutdown (false);

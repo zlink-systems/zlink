@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+JOB=/root/jobs/fx/cx/v21/s033/lad-node-l0e
+WORKTREE=/root/worktree/zlink-v21-s033/lad-node
+RUNNER="$JOB/tools/node-run-local.sh"
+RUN_GROUP="$JOB/tools/run-group.sh"
+BIN_PATHS=(
+  framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js
+  framework/languages/node/packages/nestjs/dist/index.js
+  framework/bench/grpc/node/client/main.js
+  framework/bench/grpc/node/client/framework-transport.js
+  framework/bench/grpc/node/zlink-framework-server/main.js
+  framework/bench/grpc/node/zlink-framework-server/l0-worker.js
+  framework/bench/grpc/node/zlink-framework-server/bench-handlers.js
+  framework/bench/grpc/node/shared/raw-wire.js
+  framework/bench/grpc/node/shared/bench-server-metrics.js
+  framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node
+  framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0
+)
+
+record_progress() {
+  local label="$1" commit dirty base
+  commit="$(git -C "$WORKTREE" rev-parse HEAD)"
+  base="$(git -C "$WORKTREE" merge-base HEAD origin/main)"
+  if [[ -n "$(git -C "$WORKTREE" status --porcelain)" ]]; then dirty=true; else dirty=false; fi
+  local entries=()
+  local path
+  for path in "${BIN_PATHS[@]}"; do
+    [[ -f "$WORKTREE/$path" ]] || { echo "missing binary: $WORKTREE/$path" >&2; return 1; }
+    case "$(realpath "$WORKTREE/$path")" in
+      "$WORKTREE"/*) ;;
+      *) echo "binary is outside this worktree: $path -> $(realpath "$WORKTREE/$path")" >&2; return 1 ;;
+    esac
+    entries+=("$WORKTREE/$path=$(sha256sum "$WORKTREE/$path" | cut -d' ' -f1)")
+  done
+  local installed_core
+  installed_core="$(node -p "require('$WORKTREE/framework/languages/node/node_modules/@zlink-systems/zlink/provenance/core-package-provenance.json').version")"
+  [[ "$installed_core" == "1.25.0" ]] || {
+    echo "installed Node binding Core is $installed_core, expected 1.25.0" >&2
+    return 1
+  }
+  local package="$WORKTREE/.artifacts/wsl/npm/zlink-systems-zlink-1.25.0.tgz"
+  [[ -f "$package" ]] || { echo "missing worktree-built binding package: $package" >&2; return 1; }
+  printf '%s | commit=%s dirty=%s base=%s binary_origin=local-package-build-wsl.sh-from-worktree core=%s package_sha256=%s binaries=%s\n' \
+    "$label" "$commit" "$dirty" "$base" "$installed_core" \
+    "$(sha256sum "$package" | cut -d' ' -f1)" "$(IFS=';'; echo "${entries[*]}")" \
+    >>"$JOB/progress.md"
+  printf '%s | binding reply `zlink-raw-server/main.js:79-86`: %s | L0 reply `zlink-framework-server/l0-worker.js:50-58`: %s\n' \
+    "$label" \
+    "$(sed -n '79,86p' "$WORKTREE/framework/bench/grpc/node/zlink-raw-server/main.js" | tr '\n' ' ')" \
+    "$(sed -n '50,58p' "$WORKTREE/framework/bench/grpc/node/zlink-framework-server/l0-worker.js" | tr '\n' ' ')" \
+    >>"$JOB/progress.md"
+  printf '%s | per message, both decode the body from received Message.data(), serialize a new BenchPayload with protobuf into a new Buffer, copy it into a new zlink.Message, and submit two parts with the fixed response envelope; L0 reads/parses the header only for framework-wire cross tests.\n' \
+    "$label" >>"$JOB/progress.md"
+}
+cross_group() {
+  local label="$1" output="$2" source_impl="$3" target_impl="$4"
+  shift 4
+  record_progress "$label"
+  env PATTERNS=send-saturation PAYLOAD_SIZES=1024 RUNS=3 \
+    IMPLEMENTATIONS="$source_impl" BENCH_TARGET_SERVER="$target_impl" "$@" \
+    bash "$RUN_GROUP" "$label" "$RUNNER" "$output"
+}
+
+cross_group l0-corrected-cross-raw-raw "$JOB/raw/cross/l0/raw-raw/bench/node" \
+  zlink-node zlink-node
+cross_group l0-corrected-cross-framework-raw "$JOB/raw/cross/l0/framework-raw/bench/node" \
+  zlink-node zlink-framework-node ZLINK_CROSS_FRAMEWORK_WIRE=1 ZLINK_LADDER_L0_SERVER=1
+cross_group l0-corrected-cross-framework-framework "$JOB/raw/cross/l0/framework-framework/bench/node" \
+  zlink-framework-node zlink-framework-node \
+  ZLINK_LADDER_L0_SERVER=1 ZLINK_LADDER_L0_FRAMEWORK_CLIENT=1

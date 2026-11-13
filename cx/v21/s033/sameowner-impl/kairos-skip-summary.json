@@ -1,0 +1,20 @@
+[
+  {
+    "case": "mailbox",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/kairos-skip-mailbox-01.log"
+  },
+  {
+    "case": "channel",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/kairos-skip-channel-01.log"
+  },
+  {
+    "case": "actor",
+    "iteration": 1,
+    "exit": 0,
+    "log": "/root/jobs/fx/cx/v21/s033/sameowner-impl/kairos-skip-actor-01.log"
+  }
+]

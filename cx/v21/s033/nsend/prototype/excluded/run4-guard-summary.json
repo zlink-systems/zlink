@@ -1,0 +1,19 @@
+{
+  "samples": 384,
+  "max_external_cpu": 2.604199979129495,
+  "minimum_memavailable_kb": 25888580,
+  "detected": {
+    "time": "2026-11-08T13:35:35+0900",
+    "foreign_cpu": [
+      {
+        "pid": 2259374,
+        "ppid": 2259373,
+        "comm": "node",
+        "cores": 2.604199979129495,
+        "cwd": "/root/worktree/zlink-4053-node-alloc/framework/languages/node"
+      }
+    ],
+    "memavailable_kb": 26090132,
+    "rule": "external >0.5 CPU in one second, or >0.25 CPU for two consecutive seconds; MemAvailable >=12 GiB"
+  }
+}

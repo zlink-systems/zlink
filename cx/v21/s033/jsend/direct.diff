@@ -1,0 +1,35 @@
+diff --git a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java
+index 915cc2b80a..45b854a6d2 100644
+--- a/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java
++++ b/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java
+@@ -528,21 +528,15 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
+             List<Message> replyMessages) {
+         List<Message> messages = claimMessages(replyMessages);
+         try {
+-            inStateLane(
+-                    () -> {
+-                        ensureOwnedOnLane(router);
+-                        if (requestSequence == null || messages.isEmpty()) {
+-                            throw new IllegalArgumentException(
+-                                    "service reply requires request sequence and frames");
+-                        }
+-                        var submit =
+-                                router.reply(target, requestSequence).message(messages.getFirst());
+-                        for (int index = 1; index < messages.size(); index++) {
+-                            submit.message(messages.get(index));
+-                        }
+-                        submit.submit();
+-                        return null;
+-                    });
++            if (requestSequence == null || messages.isEmpty()) {
++                throw new IllegalArgumentException(
++                        "service reply requires request sequence and frames");
++            }
++            var submit = router.reply(target, requestSequence).message(messages.getFirst());
++            for (int index = 1; index < messages.size(); index++) {
++                submit.message(messages.get(index));
++            }
++            submit.submit();
+         } finally {
+             Message.closeAll(messages);
+         }

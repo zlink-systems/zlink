@@ -1,0 +1,2360 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index a626b17e78..7d349f257c 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -2967,6 +2967,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+     opentelemetry-cpp::metrics)
+   target_include_directories(test_cpp_framework_mesh_metrics PRIVATE
+     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
++  add_zlink_framework_test(
++    test_cpp_framework_independent_node_records
++    tests/Zlink.Framework.UnitTests/test_cpp_framework_independent_node_records.cpp
++    "framework-unit;framework-contract;framework-regression;messaging"
++    "unit")
++  target_include_directories(test_cpp_framework_independent_node_records PRIVATE
++    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+   add_zlink_framework_test(
+     test_cpp_framework_claim_dispatch_cost
+     tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+index fe9c5968c8..5ecb1fc485 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+@@ -843,12 +843,12 @@ class route_client_t
+             const std::string &packet_name,
+             const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
+               auto encode_payload = [&message_value] (serializer_registry_t &serializers) {
+-                  return serializers.template get<TMessage> ().serialize_with_content_type (
+-                    message_value);
++                  const auto serializer = serializers.template get<TMessage> ();
++                  return std::pair{serializer.serialize (message_value),
++                    detail::serializer_registry_access_t::envelope_plan (serializer)};
+               };
+               // Erased submit consumes this encoder before its first suspension.
+               return submit_send_erased (state, router_channel_id, target_node_rid, packet_name,
+-                                         std::type_index (typeid (TMessage)),
+                                          std::ref (encode_payload), metadata);
+           });
+     }
+@@ -914,7 +914,7 @@ class route_client_t
+                   selected_serializer.emplace (serializers.template get<TRequest> ());
+                   return std::pair{
+                     selected_serializer->serialize (request_value),
+-                    detail::serializer_registry_access_t::request_plan (*selected_serializer)};
++                    detail::serializer_registry_access_t::envelope_plan (*selected_serializer)};
+               };
+               // Erased submit consumes this encoder before its first suspension.
+               submit_request_reply_message_erased (state, router_channel_id, target_node_rid,
+@@ -974,13 +974,16 @@ class route_client_t
+     explicit route_client_t (std::shared_ptr<detail::route_client_state_t> state,
+                              serializer_registry_t &serializers);
+ 
++    using node_payload_encoder_t = std::function<
++      std::pair<encoded_payload_t, std::shared_ptr<const detail::envelope_type_plan_t>> (
++        serializer_registry_t &)>;
++
+     static task_t<void>
+     submit_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
+                         const std::string &router_channel_id,
+                         const zlink::routing_id_t &target_node_rid,
+                         const std::string &packet_name,
+-                        std::type_index message_type,
+-                        payload_encoder_t encode_payload,
++                        node_payload_encoder_t encode_payload,
+                         const route_send_call_t::metadata_map_t &metadata);
+ 
+     static task_t<void>
+@@ -1012,10 +1015,6 @@ class route_client_t
+                              payload_encoder_t encode_payload,
+                              const route_send_call_t::metadata_map_t &metadata);
+ 
+-    using node_payload_encoder_t = std::function<
+-      std::pair<encoded_payload_t, std::shared_ptr<const detail::request_type_plan_t>> (
+-        serializer_registry_t &)>;
+-
+     static void
+     submit_request_reply_message_erased (const std::shared_ptr<detail::route_client_state_t> &state,
+                                          std::string router_channel_id,
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
+index d5bc6bcaf8..67eefd209b 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
+@@ -40,15 +40,15 @@ struct prepared_header_fragment_t
+     std::string bytes;
+     std::exception_ptr error;
+ };
+-struct request_type_plan_t
++struct envelope_type_plan_t
+ {
+     std::string content_type;
+     std::string prefix;
+     std::string middle;
+     std::exception_ptr error;
+ };
+-prepared_header_fragment_t prepare_request_channel (std::string_view channel);
+-request_type_plan_t prepare_request_type (std::string_view name, std::string content_type);
++prepared_header_fragment_t prepare_envelope_channel (std::string_view channel);
++envelope_type_plan_t prepare_envelope_type (std::string_view name, std::string content_type);
+ 
+ inline constexpr std::size_t serializer_send_type_cache_capacity = 1024;
+ class serializer_registry_state_t;
+@@ -238,7 +238,7 @@ template <typename T> class serializer_t
+                   std::string content_type) :
+         _state (std::make_shared<const state_t> (state_t{
+           std::move (serialize), std::move (deserialize),
+-          detail::prepare_request_type (detail::message_name<T> (), std::move (content_type))}))
++          detail::prepare_envelope_type (detail::message_name<T> (), std::move (content_type))}))
+     {
+     }
+ 
+@@ -285,7 +285,7 @@ template <typename T> class serializer_t
+     {
+         serialize_fn_t serialize;
+         deserialize_fn_t deserialize;
+-        detail::request_type_plan_t plan;
++        detail::envelope_type_plan_t plan;
+     };
+ 
+     std::shared_ptr<const state_t> _state;
+@@ -456,8 +456,8 @@ namespace detail
+ struct serializer_registry_access_t
+ {
+     template <typename T>
+-    static std::shared_ptr<const request_type_plan_t>
+-    request_plan (const serializer_t<T> &serializer) noexcept
++    static std::shared_ptr<const envelope_type_plan_t>
++    envelope_plan (const serializer_t<T> &serializer) noexcept
+     {
+         return {serializer._state, &serializer._state->plan};
+     }
+diff --git a/framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.cpp b/framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.cpp
+index d14836bc3b..af67af7d0a 100644
+--- a/framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.cpp
+@@ -3165,10 +3165,11 @@ result_t<void> actor_gateway_runtime_t::bind_session_route (
+           runtime::messaging::client_call_codec_t codec;
+           auto parts = codec.encode_node_send_parts (
+             route_channel_name, actor_bound_session_route_request_t::packet_name, target_node_rid,
+-            {}, state->dispatch, *serializers, [&] (serializer_registry_t &registry) {
+-                return registry.get<actor_bound_session_route_request_t> ()
+-                  .serialize_with_content_type (make_actor_bound_session_route_request (
+-                    *current_actor_ref, packet_name, payload_codec, payload));
++            {}, state->dispatch, *serializers, [&] (auto header, serializer_registry_t &registry) {
++                return codec.encode_payload_parts (
++                  std::move (header), registry.get<actor_bound_session_route_request_t> ()
++                    .serialize_with_content_type (make_actor_bound_session_route_request (
++                      *current_actor_ref, packet_name, payload_codec, payload)));
+             });
+           const auto sent =
+             co_await node->send_to_node (target_node_rid, std::move (parts).take_items ());
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+index 8d1b331d5c..38a7fc266d 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+@@ -775,7 +775,7 @@ void channel_runtime_t::bind_mesh_node_transport (
+                   index.nodes.insert_or_assign (
+                     mesh_name,
+                     channel_runtime_state_t::node_transport_index_t::entry_t{
+-                      transport, prepare_request_channel (mesh_name),
++                      transport, prepare_envelope_channel (mesh_name),
+                       &runtime::messaging::client_call_codec_t::encode_service_payload_parts});
+           });
+       })
+@@ -1442,8 +1442,7 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
+                                     const std::string &router_channel_id,
+                                     const zlink::routing_id_t &target_node_rid,
+                                     const std::string &packet_name,
+-                                    std::type_index message_type,
+-                                    payload_encoder_t encode_payload,
++                                    node_payload_encoder_t encode_payload,
+                                     const route_send_call_t::metadata_map_t &metadata)
+ {
+     try {
+@@ -1455,12 +1454,16 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
+             throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                          "route client is not configured");
+         }
+-        const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
+-        if (std::holds_alternative<std::monostate> (transport)) {
++        const auto index = std::atomic_load_explicit (&state->runtime->node_transports,
++                                                       std::memory_order_acquire);
++        const auto endpoint = index->nodes.find (router_channel_id);
++        if (endpoint == index->nodes.end ()
++            || std::holds_alternative<std::monostate> (endpoint->second.transport)) {
+             throw framework_exception_t (framework_error_kind_t::unavailable,
+                                          "route channel or SPOT mesh '" + router_channel_id
+                                            + "' is not registered");
+         }
++        const auto transport = endpoint->second.transport;
+         const auto finish = [transport] (const result_t<result_t<void>> &result) {
+             // The selected callable remains owned through its physical terminal.
+             (void) transport;
+@@ -1481,7 +1484,14 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
+             runtime::messaging::client_call_codec_t codec;
+             auto parts = codec.encode_node_send_parts (
+               router_channel_id, packet_name, target_node_rid, metadata, state->runtime->dispatch,
+-              *state->serializers, encode_payload);
++              *state->serializers, [&] (auto header, auto &serializers) {
++                  auto [payload, type] = encode_payload (serializers);
++                  header.content_type = type->content_type;
++                  return (codec.*endpoint->second.encode_envelope) (
++                    std::move (header), std::move (payload), std::move (type),
++                    std::shared_ptr<const detail::prepared_header_fragment_t> (
++                      index, &endpoint->second.channel));
++              });
+             if (const auto mesh =
+                   std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (
+                     &transport)) {
+@@ -1877,7 +1887,7 @@ void route_client_t::submit_request_reply_message_erased (
+               });
+         }
+         auto [payload, type_plan] = encode_payload (*state->serializers);
+-        parts = (codec.*endpoint->second.encode_request) (
++        parts = (codec.*endpoint->second.encode_envelope) (
+           std::move (header), std::move (payload), std::move (type_plan),
+           std::shared_ptr<const detail::prepared_header_fragment_t> (index,
+                                                                      &endpoint->second.channel));
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
+index 8ab4885d97..b2b97c5065 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
+@@ -195,15 +195,15 @@ class channel_runtime_state_t
+     {
+         struct entry_t
+         {
+-            using request_encoder_t =
++            using envelope_encoder_t =
+               runtime::messaging::message_parts_t (runtime::messaging::client_call_codec_t::*) (
+                 runtime::messaging::envelope_header_t,
+                 encoded_payload_t,
+-                std::shared_ptr<const request_type_plan_t>,
++                std::shared_ptr<const envelope_type_plan_t>,
+                 std::shared_ptr<const prepared_header_fragment_t>) const;
+             node_transport_t transport;
+             prepared_header_fragment_t channel;
+-            request_encoder_t encode_request =
++            envelope_encoder_t encode_envelope =
+               &runtime::messaging::client_call_codec_t::encode_payload_parts;
+         };
+         std::map<std::string, entry_t> nodes;
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime_manager.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime_manager.cpp
+index 451b4e8b3e..a21f0c3548 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime_manager.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime_manager.cpp
+@@ -187,7 +187,7 @@ void channel_runtime_manager_t::initialize_route_channels (
+             index.nodes.insert_or_assign (
+               route_id,
+               channel_runtime_state_t::node_transport_index_t::entry_t{
+-                _state->route_channels.at (route_id), prepare_request_channel (route_id)});
++                _state->route_channels.at (route_id), prepare_envelope_channel (route_id)});
+         });
+     }
+ }
+@@ -207,7 +207,7 @@ void channel_runtime_manager_t::initialize_route_channels (
+             index.nodes.insert_or_assign (
+               route_id,
+               channel_runtime_state_t::node_transport_index_t::entry_t{
+-                _state->route_channels.at (route_id), prepare_request_channel (route_id)});
++                _state->route_channels.at (route_id), prepare_envelope_channel (route_id)});
+         });
+     }
+ }
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/application_record.hpp b/framework/languages/cpp/framework/src/runtime/dispatch/application_record.hpp
+index cfb826f830..b7051ddc96 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/application_record.hpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/application_record.hpp
+@@ -30,9 +30,9 @@ struct service_mailbox_record_t;
+ struct service_mailbox_claim_t;
+ class service_mailbox_t;
+ 
+-// Claim credit of one claimed original. The claim mints it into the slot, so only the
+-// take that moves the original out holds it; a completion that lost the take holds none
+-// and cannot settle.
++// Claim credit of one original. The exclusive take owns its settlement; a
++// completion that lost the take holds no credit and cannot settle. A gated FIFO
++// slot retains attribution for relocation until that take.
+ class service_mailbox_settlement_t
+ {
+   public:
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+index 59d8ae6570..b87bffafa1 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+@@ -16,6 +16,15 @@
+ namespace zlink::framework::runtime
+ {
+ 
++namespace
++{
++bool accepts_internal_work (bool stopping, std::size_t active,
++                            std::size_t active_roles, std::size_t queued) noexcept
++{
++    return !stopping || active != active_roles || queued != 0;
++}
++} // namespace
++
+ std::shared_ptr<offload_executor_t> infrastructure_executor ()
+ {
+     static std::mutex mutex;
+@@ -96,7 +105,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
+         // Already-admitted owner queues keep draining through scheduler
+         // continuations. Teardown closes this path only after quiescence;
+         // public work submission remains sealed as soon as stopping begins.
+-        if (_stopping && _active == _role_active && _queue.empty ()) {
++        if (!accepts_internal_work (_stopping, _active, _role_active, _queue.size ())) {
+             return false;
+         }
+         if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
+@@ -108,6 +117,47 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
+     return true;
+ }
+ 
++void offload_executor_t::bind_application_work (application_work_t take)
++{
++    std::lock_guard lock (_mutex);
++    _take_application_work = std::move (take);
++}
++
++std::size_t offload_executor_t::schedule_application_locked ()
++{
++    if (!_take_application_work)
++        return 0;
++    std::size_t scheduled = 0;
++    while (_idle_workers > _queue.size () + _roles.size ()
++           || _live_workers < _max_worker_count) {
++        auto work = _take_application_work (_queue.size (), _stopping);
++        if (!work)
++            break;
++        if (_idle_workers <= _queue.size () + _roles.size ()
++            && _live_workers < _max_worker_count)
++            start_worker_locked ();
++        _queue.push (work_item_t{std::move (work), std::nullopt});
++        ++scheduled;
++    }
++    return scheduled;
++}
++
++bool offload_executor_t::notify_application_work ()
++{
++    std::size_t scheduled;
++    {
++        std::lock_guard lock (_mutex);
++        if (!accepts_internal_work (_stopping, _active, _role_active, _queue.size ()))
++            return false;
++        scheduled = schedule_application_locked ();
++    }
++    // Each queued drain reserves one available application worker. Repeated
++    // publications cannot notify that worker again while its slot is reserved.
++    for (std::size_t index = 0; index != scheduled; ++index)
++        _ready.notify_one ();
++    return true;
++}
++
+ offload_executor_t::retained_work_t::retained_work_t (offload_executor_t &executor) noexcept :
+     _executor (&executor)
+ {
+@@ -330,9 +380,17 @@ void offload_executor_t::worker_loop ()
+     while (true) {
+         work_item_t work;
+         std::shared_ptr<role_t> role;
++        std::size_t scheduled;
+         {
+             std::unique_lock lock (_mutex);
+             ++_idle_workers;
++            const auto initial_scheduled = schedule_application_locked ();
++            if (initial_scheduled > 1) {
++                lock.unlock ();
++                for (std::size_t index = 1; index != initial_scheduled; ++index)
++                    _ready.notify_one ();
++                lock.lock ();
++            }
+             bool ready = false;
+             if (_idle_timeout.count () == 0) {
+                 _ready.wait (lock,
+@@ -368,7 +426,12 @@ void offload_executor_t::worker_loop ()
+                     _active_cancellations.push_back (&*work.cancellation);
+             }
+             ++_active;
++            // Consuming an older reservation changes which ready sources fit
++            // the idle workers. Publish that availability before running a handler.
++            scheduled = schedule_application_locked ();
+         }
++        for (std::size_t index = 0; index != scheduled; ++index)
++            _ready.notify_one ();
+ 
+         // A receive role is deliberately outside the application exception
+         // boundary.
+@@ -403,7 +466,14 @@ void offload_executor_t::worker_loop ()
+             if (role)
+                 --_role_active;
+             complete_work_locked ();
++            // Publish this returning worker's availability before drain can
++            // observe quiescence. Runnable owner records reserve the same queue.
++            ++_idle_workers;
++            scheduled = schedule_application_locked ();
++            --_idle_workers;
+         }
++        for (std::size_t index = 0; index != scheduled; ++index)
++            _ready.notify_one ();
+     }
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
+index 008ee473d8..42eef8d96d 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.hpp
+@@ -75,6 +75,11 @@ class offload_executor_t
+         offload_executor_t *_executor = nullptr;
+     };
+     retained_work_t retain_internal_work () noexcept;
++    // The scheduler reserves existing idle worker slots for shared owner drains.
++    // The source consults its existing ready set, without a second work queue.
++    using application_work_t = std::function<std::function<void ()> (std::size_t, bool)>;
++    void bind_application_work (application_work_t take);
++    bool notify_application_work ();
+     // Initial placement uses the workers already created by the constructor.
+     bool start_role (std::shared_ptr<role_t> role);
+     // Seals submission and drains application work while receive roles keep
+@@ -108,11 +113,13 @@ class offload_executor_t
+ 
+     bool try_submit_application (work_t work);
+     void worker_loop ();
++    std::size_t schedule_application_locked ();
+     void complete_work_locked ();
+     void start_worker_locked ();
+     void retire_current_worker_locked ();
+     void join_retired_workers_locked ();
+ 
++    application_work_t _take_application_work;
+     mutable std::mutex _mutex;
+     std::condition_variable _ready;
+     std::condition_variable _empty;
+diff --git a/framework/languages/cpp/framework/src/runtime/host/app.cpp b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+index 9632b6ec9a..35f38c36e7 100644
+--- a/framework/languages/cpp/framework/src/runtime/host/app.cpp
++++ b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+@@ -2614,7 +2614,7 @@ void app_t::_apply_zlink_framework ()
+                       "MeshNode send");
+                 }
+                 co_return one_way_native_submit_result (
+-                  co_await mesh->send_to_node (target, std::move (parts).take_items ()),
++                  co_await mesh->send_to_node (target, std::move (parts)),
+                   "MeshNode send");
+             }
+         };
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+index 239a9cd60f..226a193f83 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_host_service.cpp
+@@ -2351,6 +2351,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+         receive_turn.dismiss ();
+         application_permit.reset ();
+         application_permit_budget.release_without_handler ();
++        mesh::service_mailbox_t::notify_application_ready (ready);
+         if (count != 0 && pending_management) {
+             if (pending_management->armed)
+                 pending_management->armed->store (false, std::memory_order_release);
+@@ -2387,12 +2388,11 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
+         readiness.reset ();
+         // A pump may consume the wake for supply delivered after this turn's
+         // take. Recheck its owner state before waiting for the next rotation.
+-        if (!local_pending && !ready && !host._stop.load (std::memory_order_acquire)
++        if (!local_pending && !host._stop.load (std::memory_order_acquire)
+             && !supply.has_supply ()) {
+             readiness = node->native_node ().wait_for_hosted_dispatch_activity (
+               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
+         }
+-        mesh::service_mailbox_t::notify_application_ready (ready);
+         return readiness;
+     }
+ 
+@@ -3345,6 +3345,22 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+                   _published_mesh_descriptors[index] = std::move (descriptor);
+               });
+         }
++        _application_dispatch->bind_application_work (
++          [this, next = std::size_t{0}] (std::size_t reserved, bool reject_only) mutable {
++              // The existing executor mutex owns this selector's traversal. A
++              // returned drain must give another ready node its next opportunity.
++              for (std::size_t offset = 0; offset != _nodes.size (); ++offset) {
++                  const auto index = (next + offset) % _nodes.size ();
++                  auto &mailbox = _nodes[index]->native_node ().transport ().mailbox ();
++                  if (auto owner = mailbox.select_application_owner (reserved)) {
++                      next = (index + 1) % _nodes.size ();
++                      auto start = make_application_owner_work (
++                        _nodes[index], _registrations[index], std::move (*owner));
++                      return std::function<void ()> ([start, reject_only] { start (reject_only); });
++                  }
++              }
++              return std::function<void ()>{};
++          });
+         for (std::size_t index = 0; index < _nodes.size (); ++index) {
+             const auto node = _nodes[index];
+             const auto registration = _registrations[index];
+@@ -3353,9 +3369,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
+             mesh::service_mailbox_t::application_ready_t submit_owner =
+               [this, executor = _application_dispatch, node,
+                registration] (const std::string &owner) {
+-                  auto start = make_application_owner_work (node, registration, owner);
+-                  if (!executor->try_submit_internal ([start] { start (false); }))
+-                      start (true);
++                  if (mesh::service_mailbox_t::independent_application_owner (owner)) {
++                      if (!executor->notify_application_work ())
++                          make_application_owner_work (node, registration, owner) (true);
++                  } else {
++                      auto start = make_application_owner_work (node, registration, owner);
++                      if (!executor->try_submit_internal ([start] { start (false); }))
++                          start (true);
++                  }
+               };
+             auto role =
+               std::make_shared<node_receive_role_t> (*this, node, registration, receive_permit);
+@@ -3687,7 +3708,10 @@ void mesh_node_host_service_t::stop () noexcept
+     for (const auto &node : _nodes)
+         node->signal_dispatch_activity ();
+     if (_application_dispatch)
+-        _runtime_failures->capture ([&] { _application_dispatch->drain (); });
++        _runtime_failures->capture ([&] {
++            _application_dispatch->drain ();
++            _application_dispatch->bind_application_work ({});
++        });
+     _completion_dispatcher.reset ();
+     for (auto &node : _nodes)
+         _runtime_failures->capture ([&] { node->bind_descriptor_publisher ({}); });
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
+index d61b44bcc2..5b0a8bcd7a 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
+@@ -4250,42 +4250,51 @@ mesh_node_runtime_t::lookup_unknown_node_target (zlink::routing_id_t target) con
+ 
+ task_t<zlink::submit_result_t>
+ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
+-                                   const std::vector<zlink::message_t> &parts,
+-                                   std::vector<std::uint8_t> metadata)
++                                   runtime::messaging::message_parts_t parts)
+ {
+     try {
+-        if (!_node)
+-            throw configuration_error ("MeshNode has not started");
+-        bool unknown_target = false;
+-        if (const auto classified = classify_node_target_from_topology (target, unknown_target))
+-            return task_t<zlink::submit_result_t> (
+-              result_t<zlink::submit_result_t>::success (*classified));
+-        if (unknown_target)
+-            return send_to_unknown_node (target, parts);
+-        (void) metadata;
+-        return _node->send_to_node (target, parts);
++        return dispatch_node_operation (
++          target,
++          [] (zlink::submit_result_t result) {
++              return task_t<zlink::submit_result_t> (result_t<zlink::submit_result_t>::success (result));
++          },
++          [&] { return _node->send_to_node (target, std::move (parts)); },
++          [&] (task_t<std::optional<zlink::submit_result_t>> classification) {
++              return send_to_unknown_node (target, std::move (parts), std::move (classification));
++          });
+     }
+     catch (...) {
+         return task_t<zlink::submit_result_t> (current_exception_result<zlink::submit_result_t> ());
+     }
+ }
+ 
++task_t<zlink::submit_result_t>
++mesh_node_runtime_t::send_to_unknown_node (zlink::routing_id_t target,
++                                           runtime::messaging::message_parts_t parts,
++                                           task_t<std::optional<zlink::submit_result_t>> classification)
++{
++    if (const auto classified = co_await classification)
++        co_return *classified;
++    co_return co_await _node->send_to_node (target, std::move (parts));
++}
++
+ task_t<zlink::submit_result_t>
+ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
+-                                   std::vector<zlink::message_t> &&parts,
++                                   const std::vector<zlink::message_t> &parts,
+                                    std::vector<std::uint8_t> metadata)
+ {
+     try {
+-        if (!_node)
+-            throw configuration_error ("MeshNode has not started");
+-        bool unknown_target = false;
+-        if (const auto classified = classify_node_target_from_topology (target, unknown_target))
+-            return task_t<zlink::submit_result_t> (
+-              result_t<zlink::submit_result_t>::success (*classified));
+-        if (unknown_target)
+-            return send_to_unknown_node (target, std::move (parts));
+         (void) metadata;
+-        return _node->send_to_node (target, std::move (parts));
++        return dispatch_node_operation (
++          target,
++          [] (zlink::submit_result_t result) {
++              return task_t<zlink::submit_result_t> (result_t<zlink::submit_result_t>::success (result));
++          },
++          [&] { return _node->send_to_node (target, parts); },
++          [&] (task_t<std::optional<zlink::submit_result_t>> classification) {
++              return send_to_unknown_node (target, runtime::messaging::message_parts_t (parts),
++                                            std::move (classification));
++          });
+     }
+     catch (...) {
+         return task_t<zlink::submit_result_t> (current_exception_result<zlink::submit_result_t> ());
+@@ -4293,12 +4302,27 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
+ }
+ 
+ task_t<zlink::submit_result_t>
+-mesh_node_runtime_t::send_to_unknown_node (zlink::routing_id_t target,
+-                                           std::vector<zlink::message_t> parts)
++mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
++                                   std::vector<zlink::message_t> &&parts,
++                                   std::vector<std::uint8_t> metadata)
+ {
+-    if (const auto classified = co_await classify_unknown_node_target (target))
+-        co_return *classified;
+-    co_return co_await _node->send_to_node (target, std::move (parts));
++    try {
++        (void) metadata;
++        return dispatch_node_operation (
++          target,
++          [] (zlink::submit_result_t result) {
++              return task_t<zlink::submit_result_t> (result_t<zlink::submit_result_t>::success (result));
++          },
++          [&] { return _node->send_to_node (target, std::move (parts)); },
++          [&] (task_t<std::optional<zlink::submit_result_t>> classification) {
++              return send_to_unknown_node (
++                target, runtime::messaging::message_parts_t (std::move (parts)),
++                std::move (classification));
++          });
++    }
++    catch (...) {
++        return task_t<zlink::submit_result_t> (current_exception_result<zlink::submit_result_t> ());
++    }
+ }
+ 
+ task_t<zlink::submit_result_t>
+@@ -4315,7 +4339,7 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
+  * the topology suspends, for the Location Store classification. A failure
+  * stays the returned task's result, as it was inside a coroutine. */
+ template <typename Classified, typename Known, typename Unknown>
+-auto mesh_node_runtime_t::dispatch_node_request (const zlink::routing_id_t &target,
++auto mesh_node_runtime_t::dispatch_node_operation (const zlink::routing_id_t &target,
+                                                  Classified &&classified,
+                                                  Known &&known,
+                                                  Unknown &&unknown) -> decltype (known ())
+@@ -4475,7 +4499,7 @@ void mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,
+                                               std::chrono::milliseconds timeout,
+                                               request_receiver_t<node_reply_t> receiver)
+ {
+-    dispatch_node_request (
++    dispatch_node_operation (
+       target,
+       [&] (zlink::submit_result_t result) {
+           auto failure = node_submission_failure (result);
+@@ -4527,7 +4551,7 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
+                                       std::vector<std::uint8_t> metadata)
+ try {
+     (void) metadata;
+-    return dispatch_node_request (
++    return dispatch_node_operation (
+       target,
+       [] (zlink::submit_result_t result) {
+           return task_t<zlink::submit_result_t> (
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
+index 7273864ca0..f175afcd98 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
+@@ -248,6 +248,8 @@ class mesh_node_runtime_t
+                           const std::string &endpoint,
+                           bool automatic = false) noexcept;
+ 
++    task_t<zlink::submit_result_t> send_to_node (
++      const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts);
+     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
+                                                  const std::vector<zlink::message_t> &parts,
+                                                  std::vector<std::uint8_t> metadata = {});
+@@ -638,7 +640,7 @@ class mesh_node_runtime_t
+     task_t<std::optional<zlink::submit_result_t>>
+     lookup_unknown_node_target (zlink::routing_id_t target) const;
+     template <typename Classified, typename Known, typename Unknown>
+-    auto dispatch_node_request (const zlink::routing_id_t &target,
++    auto dispatch_node_operation (const zlink::routing_id_t &target,
+                                 Classified &&classified,
+                                 Known &&known,
+                                 Unknown &&unknown) -> decltype (known ());
+@@ -660,8 +662,9 @@ class mesh_node_runtime_t
+                              host::pending_operation_t &operation_id,
+                              std::chrono::milliseconds timeout,
+                              task_t<std::optional<zlink::submit_result_t>> classification);
+-    task_t<zlink::submit_result_t> send_to_unknown_node (zlink::routing_id_t target,
+-                                                         std::vector<zlink::message_t> parts);
++    task_t<zlink::submit_result_t> send_to_unknown_node (
++      zlink::routing_id_t target, runtime::messaging::message_parts_t parts,
++      task_t<std::optional<zlink::submit_result_t>> classification);
+     void configure_relocation_metric_context (
+       runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t &wire,
+       runtime::stateful::object_kind_t kind,
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+index a5b40bfe0b..4a7eecd906 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+@@ -15,6 +15,9 @@ namespace zlink::framework::runtime::mesh
+ {
+ namespace
+ {
++constexpr std::string_view node_owner = "node";
++constexpr std::string_view channel_owner_prefix = "channel:";
++
+ bool has_original (const service_mailbox_record_t &record) noexcept
+ {
+     return !record.parts.empty () || record.application;
+@@ -52,9 +55,9 @@ std::string service_mailbox_t::application_owner (host::owner_kind_t kind, std::
+ {
+     switch (kind) {
+         case host::owner_kind_t::node:
+-            return "node";
++            return std::string (node_owner);
+         case host::owner_kind_t::channel:
+-            return "channel:" + std::string (id);
++            return std::string (channel_owner_prefix) + std::string (id);
+         case host::owner_kind_t::spot:
+             return std::string (detail::activation_admission_t::spot_key_prefix) + std::string (id);
+         case host::owner_kind_t::actor:
+@@ -64,6 +67,11 @@ std::string service_mailbox_t::application_owner (host::owner_kind_t kind, std::
+     throw std::invalid_argument ("unknown application owner kind");
+ }
+ 
++bool service_mailbox_t::independent_application_owner (std::string_view owner) noexcept
++{
++    return owner == node_owner || owner.starts_with (channel_owner_prefix);
++}
++
+ service_mailbox_t::domain_t &service_mailbox_t::domain (service_mailbox_domain_t value)
+ {
+     return value == service_mailbox_domain_t::application ? _state->application
+@@ -104,11 +112,13 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+     ++queue.messages;
+     ++target.messages;
+     target.bytes += retained;
+-    if (queue.phase == owner_phase_t::idle) {
++    const bool became_ready = queue.phase == owner_phase_t::idle;
++    if (became_ready) {
+         queue.phase = owner_phase_t::ready;
+         target.ready.push_back (owner);
+     }
+-    const bool notify = &target == &_state->application && !_state->application_receive_turn;
++    const bool notify = &target == &_state->application && !_state->application_receive_turn
++                        && (became_ready || independent_application_owner (owner));
+     lock.unlock ();
+     if (notify)
+         notify_application_ready ();
+@@ -127,17 +137,18 @@ service_mailbox_t::try_claim (service_mailbox_domain_t domain_value,
+     std::unique_lock lock (_state->mutex);
+     auto &source = domain (domain_value);
+     while (!source.ready.empty ()) {
+-        const auto &owner = source.ready.front ();
++        const auto owner = source.ready.front ();
+         auto found = source.owners.find (owner);
+         if (found == source.owners.end () || found->second.phase != owner_phase_t::ready
+             || found->second.records.empty ()) {
+             source.ready.pop_front ();
+             continue;
+         }
+-        auto claim = claim_owner_locked (source, domain_value, owner, message_budget, byte_budget,
+-                                         claimed, lock);
+-        source.ready.pop_front ();
+-        return claim;
++        if (domain_value != service_mailbox_domain_t::application
++            || !independent_application_owner (owner))
++            source.ready.pop_front ();
++        return claim_owner_locked (source, domain_value, owner, message_budget, byte_budget,
++                                    claimed, lock);
+     }
+     return nullptr;
+ }
+@@ -155,16 +166,14 @@ service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
+     std::unique_lock lock (_state->mutex);
+     auto &source = domain (domain_value);
+     const auto found = source.owners.find (owner);
+-    if (found == source.owners.end () || found->second.active_messages != 0
+-        || found->second.records.empty ()) {
++    if (found == source.owners.end () || found->second.records.empty ()) {
+         return nullptr;
+     }
++    if (domain_value != service_mailbox_domain_t::application
++        || !independent_application_owner (owner))
++        source.ready.remove (owner);
+     auto claim =
+       claim_owner_locked (source, domain_value, owner, message_budget, byte_budget, claimed, lock);
+-    if (found->second.phase != owner_phase_t::draining) {
+-        source.ready.erase (std::remove (source.ready.begin (), source.ready.end (), owner),
+-                            source.ready.end ());
+-    }
+     return claim;
+ }
+ 
+@@ -178,7 +187,10 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
+                                        std::unique_lock<std::mutex> &lock)
+ {
+     const auto found = source.owners.find (owner);
+-    if (found == source.owners.end () || found->second.active_messages != 0
++    const bool independent = domain_value == service_mailbox_domain_t::application
++                             && independent_application_owner (owner);
++    if (found == source.owners.end ()
++        || (!independent && found->second.active_messages != 0)
+         || found->second.records.empty ()) {
+         return nullptr;
+     }
+@@ -189,7 +201,8 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
+     const auto limit = std::min (message_budget, queue.records.size ());
+     claim->records.reserve (limit);
+     claim->record_bytes.reserve (limit);
+-    // The claim stays the front prefix of the FIFO; list references survive push_back.
++    // Select the FIFO prefix while holding its producer boundary. Independent
++    // turns detach these same nodes before another worker can claim a prefix.
+     for (auto &slot : queue.records) {
+         if (claim->records.size () == limit)
+             break;
+@@ -210,19 +223,34 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
+     claim->_mailbox = _state;
+     claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
+     claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
+-    // Each slot holds its own credit; whichever take moves the original out holds it.
+-    for (std::size_t index = 0; index != claim->claimed_messages; ++index)
+-        claim->records[index]->transferred = service_mailbox_settlement_t (claim, index);
++    // Gated FIFO slots retain their attribution for a relocation cut. Independent
++    // originals are owned by the claim itself, so their owning credit is minted
++    // only at transfer; storing it here would make the claim retain itself.
++    if (!independent)
++        for (std::size_t index = 0; index != claim->claimed_messages; ++index)
++            claim->records[index]->transferred = service_mailbox_settlement_t (claim, index);
+     queue.bytes -= claim->claimed_bytes;
+     queue.messages -= claim->claimed_messages;
+     source.bytes -= claim->claimed_bytes;
+     source.messages -= claim->claimed_messages;
+-    queue.active_bytes += claim->claimed_bytes;
+-    queue.active_messages += claim->claimed_messages;
+-    source.active_bytes += claim->claimed_bytes;
+-    source.active_messages += claim->claimed_messages;
+-    if (queue.phase != owner_phase_t::draining)
+-        queue.phase = owner_phase_t::retained;
++    if (independent) {
++        claim->_originals.splice (claim->_originals.end (), queue.records,
++                                  queue.records.begin (),
++                                  std::next (queue.records.begin (), claim->claimed_messages));
++        if (queue.records.empty ()) {
++            source.ready.remove (owner);
++            source.owners.erase (found);
++        }
++    } else {
++        // Gated credits retain a relocation-visible FIFO prefix. Independent
++        // credits live entirely in their record claim, without owner bookkeeping.
++        queue.active_bytes += claim->claimed_bytes;
++        queue.active_messages += claim->claimed_messages;
++        source.active_bytes += claim->claimed_bytes;
++        source.active_messages += claim->claimed_messages;
++        if (queue.phase != owner_phase_t::draining)
++            queue.phase = owner_phase_t::retained;
++    }
+     // A consumer allocation may fail before or during transfer. Return every
+     // outstanding credit through the same release owner. Own the remaining originals
+     // before unlocking so a relocation cut cannot acquire credits being returned.
+@@ -270,6 +298,13 @@ service_mailbox_record_t service_mailbox_t::transfer_locked (service_mailbox_rec
+     return transferred;
+ }
+ 
++service_mailbox_record_t service_mailbox_t::transfer_locked (const claim_handle_t &handle)
++{
++    auto record = transfer_locked (*handle.claim->records[handle.index]);
++    record.transferred = service_mailbox_settlement_t (handle.claim, handle.index);
++    return record;
++}
++
+ std::optional<std::vector<std::vector<service_mailbox_record_t>>>
+ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
+                                const cut_admits_t &admits,
+@@ -295,7 +330,8 @@ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
+         records.reserve (queue.records.size ());
+         // The claimed prefix keeps its slots until the claim settles; the remaining
+         // unclaimed records leave the FIFO now.
+-        const auto claimed = std::min (queue.active_messages, queue.records.size ());
++        const auto claimed = independent_application_owner (owners[index])
++                               ? 0 : std::min (queue.active_messages, queue.records.size ());
+         auto unclaimed = queue.records.begin ();
+         for (std::size_t index = 0; index != claimed; ++index, ++unclaimed)
+             if (has_original (*unclaimed))
+@@ -324,7 +360,7 @@ std::optional<service_mailbox_record_t> service_mailbox_t::take (const claim_han
+     auto *slot = slot_locked (handle);
+     if (!slot || !next_locked (handle))
+         return std::nullopt;
+-    return transfer_locked (*slot);
++    return transfer_locked (handle);
+ }
+ 
+ std::size_t service_mailbox_t::retained_bytes (const service_mailbox_record_t &record)
+@@ -388,6 +424,9 @@ bool service_mailbox_t::settle (const service_mailbox_settlement_t &settlement)
+         return false;
+     if (!settles_last (claim, 1))
+         return true;
++    if (claim.domain == service_mailbox_domain_t::application
++        && independent_application_owner (claim.owner))
++        return true;
+     const auto state = claim._mailbox.lock ();
+     if (!state)
+         return true;
+@@ -401,13 +440,17 @@ bool service_mailbox_t::settle (const service_mailbox_settlement_t &settlement)
+ 
+ bool service_mailbox_t::finish_locked (state_t &state, const service_mailbox_claim_t &claim)
+ {
++    // Independent records left their owner FIFO at take. Their terminal settles
++    // only that claim; it cannot mutate a later FIFO with the same owner key.
++    if (claim.domain == service_mailbox_domain_t::application
++        && independent_application_owner (claim.owner))
++        return false;
+     auto &target = claim.domain == service_mailbox_domain_t::application ? state.application
+                                                                          : state.infrastructure;
+     const auto found = target.owners.find (claim.owner);
+     if (found == target.owners.end ())
+         return false;
+     auto &queue = found->second;
+-    // Every slot of the prefix was taken or discarded before its credit settled.
+     queue.records.erase (queue.records.begin (),
+                          std::next (queue.records.begin (), claim.claimed_messages));
+     queue.active_messages -= claim.claimed_messages;
+@@ -450,11 +493,41 @@ bool service_mailbox_t::has_application_dispatch () const
+     return static_cast<bool> (_state->application_ready);
+ }
+ 
++std::optional<std::string>
++service_mailbox_t::select_application_owner (std::size_t reserved_workers)
++{
++    std::lock_guard lock (_state->mutex);
++    if (_state->application_receive_turn)
++        return std::nullopt;
++    auto &source = _state->application;
++    for (auto entry = source.ready.begin (); entry != source.ready.end ();) {
++        const auto found = source.owners.find (*entry);
++        if (found == source.owners.end () || found->second.records.empty ()
++            || found->second.phase != owner_phase_t::ready) {
++            entry = source.ready.erase (entry);
++            continue;
++        }
++        if (!independent_application_owner (*entry)
++            || found->second.messages <= reserved_workers) {
++            ++entry;
++            continue;
++        }
++        auto owner = *entry;
++        source.ready.splice (source.ready.end (), source.ready, entry);
++        return owner;
++    }
++    return std::nullopt;
++}
++
+ bool service_mailbox_t::begin_application_drain (const std::string &owner)
+ {
+     std::lock_guard lock (_state->mutex);
+     const auto found = _state->application.owners.find (owner);
+-    if (found == _state->application.owners.end () || found->second.phase != owner_phase_t::ready)
++    if (found == _state->application.owners.end () || found->second.records.empty ())
++        return false;
++    if (independent_application_owner (owner))
++        return true;
++    if (found->second.phase != owner_phase_t::ready)
+         return false;
+     found->second.phase = owner_phase_t::draining;
+     return true;
+@@ -462,6 +535,8 @@ bool service_mailbox_t::begin_application_drain (const std::string &owner)
+ 
+ void service_mailbox_t::end_application_drain (const std::string &owner)
+ {
++    if (independent_application_owner (owner))
++        return;
+     std::unique_lock lock (_state->mutex);
+     const auto found = _state->application.owners.find (owner);
+     if (found == _state->application.owners.end ()
+@@ -498,27 +573,42 @@ service_mailbox_t::application_ready_batch_t service_mailbox_t::take_application
+ {
+     std::lock_guard lock (_state->mutex);
+     _state->application_receive_turn = false;
+-    return take_application_ready_locked (*_state);
++    return take_application_ready_locked (_state);
+ }
+ 
+ service_mailbox_t::application_ready_batch_t
+-service_mailbox_t::take_application_ready_locked (state_t &state)
++service_mailbox_t::take_application_ready_locked (const std::shared_ptr<state_t> &state)
+ {
+-    if (state.application_receive_turn || !state.application_ready
+-        || state.application.ready.empty ())
++    if (state->application_receive_turn || !state->application_ready
++        || state->application.ready.empty ())
+         return std::nullopt;
+-    application_ready_batch_t ready (std::in_place);
+-    ready->second = state.application_ready;
+-    ready->first.swap (state.application.ready);
+-    return ready;
++    // Keep the canonical ready set in place. The publication borrows its state
++    // and snapshots only the notification count, without copying its list nodes.
++    return std::make_tuple (state, state->application.ready.size (), state->application_ready);
+ }
+ 
+ void service_mailbox_t::notify_application_ready (application_ready_batch_t &ready)
+ {
+-    while (ready && !ready->first.empty ()) {
+-        auto owner = std::move (ready->first.front ());
+-        ready->first.pop_front ();
+-        ready->second (owner);
++    if (!ready)
++        return;
++    auto &[state, remaining, callback] = *ready;
++    const auto count = std::exchange (remaining, 0);
++    for (std::size_t index = 0; index != count; ++index) {
++        std::string owner;
++        {
++            std::lock_guard lock (state->mutex);
++            auto &owners = state->application.ready;
++            if (state->application_receive_turn || owners.empty ())
++                break;
++            if (independent_application_owner (owners.front ())) {
++                owner = owners.front ();
++                owners.splice (owners.end (), owners, owners.begin ());
++            } else {
++                owner = std::move (owners.front ());
++                owners.pop_front ();
++            }
++        }
++        callback (owner);
+     }
+ }
+ 
+@@ -530,7 +620,7 @@ void service_mailbox_t::notify_application_ready ()
+ void service_mailbox_t::notify_application_ready_owned (const std::shared_ptr<state_t> &state)
+ {
+     std::unique_lock lock (state->mutex);
+-    auto ready = take_application_ready_locked (*state);
++    auto ready = take_application_ready_locked (state);
+     lock.unlock ();
+     notify_application_ready (ready);
+ }
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+index b8b7170326..93f9a4e1b4 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+@@ -14,6 +14,7 @@
+ #include <optional>
+ #include <type_traits>
+ #include <utility>
++#include <tuple>
+ #include <string>
+ #include <variant>
+ #include <vector>
+@@ -177,6 +178,8 @@ struct service_mailbox_slot_t
+ 
+ class service_mailbox_t
+ {
++    struct state_t;
++
+   public:
+     using utc_clock_t = std::function<std::chrono::system_clock::time_point ()>;
+     service_mailbox_t () = default;
+@@ -207,9 +210,12 @@ class service_mailbox_t
+     void begin_application_receive_turn ();
+     void end_application_receive_turn ();
+     using application_ready_batch_t =
+-      std::optional<std::pair<std::list<std::string>, application_ready_t>>;
++      std::optional<std::tuple<std::shared_ptr<state_t>, std::size_t, application_ready_t>>;
+     application_ready_batch_t take_application_receive_turn ();
+     static void notify_application_ready (application_ready_batch_t &ready);
++    // Node and ChannelName have record turns; other owners retain their gate.
++    static bool independent_application_owner (std::string_view owner) noexcept;
++    std::optional<std::string> select_application_owner (std::size_t reserved_workers);
+     bool begin_application_drain (const std::string &owner);
+     void end_application_drain (const std::string &owner);
+ 
+@@ -261,7 +267,7 @@ class service_mailbox_t
+             return std::move (*kept);
+         if (!next_locked (handle))
+             return std::monostate{};
+-        return transfer_locked (*slot);
++        return transfer_locked (handle);
+     }
+     std::optional<service_mailbox_record_t> take (const claim_handle_t &handle);
+     // Relocation flow §4.2: observe runs in the producer step that transfers the original,
+@@ -274,7 +280,7 @@ class service_mailbox_t
+         if (!slot || !next_locked (handle))
+             return std::nullopt;
+         observe ();
+-        return transfer_locked (*slot);
++        return transfer_locked (handle);
+     }
+     // Relocation flow §4.2 producer cut: in one producer step, takes every original of the
+     // owners not taken yet, claimed or not, in FIFO order, then runs cut. A claimed original
+@@ -306,8 +312,8 @@ class service_mailbox_t
+         retained
+     };
+ 
+-    // A claim is the front prefix of records; it leaves the FIFO when its last
+-    // credit settles.
++    // Gated claims retain their prefix until settlement. Independent claims move
++    // the existing FIFO nodes into their own storage at take.
+     struct owner_queue_t
+     {
+         std::list<service_mailbox_record_t> records;
+@@ -342,6 +348,7 @@ class service_mailbox_t
+     static service_mailbox_record_t *slot_locked (const claim_handle_t &handle);
+     static bool next_locked (const claim_handle_t &handle);
+     static service_mailbox_record_t transfer_locked (service_mailbox_record_t &slot);
++    static service_mailbox_record_t transfer_locked (const claim_handle_t &handle);
+ 
+     void notify_application_ready ();
+ 
+@@ -361,7 +368,8 @@ class service_mailbox_t
+     static bool settles_last (service_mailbox_claim_t &claim, std::size_t count) noexcept;
+     static bool finish_locked (state_t &state, const service_mailbox_claim_t &claim);
+     static void notify_application_ready_owned (const std::shared_ptr<state_t> &state);
+-    static application_ready_batch_t take_application_ready_locked (state_t &state);
++    static application_ready_batch_t take_application_ready_locked (
++      const std::shared_ptr<state_t> &state);
+     std::shared_ptr<state_t> _state = std::make_shared<state_t> ();
+     utc_clock_t _utc_clock = [] { return std::chrono::system_clock::now (); };
+ };
+@@ -385,6 +393,8 @@ struct service_mailbox_claim_t
+ 
+   private:
+     friend class service_mailbox_t;
++    // Retained storage, not a scheduling queue: the FIFO nodes move here once.
++    std::list<service_mailbox_record_t> _originals;
+     std::weak_ptr<service_mailbox_t::state_t> _mailbox;
+     std::unique_ptr<std::atomic_bool[]> _settled;
+     std::atomic_size_t _remaining{0};
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+index 826a50bec2..206a4d8ea6 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+@@ -73,7 +73,7 @@ message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header
+ message_parts_t client_call_codec_t::encode_payload_parts (
+   envelope_header_t header,
+   encoded_payload_t payload,
+-  std::shared_ptr<const detail::request_type_plan_t> type,
++  std::shared_ptr<const detail::envelope_type_plan_t> type,
+   std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+ {
+     auto body = detail::encoded_payload_to_raw (std::move (payload));
+@@ -83,7 +83,7 @@ message_parts_t client_call_codec_t::encode_payload_parts (
+ message_parts_t client_call_codec_t::encode_service_payload_parts (
+   envelope_header_t header,
+   encoded_payload_t payload,
+-  std::shared_ptr<const detail::request_type_plan_t> type,
++  std::shared_ptr<const detail::envelope_type_plan_t> type,
+   std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+ {
+     auto body = detail::encoded_payload_to_raw (std::move (payload));
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+index 558fa28295..14c4d35d10 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+@@ -43,12 +43,12 @@ class client_call_codec_t
+     message_parts_t
+     encode_payload_parts (envelope_header_t header,
+                           encoded_payload_t payload,
+-                          std::shared_ptr<const detail::request_type_plan_t> type,
++                          std::shared_ptr<const detail::envelope_type_plan_t> type,
+                           std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+     message_parts_t encode_service_payload_parts (
+       envelope_header_t header,
+       encoded_payload_t payload,
+-      std::shared_ptr<const detail::request_type_plan_t> type,
++      std::shared_ptr<const detail::envelope_type_plan_t> type,
+       std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+ 
+     template <typename TEncodePayload>
+@@ -79,7 +79,7 @@ class client_call_codec_t
+                                             std::nullopt};
+             });
+         }
+-        return encode_payload_parts (std::move (header), encode_payload (serializers));
++        return encode_payload (std::move (header), serializers);
+     }
+ 
+     template <typename TMessage>
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+index efe82c7560..6a110fd8cb 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+@@ -357,16 +357,11 @@ void write_channel_fragment (header_writer_t &writer, std::string_view channel)
+ void write_type_fragments (header_writer_t &prefix,
+                            header_writer_t &middle,
+                            std::string_view name,
+-                           std::string_view content_type,
+-                           message_kind_t kind)
++                           std::string_view content_type)
+ {
+     prefix.append (",\"contentType\":");
+     prefix.string (content_type);
+     prefix.append (",\"correlationId\":");
+-    middle.append (",\"formatMarker\":");
+-    middle.number (static_cast<int> (flow_id_t::format_marker));
+-    middle.append (",\"kind\":");
+-    middle.number (static_cast<int> (kind));
+     middle.append (",\"messageName\":");
+     middle.string (name);
+     middle.append (",\"metadata\":");
+@@ -384,8 +379,9 @@ struct header_plan_t
+     bool matches (const envelope_header_t &header,
+                   std::string_view selected_content_type) const noexcept
+     {
+-        return kind && *kind == header.kind
+-               && std::string_view (channel_name) == std::string_view (header.channel_name)
++        // Kind is written from the actual header; cached fragments only use
++        // this existing optional as their completed-construction marker.
++        return kind && std::string_view (channel_name) == std::string_view (header.channel_name)
+                && std::string_view (message_name) == std::string_view (header.message_name)
+                && std::string_view (content_type) == selected_content_type;
+     }
+@@ -409,8 +405,7 @@ struct header_plan_t
+         header_writer_t prefix_writer (prefix);
+         header_writer_t middle_writer (middle);
+         write_channel_fragment (prefix_writer, channel_name);
+-        write_type_fragments (prefix_writer, middle_writer, message_name, content_type,
+-                              header.kind);
++        write_type_fragments (prefix_writer, middle_writer, message_name, content_type);
+         kind = header.kind;
+     }
+ };
+@@ -451,6 +446,10 @@ void write_header (header_writer_t &writer,
+         writer.number (static_cast<int> (*flow_origin));
+     else
+         writer.append ("null");
++    writer.append (",\"formatMarker\":");
++    writer.number (static_cast<int> (flow_id_t::format_marker));
++    writer.append (",\"kind\":");
++    writer.number (static_cast<int> (header.kind));
+     writer.append (middle);
+     write_metadata (writer, header.metadata);
+     writer.append (",\"source\":");
+@@ -474,8 +473,8 @@ validate_outgoing_header (const envelope_header_t &header)
+ }
+ 
+ std::pair<const std::string *, std::optional<flow_origin_t>>
+-validate_request_header (const envelope_header_t &header,
+-                         const detail::request_type_plan_t &type,
++validate_prepared_header (const envelope_header_t &header,
++                         const detail::envelope_type_plan_t &type,
+                          const detail::prepared_header_fragment_t &channel)
+ {
+     const auto flow = validate_outgoing_header (header);
+@@ -512,10 +511,10 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
+ 
+ zlink::message_t
+ envelope_codec_t::encode_header (const envelope_header_t &header,
+-                                 const detail::request_type_plan_t &type,
++                                 const detail::envelope_type_plan_t &type,
+                                  const detail::prepared_header_fragment_t &channel) const
+ {
+-    const auto [flow_id, origin] = validate_request_header (header, type, channel);
++    const auto [flow_id, origin] = validate_prepared_header (header, type, channel);
+     header_writer_t measure;
+     write_header (measure, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
+     auto message = zlink::message_t::allocate (measure.size ());
+@@ -529,10 +528,10 @@ envelope_codec_t::encode_header (const envelope_header_t &header,
+ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_payload (
+   envelope_header_t header,
+   zlink::message_t body,
+-  std::shared_ptr<const detail::request_type_plan_t> type,
++  std::shared_ptr<const detail::envelope_type_plan_t> type,
+   std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+ {
+-    const auto [flow_id, origin] = validate_request_header (header, *type, *channel);
++    const auto [flow_id, origin] = validate_prepared_header (header, *type, *channel);
+     // Preserve the E1 flow snapshot when target resolution defers the E3 pack.
+     if (flow_id && !header.flow_id)
+         header.flow_id = *flow_id;
+@@ -1301,7 +1300,7 @@ result_t<zlink::message_t> envelope_codec_t::decode_body (const message_parts_t
+ 
+ namespace zlink::framework::detail
+ {
+-prepared_header_fragment_t prepare_request_channel (std::string_view channel)
++prepared_header_fragment_t prepare_envelope_channel (std::string_view channel)
+ {
+     prepared_header_fragment_t result;
+     try {
+@@ -1314,15 +1313,14 @@ prepared_header_fragment_t prepare_request_channel (std::string_view channel)
+     return result;
+ }
+ 
+-request_type_plan_t prepare_request_type (std::string_view name, std::string content_type)
++envelope_type_plan_t prepare_envelope_type (std::string_view name, std::string content_type)
+ {
+-    request_type_plan_t result;
++    envelope_type_plan_t result;
+     result.content_type = std::move (content_type);
+     try {
+         runtime::messaging::header_writer_t prefix (result.prefix);
+         runtime::messaging::header_writer_t middle (result.middle);
+-        runtime::messaging::write_type_fragments (prefix, middle, name, result.content_type,
+-                                                  runtime::messaging::message_kind_t::request);
++        runtime::messaging::write_type_fragments (prefix, middle, name, result.content_type);
+     }
+     catch (const nlohmann::json::exception &) {
+         result.error = std::current_exception ();
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+index b451f97508..699852c122 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+@@ -253,12 +253,12 @@ class envelope_codec_t
+     zlink::message_t encode_header (const envelope_header_t &header,
+                                     std::string_view content_type) const;
+     zlink::message_t encode_header (const envelope_header_t &header,
+-                                    const detail::request_type_plan_t &type,
++                                    const detail::envelope_type_plan_t &type,
+                                     const detail::prepared_header_fragment_t &channel) const;
+     protocol::application_envelope_encoder_t prepare_service_payload (
+       envelope_header_t header,
+       zlink::message_t body,
+-      std::shared_ptr<const detail::request_type_plan_t> type,
++      std::shared_ptr<const detail::envelope_type_plan_t> type,
+       std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+ };
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index 666b5dd6b1..903a23500c 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -762,7 +762,7 @@ struct application_claim_batch_t
+             return;
+         for (std::size_t index = 0; index < claim->claimed_messages; ++index)
+             entries[index].original.emplace (
+-              mesh::service_mailbox_t::transfer_locked (*claim->records[index]));
++              mesh::service_mailbox_t::transfer_locked (mesh::service_mailbox_slot_t{claim, index}));
+     }
+ 
+     std::array<entry_t, dispatch_limits::receive_batch_messages> storage;
+@@ -3356,6 +3356,20 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
+     co_return submitted (accepted);
+ }
+ 
++task_t<zlink::submit_result_t>
++public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
++                                     messaging::message_parts_t parts)
++{
++    try {
++        return _transport->send_to_node_result (
++          target.to_bytes (), std::move (parts).take_application_payload ());
++    }
++    catch (...) {
++        return task_t<zlink::submit_result_t> (
++          detail::current_exception_result<zlink::submit_result_t> ());
++    }
++}
++
+ task_t<zlink::submit_result_t>
+ public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
+                                      const std::vector<zlink::message_t> &parts)
+@@ -8561,8 +8575,9 @@ public_host_runtime_t::dispatch_application_owner (
+         // Account the accepted claim even if its consumer storage cannot be allocated.
+         auto claim = _transport->mailbox ().try_claim_owner (
+           mesh::service_mailbox_domain_t::application, owner,
+-          dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
+-          std::ref (transfer));
++          mesh::service_mailbox_t::independent_application_owner (owner)
++            ? 1 : dispatch_limits::receive_batch_messages,
++          dispatch_limits::receive_batch_bytes, std::ref (transfer));
+         if (!claim)
+             return false;
+         auto result = dispatch_application_claim (batch);
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
+index f8ab02fafa..2714dc18fe 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.hpp
+@@ -862,6 +862,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
+       std::uint64_t owner_lease_generation = 0,
+       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
+         std::nullopt);
++    task_t<zlink::submit_result_t> send_to_node (
++      const zlink::routing_id_t &target, messaging::message_parts_t parts);
+     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
+                                                  const std::vector<zlink::message_t> &parts);
+     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+index 813b51eec1..660625a54f 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+@@ -1,5 +1,6 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #include "allocation_counter.hpp"
++#include "runtime/actors/actor_ref_access.hpp"
+ #include "runtime/dispatch/dispatch_limits.hpp"
+ #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
+ #include "runtime/stateful/public_host_runtime.hpp"
+@@ -54,6 +55,8 @@ constexpr std::uint64_t request_correlation = 17;
+ const std::vector<std::uint8_t> request_source = {'p', 'e', 'e', 'r'};
+ constexpr auto domain = mesh::service_mailbox_domain_t::application;
+ const auto owner = mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
++const auto gated_owner = mesh::service_mailbox_t::application_owner (
++  host::owner_kind_t::actor, "claim-fence");
+ using dispatch_t = mesh::service_mailbox_t::application_dispatch_t;
+ const std::function<void ()> noop = [] {};
+ std::string claim_owner (bool channel)
+@@ -93,10 +96,22 @@ make_host (std::shared_ptr<runtime::application_job_queue_t> jobs = {},
+     return result;
+ }
+ 
++// S02 §2: retained-prefix fencing and relocation cuts belong to gated owners.
++void set_gated_original (mesh::service_mailbox_record_t &record)
++{
++    record.owner = gated_owner;
++    auto &application = record.application ? *record.application : record.application.emplace ();
++    application.owner.owner_kind = host::owner_kind_t::actor;
++    application.owner.actor = detail::actor_ref_access_t::make (
++      node_rid_t::from_string ("claim"), "claim-actor", "claim-fence", 1);
++    application.record.kind = host::record_kind_t::actor_send;
++}
++
+ void enqueue (mesh::service_mailbox_t &mailbox,
+               bool raw_request = false,
+               bool channel = false,
+-              std::function<void ()> before = {})
++              std::function<void ()> before = {},
++              std::string_view queue_owner = {})
+ {
+     mesh::service_mailbox_record_t record;
+     record.owner = claim_owner (channel);
+@@ -121,15 +136,22 @@ void enqueue (mesh::service_mailbox_t &mailbox,
+         record.application->owner.domain = host::ready_domain_t::application;
+         record.application->record.domain = host::ready_domain_t::application;
+     }
++    if (!queue_owner.empty ()) {
++        require (queue_owner == gated_owner && !raw_request, "gated fixture requires a local Actor");
++        set_gated_original (record);
++    }
+     require (mailbox.try_enqueue (std::move (record)), "fixture enqueue failed");
+ }
+ 
+ bool dispatch (host::public_host_runtime_t &target,
+                const dispatch_t &callback,
+-               bool channel = false)
++               bool channel = false,
++               std::string_view queue_owner = {})
+ {
+     return zlink::framework::test::application_owner_result (
+-             target.dispatch_application_owner (claim_owner (channel), callback, noop, noop))
++             target.dispatch_application_owner (
++               queue_owner.empty () ? claim_owner (channel) : std::string (queue_owner),
++               callback, noop, noop))
+       .value ();
+ }
+ 
+@@ -233,19 +255,19 @@ void verify_batch_record_cost (host::public_host_runtime_t &target)
+             enqueue (mailbox);
+         const dispatch_t callback = [] (const auto &, const auto &, auto, auto permit) {};
+         return tests::measure_allocations ([&] {
+-            if (dispatch_records)
+-                require (dispatch (target, callback), "batch cost dispatch failed");
+-            else {
+-                auto claim = mailbox.try_claim_owner (
+-                  domain, owner, size, runtime::dispatch_limits::receive_batch_bytes);
+-                require (static_cast<bool> (claim), "batch cost claim failed");
+-                const auto count = claim->claimed_messages;
+-                for (std::size_t index = 0; index < count; ++index) {
+-                    auto original = mailbox.take ({claim, index});
++            for (std::size_t index = 0; index < size; ++index) {
++                if (dispatch_records)
++                    require (dispatch (target, callback), "batch cost dispatch failed");
++                else {
++                    auto claim = mailbox.try_claim_owner (
++                      domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes);
++                    require (static_cast<bool> (claim), "batch cost claim failed");
++                    auto original = mailbox.take ({claim, 0});
+                     require (original.has_value (), "batch baseline take failed");
+                     original->transferred ();
+                 }
+             }
++            require (mailbox.pending_messages (domain) == 0, "cost fixture left records queued");
+         });
+     };
+     const auto one = measure (1, true);
+@@ -262,34 +284,60 @@ void verify_batch_record_cost (host::public_host_runtime_t &target)
+ void verify_retained_batch (host::public_host_runtime_t &target)
+ {
+     auto &mailbox = target.transport ().mailbox ();
+-    enqueue (mailbox);
+-    enqueue (mailbox);
++    const auto &owner = gated_owner;
++    enqueue (mailbox, false, false, {}, owner);
++    enqueue (mailbox, false, false, {}, owner);
+     std::vector<host::mailbox_callback_t> releases;
+     const dispatch_t callback = [&] (const auto &, const auto &record, auto, auto permit) {
+         record.retain_mailbox_reservation ();
+         releases.push_back (record.release_mailbox_reservation);
+     };
+-    require (dispatch (target, callback) && releases.size () == 2, "batch dispatch changed");
++    require (dispatch (target, callback, false, owner) && releases.size () == 2, "batch dispatch changed");
+     enqueue (mailbox, false, true);
+     const dispatch_t independent = [] (const auto &, const auto &, auto, auto permit) {};
+     require (dispatch (target, independent, true),
+              "independent owner could not drain while first batch retained");
+-    enqueue (mailbox);
++    enqueue (mailbox, false, false, {}, owner);
+     const dispatch_t next = [] (const auto &, const auto &, auto, auto permit) {};
+-    require (!dispatch (target, next), "retained claim released early");
++    require (!dispatch (target, next, false, owner), "retained claim released early");
+     releases[0]();
+     releases[0]();
+-    require (!dispatch (target, next), "duplicate release ended another child");
++    require (!dispatch (target, next, false, owner), "duplicate release ended another child");
+     releases[1]();
+-    require (dispatch (target, next), "last child did not release claim");
++    require (dispatch (target, next, false, owner), "last child did not release claim");
+     require (mailbox.pending_messages (domain) == 0, "next record was lost");
+ }
+ 
+-void verify_original_transfer (host::public_host_runtime_t &target)
++void verify_independent_retained_records (host::public_host_runtime_t &target)
+ {
+     auto &mailbox = target.transport ().mailbox ();
+     enqueue (mailbox);
+     enqueue (mailbox);
++    std::vector<host::mailbox_callback_t> releases;
++    const dispatch_t retain = [&] (const auto &, const auto &record, auto, auto) {
++        record.retain_mailbox_reservation ();
++        releases.push_back (record.release_mailbox_reservation);
++    };
++    require (dispatch (target, retain) && dispatch (target, retain) && releases.size () == 2,
++             "independent records did not retain separate credits");
++    enqueue (mailbox);
++    require (dispatch (target, [] (const auto &, const auto &, auto, auto) {}),
++             "retained Node records fenced the next record");
++    enqueue (mailbox); // A later FIFO with the same key owns this original.
++    releases[1] ();
++    releases[0] ();
++    releases[0] ();
++    require (dispatch (target, [] (const auto &, const auto &, auto, auto) {}),
++             "an older terminal erased the later FIFO with the same owner key");
++    require (mailbox.pending_messages (domain) == 0, "independent settlement lost a record");
++}
++
++void verify_original_transfer (host::public_host_runtime_t &target)
++{
++    auto &mailbox = target.transport ().mailbox ();
++    const auto &owner = gated_owner;
++    enqueue (mailbox, false, false, {}, owner);
++    enqueue (mailbox, false, false, {}, owner);
+     auto claim =
+       mailbox.try_claim_owner (domain, owner, 2, runtime::dispatch_limits::receive_batch_bytes);
+     require (claim && claim->claimed_messages == 2, "transfer fixture claim failed");
+@@ -648,10 +696,12 @@ void verify_multicast_failure_admission ()
+ 
+ void verify_retained_local_original ()
+ {
++    const auto &owner = gated_owner;
+     mesh::service_mailbox_record_t original;
+     original.owner = owner;
+     original.domain = domain;
+     original.application.emplace ();
++    set_gated_original (original);
+     original.application->parts.push_back (zlink::message_t::from ("original"));
+     const auto before = original.application.operator->();
+     tests::allocations_before_failure = 0;
+@@ -688,13 +738,14 @@ void verify_retained_local_original ()
+ 
+ void verify_exception ()
+ {
++    const auto &owner = gated_owner;
+     auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+     auto owned = make_host ({}, failures);
+     auto &target = *owned;
+     auto &mailbox = target.transport ().mailbox ();
+-    enqueue (mailbox);
+-    enqueue (mailbox);
+-    enqueue (mailbox);
++    enqueue (mailbox, false, false, {}, owner);
++    enqueue (mailbox, false, false, {}, owner);
++    enqueue (mailbox, false, false, {}, owner);
+     std::size_t starts = 0, rejects = 0, calls = 0;
+     bool caught = false;
+     auto pending = target.dispatch_application_owner (
+@@ -716,8 +767,8 @@ void verify_exception ()
+              "exception did not return record reservations");
+     require (starts == 3 && rejects == 1 && calls == 3,
+              "exception did not settle started and rejected exactly once");
+-    enqueue (mailbox);
+-    require (dispatch (target, [] (const auto &, const auto &, auto, auto permit) {}),
++    enqueue (mailbox, false, false, {}, owner);
++    require (dispatch (target, [] (const auto &, const auto &, auto, auto permit) {}, false, owner),
+              "exception left the owner claim active");
+     owned->close ();
+ }
+@@ -937,6 +988,7 @@ int main (int argc, char **argv)
+         measure_permit_ownership_cost ();
+         auto target = make_host ();
+         verify_retained_batch (*target);
++        verify_independent_retained_records (*target);
+         verify_original_transfer (*target);
+         verify_nested_batch (*target);
+         verify_inline_permit (false);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+index 82789a4753..53ea793488 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+@@ -439,7 +439,10 @@ TEST (EnvelopeAllocations, NodeSendOwnsOnlyTheSerializedContentType)
+     };
+     const auto encode_node = [&] {
+         return codec.encode_node_send_parts ("bench", "BenchPayload", target, metadata, dispatch,
+-                                             serializers, [&] (auto &) { return encode (); });
++                                             serializers, [&] (auto header, auto &) {
++                                                 return codec.encode_payload_parts (
++                                                   std::move (header), encode ());
++                                             });
+     };
+     (void) encode_baseline ();
+     (void) encode_node ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
+index 32717761cf..178d04979d 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
+@@ -2131,6 +2131,34 @@ bool verify_spot_wide_two_actors_are_serial ()
+     return accepted_b && !ran_too_early && ran_after_release;
+ }
+ 
++bool verify_same_actor_records_are_serial_with_available_workers ()
++{
++    using namespace zlink::framework::runtime;
++
++    serial_executor_test_fixture_t fixture (serial_lane_policy_t::per_actor_spot ());
++    serial_test_blocker_t actor_a;
++    serial_test_signal_t actor_b_started;
++    // Releases the blocker and drains before the locals above are destroyed.
++    scope_exit_t drain_on_exit ([&] {
++        actor_a.release ();
++        fixture.drain ();
++    });
++    const auto accepted_a = fixture.serial.execute_actor ("actor-a", "wide-a", actor_a.work ());
++    if (!accepted_a || !actor_a.wait_for_entry ())
++        return false;
++
++    const auto accepted_b = fixture.serial.execute_actor ("actor-a", "same-actor-next", [&] (auto complete) {
++        actor_b_started.set ();
++        complete ([] {});
++    });
++    const auto ran_too_early = actor_b_started.wait_for (std::chrono::milliseconds (50));
++    actor_a.release ();
++    const auto ran_after_release = actor_b_started.wait_for ();
++    fixture.spot_queue->drain ();
++    fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
++    return accepted_b && !ran_too_early && ran_after_release;
++}
++
+ bool verify_spot_wide_consumer_waits_for_shared_gate ()
+ {
+     using namespace zlink::framework::runtime;
+@@ -12427,6 +12455,10 @@ int main (int argc, char **argv)
+     if (!verify_serial_executor_submission_paths_select_queues ()) {
+         return 118;
+     }
++    if (!verify_same_actor_records_are_serial_with_available_workers ()) {
++        std::cerr << "same Actor overlapped across application workers" << std::endl;
++        return 1;
++    }
+     if (!verify_per_actor_two_actors_overlap ()) {
+         return 119;
+     }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+index c731a193f9..76c5d06e95 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+@@ -4120,15 +4120,22 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
+           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+     target->start ();
+     auto &mailbox = target->transport ().mailbox ();
+-    const auto enqueue = [&mailbox] (std::string value) {
++    // S02 §2 leaves batched retained-prefix claims to gated owners.
++    const auto actor = zlink::framework::detail::actor_ref_access_t::make (
++      zlink::framework::node_rid_t::from_string (target->status ().routing_id ().to_string ()),
++      "claim", "owner-batch", 1);
++    const auto owner = mesh::service_mailbox_t::application_owner (
++      host::owner_kind_t::actor, "owner-batch");
++    const auto enqueue = [&mailbox, &actor, &owner] (std::string value) {
+         auto application = std::make_shared<host::local_application_dispatch_t> ();
+-        application->owner.owner_kind = host::owner_kind_t::node;
++        application->owner.owner_kind = host::owner_kind_t::actor;
++        application->owner.actor = actor;
+         application->owner.domain = host::ready_domain_t::application;
+-        application->record.kind = host::record_kind_t::node_send;
++        application->record.kind = host::record_kind_t::actor_send;
+         application->record.domain = host::ready_domain_t::application;
+         application->parts.push_back (zlink::message_t::from (value));
+         mesh::service_mailbox_record_t record;
+-        record.owner = mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
++        record.owner = owner;
+         record.domain = mesh::service_mailbox_domain_t::application;
+         record.application.emplace (std::move (*application));
+         return mailbox.try_enqueue (std::move (record));
+@@ -4137,7 +4144,6 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
+     assert (enqueue ("second"));
+     assert (enqueue ("third"));
+ 
+-    const auto owner = mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
+     assert (mailbox.begin_application_drain (owner));
+     std::vector<std::string> dispatched;
+     std::size_t started = 0;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
+index 0b9771c199..64ae821333 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
+@@ -37,7 +37,7 @@ void rotate (mailbox_t &mailbox, std::size_t count)
+     for (std::size_t index = 0; index != count; ++index)
+         require (mailbox.try_enqueue (record ()), "mailbox enqueue failed");
+     auto ready = mailbox.take_application_receive_turn ();
+-    require (ready && ready->first.size () == 1, "owner ready count differs");
++    require (ready && std::get<1> (*ready) == 1, "owner ready count differs");
+     mailbox_t::notify_application_ready (ready);
+     require (mailbox.begin_application_drain ("node"), "owner drain did not begin");
+     auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "node",
+@@ -74,19 +74,15 @@ void verify_cost ()
+     std::optional<mailbox_t::application_ready_batch_t> batch;
+     const auto transfer = fw::tests::measure_allocations (
+       [&] { batch.emplace (mailbox.take_application_receive_turn ()); });
+-    // Calibrate construction/move too: some standard libraries allocate a list
+-    // sentinel even for an empty/moved-from container.
++    // Calibrate the notification snapshot's standard-library storage. Canonical
++    // owner-list nodes remain in the mailbox; publication must not copy them.
+     using ready_reference_t =
+-      std::optional<std::pair<std::list<std::string>, mailbox_t::application_ready_t>>;
++      std::optional<std::tuple<std::shared_ptr<int>, std::size_t, mailbox_t::application_ready_t>>;
++    auto reference_state = std::make_shared<int> (0);
+     const auto take_reference = [&] () -> ready_reference_t {
+-        // Match the owner's mixed nullopt/value returns: NRVO is optional and
+-        // MSVC moves the list when this function returns an engaged optional.
+         if (ready_owners.empty ())
+             return std::nullopt;
+-        ready_reference_t value (std::in_place);
+-        value->second = ready_callback;
+-        value->first.swap (ready_owners);
+-        return value;
++        return std::make_tuple (reference_state, ready_owners.size (), ready_callback);
+     };
+     std::optional<ready_reference_t> reference_batch;
+     const auto transfer_reference =
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+index 9e3e2d5099..467099ee4a 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+@@ -39,6 +39,7 @@ std::atomic_bool handler_blocked{false};
+ constexpr std::size_t queued_records = 128;
+ std::atomic_size_t received_queued{0};
+ std::atomic_size_t handled_queued{0};
++std::array<std::atomic_bool, queued_records> seen_queued{};
+ std::promise<void> queue_drained;
+ std::promise<void> parallel_started;
+ std::shared_future<void> release_handler_turn;
+@@ -56,8 +57,8 @@ struct handler_t
+         }
+         if (probe.value.starts_with ("queued-probe-")) {
+             const auto index = std::stoul (probe.value.substr (13));
+-            assert (handled_queued.fetch_add (1) == index);
+-            if (index + 1 == queued_records)
++            assert (index < queued_records && !seen_queued[index].exchange (true));
++            if (handled_queued.fetch_add (1) + 1 == queued_records)
+                 queue_drained.set_value ();
+             return;
+         }
+@@ -248,11 +249,14 @@ int main ()
+                 assert (std::chrono::steady_clock::now () < receive_deadline);
+                 std::this_thread::yield ();
+             }
+-            assert (handled_queued.load () == 0);
++            // S02 §2 permits the same Node's next records to enter while the
++            // first synchronous handler is still running on another worker.
++            const bool same_node_parallel = drained.wait_for (5s) == std::future_status::ready;
++            correct = correct && same_node_parallel;
+             const auto notifications_while_busy = worker_notifications.load ();
+             std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
+                       << std::endl;
+-            correct = correct && notifications_while_busy == 1;
++            std::cout << "same_node_parallel=" << same_node_parallel << std::endl;
+             auto completed = std::make_shared<std::promise<void>> ();
+             auto terminal = completed->get_future ();
+             const auto operation =
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+index 47aa3a28ce..69e89e45e8 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+@@ -4,6 +4,7 @@
+ #include "runtime/spots/actor_transfer_coordinator.hpp"
+ #include "runtime/stateful/public_host_runtime.hpp"
+ #include "runtime/dispatch/dispatch_limits.hpp"
++#include "runtime/actors/actor_ref_access.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+ #include "../support/allocation_counter.hpp"
+ #include <gtest/gtest.h>
+@@ -81,71 +82,90 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
+ {
+     namespace mesh = runtime::mesh;
+     namespace host = runtime::host;
+-    auto owner = std::make_shared<host::public_host_runtime_t> (
+-      host::host_options_t{mesh::raw_mesh_node_options_t{
+-        .descriptor = {"claim-allocation",
+-                       {'a'},
+-                       1,
+-                       1,
+-                       "tcp://127.0.0.1:0",
+-                       {},
+-                       mesh::service_node_state_t::preparing},
+-        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+-    auto &mailbox = owner->transport ().mailbox ();
+-    const auto enqueue = [&] {
+-        mesh::service_mailbox_record_t original;
+-        original.owner = "node";
+-        original.domain = mesh::service_mailbox_domain_t::application;
+-        original.application.emplace ();
+-        original.application->owner.owner_kind = host::owner_kind_t::node;
+-        original.application->record.kind = host::record_kind_t::node_send;
+-        original.application->parts.push_back (zlink::message_t::from ("x"));
+-        ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+-    };
+-    constexpr auto count = runtime::dispatch_limits::receive_batch_messages;
+-    for (std::size_t index = 0; index < count; ++index)
++    for (const bool independent : {true, false}) {
++        auto owner = std::make_shared<host::public_host_runtime_t> (
++          host::host_options_t{mesh::raw_mesh_node_options_t{
++            .descriptor = {"claim-allocation",
++                           {'a'},
++                           1,
++                           1,
++                           "tcp://127.0.0.1:0",
++                           {},
++                           mesh::service_node_state_t::preparing},
++            .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
++        auto &mailbox = owner->transport ().mailbox ();
++        const auto actor = detail::actor_ref_access_t::make (
++          node_rid_t::from_string ("a"), "claim", "allocation", 1);
++        const auto queue_owner =
++          independent ? std::string ("node")
++                      : mesh::service_mailbox_t::application_owner (host::owner_kind_t::actor,
++                                                                    "allocation");
++        const auto enqueue = [&] {
++            mesh::service_mailbox_record_t original;
++            original.owner = queue_owner;
++            original.domain = mesh::service_mailbox_domain_t::application;
++            original.application.emplace ();
++            original.application->owner.owner_kind =
++              independent ? host::owner_kind_t::node : host::owner_kind_t::actor;
++            if (!independent)
++                original.application->owner.actor = actor;
++            original.application->record.kind =
++              independent ? host::record_kind_t::node_send : host::record_kind_t::actor_send;
++            original.application->parts.push_back (zlink::message_t::from ("x"));
++            ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
++        };
++        constexpr auto count = runtime::dispatch_limits::receive_batch_messages;
++        for (std::size_t index = 0; index < count; ++index)
++            enqueue ();
++        // A Node claim owns one record; a gated Actor retains its whole batch.
++        const auto claimed = independent ? std::size_t{1} : count;
++        std::size_t started = 0, rejected = 0, dispatched = 0;
++        auto &failure_size = zlink::framework::tests::process_allocation_failure_size;
++        auto &failure_count = zlink::framework::tests::process_allocation_failure_count;
++        failure_count.store (0, std::memory_order_relaxed);
++        // The batch's record storage is larger than its pointer/byte claim vectors.
++        std::promise<void> begin_dispatch;
++        auto begin = begin_dispatch.get_future ().share ();
++        auto cold = std::async (std::launch::async, [&] {
++            begin.wait ();
++            failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
++                                std::memory_order_relaxed);
++            try {
++                auto result = owner->dispatch_application_owner (
++                  queue_owner, [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
++                  [&] { ++started; }, [&] { ++rejected; });
++                failure_size.store (0, std::memory_order_relaxed);
++                return result;
++            }
++            catch (...) {
++                failure_size.store (0, std::memory_order_relaxed);
++                throw;
++            }
++        });
++        begin_dispatch.set_value ();
++        auto pending = cold.get ();
++        const auto &result = zlink::framework::test::application_owner_result (pending);
++        ASSERT_EQ (failure_count.load (std::memory_order_relaxed), 1);
++        ASSERT_FALSE (result);
++        EXPECT_THROW (result.value (), std::bad_alloc);
++        EXPECT_EQ (started, claimed);
++        EXPECT_EQ (rejected, claimed);
++        EXPECT_EQ (dispatched, 0u);
++        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
++                   count - claimed);
+         enqueue ();
+-    std::size_t started = 0, rejected = 0, dispatched = 0;
+-    auto &failure_size = zlink::framework::tests::process_allocation_failure_size;
+-    auto &failure_count = zlink::framework::tests::process_allocation_failure_count;
+-    failure_count.store (0, std::memory_order_relaxed);
+-    // The batch's record storage is larger than its pointer/byte claim vectors.
+-    std::promise<void> begin_dispatch;
+-    auto begin = begin_dispatch.get_future ().share ();
+-    auto cold = std::async (std::launch::async, [&] {
+-        begin.wait ();
+-        failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
+-                            std::memory_order_relaxed);
+-        try {
+-            auto result = owner->dispatch_application_owner (
+-              "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
++        std::size_t turns = 0;
++        while (mailbox.pending_messages (mesh::service_mailbox_domain_t::application) != 0) {
++            ASSERT_LT (turns++, count + 1);
++            auto next = owner->dispatch_application_owner (
++              queue_owner, [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
+               [&] { ++started; }, [&] { ++rejected; });
+-            failure_size.store (0, std::memory_order_relaxed);
+-            return result;
+-        }
+-        catch (...) {
+-            failure_size.store (0, std::memory_order_relaxed);
+-            throw;
++            ASSERT_TRUE (zlink::framework::test::application_owner_result (next).value ());
+         }
+-    });
+-    begin_dispatch.set_value ();
+-    auto pending = cold.get ();
+-    const auto &result = zlink::framework::test::application_owner_result (pending);
+-    ASSERT_EQ (failure_count.load (std::memory_order_relaxed), 1);
+-    ASSERT_FALSE (result);
+-    EXPECT_THROW (result.value (), std::bad_alloc);
+-    EXPECT_EQ (started, count);
+-    EXPECT_EQ (rejected, count);
+-    EXPECT_EQ (dispatched, 0u);
+-    EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+-    enqueue ();
+-    auto next = owner->dispatch_application_owner (
+-      "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; }, [&] { ++started; },
+-      [&] { ++rejected; });
+-    EXPECT_TRUE (zlink::framework::test::application_owner_result (next).value ());
+-    EXPECT_EQ (dispatched, 1u);
+-    EXPECT_EQ (started, count + 1);
+-    EXPECT_EQ (rejected, count);
+-    owner->close ();
++        EXPECT_EQ (dispatched, count + 1 - claimed);
++        EXPECT_EQ (started, count + 1);
++        EXPECT_EQ (rejected, claimed);
++        owner->close ();
++    }
+ }
+ }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+index 98ffcb641e..357578f130 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+@@ -1465,9 +1465,9 @@ void verify_local_node_submit_bridge ()
+         assert (capacity_while_handlers_are_pending.permits_in_use == 1);
+     }
+ 
+-    // A different node owns a different gate and must enter while the first
+-    // handler is blocked. The same-node successor retains its permit until
+-    // that node's first handler reaches terminal completion (02 §2).
++    // S02 §2 gives each Node record an independent turn. Both another Node
++    // and the same Node's successor enter before the first handler completes.
++    // Each returns its waiting permit at entry, while retaining its payload.
+     auto independent = encode ("independent-owner", "independent-mesh");
+     assert (
+       service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
+@@ -1482,15 +1482,16 @@ void verify_local_node_submit_bridge ()
+             == zlink::submit_result_t::ok);
+     {
+         std::unique_lock lock (probe->mutex);
+-        assert (!probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
++        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
+         assert (probe->completed == 0);
+-        assert (node->pending_application_callbacks () == 1);
+-        assert (node->active_application_callbacks () == 1);
++        assert (node->pending_application_callbacks () == 0);
++        assert (node->active_application_callbacks () == 2);
+         assert (independent_node->active_application_callbacks () == 1);
+         const auto queued = application_jobs->snapshot ();
+         assert (queued.effective_max_queued_application_jobs == 1);
+-        assert (queued.queued_application_jobs == 1);
+-        assert (queued.permits_in_use == 1);
++        assert (queued.queued_application_jobs == 0);
++        // Only the receive roles may reserve the capacity returned at entry.
++        assert (queued.permits_in_use == queued.reserved_supply_permits);
+     }
+ 
+     {
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+index f6965813f0..06eae47404 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+@@ -1732,21 +1732,29 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
+         original.domain = mesh::service_mailbox_domain_t::application;
+         original.application.emplace ();
+         original.application->owner.owner_kind = host::owner_kind_t::node;
+-        original.application->record.kind = host::record_kind_t::channel_send;
++        original.application->record.kind = host::record_kind_t::node_send;
+         original.application->parts = detail::backend::materialize_binding_parts ({{1}});
+         ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+     };
+     for (int index = 0; index < 64; ++index)
+         enqueue ();
+     unsigned started = 0, rejected = 0, calls = 0;
+-    auto failed = host->dispatch_application_owner (
+-      "node",
+-      [&] (const auto &, const auto &, auto, auto) {
+-          ++calls;
+-          std::rethrow_exception (injected);
+-      },
+-      [&] { ++started; }, [&] { ++rejected; });
+-    EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
++    // S02 §2 takes one Node record per claim. A failed record must settle
++    // only itself and leave each following FIFO original available exactly once.
++    for (unsigned index = 0; index != 64; ++index) {
++        auto failed = host->dispatch_application_owner (
++          "node",
++          [&] (const auto &, const auto &, auto, auto) {
++              ++calls;
++              std::rethrow_exception (injected);
++          },
++          [&] { ++started; }, [&] { ++rejected; });
++        ASSERT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
++        EXPECT_EQ (calls, index + 1);
++        EXPECT_EQ (rejected, index + 1);
++        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
++                   63u - index);
++    }
+     EXPECT_EQ (calls, 64u);
+     EXPECT_EQ (reported, 64u);
+     EXPECT_EQ (started, 64u);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp
+index 7532f84353..ded7d107fa 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp
+@@ -61,11 +61,11 @@ fw::encoded_payload_t request_payload ()
+ 
+ messaging::message_parts_t encode_request (messaging::envelope_header_t header, bool service)
+ {
+-    auto type = std::make_shared<const fw::detail::request_type_plan_t> (
+-      fw::detail::prepare_request_type (std::string_view (header.message_name),
++    auto type = std::make_shared<const fw::detail::envelope_type_plan_t> (
++      fw::detail::prepare_envelope_type (std::string_view (header.message_name),
+                                         std::string (std::string_view (header.content_type))));
+     auto channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
+-      fw::detail::prepare_request_channel (std::string_view (header.channel_name)));
++      fw::detail::prepare_envelope_channel (std::string_view (header.channel_name)));
+     messaging::client_call_codec_t codec;
+     return service ? codec.encode_service_payload_parts (std::move (header), request_payload (),
+                                                          std::move (type), std::move (channel))
+@@ -104,6 +104,29 @@ TEST_P (RequestWireIdentity, PreparedServiceAndRouteMatchMainEncoderBytes)
+ 
+ INSTANTIATE_TEST_SUITE_P (MainEncoderFixtures, RequestWireIdentity, testing::Range (0, 6));
+ 
++TEST (RequestWireIdentity, PreparedCommandUsesCommandKindAndMatchesMainEncoder)
++{
++    for (int scenario = 0; scenario != 6; ++scenario) {
++        auto header = request_header (scenario);
++        header.kind = messaging::message_kind_t::command;
++        header.correlation_id.clear ();
++        header.deadline.reset ();
++        messaging::envelope_codec_t codec;
++        auto original = codec.encode_raw_body_parts (
++          header, fw::detail::encoded_payload_to_raw (request_payload ()));
++        const auto expected = protocol::encode_application_payload_message (
++          std::move (original).take_application_payload ()).to_bytes ();
++        auto parts = encode_request (header, true);
++        auto frame = protocol::encode_application_payload_message (
++          std::move (parts).take_application_payload ());
++        EXPECT_EQ (frame.to_bytes (), expected);
++        auto decoded = protocol::decode_application_parts (std::move (frame));
++        auto actual = codec.decode_header (messaging::message_parts_t (std::move (decoded)), false);
++        ASSERT_TRUE (actual);
++        EXPECT_EQ (actual.value ().kind, messaging::message_kind_t::command);
++    }
++}
++
+ TEST (RequestWireIdentity, ChangedByteDoesNotMatchFixture)
+ {
+     auto parts = encode_request (request_header (0), true);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
+index 3485ad2ace..0a7cad6f35 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
+@@ -954,7 +954,7 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithout
+                      "concurrent-route",
+                      detail::channel_runtime_state_t::node_transport_index_t::entry_t{
+                        std::shared_ptr<detail::route_channel_runtime_t>{},
+-                       detail::prepare_request_channel ("concurrent-route")});
++                       detail::prepare_envelope_channel ("concurrent-route")});
+                });
+                EXPECT_TRUE (state->spot_mesh_requesters.contains ("retry"));
+                signalled = true;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
+index fe89b2727c..3336f37f5c 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp
+@@ -939,12 +939,15 @@ TEST (RoutePayloadOwnership, NodeSendKeepsReadyResultsInline)
+     route_send_fixture_t fixture (
+       [&] (const zlink::routing_id_t &, runtime::messaging::message_parts_t parts) {
+           ++delivered;
++          // Native parts belong to encoding, including deferred service payload
++          // materialization. Only the ready result below is transport storage.
++          const auto &items = parts.items ();
+           const auto before = tests::tracked_allocation_count;
+           if (tests::tracking_allocations) {
+               before_transport = before;
+               const auto &log = *tests::allocation_event_log;
+               for (std::size_t index = 0; index < log.count; ++index)
+-                  codec_buffers += log.events[index].memory == parts.items ().data () ? 1 : 0;
++                  codec_buffers += log.events[index].memory == items.data () ? 1 : 0;
+           }
+           auto ready =
+             task_t<result_t<void>> (result_t<result_t<void>>::success (result_t<void>::success ()));
+@@ -956,17 +959,26 @@ TEST (RoutePayloadOwnership, NodeSendKeepsReadyResultsInline)
+         auto call = fixture.send ();
+         call.async ().result ().value ();
+     }
+-    // Calibrate the codec's required storage, including this STL's empty
+-    // metadata map. A ready public send must add no result state to it.
++    // Calibrate the full codec boundary consumed by this native-parts transport,
++    // including deferred materialization. The ready result adds no storage.
+     runtime::messaging::client_call_codec_t codec;
+     const route_send_call_t::metadata_map_t metadata;
+     const dispatch_options_t dispatch;
++    const auto type = detail::serializer_registry_access_t::envelope_plan (
++      fixture.serializers.get<send_payload_t> ());
++    const auto channel = std::make_shared<const detail::prepared_header_fragment_t> (
++      detail::prepare_envelope_channel ("m"));
++    const auto packet_name = detail::message_name<send_payload_t> ();
+     const auto reference = tests::count_allocations ([&] {
+-        (void) codec.encode_node_send_parts (
+-          "m", "p", fixture.rid, metadata, dispatch, fixture.serializers,
+-          [] (serializer_registry_t &registry) {
+-              return registry.get<send_payload_t> ().serialize_with_content_type (send_payload_t{});
++        auto parts = codec.encode_node_send_parts (
++          "m", packet_name, fixture.rid, metadata, dispatch, fixture.serializers,
++          [&] (auto header, serializer_registry_t &registry) {
++              header.content_type = type->content_type;
++              return codec.encode_service_payload_parts (
++                std::move (header), registry.get<send_payload_t> ().serialize (send_payload_t{}),
++                type, channel);
+           });
++        (void) parts.items ();
+     });
+     auto call = fixture.send ();
+     std::array<tests::allocation_event_t, 256> events{};
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
+index 1b57479224..783e57f6a1 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_send_allocations.cpp
+@@ -227,12 +227,21 @@ TEST (SendAllocations, SynchronousNodeSendAddsNoStorageBeyondEncoding)
+     const fw::route_send_call_t::metadata_map_t metadata;
+     const fw::dispatch_options_t dispatch;
+     fw::runtime::messaging::client_call_codec_t codec;
++    const auto type = detail::serializer_registry_access_t::envelope_plan (
++      serializers.get<route_payload_t> ());
++    const auto channel = std::make_shared<const detail::prepared_header_fragment_t> (
++      detail::prepare_envelope_channel ("m"));
++    const auto packet_name = detail::message_name<route_payload_t> ();
++    // This transport accepts the deferred encoder without materializing it.
++    // Compare the same encoder construction boundary, with no result storage.
+     const auto reference_allocations = fw::tests::count_allocations ([&] {
+         (void) codec.encode_node_send_parts (
+-          "m", "p", target, metadata, dispatch, serializers,
+-          [] (fw::serializer_registry_t &registry) {
+-              return registry.get<route_payload_t> ().serialize_with_content_type (
+-                route_payload_t{});
++          "m", packet_name, target, metadata, dispatch, serializers,
++          [&] (auto header, fw::serializer_registry_t &registry) {
++              header.content_type = type->content_type;
++              return codec.encode_service_payload_parts (
++                std::move (header), registry.get<route_payload_t> ().serialize (route_payload_t{}),
++                type, channel);
+           });
+     });
+     const auto reference_before_serializer = before_serializer;
+@@ -505,7 +514,10 @@ TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
+         fw::route_client_t::payload_encoder_t borrowed (std::ref (encode));
+         fw::runtime::messaging::client_call_codec_t codec;
+         (void) codec.encode_node_send_parts ("m", packet_name, target, metadata, dispatch,
+-                                             serializers, borrowed);
++                                             serializers, [&] (auto header, auto &registry) {
++                                               return codec.encode_payload_parts (
++                                                 std::move (header), borrowed (registry));
++                                             });
+         return fw::task_t<void> (fw::result_t<void>::success ());
+     };
+     const std::string packet_name = "p";
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_independent_node_records.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_independent_node_records.cpp
+new file mode 100644
+--- /dev/null
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_independent_node_records.cpp
+@@ -0,0 +1,172 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#ifdef NDEBUG
++#undef NDEBUG
++#endif
++#include "runtime/mesh/service_mailbox.hpp"
++#include "runtime/dispatch/offload_executor.hpp"
++#include <array>
++#include <barrier>
++#include <cassert>
++#include <cstring>
++#include <iostream>
++#include <future>
++#include <thread>
++
++namespace zlink::framework::runtime
++{
++struct offload_executor_test_access_t
++{
++    static bool idle (offload_executor_t &executor)
++    {
++        std::lock_guard lock (executor._mutex);
++        return executor._idle_workers == 2 && executor._queue.empty ();
++    }
++    static void publish_with_older_work (offload_executor_t &executor,
++                                         std::function<void ()> older,
++                                         std::atomic_size_t &pending)
++    {
++        {
++            std::lock_guard lock (executor._mutex);
++            executor._queue.push (offload_executor_t::work_item_t{std::move (older), std::nullopt});
++            pending = 1;
++            assert (executor.schedule_application_locked () == 0);
++        }
++        executor._ready.notify_one ();
++    }
++};
++}
++
++namespace mesh = zlink::framework::runtime::mesh;
++using domain_t = mesh::service_mailbox_domain_t;
++
++static void enqueue (mesh::service_mailbox_t &mailbox, const std::string &owner,
++                     std::uint32_t value)
++{
++    mesh::service_mailbox_record_t record;
++    record.owner = owner;
++    record.domain = domain_t::application;
++    record.parts.push_back (zlink::message_t::from (std::as_bytes (std::span (&value, 1))));
++    assert (mailbox.try_enqueue (std::move (record)));
++}
++
++static void verify_idle_worker_after_older_reservation ()
++{
++    namespace runtime = zlink::framework::runtime;
++    using namespace std::chrono_literals;
++    std::atomic_size_t pending{0};
++    std::promise<void> release, entered;
++    auto released = release.get_future ().share ();
++    auto node_entered = entered.get_future ();
++    runtime::offload_executor_t executor (2);
++    executor.bind_application_work ([&] (std::size_t reserved, bool) {
++        if (pending.load () <= reserved)
++            return std::function<void ()>{};
++        return std::function<void ()> ([&] {
++            if (pending.exchange (0) != 0)
++                entered.set_value ();
++        });
++    });
++    const auto deadline = std::chrono::steady_clock::now () + 5s;
++    while (!runtime::offload_executor_test_access_t::idle (executor)) {
++        assert (std::chrono::steady_clock::now () < deadline);
++        std::this_thread::yield ();
++    }
++    // The older reservation covers one idle worker when the Node is published.
++    // Once it is popped, the other idle worker must see the ready Node before
++    // the older handler returns. Waiting for handler completion would lose a wake.
++    runtime::offload_executor_test_access_t::publish_with_older_work (
++      executor, [released] { released.wait (); }, pending);
++    const bool independent = node_entered.wait_for (5s) == std::future_status::ready;
++    release.set_value ();
++    executor.drain ();
++    executor.bind_application_work ({});
++    std::cout << "idle_worker_progress_while_older_work_blocked=" << independent << std::endl;
++    assert (independent);
++}
++
++int main ()
++{
++    // Both workers retain their first record until both claims have been attempted.
++    // The serial implementation fails here without deadlocking the test.
++    mesh::service_mailbox_t mailbox;
++    enqueue (mailbox, "node", 0);
++    enqueue (mailbox, "node", 1);
++    std::barrier together (2);
++    std::array<std::shared_ptr<mesh::service_mailbox_claim_t>, 2> first;
++    std::array<std::thread, 2> pair;
++    for (std::size_t worker = 0; worker != pair.size (); ++worker)
++        pair[worker] = std::thread ([&, worker] {
++            first[worker] = mailbox.try_claim_owner (domain_t::application, "node", 1, 4096);
++            together.arrive_and_wait ();
++        });
++    for (auto &worker : pair)
++        worker.join ();
++    assert (first[0] && first[1]);
++    assert (first[0]->records.front () != first[1]->records.front ());
++    auto cut = mailbox.cut_owners ({"node"}, [] (const auto &) { return true; }, [] {});
++    assert (cut && cut->front ().empty ()); // Both originals have already left the FIFO.
++    // Out-of-order terminal and close must not erase another claim's FIFO nodes.
++    mailbox.close ();
++    auto second_record = mailbox.take ({first[1], 0});
++    assert (second_record && second_record->transferred ());
++    assert (!second_record->transferred ());
++    assert (mailbox.release (*first[0]));
++    assert (!mailbox.release (*first[0]));
++    assert (first[0]->outstanding () == 0 && first[1]->outstanding () == 0);
++
++    // An untaken original must not keep its owning claim alive through its own
++    // settlement callback, including after the mailbox has gone away.
++    std::weak_ptr<mesh::service_mailbox_claim_t> abandoned;
++    {
++        mesh::service_mailbox_t closing;
++        enqueue (closing, "node", 0);
++        auto claim = closing.try_claim_owner (domain_t::application, "node", 1, 4096);
++        abandoned = claim;
++        closing.close ();
++    }
++    assert (abandoned.expired ());
++
++    constexpr std::size_t records = 4096;
++    mesh::service_mailbox_t concurrent;
++    for (std::uint32_t value = 0; value != records; ++value)
++        enqueue (concurrent, "node", value);
++    std::array<std::atomic_uint, records> seen{};
++    std::array<std::thread, 4> workers;
++    for (auto &worker : workers)
++        worker = std::thread ([&] {
++            while (auto claim = concurrent.try_claim_owner (domain_t::application, "node", 1, 4096)) {
++                auto record = concurrent.take ({claim, 0});
++                assert (record);
++                std::uint32_t value;
++                std::memcpy (&value, record->parts.front ().data (), sizeof (value));
++                assert (value < records && seen[value].fetch_add (1) == 0);
++                assert (!concurrent.take ({claim, 0}));
++                assert (record->transferred ());
++            }
++        });
++    for (auto &worker : workers)
++        worker.join ();
++    for (const auto &count : seen)
++        assert (count.load () == 1);
++    assert (concurrent.pending_messages (domain_t::application) == 0);
++    assert (concurrent.pending_bytes (domain_t::application) == 0);
++
++    // A gated Actor retains the head claim through its terminal. The second
++    // application worker cannot enter the next record while that claim is live.
++    mesh::service_mailbox_t actor;
++    const auto owner = mesh::service_mailbox_t::application_owner (
++      zlink::framework::runtime::host::owner_kind_t::actor, "one");
++    enqueue (actor, owner, 0);
++    enqueue (actor, owner, 1);
++    auto active = actor.try_claim_owner (domain_t::application, owner, 1, 4096);
++    assert (active);
++    std::thread waiting ([&] {
++        assert (!actor.try_claim_owner (domain_t::application, owner, 1, 4096));
++    });
++    waiting.join ();
++    assert (actor.release (*active));
++    auto next = actor.try_claim_owner (domain_t::application, owner, 1, 4096);
++    assert (next && actor.release (*next));
++    verify_idle_worker_after_older_reservation ();
++    std::cout << "independent Node claims, 4096 exclusive records, close and gated Actor passed\n";
++}

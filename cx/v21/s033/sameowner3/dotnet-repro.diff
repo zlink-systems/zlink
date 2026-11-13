@@ -1,0 +1,188 @@
+diff --git a/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj b/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj
+index 167b857f10..3031447ad6 100644
+--- a/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj
++++ b/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj
+@@ -150,6 +150,7 @@
+         <Compile Include="Runtime/ChannelOutboundTerminalTests.cs"/>
+         <Compile Include="Runtime/ChannelApplicationDispatchQueueShutdownTests.cs"/>
+         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
++        <Compile Include="Runtime/SameOwnerPublicApiReproTests.cs"/>
+         <Compile Include="Runtime/ChannelEnvelopeHandoffTests.cs"/>
+         <Compile Include="Runtime/ChannelReceiveMessageFlowTests.cs"/>
+         <Compile Include="Runtime/ClientServerLivenessLaneTests.cs"/>
+diff --git a/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/SameOwnerPublicApiReproTests.cs b/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/SameOwnerPublicApiReproTests.cs
+new file mode 100644
+index 0000000000..5f2a74a3dc
+--- /dev/null
++++ b/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/SameOwnerPublicApiReproTests.cs
+@@ -0,0 +1,170 @@
++using Microsoft.Extensions.DependencyInjection;
++using Microsoft.Extensions.Hosting;
++using Zlink.Framework.AspNetCore;
++using Zlink.Framework.Contracts.Messaging;
++using Zlink.Framework.LocationProvider;
++using Zlink.Framework.Runtime.Actors;
++using Xunit.Abstractions;
++
++namespace Zlink.Framework.UnitTests;
++
++public sealed class SameOwnerPublicApiReproTests
++{
++    private readonly ITestOutputHelper _output;
++
++    public SameOwnerPublicApiReproTests(ITestOutputHelper output) => _output = output;
++
++    [Fact]
++    public async Task ClientServer_same_and_different_channel_and_gated_actor()
++    {
++        var probe = new ChannelProbe();
++        var serverServices = new ServiceCollection();
++        serverServices.AddSingleton(probe);
++        serverServices.AddZLinkFramework(options =>
++        {
++            options.DisableImplicitHandlerAutoRegistration();
++            foreach (var channel in new[] { "owner-a", "owner-b" })
++                options.AddClientServerChannel(channel).Server().Listen(0)
++                    .AddRequestHandler<ChannelHandler, Request, Reply>();
++        });
++        await using var server = serverServices.BuildServiceProvider();
++        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
++        await serverRuntime.StartAsync(CancellationToken.None);
++        var endpointA = serverRuntime.GetListenerStatus(ZLinkListenerKind.ClientServer, "owner-a").Endpoint!;
++        var endpointB = serverRuntime.GetListenerStatus(ZLinkListenerKind.ClientServer, "owner-b").Endpoint!;
++
++        var clientServices = new ServiceCollection();
++        clientServices.AddZLinkFramework(options =>
++        {
++            options.AddClientServerChannel("owner-a").Client().Connect(endpointA);
++            options.AddClientServerChannel("owner-b").Client().Connect(endpointB);
++        });
++        await using var client = clientServices.BuildServiceProvider();
++        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
++        await clientRuntime.StartAsync(CancellationToken.None);
++        try
++        {
++            var route = client.GetRequiredService<IZLinkRouteClient>();
++            var same = 0;
++            var different = 0;
++            for (var i = 0; i < 20; i++)
++            {
++                same += await RunChannelCase(route, probe, "owner-a", "owner-a");
++                different += await RunChannelCase(route, probe, "owner-a", "owner-b");
++            }
++            _output.WriteLine($"same-owner B before release: {same}/20; different-owner B before release: {different}/20");
++        }
++        finally
++        {
++            await clientRuntime.StopAsync(CancellationToken.None);
++            await serverRuntime.StopAsync(CancellationToken.None);
++        }
++
++        await VerifyActorGate(_output);
++    }
++
++    private static async Task<int> RunChannelCase(
++        IZLinkRouteClient route, ChannelProbe probe, string first, string second)
++    {
++        probe.Reset();
++        var firstReply = route.RequestToChannel(first, new Request(1)).Timeout(TimeSpan.FromSeconds(10)).Async<Reply>().AsTask();
++        Assert.True(probe.First.Wait(TimeSpan.FromSeconds(5)));
++        var secondReply = route.RequestToChannel(second, new Request(2)).Timeout(TimeSpan.FromSeconds(10)).Async<Reply>().AsTask();
++        var started = probe.Second.Wait(TimeSpan.FromMilliseconds(250));
++        probe.Release.Set();
++        Assert.Equal(1, (await firstReply.WaitAsync(TimeSpan.FromSeconds(10))).Value);
++        Assert.Equal(2, (await secondReply.WaitAsync(TimeSpan.FromSeconds(10))).Value);
++        return started ? 1 : 0;
++    }
++
++    private static async Task VerifyActorGate(ITestOutputHelper output)
++    {
++        var gate = new ActorGate();
++        var builder = Host.CreateDefaultBuilder().ConfigureServices(services =>
++        {
++            services.AddSingleton(gate);
++            services.AddTransient<ActorHandler>();
++            services.AddZLinkFramework(options =>
++            {
++                options.UseTestLocationStore();
++                options.AddRouteMesh("gate-mesh").Listen("tcp://127.0.0.1:0")
++                    .Objects().Server().AddEntrySpot<Entry>()
++                    .AddActorFactory<ProbeActor, ProbeActorFactory>("probe-actor", f => f.DisableRelocation());
++            });
++        });
++        using var host = builder.Build();
++        await host.StartAsync();
++        try
++        {
++            var actors = host.Services.GetRequiredService<IZLinkActorManager>();
++            var created = await actors.GetOrCreate("same-owner-actor", "probe-actor")
++                .InMesh("gate-mesh").Request(ZLinkMessage.Empty).Async();
++            Assert.IsType<ZLinkActorCreateResult.Created>(created);
++            var client = host.Services.GetRequiredService<IZLinkActorClient>();
++            for (var i = 0; i < 20; i++)
++            {
++                gate.Reset();
++                var first = client.RequestToActor("same-owner-actor", new ActorRequest(1))
++                    .Async<Reply>().AsTask();
++                Assert.True(gate.First.Wait(TimeSpan.FromSeconds(5)));
++                var second = client.RequestToActor("same-owner-actor", new ActorRequest(2))
++                    .Async<Reply>().AsTask();
++                Assert.False(gate.Second.Wait(TimeSpan.FromMilliseconds(250)));
++                gate.Release.Set();
++                await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10));
++            }
++            output.WriteLine("gated Actor second before release: 0/20");
++        }
++        finally { await host.StopAsync(); }
++    }
++
++    private sealed record Request(int Id);
++    private sealed record ActorRequest(int Id);
++    private sealed record Reply(int Value);
++
++    private sealed class ChannelProbe
++    {
++        internal ManualResetEventSlim First = new();
++        internal ManualResetEventSlim Second = new();
++        internal ManualResetEventSlim Release = new();
++        internal void Reset() { First.Dispose(); Second.Dispose(); Release.Dispose(); First = new(); Second = new(); Release = new(); }
++    }
++    private sealed class ActorGate
++    {
++        internal ManualResetEventSlim First = new();
++        internal ManualResetEventSlim Second = new();
++        internal ManualResetEventSlim Release = new();
++        internal void Reset() { First.Dispose(); Second.Dispose(); Release.Dispose(); First = new(); Second = new(); Release = new(); }
++    }
++
++    private sealed class ChannelHandler(ChannelProbe probe) : IZLinkRequestHandler<Request, Reply>
++    {
++        public ValueTask<Reply> HandleAsync(Request request, IZLinkMessageContext context, CancellationToken cancellationToken)
++        {
++            if (request.Id == 1) { probe.First.Set(); Assert.True(probe.Release.Wait(TimeSpan.FromSeconds(10))); }
++            else probe.Second.Set();
++            return ValueTask.FromResult(new Reply(request.Id));
++        }
++    }
++    private sealed class ProbeActor(IZLinkActorContext context) : IZLinkActor { public IZLinkActorContext Context { get; } = context; }
++    private sealed class ProbeActorFactory : IZLinkActorFactory<ProbeActor>
++    {
++        public ValueTask<ProbeActor> CreateAsync(IZLinkActorContext context, CancellationToken cancellationToken = default) => ValueTask.FromResult(new ProbeActor(context));
++    }
++    private sealed class Entry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<ProbeActor>
++    {
++        public IZLinkEntrySpotContext Context { get; } = context;
++        public void Configure() => Context.Handlers.AddActorPacket<ActorHandler, ProbeActor>(nameof(ActorRequest));
++        public ValueTask OnJoinedActorAsync(ProbeActor actor, CancellationToken cancellationToken) => ValueTask.CompletedTask;
++        public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) => ValueTask.CompletedTask;
++    }
++    private sealed class ActorHandler(ActorGate gate) : IZLinkEntrySpotActorRequestHandler<Entry, ProbeActor, ActorRequest, Reply>
++    {
++        public ValueTask<Reply> HandleAsync(Entry entry, ProbeActor actor, IZLinkMessageContext context, ActorRequest request, CancellationToken cancellationToken)
++        {
++            if (request.Id == 1) { gate.First.Set(); Assert.True(gate.Release.Wait(TimeSpan.FromSeconds(10))); }
++            else gate.Second.Set();
++            return ValueTask.FromResult(new Reply(request.Id));
++        }
++    }
++}

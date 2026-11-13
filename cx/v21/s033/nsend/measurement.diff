@@ -1,0 +1,50 @@
+diff --git a/framework/bench/grpc/node/client/bench-core.js b/framework/bench/grpc/node/client/bench-core.js
+index fb1247d5d9..8ee84f5398 100644
+--- a/framework/bench/grpc/node/client/bench-core.js
++++ b/framework/bench/grpc/node/client/bench-core.js
+@@ -384,10 +384,19 @@ async function requestBackpressure(
+ }
+ 
+ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
++  // Measurement-only pacing. Groups amortize timer cost without changing transport concurrency.
++  const rate = Number(process.env.NSEND_RATE || 0);
++  const paceStart = header.nowNs();
+   const workers = Array.from({ length: count }, (_, stream) =>
+     (async () => {
+       while (header.nowNs() < deadline) {
+         const sequence = nextSequence();
++        if (rate > 0) {
++          const due = paceStart + BigInt(Math.floor(Math.floor(sequence / 128) * 128 * 1e9 / rate));
++          const remaining = Number(due - header.nowNs()) / 1e6;
++          if (remaining > 0) await delay(Math.ceil(remaining));
++          if (header.nowNs() >= deadline) break;
++        }
+         const payload = header.createPayloadBytes(
+           trigger.payloadBytes,
+           runId,
+diff --git a/framework/bench/grpc/node/client/main.js b/framework/bench/grpc/node/client/main.js
+index a8806f4a61..22374144ad 100644
+--- a/framework/bench/grpc/node/client/main.js
++++ b/framework/bench/grpc/node/client/main.js
+@@ -4,7 +4,6 @@
+ const fs = require('node:fs');
+ const os = require('node:os');
+ const path = require('node:path');
+-const { execFileSync } = require('node:child_process');
+ const grpc = require('@grpc/grpc-js');
+ const protoLoader = require('@grpc/proto-loader');
+ const zlink = require('@zlink-systems/zlink');
+@@ -435,12 +434,7 @@ function readPackageVersion(packageName) {
+ }
+ 
+ async function collectMetadata(options) {
+-  let commit = 'unknown';
+-  try {
+-    commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+-  } catch (error) {
+-    // Provenance is best effort; a missing git executable does not change the cell.
+-  }
++  const commit = 'd961e51e231234e8404d74164d2a27c0cf2fce41';
+   let targetInfo = {};
+   try {
+     const response = await fetch(`${options.targetStatsUrl}/bench/info`);

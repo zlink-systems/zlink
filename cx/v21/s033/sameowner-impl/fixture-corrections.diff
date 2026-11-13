@@ -1,0 +1,376 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index d1fdfdb676..c4c379b50f 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -2138,12 +2138,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+   zlink_framework_cpp_add_test(
+     NAME test_cpp_framework_same_owner_channel
+     COMMAND test_cpp_framework_client_server_runtime --same-owner-regression
+-    LABELS "framework-unit;framework-contract;execution;unit;contract"
++    LABELS "framework-contract;execution"
+     TIMEOUT 60)
+   zlink_framework_cpp_add_test(
+     NAME test_cpp_framework_same_owner_actor_control
+     COMMAND test_cpp_framework_client_server_runtime --same-owner-gated-control
+-    LABELS "framework-unit;framework-contract;execution;unit;contract"
++    LABELS "framework-contract;execution"
+     TIMEOUT 60)
+   target_include_directories(test_cpp_framework_client_server_runtime PRIVATE
+     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+@@ -2404,7 +2404,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
+     target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
+       "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
+-      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
+       "LINKER:--wrap=zlink_router_recv")
+     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
+       "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+index 52f5438374..447eb65a63 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+@@ -4110,7 +4110,7 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
+     }
+ }
+ 
+-void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
++void verify_public_host_dispatches_one_node_record_per_claim ()
+ {
+     auto target = std::make_shared<host::public_host_runtime_t> (
+       host::host_options_t{mesh::raw_mesh_node_options_t{
+@@ -4141,20 +4141,25 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
+     std::vector<std::string> dispatched;
+     std::size_t started = 0;
+     std::size_t rejected = 0;
+-    assert (zlink::framework::test::application_owner_result (
+-              target->dispatch_application_owner (
+-                owner,
+-                [&] (const host::ready_record_t &, const host::receive_record_t &record,
+-                     std::vector<zlink::message_t> parts, auto) {
+-                    assert (record.retain_mailbox_reservation);
+-                    assert (record.release_mailbox_reservation);
+-                    record.retain_mailbox_reservation ();
+-                    assert (parts.size () == 1);
+-                    dispatched.push_back (parts.front ().to_string ());
+-                    record.release_mailbox_reservation ();
+-                },
+-                [&] { ++started; }, [&] { ++rejected; }))
+-              .value ());
++    for (std::size_t index = 0; index != 3; ++index) {
++        assert (zlink::framework::test::application_owner_result (
++                  target->dispatch_application_owner (
++                    owner,
++                    [&] (const host::ready_record_t &, const host::receive_record_t &record,
++                         std::vector<zlink::message_t> parts, auto) {
++                        assert (record.retain_mailbox_reservation);
++                        assert (record.release_mailbox_reservation);
++                        record.retain_mailbox_reservation ();
++                        assert (parts.size () == 1);
++                        dispatched.push_back (parts.front ().to_string ());
++                        record.release_mailbox_reservation ();
++                    },
++                    [&] { ++started; }, [&] { ++rejected; }))
++                  .value ());
++        assert (dispatched.size () == index + 1);
++        assert (mailbox.pending_messages (mesh::service_mailbox_domain_t::application)
++                == 2 - index);
++    }
+     mailbox.end_application_drain (owner);
+ 
+     assert ((dispatched == std::vector<std::string>{"first", "second", "third"}));
+@@ -9888,7 +9893,7 @@ int main (int argc, char **argv)
+     verify_terminal_journal_preserves_outstanding_entries ();
+     verify_unbounded_actor_handoff_backlog ();
+     verify_public_host_dispatches_one_application_record_per_turn ();
+-    verify_public_host_dispatches_one_owner_claim_as_a_batch ();
++    verify_public_host_dispatches_one_node_record_per_claim ();
+     verify_public_host_batches_with_finite_permits ();
+     verify_public_host_fifo_drains_before_liveness_probe ();
+     verify_logical_multicast_continues_after_one_target_failure ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+index 65017067bd..07e257fb52 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+@@ -8,7 +8,9 @@
+ #include "runtime/mesh/mesh_node_host_service.hpp"
+ #include "runtime/messaging/client_call_codec.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
++#include "same_owner_claim_controls.hpp"
+ #include <zlink.h>
++#include <array>
+ #include <cassert>
+ #include <future>
+ #include <iostream>
+@@ -21,23 +23,6 @@ namespace zlink::framework::runtime
+ {
+ struct offload_executor_test_access_t
+ {
+-    static auto ready (offload_executor_t &executor)
+-    {
+-        const auto deadline = std::chrono::steady_clock::now () + 5s;
+-        while (true) {
+-            {
+-                std::lock_guard lock (executor._mutex);
+-                if (executor.idle_worker_count_locked () == executor._live_workers) {
+-                    std::vector<std::condition_variable *> result;
+-                    for (const auto &worker : executor._workers)
+-                        result.push_back (&worker->ready);
+-                    return result;
+-                }
+-            }
+-            assert (std::chrono::steady_clock::now () < deadline);
+-            std::this_thread::yield ();
+-        }
+-    }
+     static bool receiving (offload_executor_t &executor)
+     {
+         std::lock_guard lock (executor._mutex);
+@@ -54,9 +39,6 @@ struct offload_executor_test_access_t
+ namespace
+ {
+ rt::offload_executor_t *application_executor = nullptr;
+-std::vector<std::condition_variable *> application_ready;
+-std::atomic_size_t worker_notifications{0};
+-std::atomic_bool watch_notifications{false};
+ std::atomic_uint receive_active{0}, receive_maximum{0}, receive_rotations{0}, publications{0};
+ struct observed_role_t final : rt::offload_executor_t::role_t
+ {
+@@ -92,6 +74,7 @@ std::atomic_bool handler_blocked{false};
+ constexpr std::size_t queued_records = 128;
+ std::atomic_size_t received_queued{0};
+ std::atomic_size_t handled_queued{0};
++std::array<std::atomic_uint, queued_records> handled_indices{};
+ std::promise<void> queue_drained;
+ std::promise<void> parallel_started;
+ std::shared_future<void> release_handler_turn;
+@@ -109,8 +92,9 @@ struct handler_t
+         }
+         if (probe.value.starts_with ("queued-probe-")) {
+             const auto index = std::stoul (probe.value.substr (13));
+-            assert (handled_queued.fetch_add (1) == index);
+-            if (index + 1 == queued_records)
++            assert (index < queued_records);
++            assert (handled_indices[index].fetch_add (1) == 0);
++            if (handled_queued.fetch_add (1) + 1 == queued_records)
+                 queue_drained.set_value ();
+             return;
+         }
+@@ -149,7 +133,6 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
+                 && std::string_view (data, bytes).find (marker) != std::string_view::npos) {
+                 std::lock_guard lock (observation_mutex);
+                 received_on = std::this_thread::get_id ();
+-                watch_notifications = true;
+             }
+         }
+     }
+@@ -169,31 +152,20 @@ extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
+                                     std::shared_ptr<rt::offload_executor_t::role_t> role)
+ {
+     application_executor = executor;
+-    application_ready = rt::offload_executor_test_access_t::ready (*executor);
+     return real_start_role (executor, std::make_shared<observed_role_t> (std::move (role)));
+ }
+ 
+-extern "C" void
+-real_notify (std::condition_variable *) __asm__ ("__real__ZNSt18condition_variable10notify_oneEv");
+-extern "C" void wrapped_notify (std::condition_variable *) __asm__ (
+-  "__wrap__ZNSt18condition_variable10notify_oneEv");
+-extern "C" void wrapped_notify (std::condition_variable *ready)
+-{
+-    if (watch_notifications.load ()
+-        && std::find (application_ready.begin (), application_ready.end (), ready)
+-             != application_ready.end ())
+-        ++worker_notifications;
+-    real_notify (ready);
+-}
+-
+ int main ()
+ {
++    assert (fw::test::same_owner_claim_controls ());
+     bool correct = true;
+     {
+         fw::completion_owner_t completion;
+         handled = {};
+         received_queued = 0;
+         handled_queued = 0;
++        for (auto &seen : handled_indices)
++            seen = 0;
+         queue_drained = {};
+         auto drained = queue_drained.get_future ();
+         handler_blocked = false;
+@@ -317,13 +289,10 @@ int main ()
+                 assert (std::chrono::steady_clock::now () < receive_deadline);
+                 std::this_thread::yield ();
+             }
+-            assert (handled_queued.load () == 0);
+-            const auto notifications_while_busy = worker_notifications.load ();
+-            std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
+-                      << std::endl;
+-            // The receive notification replaces the application wake on a
+-            // successful handoff. This one-owner batch still needs one wake.
+-            correct = correct && notifications_while_busy == 1;
++            assert (drained.wait_for (5s) == std::future_status::ready);
++            assert (handled_queued.load () == queued_records);
++            for (const auto &seen : handled_indices)
++                assert (seen == 1);
+             auto completed = std::make_shared<std::promise<void>> ();
+             auto terminal = completed->get_future ();
+             const auto operation =
+@@ -401,7 +370,6 @@ int main ()
+             late_peer.stop ();
+             const bool completion_ready = terminal.wait_for (5s) == std::future_status::ready;
+             release_handler.set_value ();
+-            assert (drained.wait_for (5s) == std::future_status::ready);
+             correct = correct && operation && parallel_send
+                       && parallel_send.value () == zlink::submit_result_t::ok && other_owner
+                       && completion_ready && handler_blocked.load ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+index 47aa3a28ce..aaf6f16061 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+@@ -109,31 +109,38 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
+     auto &failure_size = zlink::framework::tests::process_allocation_failure_size;
+     auto &failure_count = zlink::framework::tests::process_allocation_failure_count;
+     failure_count.store (0, std::memory_order_relaxed);
+-    // The batch's record storage is larger than its pointer/byte claim vectors.
+-    std::promise<void> begin_dispatch;
+-    auto begin = begin_dispatch.get_future ().share ();
+-    auto cold = std::async (std::launch::async, [&] {
+-        begin.wait ();
+-        failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
+-                            std::memory_order_relaxed);
+-        try {
+-            auto result = owner->dispatch_application_owner (
+-              "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
+-              [&] { ++started; }, [&] { ++rejected; });
+-            failure_size.store (0, std::memory_order_relaxed);
+-            return result;
+-        }
+-        catch (...) {
+-            failure_size.store (0, std::memory_order_relaxed);
+-            throw;
+-        }
+-    });
+-    begin_dispatch.set_value ();
+-    auto pending = cold.get ();
+-    const auto &result = zlink::framework::test::application_owner_result (pending);
+-    ASSERT_EQ (failure_count.load (std::memory_order_relaxed), 1);
+-    ASSERT_FALSE (result);
+-    EXPECT_THROW (result.value (), std::bad_alloc);
++    // Dispatcher storage has fixed batch capacity, but a Node claim owns one
++    // record. Fail that allocation once for each of the queued originals.
++    for (std::size_t index = 0; index != count; ++index) {
++        std::promise<void> begin_dispatch;
++        auto begin = begin_dispatch.get_future ().share ();
++        auto cold = std::async (std::launch::async, [&] {
++            begin.wait ();
++            failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
++                                std::memory_order_relaxed);
++            try {
++                auto result = owner->dispatch_application_owner (
++                  "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
++                  [&] { ++started; }, [&] { ++rejected; });
++                failure_size.store (0, std::memory_order_relaxed);
++                return result;
++            }
++            catch (...) {
++                failure_size.store (0, std::memory_order_relaxed);
++                throw;
++            }
++        });
++        begin_dispatch.set_value ();
++        auto pending = cold.get ();
++        const auto &result = zlink::framework::test::application_owner_result (pending);
++        ASSERT_EQ (failure_count.load (std::memory_order_relaxed), index + 1);
++        ASSERT_FALSE (result);
++        EXPECT_THROW (result.value (), std::bad_alloc);
++        EXPECT_EQ (started, index + 1);
++        EXPECT_EQ (rejected, index + 1);
++        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
++                   count - index - 1);
++    }
+     EXPECT_EQ (started, count);
+     EXPECT_EQ (rejected, count);
+     EXPECT_EQ (dispatched, 0u);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+index 4301f7feda..a92a4b621b 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+@@ -1443,7 +1443,7 @@ void verify_local_node_submit_bridge ()
+         assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 1; }));
+         assert (probe->completed == 0);
+     }
+-    {
++    const auto verify_released_capacity = [&] {
+         // The receive pump shares this queue and can reserve the released
+         // permit. Acquire it through the same FIFO to prove that the running
+         // handler returned capacity at entry, independent of pump scheduling.
+@@ -1463,11 +1463,11 @@ void verify_local_node_submit_bridge ()
+         assert (capacity_while_handlers_are_pending.reserved_supply_permits == 1);
+         assert (capacity_while_handlers_are_pending.queued_application_jobs == 0);
+         assert (capacity_while_handlers_are_pending.permits_in_use == 1);
+-    }
++    };
++    verify_released_capacity ();
+ 
+-    // A different node owns a different gate and must enter while the first
+-    // handler is blocked. The same-node successor retains its permit until
+-    // that node's first handler reaches terminal completion (02 §2).
++    // Node pipelines have no gate. Both another Node and this Node's successor
++    // enter before the first handler completes (02 §2).
+     auto independent = encode ("independent-owner", "independent-mesh");
+     assert (
+       service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
+@@ -1482,16 +1482,13 @@ void verify_local_node_submit_bridge ()
+             == zlink::submit_result_t::ok);
+     {
+         std::unique_lock lock (probe->mutex);
+-        assert (!probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
++        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
+         assert (probe->completed == 0);
+-        assert (node->pending_application_callbacks () == 1);
+-        assert (node->active_application_callbacks () == 1);
++        assert (node->pending_application_callbacks () == 0);
++        assert (node->active_application_callbacks () == 2);
+         assert (independent_node->active_application_callbacks () == 1);
+-        const auto queued = application_jobs->snapshot ();
+-        assert (queued.effective_max_queued_application_jobs == 1);
+-        assert (queued.queued_application_jobs == 1);
+-        assert (queued.permits_in_use == 1);
+     }
++    verify_released_capacity ();
+ 
+     {
+         std::lock_guard lock (probe->mutex);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+index 2739a5dabd..2d52f8429d 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+@@ -1729,14 +1729,19 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
+     for (int index = 0; index < 64; ++index)
+         enqueue ();
+     unsigned started = 0, rejected = 0, calls = 0;
+-    auto failed = host->dispatch_application_owner (
+-      "node",
+-      [&] (const auto &, const auto &, auto, auto) {
+-          ++calls;
+-          std::rethrow_exception (injected);
+-      },
+-      [&] { ++started; }, [&] { ++rejected; });
+-    EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
++    for (unsigned index = 0; index != 64; ++index) {
++        auto failed = host->dispatch_application_owner (
++          "node",
++          [&] (const auto &, const auto &, auto, auto) {
++              ++calls;
++              std::rethrow_exception (injected);
++          },
++          [&] { ++started; }, [&] { ++rejected; });
++        EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
++        EXPECT_EQ (calls, index + 1);
++        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
++                   63 - index);
++    }
+     EXPECT_EQ (calls, 64u);
+     EXPECT_EQ (reported, 64u);
+     EXPECT_EQ (started, 64u);

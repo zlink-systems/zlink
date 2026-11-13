@@ -1,0 +1,97 @@
+diff --git a/framework/bench/grpc/cpp/CMakeLists.txt b/framework/bench/grpc/cpp/CMakeLists.txt
+index eeceb8a42c..5680b355fe 100644
+--- a/framework/bench/grpc/cpp/CMakeLists.txt
++++ b/framework/bench/grpc/cpp/CMakeLists.txt
+@@ -173,3 +173,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   target_link_options(bench_cpp_framework_completion_test PRIVATE -Wl,--wrap=pthread_mutex_lock)
+ endif()
+ add_test(NAME bench_cpp_framework_completion COMMAND bench_cpp_framework_completion_test)
++
++# Measurement-only close race fixture.
++add_executable(creply_close_probe measurement/creply_close_probe.cpp)
++bench_target(creply_close_probe)
++target_include_directories(creply_close_probe PRIVATE "${BENCH_REPO_ROOT}/framework/languages/cpp/framework/src")
++target_link_libraries(creply_close_probe PRIVATE zlink::cpp Threads::Threads)
++target_link_options(creply_close_probe PRIVATE -Wl,--wrap=zlink_reply)
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..a09fc3cafb 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -21,6 +21,7 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cstdio>
++#include <cstdlib>
+ #include <deque>
+ #include <functional>
+ #include <limits>
+@@ -435,6 +436,12 @@ bool grpc_driver_t::validate<google::protobuf::Empty> (
+ // typed protobuf `BenchPayload`, serialized for every message (Issue #66).
+ // ---------------------------------------------------------------------------
+ 
++static uint64_t measurement_request_rate ()
++{
++    const char *value = std::getenv ("ZLINK_CPP_BENCH_REQUEST_RATE");
++    return value && *value ? std::stoull (value) : 0;
++}
++
+ class zlink_raw_driver_t : public driver_t
+ {
+   public:
+@@ -674,7 +681,17 @@ class zlink_raw_driver_t : public driver_t
+     {
+         co_await _ready.schedule ();
+         size_t submitted_since_progress = 0;
++        const auto rate = measurement_request_rate ();
++        const auto interval = rate ? std::chrono::nanoseconds (1000000000 / rate) : std::chrono::nanoseconds (0);
++        auto next_submission = clock_t_::now ();
+         while (clock_t_::now () < _deadline) {
++            if (rate) {
++                if (clock_t_::now () < next_submission) {
++                    co_await _ready.schedule ();
++                    continue;
++                }
++                next_submission += interval;
++            }
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -903,6 +920,9 @@ class framework_driver_t final : public driver_t
+             uint64_t sent_ns;
+             uint64_t seq;
+         };
++        const auto rate = measurement_request_rate ();
++        const auto interval = rate ? std::chrono::nanoseconds (1000000000 / rate) : std::chrono::nanoseconds (0);
++        auto next_submission = clock_t_::now ();
+         std::vector<std::optional<pending_t>> pending;
+         std::vector<size_t> free_slots;
+         std::vector<size_t> completed_slots;
+@@ -912,7 +932,7 @@ class framework_driver_t final : public driver_t
+         auto completion_signal = std::make_shared<completion_signal_t> ();
+         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
+         const auto can_submit = [&] (clock_t_::time_point now) {
+-            return can_submit_framework_task<T> (now, deadline, in_flight, _window, [&] {
++            return (!rate || now >= next_submission) && can_submit_framework_task<T> (now, deadline, in_flight, _window, [&] {
+                 return !preceding_admission || preceding_admission->await_ready ();
+             });
+         };
+@@ -923,6 +943,8 @@ class framework_driver_t final : public driver_t
+                 completion_signal->take_completed (completed_slots);
+             // Admission sequences submits; the pattern window bounds replies.
+             if (can_submit (clock_t_::now ())) {
++                if (rate)
++                    next_submission += interval;
+                 uint64_t sent = 0;
+                 if constexpr (!std::is_void_v<T>)
+                     sent = now_ns ();
+@@ -992,7 +1014,9 @@ class framework_driver_t final : public driver_t
+             const auto now = clock_t_::now ();
+             if (now >= hard_stop)
+                 break;
+-            if (in_flight != 0 && !can_submit (now))
++            if (rate && now < deadline && now < next_submission)
++                continue;
++            else if (in_flight != 0 && !can_submit (now))
+                 completion_signal->wait_until (now < deadline ? deadline : hard_stop);
+         } while (clock_t_::now () < deadline || in_flight != 0);
+         close_window (deadline);

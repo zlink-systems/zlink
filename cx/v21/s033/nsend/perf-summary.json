@@ -1,0 +1,1380 @@
+[
+  {
+    "cell": "zlink-framework-node-send-saturation-4096",
+    "role": "source",
+    "main_us": 16.897348715373848,
+    "samples": 1432,
+    "stages_us": {
+      "allocation": 1.5221773633262754,
+      "other": 7.481088746890377,
+      "Promise/microtask": 1.4277787671510025,
+      "copy": 2.0177699932464583,
+      "encode/serialize": 0.5545917525297283,
+      "Framework bookkeeping": 0.7669885939240922,
+      "binding/Core": 1.6165759595015483,
+      "handoff/event loop": 0.5309921034859101,
+      "benchmark": 0.7551887694021832,
+      "GC": 0.22419666591627313
+    },
+    "leafs": [
+      [
+        "__memcpy_avx_unaligned_erms (inlined)",
+        155,
+        1.8289728008959123
+      ],
+      [
+        "_int_malloc (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        57,
+        0.6725899977488193
+      ],
+      [
+        "JS:*promiseInitHook node:internal/async_hooks:328:25 (/tmp/perf-1898688.map)",
+        43,
+        0.5073924544420918
+      ],
+      [
+        "_raw_write_unlock_irq ([kernel.kallsyms])",
+        42,
+        0.4955926299201827
+      ],
+      [
+        "malloc_consolidate (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        33,
+        0.38939420922300066
+      ],
+      [
+        "__memset_avx2_unaligned_erms (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        29,
+        0.3421949111353642
+      ],
+      [
+        "Builtins_LoadIC (/usr/bin/node)",
+        27,
+        0.31859526209154604
+      ],
+      [
+        "Builtins_CreateTypedArray (/usr/bin/node)",
+        23,
+        0.2713959640039096
+      ],
+      [
+        "Builtins_KeyedLoadIC_Megamorphic (/usr/bin/node)",
+        23,
+        0.2713959640039096
+      ],
+      [
+        "JS:*submitBindingSend /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-backend-adapter-support.js:88:27 (/tmp/perf-1898688.map)",
+        22,
+        0.25959613948200044
+      ],
+      [
+        "JS:* /root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:391:6 (/tmp/perf-1898688.map)",
+        22,
+        0.25959613948200044
+      ],
+      [
+        "JS:*sendToNode /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:442:15 (/tmp/perf-1898688.map)",
+        22,
+        0.25959613948200044
+      ],
+      [
+        "_raw_spin_unlock_irqrestore ([kernel.kallsyms])",
+        20,
+        0.23599649043818222
+      ],
+      [
+        "do_syscall_64 ([kernel.kallsyms])",
+        19,
+        0.22419666591627313
+      ],
+      [
+        "Builtins_LoadGlobalIC (/usr/bin/node)",
+        19,
+        0.22419666591627313
+      ],
+      [
+        "node::NodeArrayBufferAllocator::AllocateUninitialized(unsigned long) (/usr/bin/node)",
+        17,
+        0.2005970168724549
+      ],
+      [
+        "unlink_chunk (inlined)",
+        16,
+        0.1887971923505458
+      ],
+      [
+        "JS:*allocateApplicationPayload /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js:209:36 (/tmp/perf-1898688.map)",
+        14,
+        0.16519754330672756
+      ],
+      [
+        "JS:* /root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:150:22 (/tmp/perf-1898688.map)",
+        13,
+        0.15339771878481848
+      ],
+      [
+        "Builtins_RecordWriteSaveFP (/usr/bin/node)",
+        13,
+        0.15339771878481848
+      ],
+      [
+        "Builtins_PromiseConstructor (/usr/bin/node)",
+        12,
+        0.14159789426290934
+      ],
+      [
+        "Builtins_FindOrderedHashMapEntry (/usr/bin/node)",
+        12,
+        0.14159789426290934
+      ],
+      [
+        "JS:*processImmediate node:internal/timers:436:28 (/tmp/perf-1898688.map)",
+        12,
+        0.14159789426290934
+      ],
+      [
+        "JS:*createPayloadBytes /root/worktree/zlink-nsend/framework/bench/grpc/node/shared/bench-metric-header.js:32:28 (/tmp/perf-1898688.map)",
+        12,
+        0.14159789426290934
+      ],
+      [
+        "__GI_epoll_ctl (inlined)",
+        11,
+        0.12979806974100022
+      ],
+      [
+        "Builtins_KeyedStoreIC_Megamorphic (/usr/bin/node)",
+        11,
+        0.12979806974100022
+      ],
+      [
+        "Builtins_AsyncFunctionAwaitUncaught (/usr/bin/node)",
+        11,
+        0.12979806974100022
+      ],
+      [
+        "Builtins_FulfillPromise (/usr/bin/node)",
+        10,
+        0.11799824521909111
+      ],
+      [
+        "JS:*serialize /root/worktree/zlink-nsend/framework/bench/grpc/node/node_modules/@grpc/proto-loader/build/src/index.js:83:30 (/tmp/perf-1898688.map)",
+        10,
+        0.11799824521909111
+      ],
+      [
+        "Builtins_RunMicrotasks (/usr/bin/node)",
+        10,
+        0.11799824521909111
+      ],
+      [
+        "Builtins_CallFunction_ReceiverIsAny (/usr/bin/node)",
+        10,
+        0.11799824521909111
+      ],
+      [
+        "__GI___libc_malloc (inlined)",
+        10,
+        0.11799824521909111
+      ],
+      [
+        "JS:*classifyManualNodeTarget /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/mesh-router-resolver.js:18:29 (/tmp/perf-1898688.map)",
+        9,
+        0.10619842069718201
+      ],
+      [
+        "__fdget ([kernel.kallsyms])",
+        9,
+        0.10619842069718201
+      ],
+      [
+        "JS:*submitNode /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-transports.js:72:15 (/tmp/perf-1898688.map)",
+        9,
+        0.10619842069718201
+      ],
+      [
+        "Builtins_AsyncFunctionEnter (/usr/bin/node)",
+        8,
+        0.0943985961752729
+      ],
+      [
+        "Builtins_WeakMapLookupHashIndex (/usr/bin/node)",
+        8,
+        0.0943985961752729
+      ],
+      [
+        "JS:*emitInitScript node:internal/async_hooks:503:24 (/tmp/perf-1898688.map)",
+        8,
+        0.0943985961752729
+      ],
+      [
+        "zlink::socket_base_t::try_admit_send_parts_scoped(zlink_msg_t*, unsigned long, zlink::routed_send_target_key_t const&, bool, zlink::socket_public_send_scope_t&, zlink::pipe_t**, bool, bool (*)(zlink::pipe_t*, void*, zlink::pipe_write_observer_phase_t), void*, bool, bool, zlink_routing_id_t const*, zlink::pipe_t*, bool) [clone .constprop.0] (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        8,
+        0.0943985961752729
+      ],
+      [
+        "JS:*writeBigU_Int64LE node:internal/buffer:580:27 (/tmp/perf-1898688.map)",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "Builtins_ToNumberConvertBigInt (/usr/bin/node)",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "Builtins_ResumeGeneratorTrampoline (/usr/bin/node)",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "JS:*send /root/worktree/zlink-nsend/framework/bench/grpc/node/client/framework-transport.js:61:11 (/tmp/perf-1898688.map)",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "[unknown] ([vdso])",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "v8::internal::JSArrayBuffer::Setup(v8::internal::SharedFlag, v8::internal::ResizableFlag, std::shared_ptr<v8::internal::BackingStore>, v8::internal::Isolate*) (/usr/bin/node)",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "JS:*serialize /root/worktree/zlink-nsend/framework/languages/node/packages/framework-codec-protobuf/dist/server/framework.cjs:335:14 (/tmp/perf-1898688.map)",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "Builtins_AsyncFunctionAwaitCaught (/usr/bin/node)",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "syscall_exit_to_user_mode ([kernel.kallsyms])",
+        7,
+        0.08259877165336378
+      ],
+      [
+        "JS:*from node:buffer:301:28 (/tmp/perf-1898688.map)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "Builtins_CallApiCallbackOptimizedNoProfiling (/usr/bin/node)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "JS:*encodePayload /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:241:23 (/tmp/perf-1898688.map)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "std::__shared_ptr<v8::BackingStore, (__gnu_cxx::_Lock_policy)2>::__shared_ptr<v8::BackingStore, std::default_delete<v8::BackingStore>, void>(std::unique_ptr<v8::BackingStore, std::default_delete<v8::BackingStore> >&&) (/usr/bin/node)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "v8::EscapableHandleScopeBase::EscapableHandleScopeBase(v8::Isolate*) (/usr/bin/node)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "node::Buffer::(anonymous namespace)::CreateUnsafeArrayBuffer(v8::FunctionCallbackInfo<v8::Value> const&) (/usr/bin/node)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "socket_submit_send(napi_env__*, napi_callback_info__*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "v8::internal::ScavengerCollector::CollectGarbage() (/usr/bin/node)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "Builtins_TypedArrayPrototypeSet (/usr/bin/node)",
+        6,
+        0.07079894713145467
+      ],
+      [
+        "JS:*submitSend /root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:216:15 (/tmp/perf-1898688.map)",
+        5,
+        0.058999122609545554
+      ],
+      [
+        "JS:*take /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/host/application-job-queue.js:145:9 (/tmp/perf-1898688.map)",
+        5,
+        0.058999122609545554
+      ],
+      [
+        "Builtins_PromiseFulfillReactionJob (/usr/bin/node)",
+        5,
+        0.058999122609545554
+      ],
+      [
+        "zlink::router_t::xsend_routed(zlink_routing_id_t const*, zlink::msg_t*, unsigned long*, unsigned long, zlink::pipe_t**, unsigned long, unsigned long, zlink::pipe_message_admission_t*, bool (*)(zlink::pipe_t*, void*, zlink::pipe_write_observer_phase_t), void*, zlink::routed_send_attempt_identity_t*, unsigned long, bool) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        5,
+        0.058999122609545554
+      ],
+      [
+        "JS:*write node:buffer:1114:40 (/tmp/perf-1898688.map)",
+        5,
+        0.058999122609545554
+      ],
+      [
+        "JS:*writeUInt32LE node:internal/buffer:706:23 (/tmp/perf-1898688.map)",
+        5,
+        0.058999122609545554
+      ],
+      [
+        "Builtins_CompileLazy (/usr/bin/node)",
+        5,
+        0.058999122609545554
+      ],
+      [
+        "Builtins_EnqueueMicrotask (/usr/bin/node)",
+        5,
+        0.058999122609545554
+      ]
+    ]
+  },
+  {
+    "cell": "zlink-framework-node-send-saturation-4096",
+    "role": "target",
+    "main_us": 17.276260901284424,
+    "samples": 1464,
+    "stages_us": {
+      "other": 7.965489145059417,
+      "allocation": 1.038463770022561,
+      "encode/serialize": 1.21547463991277,
+      "Promise/microtask": 1.4750905824184104,
+      "binding/Core": 1.498692031737105,
+      "copy": 1.7583079742427454,
+      "Framework bookkeeping": 1.6521014523086197,
+      "GC": 0.542833334329975,
+      "benchmark": 0.10620652193412555,
+      "handoff/event loop": 0.023601449318694567
+    },
+    "leafs": [
+      [
+        "__memcpy_avx_unaligned_erms (inlined)",
+        146,
+        1.7229058002647035
+      ],
+      [
+        "Builtins_CreateTypedArray (/usr/bin/node)",
+        54,
+        0.6372391316047533
+      ],
+      [
+        "Builtins_KeyedLoadIC_Megamorphic (/usr/bin/node)",
+        46,
+        0.542833334329975
+      ],
+      [
+        "JS:*promiseInitHook node:internal/async_hooks:328:25 (/tmp/perf-1898657.map)",
+        44,
+        0.5192318850112805
+      ],
+      [
+        "_int_malloc (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        33,
+        0.38942391375846036
+      ],
+      [
+        "node::NodeArrayBufferAllocator::AllocateUninitialized(unsigned long) (/usr/bin/node)",
+        27,
+        0.31861956580237666
+      ],
+      [
+        "_raw_spin_unlock_irqrestore ([kernel.kallsyms])",
+        21,
+        0.24781521784629296
+      ],
+      [
+        "JS:*consume /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:653:12 (/tmp/perf-1898657.map)",
+        19,
+        0.22421376852759842
+      ],
+      [
+        "Builtins_KeyedStoreIC_Megamorphic (/usr/bin/node)",
+        19,
+        0.22421376852759842
+      ],
+      [
+        "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        17,
+        0.20061231920890385
+      ],
+      [
+        "Builtins_LoadGlobalIC (/usr/bin/node)",
+        17,
+        0.20061231920890385
+      ],
+      [
+        "Builtins_PromisePrototypeThen (/usr/bin/node)",
+        16,
+        0.18881159454955654
+      ],
+      [
+        "Builtins_LoadIC (/usr/bin/node)",
+        15,
+        0.17701086989020925
+      ],
+      [
+        "JS:*tryParseCanonicalChannelHeader /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:579:40 (/tmp/perf-1898657.map)",
+        15,
+        0.17701086989020925
+      ],
+      [
+        "unlink_chunk (inlined)",
+        15,
+        0.17701086989020925
+      ],
+      [
+        "JS:*receiveOne /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:671:15 (/tmp/perf-1898657.map)",
+        14,
+        0.16521014523086197
+      ],
+      [
+        "Builtins_FindOrderedHashMapEntry (/usr/bin/node)",
+        14,
+        0.16521014523086197
+      ],
+      [
+        "[unknown] ([vdso])",
+        14,
+        0.16521014523086197
+      ],
+      [
+        "JS:*readString /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js:672:15 (/tmp/perf-1898657.map)",
+        13,
+        0.1534094205715147
+      ],
+      [
+        "zlink_router_recv (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        13,
+        0.1534094205715147
+      ],
+      [
+        "JS:*messageFromOwnedRoutedBuffer /root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_snapshot.js:21:38 (/tmp/perf-1898657.map)",
+        13,
+        0.1534094205715147
+      ],
+      [
+        "Builtins_RunMicrotasks (/usr/bin/node)",
+        13,
+        0.1534094205715147
+      ],
+      [
+        "v8::internal::JSArrayBuffer::Setup(v8::internal::SharedFlag, v8::internal::ResizableFlag, std::shared_ptr<v8::internal::BackingStore>, v8::internal::Isolate*) (/usr/bin/node)",
+        12,
+        0.1416086959121674
+      ],
+      [
+        "v8::internal::String::ComputeAndSetRawHash(v8::internal::SharedStringAccessGuardIfNeeded const&) (/usr/bin/node)",
+        11,
+        0.12980797125282012
+      ],
+      [
+        "v8::internal::Factory::AllocateRaw(int, v8::internal::AllocationType, v8::internal::AllocationAlignment) (/usr/bin/node)",
+        10,
+        0.11800724659347284
+      ],
+      [
+        "JS:*dispatchClaimRecords /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/mesh-dispatch-pump.js:403:25 (/tmp/perf-1898657.map)",
+        10,
+        0.11800724659347284
+      ],
+      [
+        "JS:*dispatchMesh /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js:494:17 (/tmp/perf-1898657.map)",
+        10,
+        0.11800724659347284
+      ],
+      [
+        "JS:*NodeRawReceivedRecord /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:387:16 (/tmp/perf-1898657.map)",
+        9,
+        0.10620652193412555
+      ],
+      [
+        "JS:*deserialize /root/worktree/zlink-nsend/framework/languages/node/packages/framework-codec-protobuf/dist/server/framework.cjs:339:16 (/tmp/perf-1898657.map)",
+        9,
+        0.10620652193412555
+      ],
+      [
+        "JS:*promiseBeforeHook node:internal/async_hooks:346:27 (/tmp/perf-1898657.map)",
+        9,
+        0.10620652193412555
+      ],
+      [
+        "Builtins_FulfillPromise (/usr/bin/node)",
+        9,
+        0.10620652193412555
+      ],
+      [
+        "JS:*BenchPayload$decode :3:36 (/tmp/perf-1898657.map)",
+        9,
+        0.10620652193412555
+      ],
+      [
+        "int v8::internal::BinarySearch<(v8::internal::SearchMode)1, v8::internal::DescriptorArray>(v8::internal::DescriptorArray*, v8::internal::Tagged<v8::internal::Name>, int, int*) [clone .isra.0] (/usr/bin/node)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "JS:*dispatchOneWay /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatch-pipeline.js:27:19 (/tmp/perf-1898657.map)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "v8::internal::JSObject::MigrateToMap(v8::internal::Isolate*, v8::internal::Handle<v8::internal::JSObject>, v8::internal::Handle<v8::internal::Map>, int) (/usr/bin/node)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "JS:*processApplicationReceived /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:927:31 (/tmp/perf-1898657.map)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "JS:*from node:buffer:301:28 (/tmp/perf-1898657.map)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "JS:*promiseAfterHook node:internal/async_hooks:353:26 (/tmp/perf-1898657.map)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "v8::internal::MemoryChunk::GetHeap() (/usr/bin/node)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "zlink::ypipe_t<zlink::msg_t, 64>::read(zlink::msg_t*, bool*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "v8::internal::JSTypedArray::GetBuffer() (/usr/bin/node)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "JS:*materializeRoutedReceivedInto /root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:139:39 (/tmp/perf-1898657.map)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "JS:*createRouteContext /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js:588:23 (/tmp/perf-1898657.map)",
+        8,
+        0.09440579727477827
+      ],
+      [
+        "JS:*closeMessageParts /root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_parts_state.js:13:27 (/tmp/perf-1898657.map)",
+        7,
+        0.08260507261543099
+      ],
+      [
+        "v8::internal::Object::AddDataProperty(v8::internal::LookupIterator*, v8::internal::Handle<v8::internal::Object>, v8::internal::PropertyAttributes, v8::Maybe<v8::internal::ShouldThrow>, v8::internal::StoreOrigin, v8::internal::EnforceDefineSemantics) (/usr/bin/node)",
+        7,
+        0.08260507261543099
+      ],
+      [
+        "JS:*isCanonicalCodecContentType /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/contracts/Configuration/CodecContentType.js:38:37 (/tmp/perf-1898657.map)",
+        7,
+        0.08260507261543099
+      ],
+      [
+        "JS:*processReceived /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/foundation/raw-service-mesh-runtime.js:786:20 (/tmp/perf-1898657.map)",
+        7,
+        0.08260507261543099
+      ],
+      [
+        "JS:*invoke /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatch-pipeline.js:191:11 (/tmp/perf-1898657.map)",
+        7,
+        0.08260507261543099
+      ],
+      [
+        "v8::internal::Handle<v8::internal::String> v8::internal::StringTable::LookupKey<v8::internal::SequentialStringKey<unsigned char>, v8::internal::Isolate>(v8::internal::Isolate*, v8::internal::SequentialStringKey<unsigned char>*) (/usr/bin/node)",
+        7,
+        0.08260507261543099
+      ],
+      [
+        "v8::internal::JSArrayBuffer::EnsureExtension() (/usr/bin/node)",
+        7,
+        0.08260507261543099
+      ],
+      [
+        "Builtins_EnqueueMicrotask (/usr/bin/node)",
+        7,
+        0.08260507261543099
+      ],
+      [
+        "v8::ArrayBuffer::Data() const (/usr/bin/node)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "malloc_consolidate (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "_int_free_create_chunk (inlined)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "JS:*recvBatch /root/worktree/zlink-nsend/framework/languages/node/packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js:1384:14 (/tmp/perf-1898657.map)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "node::Buffer::(anonymous namespace)::ParseArrayIndex(node::Environment*, v8::Local<v8::Value>, unsigned long, unsigned long*) (/usr/bin/node)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "JS:*handle /root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-framework-server/main.js:44:15 (/tmp/perf-1898657.map)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "v8::internal::(anonymous namespace)::Invoke(v8::internal::Isolate*, v8::internal::(anonymous namespace)::InvokeParams const&) (/usr/bin/node)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "heap::base::SlotCallbackResult v8::internal::Scavenger::ScavengeObject<v8::internal::FullHeapObjectSlot>(v8::internal::FullHeapObjectSlot, v8::internal::Tagged<v8::internal::HeapObject>) (/usr/bin/node)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "Builtins_RegExpPrototypeTestFast (/usr/bin/node)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "int zlink::fq_t::recvpipe_internal<true>(zlink::msg_t*, zlink::pipe_t**, int (*)(zlink::pipe_t*, zlink::msg_t const&, void*), void*, bool (*)(zlink::pipe_t*, void*), void*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "Builtins_ObjectPrototypeHasOwnProperty (/usr/bin/node)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "v8::internal::Object::TransitionAndWriteDataProperty(v8::internal::LookupIterator*, v8::internal::Handle<v8::internal::Object>, v8::internal::PropertyAttributes, v8::Maybe<v8::internal::ShouldThrow>, v8::internal::StoreOrigin) (/usr/bin/node)",
+        6,
+        0.0708043479560837
+      ],
+      [
+        "Builtins_RecordWriteSaveFP (/usr/bin/node)",
+        5,
+        0.05900362329673642
+      ],
+      [
+        "v8::Value::IsArrayBufferView() const (/usr/bin/node)",
+        5,
+        0.05900362329673642
+      ]
+    ]
+  },
+  {
+    "cell": "zlink-node-send-saturation-4096",
+    "role": "source",
+    "main_us": 10.788827624876324,
+    "samples": 1469,
+    "stages_us": {
+      "copy": 1.248536893280446,
+      "allocation": 1.3513575786094238,
+      "binding/Core": 1.4615225986047573,
+      "other": 4.817883541129251,
+      "handoff/event loop": 0.39659407198320046,
+      "GC": 0.7197447973028454,
+      "benchmark": 0.3158063906532893,
+      "Promise/microtask": 0.24236304398973363,
+      "encode/serialize": 0.23501870932337804
+    },
+    "leafs": [
+      [
+        "__memcpy_avx_unaligned_erms (inlined)",
+        161,
+        1.182437881283246
+      ],
+      [
+        "_int_malloc (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        96,
+        0.7050561279701342
+      ],
+      [
+        "malloc_consolidate (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        41,
+        0.3011177213205782
+      ],
+      [
+        "__GI___libc_malloc (inlined)",
+        39,
+        0.286429051987867
+      ],
+      [
+        "__memset_avx2_unaligned_erms (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        36,
+        0.26439604798880034
+      ],
+      [
+        "_raw_spin_unlock_irqrestore ([kernel.kallsyms])",
+        36,
+        0.26439604798880034
+      ],
+      [
+        "JS:*submitSend /root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:216:15 (/tmp/perf-1899437.map)",
+        29,
+        0.21298570532431135
+      ],
+      [
+        "JS:* /root/worktree/zlink-nsend/framework/bench/grpc/node/client/bench-core.js:391:6 (/tmp/perf-1899437.map)",
+        28,
+        0.20564137065795582
+      ],
+      [
+        "unlink_chunk (inlined)",
+        24,
+        0.17626403199253354
+      ],
+      [
+        "v8::internal::GlobalHandles::Create(v8::internal::Tagged<v8::internal::Object>) (/usr/bin/node)",
+        23,
+        0.16891969732617798
+      ],
+      [
+        "Builtins_LoadIC (/usr/bin/node)",
+        20,
+        0.1468866933271113
+      ],
+      [
+        "Builtins_CallApiCallbackOptimizedNoProfiling (/usr/bin/node)",
+        19,
+        0.13954235866075573
+      ],
+      [
+        "JS:*encodeBenchPayloadMessage /root/worktree/zlink-nsend/framework/bench/grpc/node/shared/raw-wire.js:38:35 (/tmp/perf-1899437.map)",
+        19,
+        0.13954235866075573
+      ],
+      [
+        "_int_free (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        18,
+        0.13219802399440017
+      ],
+      [
+        "node::NodeArrayBufferAllocator::AllocateUninitialized(unsigned long) (/usr/bin/node)",
+        17,
+        0.1248536893280446
+      ],
+      [
+        "JS:*setImmediate node:timers:225:22 (/tmp/perf-1899437.map)",
+        14,
+        0.10282068532897791
+      ],
+      [
+        "[unknown] ([vdso])",
+        13,
+        0.09547635066262233
+      ],
+      [
+        "std::pair<std::__detail::_Node_iterator<v8impl::RefTracker*, true, false>, bool> std::_Hashtable<v8impl::RefTracker*, v8impl::RefTracker*, std::allocator<v8impl::RefTracker*>, std::__detail::_Identity, std::equal_to<v8impl::RefTracker*>, std::hash<v8impl::RefTracker*>, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<false, true, true> >::_M_emplace<v8impl::RefTracker*&>(std::integral_constant<bool, true>, v8impl::RefTracker*&) (/usr/bin/node)",
+        13,
+        0.09547635066262233
+      ],
+      [
+        "JS:*send /root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/sockets/router_socket.js:37:9 (/tmp/perf-1899437.map)",
+        13,
+        0.09547635066262233
+      ],
+      [
+        "Builtins_CreateTypedArray (/usr/bin/node)",
+        12,
+        0.08813201599626677
+      ],
+      [
+        "JS:*writeBigU_Int64LE node:internal/buffer:580:27 (/tmp/perf-1899437.map)",
+        11,
+        0.08078768132991121
+      ],
+      [
+        "Builtins_RecordWriteSaveFP (/usr/bin/node)",
+        11,
+        0.08078768132991121
+      ],
+      [
+        "do_syscall_64 ([kernel.kallsyms])",
+        11,
+        0.08078768132991121
+      ],
+      [
+        "JS:*submitSend /root/worktree/zlink-nsend/framework/bench/grpc/node/client/main.js:251:22 (/tmp/perf-1899437.map)",
+        11,
+        0.08078768132991121
+      ],
+      [
+        "v8::Context::GetNumberOfEmbedderDataFields() (/usr/bin/node)",
+        10,
+        0.07344334666355565
+      ],
+      [
+        "JS:*processImmediate node:internal/timers:436:28 (/tmp/perf-1899437.map)",
+        10,
+        0.07344334666355565
+      ],
+      [
+        "v8::internal::JSArrayBuffer::Setup(v8::internal::SharedFlag, v8::internal::ResizableFlag, std::shared_ptr<v8::internal::BackingStore>, v8::internal::Isolate*) (/usr/bin/node)",
+        10,
+        0.07344334666355565
+      ],
+      [
+        "Builtins_ArrayPrototypeSlice (/usr/bin/node)",
+        9,
+        0.06609901199720009
+      ],
+      [
+        "v8impl::ExternalWrapper::WeakCallback(v8::WeakCallbackInfo<v8impl::ExternalWrapper> const&) (/usr/bin/node)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "v8::internal::Handle<v8::internal::String> v8::internal::StringTable::LookupKey<v8::internal::SequentialStringKey<unsigned char>, v8::internal::Isolate>(v8::internal::Isolate*, v8::internal::SequentialStringKey<unsigned char>*) (/usr/bin/node)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "__GI___libc_free (inlined)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "message_from_buffer(napi_env__*, napi_callback_info__*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "Builtins_ToNumberConvertBigInt (/usr/bin/node)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "v8impl::(anonymous namespace)::FunctionCallbackWrapper::Invoke(v8::FunctionCallbackInfo<v8::Value> const&) (/usr/bin/node)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "__GI___lll_lock_wake_private (inlined)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "v8::TryCatch::HasCaught() const (/usr/bin/node)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "zlink::pipe_t::refresh_peer_credit_snapshot_unlocked() (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        8,
+        0.05875467733084451
+      ],
+      [
+        "futex_wake ([kernel.kallsyms])",
+        7,
+        0.051410342664488955
+      ],
+      [
+        "v8::Object::Get(v8::Local<v8::Context>, unsigned int) (/usr/bin/node)",
+        7,
+        0.051410342664488955
+      ],
+      [
+        "zlink::msg_t::copy(zlink::msg_t&) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        7,
+        0.051410342664488955
+      ],
+      [
+        "Builtins_LoadGlobalIC (/usr/bin/node)",
+        7,
+        0.051410342664488955
+      ],
+      [
+        "v8::internal::GlobalHandles::Destroy(unsigned long*) (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "Builtins_EnqueueMicrotask (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "Builtins_CallFunction_ReceiverIsAny (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "v8::internal::(anonymous namespace)::IsUnscavengedHeapObjectSlot(v8::internal::Heap*, v8::internal::FullObjectSlot) (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "v8::internal::LookupIterator::State v8::internal::LookupIterator::LookupInRegularHolder<true>(v8::internal::Tagged<v8::internal::Map>, v8::internal::Tagged<v8::internal::JSReceiver>) (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "napi_get_element (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "Builtins_RunMicrotasks (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "int v8::internal::BinarySearch<(v8::internal::SearchMode)0, v8::internal::TransitionArray>(v8::internal::TransitionArray*, v8::internal::Tagged<v8::internal::Name>, int, int*) [clone .isra.0] (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "v8::internal::Factory::AllocateRawWithAllocationSite(v8::internal::Handle<v8::internal::Map>, v8::internal::AllocationType, v8::internal::Handle<v8::internal::AllocationSite>) (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "zlink::socket_base_t::process_commands(int, bool, bool, unsigned long const*, bool) [clone .constprop.1] (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "v8::internal::LookupIterator::WriteDataValue(v8::internal::Handle<v8::internal::Object>, bool) (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "std::__shared_ptr<v8::BackingStore, (__gnu_cxx::_Lock_policy)2>::__shared_ptr<v8::BackingStore, std::default_delete<v8::BackingStore>, void>(std::unique_ptr<v8::BackingStore, std::default_delete<v8::BackingStore> >&&) (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "node::Buffer::(anonymous namespace)::CreateUnsafeArrayBuffer(v8::FunctionCallbackInfo<v8::Value> const&) (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "Builtins_CEntry_Return1_ArgvOnStack_NoBuiltinExit (/usr/bin/node)",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "_raw_write_unlock_irq ([kernel.kallsyms])",
+        6,
+        0.044066007998133386
+      ],
+      [
+        "napi_create_external (/usr/bin/node)",
+        5,
+        0.036721673331777824
+      ],
+      [
+        "v8::ArrayBuffer::New(v8::Isolate*, std::shared_ptr<v8::BackingStore>) (/usr/bin/node)",
+        5,
+        0.036721673331777824
+      ],
+      [
+        "v8::EscapableHandleScopeBase::EscapableHandleScopeBase(v8::Isolate*) (/usr/bin/node)",
+        5,
+        0.036721673331777824
+      ],
+      [
+        "zlink::routing_socket_base_t::lookup_out_pipe(zlink::blob_t const&) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        5,
+        0.036721673331777824
+      ],
+      [
+        "v8::internal::BackingStore::Allocate(v8::internal::Isolate*, unsigned long, v8::internal::SharedFlag, v8::internal::InitializedFlag) (/usr/bin/node)",
+        5,
+        0.036721673331777824
+      ],
+      [
+        "v8::internal::BigInt::ToNumber(v8::internal::Isolate*, v8::internal::Handle<v8::internal::BigInt>) (/usr/bin/node)",
+        5,
+        0.036721673331777824
+      ],
+      [
+        "v8::internal::Builtin_TypedArrayPrototypeFill(int, unsigned long*, v8::internal::Isolate*) (/usr/bin/node)",
+        5,
+        0.036721673331777824
+      ],
+      [
+        "v8::internal::JSTypedArray::GetBuffer() (/usr/bin/node)",
+        5,
+        0.036721673331777824
+      ],
+      [
+        "v8::internal::MemoryChunk::GetHeap() (/usr/bin/node)",
+        5,
+        0.036721673331777824
+      ]
+    ]
+  },
+  {
+    "cell": "zlink-node-send-saturation-4096",
+    "role": "target",
+    "main_us": 11.0093576882292,
+    "samples": 1498,
+    "stages_us": {
+      "GC": 0.9554182239451241,
+      "binding/Core": 2.2636062536546016,
+      "allocation": 0.7349370953424031,
+      "other": 5.673714376043352,
+      "copy": 0.5952990472273466,
+      "handoff/event loop": 0.2792760962301132,
+      "benchmark": 0.1763849028821768,
+      "encode/serialize": 0.2939748381369613,
+      "Promise/microtask": 0.03674685476712016
+    },
+    "leafs": [
+      [
+        "__memcpy_avx_unaligned_erms (inlined)",
+        73,
+        0.5365040795999543
+      ],
+      [
+        "_int_malloc (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        54,
+        0.39686603148489774
+      ],
+      [
+        "v8::internal::GlobalHandles::Create(v8::internal::Tagged<v8::internal::Object>) (/usr/bin/node)",
+        40,
+        0.2939748381369613
+      ],
+      [
+        "v8::internal::FactoryBase<v8::internal::Factory>::InternalizeString(v8::base::Vector<unsigned char const>, bool) (/usr/bin/node)",
+        32,
+        0.235179870509569
+      ],
+      [
+        "malloc_consolidate (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        31,
+        0.22783049955614496
+      ],
+      [
+        "__GI___libc_malloc (inlined)",
+        26,
+        0.19108364478902481
+      ],
+      [
+        "JS:*closeMessageParts /root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_parts_state.js:13:27 (/tmp/perf-1899424.map)",
+        25,
+        0.1837342738356008
+      ],
+      [
+        "unlink_chunk (inlined)",
+        25,
+        0.1837342738356008
+      ],
+      [
+        "v8::internal::Handle<v8::internal::String> v8::internal::StringTable::LookupKey<v8::internal::SequentialStringKey<unsigned char>, v8::internal::Isolate>(v8::internal::Isolate*, v8::internal::SequentialStringKey<unsigned char>*) (/usr/bin/node)",
+        23,
+        0.16903553192875273
+      ],
+      [
+        "zlink_router_recv (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        22,
+        0.16168616097532867
+      ],
+      [
+        "Builtins_CreateTypedArray (/usr/bin/node)",
+        19,
+        0.1396380481150566
+      ],
+      [
+        "node::NodeArrayBufferAllocator::Allocate(unsigned long) (/usr/bin/node)",
+        18,
+        0.13228867716163256
+      ],
+      [
+        "JS:*pumpCommands /root/worktree/zlink-nsend/framework/bench/grpc/node/zlink-raw-server/main.js:95:22 (/tmp/perf-1899424.map)",
+        17,
+        0.12493930620820855
+      ],
+      [
+        "_raw_spin_unlock_irqrestore ([kernel.kallsyms])",
+        17,
+        0.12493930620820855
+      ],
+      [
+        "v8::internal::JSObject::MigrateToMap(v8::internal::Isolate*, v8::internal::Handle<v8::internal::JSObject>, v8::internal::Handle<v8::internal::Map>, int) (/usr/bin/node)",
+        16,
+        0.1175899352547845
+      ],
+      [
+        "v8::internal::Runtime::SetObjectProperty(v8::internal::Isolate*, v8::internal::Handle<v8::internal::Object>, v8::internal::Handle<v8::internal::Object>, v8::internal::Handle<v8::internal::Object>, v8::internal::StoreOrigin, v8::Maybe<v8::internal::ShouldThrow>) (/usr/bin/node)",
+        16,
+        0.1175899352547845
+      ],
+      [
+        "Builtins_LoadIC (/usr/bin/node)",
+        15,
+        0.11024056430136048
+      ],
+      [
+        "JS:*decodeBenchPayloadBody /root/worktree/zlink-nsend/framework/bench/grpc/node/shared/raw-wire.js:43:32 (/tmp/perf-1899424.map)",
+        15,
+        0.11024056430136048
+      ],
+      [
+        "v8::internal::GlobalHandles::Destroy(unsigned long*) (/usr/bin/node)",
+        14,
+        0.10289119334793644
+      ],
+      [
+        "JS:*materializeRoutedReceivedInto /root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/message_materializer.js:139:39 (/tmp/perf-1899424.map)",
+        14,
+        0.10289119334793644
+      ],
+      [
+        "zlink::pipe_t::frame_accounted_bytes(zlink::msg_t const*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        14,
+        0.10289119334793644
+      ],
+      [
+        "v8::internal::BackingStore::Allocate(v8::internal::Isolate*, unsigned long, v8::internal::SharedFlag, v8::internal::InitializedFlag) (/usr/bin/node)",
+        14,
+        0.10289119334793644
+      ],
+      [
+        "node_napi_env__::can_call_into_js() const (/usr/bin/node)",
+        13,
+        0.09554182239451241
+      ],
+      [
+        "napi_set_named_property (/usr/bin/node)",
+        13,
+        0.09554182239451241
+      ],
+      [
+        "v8::internal::LookupIterator::State v8::internal::LookupIterator::LookupInRegularHolder<false>(v8::internal::Tagged<v8::internal::Map>, v8::internal::Tagged<v8::internal::JSReceiver>) (/usr/bin/node)",
+        13,
+        0.09554182239451241
+      ],
+      [
+        "Builtins_RecordWriteSaveFP (/usr/bin/node)",
+        13,
+        0.09554182239451241
+      ],
+      [
+        "v8::internal::Object::AddDataProperty(v8::internal::LookupIterator*, v8::internal::Handle<v8::internal::Object>, v8::internal::PropertyAttributes, v8::Maybe<v8::internal::ShouldThrow>, v8::internal::StoreOrigin, v8::internal::EnforceDefineSemantics) (/usr/bin/node)",
+        13,
+        0.09554182239451241
+      ],
+      [
+        "int v8::internal::BinarySearch<(v8::internal::SearchMode)0, v8::internal::TransitionArray>(v8::internal::TransitionArray*, v8::internal::Tagged<v8::internal::Name>, int, int*) [clone .isra.0] (/usr/bin/node)",
+        12,
+        0.0881924514410884
+      ],
+      [
+        "v8::internal::(anonymous namespace)::IsUnscavengedHeapObjectSlot(v8::internal::Heap*, v8::internal::FullObjectSlot) (/usr/bin/node)",
+        12,
+        0.0881924514410884
+      ],
+      [
+        "v8::internal::Factory::InitializeJSObjectFromMap(v8::internal::Tagged<v8::internal::JSObject>, v8::internal::Tagged<v8::internal::Object>, v8::internal::Tagged<v8::internal::Map>) (/usr/bin/node)",
+        12,
+        0.0881924514410884
+      ],
+      [
+        "v8::internal::LookupIterator::ApplyTransitionToDataProperty(v8::internal::Handle<v8::internal::JSReceiver>) (/usr/bin/node)",
+        12,
+        0.0881924514410884
+      ],
+      [
+        "std::pair<std::__detail::_Node_iterator<v8impl::RefTracker*, true, false>, bool> std::_Hashtable<v8impl::RefTracker*, v8impl::RefTracker*, std::allocator<v8impl::RefTracker*>, std::__detail::_Identity, std::equal_to<v8impl::RefTracker*>, std::hash<v8impl::RefTracker*>, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<false, true, true> >::_M_emplace<v8impl::RefTracker*&>(std::integral_constant<bool, true>, v8impl::RefTracker*&) (/usr/bin/node)",
+        12,
+        0.0881924514410884
+      ],
+      [
+        "v8::internal::Map::TransitionToDataProperty(v8::internal::Isolate*, v8::internal::Handle<v8::internal::Map>, v8::internal::Handle<v8::internal::Name>, v8::internal::Handle<v8::internal::Object>, v8::internal::PropertyAttributes, v8::internal::PropertyConstness, v8::internal::StoreOrigin) (/usr/bin/node)",
+        12,
+        0.0881924514410884
+      ],
+      [
+        "zlink::msg_t::close() (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        11,
+        0.08084308048766434
+      ],
+      [
+        "int zlink::fq_t::recvpipe_internal<true>(zlink::msg_t*, zlink::pipe_t**, int (*)(zlink::pipe_t*, zlink::msg_t const&, void*), void*, bool (*)(zlink::pipe_t*, void*), void*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        10,
+        0.07349370953424032
+      ],
+      [
+        "napi_create_external (/usr/bin/node)",
+        10,
+        0.07349370953424032
+      ],
+      [
+        "_int_free (/usr/lib/x86_64-linux-gnu/libc.so.6)",
+        10,
+        0.07349370953424032
+      ],
+      [
+        "do_syscall_64 ([kernel.kallsyms])",
+        10,
+        0.07349370953424032
+      ],
+      [
+        "Builtins_ArrayIteratorPrototypeNext (/usr/bin/node)",
+        10,
+        0.07349370953424032
+      ],
+      [
+        "zlink::shared_message_memory_allocator::call_dec_ref(void*, void*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        10,
+        0.07349370953424032
+      ],
+      [
+        "v8::internal::Factory::AllocateRawWithAllocationSite(v8::internal::Handle<v8::internal::Map>, v8::internal::AllocationType, v8::internal::Handle<v8::internal::AllocationSite>) (/usr/bin/node)",
+        10,
+        0.07349370953424032
+      ],
+      [
+        "node_napi_env__::DrainFinalizerQueue() (/usr/bin/node)",
+        9,
+        0.06614433858081628
+      ],
+      [
+        "v8::internal::Object::TransitionAndWriteDataProperty(v8::internal::LookupIterator*, v8::internal::Handle<v8::internal::Object>, v8::internal::PropertyAttributes, v8::Maybe<v8::internal::ShouldThrow>, v8::internal::StoreOrigin) (/usr/bin/node)",
+        9,
+        0.06614433858081628
+      ],
+      [
+        "v8::internal::LookupIterator::WriteDataValue(v8::internal::Handle<v8::internal::Object>, bool) (/usr/bin/node)",
+        9,
+        0.06614433858081628
+      ],
+      [
+        "v8::internal::Factory::InitializeJSObjectBody(v8::internal::Tagged<v8::internal::JSObject>, v8::internal::Tagged<v8::internal::Map>, int) (/usr/bin/node)",
+        8,
+        0.05879496762739225
+      ],
+      [
+        "v8::internal::LookupIterator::State v8::internal::LookupIterator::LookupInRegularHolder<true>(v8::internal::Tagged<v8::internal::Map>, v8::internal::Tagged<v8::internal::JSReceiver>) (/usr/bin/node)",
+        8,
+        0.05879496762739225
+      ],
+      [
+        "v8impl::(anonymous namespace)::FunctionCallbackWrapper::Invoke(v8::FunctionCallbackInfo<v8::Value> const&) (/usr/bin/node)",
+        8,
+        0.05879496762739225
+      ],
+      [
+        "zlink::socket_base_t::recv_routed(zlink::msg_t*, zlink_routing_id_t*, int, unsigned long*, zlink::pipe_t**, bool, unsigned long*, unsigned long*, unsigned long*, zlink::socket_receive_record_scope_t*, int (*)(zlink::pipe_t*, zlink::msg_t const&, void*), void*, bool, bool*) [clone .constprop.0] (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        8,
+        0.05879496762739225
+      ],
+      [
+        "finalize_native_message_frame(napi_env__*, void*, void*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node)",
+        8,
+        0.05879496762739225
+      ],
+      [
+        "v8impl::ExternalWrapper::WeakCallback(v8::WeakCallbackInfo<v8impl::ExternalWrapper> const&) (/usr/bin/node)",
+        8,
+        0.05879496762739225
+      ],
+      [
+        "v8::internal::JSArrayBuffer::Setup(v8::internal::SharedFlag, v8::internal::ResizableFlag, std::shared_ptr<v8::internal::BackingStore>, v8::internal::Isolate*) (/usr/bin/node)",
+        8,
+        0.05879496762739225
+      ],
+      [
+        "v8::Context::GetNumberOfEmbedderDataFields() (/usr/bin/node)",
+        7,
+        0.05144559667396822
+      ],
+      [
+        "v8::internal::Factory::InternalizeUtf8String(v8::base::Vector<char const>) (/usr/bin/node)",
+        7,
+        0.05144559667396822
+      ],
+      [
+        "v8::internal::Utf8DecoderBase<v8::internal::Utf8Decoder>::Utf8DecoderBase(v8::base::Vector<unsigned char const>) (/usr/bin/node)",
+        7,
+        0.05144559667396822
+      ],
+      [
+        "v8::internal::Object::SetProperty(v8::internal::LookupIterator*, v8::internal::Handle<v8::internal::Object>, v8::internal::StoreOrigin, v8::Maybe<v8::internal::ShouldThrow>) (/usr/bin/node)",
+        7,
+        0.05144559667396822
+      ],
+      [
+        "zlink::socket_base_t::process_commands(int, bool, bool, unsigned long const*, bool) [clone .constprop.1] (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        7,
+        0.05144559667396822
+      ],
+      [
+        "zlink::socket_lifecycle_coordinator_t::unlock_public_api_sync() (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        6,
+        0.0440962257205442
+      ],
+      [
+        "v8::internal::Runtime_GetProperty(int, unsigned long*, v8::internal::Isolate*) (/usr/bin/node)",
+        6,
+        0.0440962257205442
+      ],
+      [
+        "zlink::socket_lifecycle_coordinator_t::lock_public_api_sync() (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        6,
+        0.0440962257205442
+      ],
+      [
+        "int v8::internal::BinarySearch<(v8::internal::SearchMode)1, v8::internal::DescriptorArray>(v8::internal::DescriptorArray*, v8::internal::Tagged<v8::internal::Name>, int, int*) [clone .isra.0] (/usr/bin/node)",
+        6,
+        0.0440962257205442
+      ],
+      [
+        "JS:*BenchPayload$decode :3:36 (/tmp/perf-1899424.map)",
+        6,
+        0.0440962257205442
+      ],
+      [
+        "zlink::router_t::xrecv_routed(zlink::msg_t*, zlink_routing_id_t*, unsigned long*, zlink::pipe_t**, int (*)(zlink::pipe_t*, zlink::msg_t const&, void*), void*, unsigned long*) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        6,
+        0.0440962257205442
+      ],
+      [
+        "zlink::pipe_t::account_inbound_frame(zlink::msg_t const*, bool) (/root/worktree/zlink-nsend/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/libzlink.so.0)",
+        6,
+        0.0440962257205442
+      ],
+      [
+        "v8::TryCatch::~TryCatch() (/usr/bin/node)",
+        6,
+        0.0440962257205442
+      ],
+      [
+        "v8::internal::JSObject::SetPrototype(v8::internal::Isolate*, v8::internal::Handle<v8::internal::JSObject>, v8::internal::Handle<v8::internal::Object>, bool, v8::internal::ShouldThrow) (/usr/bin/node)",
+        6,
+        0.0440962257205442
+      ]
+    ]
+  }
+]

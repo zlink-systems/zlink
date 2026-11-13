@@ -1,0 +1,140 @@
+{
+  "baseline": {
+    "cases": 36,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 25895412,
+    "guard": null
+  },
+  "baseline-r3-clean": {
+    "cases": 12,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 25895412,
+    "guard": {
+      "samples": 375,
+      "max_external_cpu": 0.10772815581922754,
+      "minimum_memavailable_kb": 25866052,
+      "detected": null
+    }
+  },
+  "cpu": {
+    "cases": 2,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 26093484,
+    "guard": {
+      "samples": 62,
+      "max_external_cpu": 0.05898363720195073,
+      "minimum_memavailable_kb": 26049212,
+      "detected": null
+    }
+  },
+  "perf": {
+    "cases": 2,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 26149032,
+    "guard": {
+      "samples": 435,
+      "max_external_cpu": 0.08848842444403547,
+      "minimum_memavailable_kb": 26066336,
+      "detected": null
+    }
+  },
+  "heap": {
+    "cases": 2,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 26150652,
+    "guard": {
+      "samples": 63,
+      "max_external_cpu": 0.09806291239869859,
+      "minimum_memavailable_kb": 26067908,
+      "detected": null
+    }
+  },
+  "diag-corrected": {
+    "cases": 2,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 26141772,
+    "guard": {
+      "samples": 82,
+      "max_external_cpu": 0.10817367378958484,
+      "minimum_memavailable_kb": 26063060,
+      "detected": null
+    }
+  },
+  "same-rate": {
+    "cases": 6,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 26153576,
+    "guard": {
+      "samples": 188,
+      "max_external_cpu": 0.0983045167527164,
+      "minimum_memavailable_kb": 26138428,
+      "detected": null
+    }
+  },
+  "matched-rate-baseline": {
+    "cases": 6,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 26045780,
+    "guard": {
+      "samples": 61,
+      "max_external_cpu": 0.3382577407686016,
+      "minimum_memavailable_kb": 25999092,
+      "detected": null
+    }
+  },
+  "prototype": {
+    "cases": 60,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 25865812,
+    "guard": {
+      "samples": 751,
+      "max_external_cpu": 0.2845399235539998,
+      "minimum_memavailable_kb": 25846936,
+      "detected": null
+    }
+  },
+  "prototype-cpu": {
+    "cases": 2,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 26042908,
+    "guard": {
+      "samples": 82,
+      "max_external_cpu": 0.08791078592229279,
+      "minimum_memavailable_kb": 25993400,
+      "detected": null
+    }
+  },
+  "prototype-diag": {
+    "cases": 2,
+    "zero_errors_abandoned_rejected": true,
+    "source_target_counts_match": true,
+    "affinity_valid": true,
+    "minimum_observed_mem_kib": 26090892,
+    "guard": {
+      "samples": 82,
+      "max_external_cpu": 0.1083890965397039,
+      "minimum_memavailable_kb": 26031260,
+      "detected": null
+    }
+  }
+}

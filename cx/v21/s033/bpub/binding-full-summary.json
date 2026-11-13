@@ -1,0 +1,15 @@
+{
+  "command": [
+    "./gradlew",
+    "--no-daemon",
+    "--max-workers=2",
+    "--continue",
+    "test",
+    "integrationTest"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 129.06791917607188,
+  "minimum_mem_available_kib": 15634192,
+  "memory_floor_violated": false,
+  "stress_exit": 0
+}

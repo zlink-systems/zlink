@@ -1,0 +1,900 @@
+[
+  {
+    "cell": "zlink-framework-dotnet-request-serial-1024",
+    "implementation": "zlink-framework-dotnet",
+    "payload": 1024,
+    "complete_cycles": 15749,
+    "cycle_wall_us": {
+      "n": 15749,
+      "p50": 184.549,
+      "p90": 224.665,
+      "mean": 191.048
+    },
+    "segments": {
+      "bench\u2192Framework call": {
+        "time_us": {
+          "n": 15749,
+          "p50": 0.642,
+          "p90": 0.982,
+          "mean": 0.889
+        },
+        "alloc_bytes": {
+          "n": 15749,
+          "p50": 152.0,
+          "p90": 152.0,
+          "mean": 152.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15749
+      },
+      "Framework call\u2192typed encode done": {
+        "time_us": {
+          "n": 15749,
+          "p50": 3.356,
+          "p90": 5.079,
+          "mean": 4.115
+        },
+        "alloc_bytes": {
+          "n": 15749,
+          "p50": 320.0,
+          "p90": 320.0,
+          "mean": 320.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15749
+      },
+      "typed encode\u2192service wire encode done": {
+        "time_us": {
+          "n": 15749,
+          "p50": 0.441,
+          "p90": 0.571,
+          "mean": 0.662
+        },
+        "alloc_bytes": {
+          "n": 15749,
+          "p50": 304.0,
+          "p90": 304.0,
+          "mean": 304.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15749
+      },
+      "service wire encode\u2192native submit": {
+        "time_us": {
+          "n": 15749,
+          "p50": 0.832,
+          "p90": 1.192,
+          "mean": 0.894
+        },
+        "alloc_bytes": {
+          "n": 15749,
+          "p50": 104.0,
+          "p90": 104.0,
+          "mean": 104.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15749
+      },
+      "native submit\u2192source sendto": {
+        "time_us": {
+          "n": 15749,
+          "p50": 17.271,
+          "p90": 24.355,
+          "mean": 18.755
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15749,
+        "n": 15749
+      },
+      "source sendto\u2192target recvfrom": {
+        "time_us": {
+          "n": 15749,
+          "p50": 21.209,
+          "p90": 27.37,
+          "mean": 22.059
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15749,
+        "n": 15749
+      },
+      "target recvfrom\u2192ProcessReceived": {
+        "time_us": {
+          "n": 15749,
+          "p50": 23.403,
+          "p90": 30.346,
+          "mean": 23.893
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15749,
+        "n": 15749
+      },
+      "receive parse\u2192mailbox enqueue": {
+        "time_us": {
+          "n": 15749,
+          "p50": 1.072,
+          "p90": 1.583,
+          "mean": 1.206
+        },
+        "alloc_bytes": {
+          "n": 15749,
+          "p50": 232.0,
+          "p90": 232.0,
+          "mean": 232.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15749
+      },
+      "mailbox enqueue\u2192Node route dispatch": {
+        "time_us": {
+          "n": 15749,
+          "p50": 18.804,
+          "p90": 25.938,
+          "mean": 20.314
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15749,
+        "n": 15749
+      },
+      "Node dispatch/handler/reply encode": {
+        "time_us": {
+          "n": 15749,
+          "p50": 6.362,
+          "p90": 9.287,
+          "mean": 6.785
+        },
+        "alloc_bytes": {
+          "n": 15749,
+          "p50": 1984.0,
+          "p90": 1984.0,
+          "mean": 1984.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15749
+      },
+      "reply submit\u2192target sendto": {
+        "time_us": {
+          "n": 15749,
+          "p50": 13.244,
+          "p90": 18.504,
+          "mean": 14.045
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15749,
+        "n": 15749
+      },
+      "target sendto\u2192source recvfrom": {
+        "time_us": {
+          "n": 15749,
+          "p50": 27.541,
+          "p90": 34.163,
+          "mean": 28.423
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15749,
+        "n": 15749
+      },
+      "source recvfrom\u2192physical reply observed": {
+        "time_us": {
+          "n": 15749,
+          "p50": 37.859,
+          "p90": 47.167,
+          "mean": 38.958
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15749,
+        "n": 15749
+      },
+      "reply decode\u2192completion queue": {
+        "time_us": {
+          "n": 15749,
+          "p50": 5.45,
+          "p90": 7.664,
+          "mean": 5.627
+        },
+        "alloc_bytes": {
+          "n": 15749,
+          "p50": 1680.0,
+          "p90": 1680.0,
+          "mean": 1680.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15749
+      },
+      "completion queue\u2192worker execute": {
+        "time_us": {
+          "n": 15749,
+          "p50": 0.341,
+          "p90": 0.881,
+          "mean": 0.753
+        },
+        "alloc_bytes": {
+          "n": 14587,
+          "p50": 0.0,
+          "p90": 0.0,
+          "mean": 0.0
+        },
+        "thread_handoff_count": 1162,
+        "n": 15749
+      },
+      "completion execute\u2192caller/next request": {
+        "time_us": {
+          "n": 15749,
+          "p50": 3.286,
+          "p90": 4.899,
+          "mean": 3.673
+        },
+        "alloc_bytes": {
+          "n": 15749,
+          "p50": 1112.0,
+          "p90": 1112.0,
+          "mean": 1112.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15749
+      }
+    },
+    "syscalls": {
+      "source_sendto": 15790,
+      "target_recvfrom": 31541,
+      "target_sendto": 15778,
+      "source_recvfrom": 31639
+    },
+    "markers": {
+      "source_bench": 119564,
+      "target_bench": 0,
+      "source_runtime": 954752,
+      "target_runtime": 477376
+    },
+    "alloc_method": "GC.GetAllocatedBytesForCurrentThread snapshots; segment delta is reported only when endpoint markers run on the same managed thread.",
+    "handoff_method": "different managed ThreadId at segment endpoint markers; syscall segments report TIDs separately in report."
+  },
+  {
+    "cell": "zlink-framework-dotnet-request-serial-4096",
+    "implementation": "zlink-framework-dotnet",
+    "payload": 4096,
+    "complete_cycles": 15078,
+    "cycle_wall_us": {
+      "n": 15078,
+      "p50": 192.685,
+      "p90": 230.347,
+      "mean": 199.451
+    },
+    "segments": {
+      "bench\u2192Framework call": {
+        "time_us": {
+          "n": 15078,
+          "p50": 0.711,
+          "p90": 0.982,
+          "mean": 0.843
+        },
+        "alloc_bytes": {
+          "n": 15078,
+          "p50": 152.0,
+          "p90": 152.0,
+          "mean": 152.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15078
+      },
+      "Framework call\u2192typed encode done": {
+        "time_us": {
+          "n": 15078,
+          "p50": 3.567,
+          "p90": 5.33,
+          "mean": 4.128
+        },
+        "alloc_bytes": {
+          "n": 15078,
+          "p50": 320.0,
+          "p90": 320.0,
+          "mean": 320.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15078
+      },
+      "typed encode\u2192service wire encode done": {
+        "time_us": {
+          "n": 15078,
+          "p50": 0.431,
+          "p90": 0.531,
+          "mean": 0.602
+        },
+        "alloc_bytes": {
+          "n": 15078,
+          "p50": 304.0,
+          "p90": 304.0,
+          "mean": 304.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15078
+      },
+      "service wire encode\u2192native submit": {
+        "time_us": {
+          "n": 15078,
+          "p50": 1.052,
+          "p90": 1.463,
+          "mean": 1.294
+        },
+        "alloc_bytes": {
+          "n": 15078,
+          "p50": 104.0,
+          "p90": 104.0,
+          "mean": 104.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15078
+      },
+      "native submit\u2192source sendto": {
+        "time_us": {
+          "n": 15078,
+          "p50": 18.034,
+          "p90": 24.465,
+          "mean": 19.536
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15078,
+        "n": 15078
+      },
+      "source sendto\u2192target recvfrom": {
+        "time_us": {
+          "n": 15078,
+          "p50": 22.381,
+          "p90": 27.821,
+          "mean": 23.048
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15078,
+        "n": 15078
+      },
+      "target recvfrom\u2192ProcessReceived": {
+        "time_us": {
+          "n": 15078,
+          "p50": 23.082,
+          "p90": 31.098,
+          "mean": 24.015
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15078,
+        "n": 15078
+      },
+      "receive parse\u2192mailbox enqueue": {
+        "time_us": {
+          "n": 15078,
+          "p50": 1.082,
+          "p90": 1.653,
+          "mean": 1.246
+        },
+        "alloc_bytes": {
+          "n": 15078,
+          "p50": 232.0,
+          "p90": 232.0,
+          "mean": 232.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15078
+      },
+      "mailbox enqueue\u2192Node route dispatch": {
+        "time_us": {
+          "n": 15078,
+          "p50": 18.068,
+          "p90": 24.656,
+          "mean": 19.909
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15078,
+        "n": 15078
+      },
+      "Node dispatch/handler/reply encode": {
+        "time_us": {
+          "n": 15078,
+          "p50": 7.484,
+          "p90": 10.57,
+          "mean": 7.931
+        },
+        "alloc_bytes": {
+          "n": 15078,
+          "p50": 5056.0,
+          "p90": 5056.0,
+          "mean": 5056.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15078
+      },
+      "reply submit\u2192target sendto": {
+        "time_us": {
+          "n": 15078,
+          "p50": 13.074,
+          "p90": 19.449,
+          "mean": 14.076
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15078,
+        "n": 15078
+      },
+      "target sendto\u2192source recvfrom": {
+        "time_us": {
+          "n": 15078,
+          "p50": 28.342,
+          "p90": 35.255,
+          "mean": 29.327
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15078,
+        "n": 15078
+      },
+      "source recvfrom\u2192physical reply observed": {
+        "time_us": {
+          "n": 15078,
+          "p50": 38.1,
+          "p90": 47.467,
+          "mean": 39.41
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 15078,
+        "n": 15078
+      },
+      "reply decode\u2192completion queue": {
+        "time_us": {
+          "n": 15078,
+          "p50": 6.091,
+          "p90": 8.426,
+          "mean": 6.432
+        },
+        "alloc_bytes": {
+          "n": 15078,
+          "p50": 4752.0,
+          "p90": 4752.0,
+          "mean": 4752.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15078
+      },
+      "completion queue\u2192worker execute": {
+        "time_us": {
+          "n": 15078,
+          "p50": 0.351,
+          "p90": 2.635,
+          "mean": 0.858
+        },
+        "alloc_bytes": {
+          "n": 13342,
+          "p50": 0.0,
+          "p90": 0.0,
+          "mean": 0.0
+        },
+        "thread_handoff_count": 1736,
+        "n": 15078
+      },
+      "completion execute\u2192caller/next request": {
+        "time_us": {
+          "n": 15078,
+          "p50": 5.67,
+          "p90": 7.865,
+          "mean": 6.796
+        },
+        "alloc_bytes": {
+          "n": 15078,
+          "p50": 4184.0,
+          "p90": 4184.0,
+          "mean": 4184.0
+        },
+        "thread_handoff_count": 0,
+        "n": 15078
+      }
+    },
+    "syscalls": {
+      "source_sendto": 15110,
+      "target_recvfrom": 30250,
+      "target_sendto": 15129,
+      "source_recvfrom": 30261
+    },
+    "markers": {
+      "source_bench": 113168,
+      "target_bench": 0,
+      "source_runtime": 903584,
+      "target_runtime": 451792
+    },
+    "alloc_method": "GC.GetAllocatedBytesForCurrentThread snapshots; segment delta is reported only when endpoint markers run on the same managed thread.",
+    "handoff_method": "different managed ThreadId at segment endpoint markers; syscall segments report TIDs separately in report."
+  },
+  {
+    "cell": "zlink-dotnet-request-serial-1024",
+    "implementation": "zlink-dotnet",
+    "payload": 1024,
+    "complete_cycles": 26330,
+    "cycle_wall_us": {
+      "n": 26330,
+      "p50": 110.604,
+      "p90": 131.191,
+      "mean": 114.142
+    },
+    "segments": {
+      "bench\u2192raw request setup": {
+        "time_us": {
+          "n": 26330,
+          "p50": 0.1,
+          "p90": 0.16,
+          "mean": 0.152
+        },
+        "alloc_bytes": {
+          "n": 26330,
+          "p50": 0.0,
+          "p90": 0.0,
+          "mean": 0.0
+        },
+        "thread_handoff_count": 0,
+        "n": 26330
+      },
+      "raw setup\u2192body encode done": {
+        "time_us": {
+          "n": 26330,
+          "p50": 0.952,
+          "p90": 1.333,
+          "mean": 1.104
+        },
+        "alloc_bytes": {
+          "n": 26330,
+          "p50": 64.0,
+          "p90": 64.0,
+          "mean": 64.0
+        },
+        "thread_handoff_count": 0,
+        "n": 26330
+      },
+      "body encode\u2192binding submit": {
+        "time_us": {
+          "n": 26330,
+          "p50": 0.05,
+          "p90": 0.08,
+          "mean": 0.106
+        },
+        "alloc_bytes": {
+          "n": 26330,
+          "p50": 0.0,
+          "p90": 0.0,
+          "mean": 0.0
+        },
+        "thread_handoff_count": 0,
+        "n": 26330
+      },
+      "binding submit\u2192source sendto": {
+        "time_us": {
+          "n": 26330,
+          "p50": 11.631,
+          "p90": 16.13,
+          "mean": 12.613
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 26330,
+        "n": 26330
+      },
+      "source sendto\u2192target recvfrom": {
+        "time_us": {
+          "n": 26330,
+          "p50": 24.375,
+          "p90": 30.046,
+          "mean": 25.319
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 26330,
+        "n": 26330
+      },
+      "target recvfrom\u2192handler start": {
+        "time_us": {
+          "n": 26330,
+          "p50": 11.08,
+          "p90": 15.749,
+          "mean": 12.15
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 26330,
+        "n": 26330
+      },
+      "binding handler decode/echo\u2192reply call": {
+        "time_us": {
+          "n": 26330,
+          "p50": 0.34,
+          "p90": 1.693,
+          "mean": 0.982
+        },
+        "alloc_bytes": {
+          "n": 26330,
+          "p50": 1144.0,
+          "p90": 1144.0,
+          "mean": 1144.0
+        },
+        "thread_handoff_count": 0,
+        "n": 26330
+      },
+      "reply call\u2192target sendto": {
+        "time_us": {
+          "n": 26330,
+          "p50": 11.712,
+          "p90": 16.139,
+          "mean": 12.596
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 26330,
+        "n": 26330
+      },
+      "target sendto\u2192source recvfrom": {
+        "time_us": {
+          "n": 26330,
+          "p50": 18.153,
+          "p90": 22.061,
+          "mean": 18.775
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 26330,
+        "n": 26330
+      },
+      "source recvfrom\u2192binding completion/typed decode": {
+        "time_us": {
+          "n": 26330,
+          "p50": 27.28,
+          "p90": 33.161,
+          "mean": 28.152
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 26330,
+        "n": 26330
+      },
+      "completion\u2192caller/next request": {
+        "time_us": {
+          "n": 26330,
+          "p50": 1.573,
+          "p90": 2.745,
+          "mean": 2.193
+        },
+        "alloc_bytes": {
+          "n": 26330,
+          "p50": 1112.0,
+          "p90": 1112.0,
+          "mean": 1112.0
+        },
+        "thread_handoff_count": 0,
+        "n": 26330
+      }
+    },
+    "syscalls": {
+      "source_sendto": 26394,
+      "target_recvfrom": 52792,
+      "target_sendto": 26415,
+      "source_recvfrom": 52810
+    },
+    "markers": {
+      "source_bench": 1328624,
+      "target_bench": 443021,
+      "source_runtime": 0,
+      "target_runtime": 0
+    },
+    "alloc_method": "GC.GetAllocatedBytesForCurrentThread snapshots; segment delta is reported only when endpoint markers run on the same managed thread.",
+    "handoff_method": "different managed ThreadId at segment endpoint markers; syscall segments report TIDs separately in report."
+  },
+  {
+    "cell": "zlink-dotnet-request-serial-4096",
+    "implementation": "zlink-dotnet",
+    "payload": 4096,
+    "complete_cycles": 22313,
+    "cycle_wall_us": {
+      "n": 22313,
+      "p50": 130.069,
+      "p90": 161.505,
+      "mean": 134.768
+    },
+    "segments": {
+      "bench\u2192raw request setup": {
+        "time_us": {
+          "n": 22313,
+          "p50": 0.091,
+          "p90": 0.16,
+          "mean": 0.155
+        },
+        "alloc_bytes": {
+          "n": 22313,
+          "p50": 0.0,
+          "p90": 0.0,
+          "mean": 0.0
+        },
+        "thread_handoff_count": 0,
+        "n": 22313
+      },
+      "raw setup\u2192body encode done": {
+        "time_us": {
+          "n": 22313,
+          "p50": 1.162,
+          "p90": 1.763,
+          "mean": 1.327
+        },
+        "alloc_bytes": {
+          "n": 22313,
+          "p50": 64.0,
+          "p90": 64.0,
+          "mean": 64.0
+        },
+        "thread_handoff_count": 0,
+        "n": 22313
+      },
+      "body encode\u2192binding submit": {
+        "time_us": {
+          "n": 22313,
+          "p50": 0.06,
+          "p90": 0.08,
+          "mean": 0.11
+        },
+        "alloc_bytes": {
+          "n": 22313,
+          "p50": 0.0,
+          "p90": 0.0,
+          "mean": 0.0
+        },
+        "thread_handoff_count": 0,
+        "n": 22313
+      },
+      "binding submit\u2192source sendto": {
+        "time_us": {
+          "n": 22313,
+          "p50": 13.144,
+          "p90": 18.204,
+          "mean": 13.929
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 22313,
+        "n": 22313
+      },
+      "source sendto\u2192target recvfrom": {
+        "time_us": {
+          "n": 22313,
+          "p50": 26.609,
+          "p90": 33.381,
+          "mean": 27.674
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 22313,
+        "n": 22313
+      },
+      "target recvfrom\u2192handler start": {
+        "time_us": {
+          "n": 22313,
+          "p50": 12.213,
+          "p90": 17.853,
+          "mean": 13.319
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 22313,
+        "n": 22313
+      },
+      "binding handler decode/echo\u2192reply call": {
+        "time_us": {
+          "n": 22313,
+          "p50": 1.222,
+          "p90": 2.435,
+          "mean": 1.423
+        },
+        "alloc_bytes": {
+          "n": 22313,
+          "p50": 4216.0,
+          "p90": 4216.0,
+          "mean": 4216.0
+        },
+        "thread_handoff_count": 0,
+        "n": 22313
+      },
+      "reply call\u2192target sendto": {
+        "time_us": {
+          "n": 22313,
+          "p50": 12.714,
+          "p90": 18.514,
+          "mean": 13.966
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 22313,
+        "n": 22313
+      },
+      "target sendto\u2192source recvfrom": {
+        "time_us": {
+          "n": 22313,
+          "p50": 25.126,
+          "p90": 32.691,
+          "mean": 26.4
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 22313,
+        "n": 22313
+      },
+      "source recvfrom\u2192binding completion/typed decode": {
+        "time_us": {
+          "n": 22313,
+          "p50": 30.245,
+          "p90": 38.058,
+          "mean": 31.826
+        },
+        "alloc_bytes": {
+          "n": 0
+        },
+        "thread_handoff_count": 22313,
+        "n": 22313
+      },
+      "completion\u2192caller/next request": {
+        "time_us": {
+          "n": 22313,
+          "p50": 3.968,
+          "p90": 5.75,
+          "mean": 4.639
+        },
+        "alloc_bytes": {
+          "n": 22313,
+          "p50": 4184.0,
+          "p90": 4184.0,
+          "mean": 4184.0
+        },
+        "thread_handoff_count": 0,
+        "n": 22313
+      }
+    },
+    "syscalls": {
+      "source_sendto": 22373,
+      "target_recvfrom": 44714,
+      "target_sendto": 22339,
+      "source_recvfrom": 44735
+    },
+    "markers": {
+      "source_bench": 1191727,
+      "target_bench": 397388,
+      "source_runtime": 0,
+      "target_runtime": 0
+    },
+    "alloc_method": "GC.GetAllocatedBytesForCurrentThread snapshots; segment delta is reported only when endpoint markers run on the same managed thread.",
+    "handoff_method": "different managed ThreadId at segment endpoint markers; syscall segments report TIDs separately in report."
+  }
+]

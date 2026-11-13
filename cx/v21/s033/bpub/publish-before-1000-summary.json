@@ -1,0 +1,15 @@
+{
+  "command": [
+    "./gradlew",
+    "--no-daemon",
+    "--max-workers=2",
+    ":test",
+    "--tests",
+    "*PublishCloseRaceContractTest"
+  ],
+  "exit": 1,
+  "elapsed_seconds": 48.1396634336561,
+  "minimum_mem_available_kib": 23930672,
+  "memory_floor_violated": false,
+  "stress_exit": 0
+}

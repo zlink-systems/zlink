@@ -1,0 +1,58 @@
+[
+  {
+    "cell": "zlink-framework-node-send-saturation-4096",
+    "role": "source",
+    "samples": 1432,
+    "copy_us": {
+      "M6A ownership copy": 0.4955926299201827,
+      "protobuf bytes copy": 0.7787884184460013,
+      "binding send copy": 0.6017910506173647
+    },
+    "copy_samples": {
+      "M6A ownership copy": 42,
+      "protobuf bytes copy": 66,
+      "binding send copy": 51
+    }
+  },
+  {
+    "cell": "zlink-framework-node-send-saturation-4096",
+    "role": "target",
+    "samples": 1464,
+    "copy_us": {
+      "receive managed copy": 1.1918731905940756,
+      "serializer isolation copy": 0.5074311603519333,
+      "unresolved copy": 0.023601449318694567
+    },
+    "copy_samples": {
+      "receive managed copy": 101,
+      "serializer isolation copy": 43,
+      "unresolved copy": 2
+    }
+  },
+  {
+    "cell": "zlink-node-send-saturation-4096",
+    "role": "source",
+    "samples": 1469,
+    "copy_us": {
+      "binding send copy": 0.044066007998133386,
+      "unresolved copy": 0.39659407198320046,
+      "protobuf bytes copy": 0.7491221359682675
+    },
+    "copy_samples": {
+      "binding send copy": 6,
+      "unresolved copy": 54,
+      "protobuf bytes copy": 102
+    }
+  },
+  {
+    "cell": "zlink-node-send-saturation-4096",
+    "role": "target",
+    "samples": 1498,
+    "copy_us": {
+      "unresolved copy": 0.5365040795999543
+    },
+    "copy_samples": {
+      "unresolved copy": 73
+    }
+  }
+]

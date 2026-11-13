@@ -1,0 +1,20 @@
+--- a/core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp
++++ b/core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp
+@@ -706,8 +706,16 @@
+ #define RUN_SELECTED_TEST(test_)                                               \
+     do {                                                                       \
+         const char *const selected = getenv ("ZLINK_TEST_CASE");                 \
+-        if (!selected || !*selected || strcmp (selected, #test_) == 0)           \
++        if (!selected || !*selected || strcmp (selected, #test_) == 0) {          \
++            const bool trace_disconnect =                                       \
++              strcmp (#test_, "test_tcp_registered_without_waiter_progresses")  \
++              == 0;                                                             \
++            if (trace_disconnect)                                               \
++                setenv ("ZLINK_DISCONNECT_TRACE", "1", 1);                     \
+             RUN_TEST (test_);                                                   \
++            if (trace_disconnect)                                               \
++                unsetenv ("ZLINK_DISCONNECT_TRACE");                            \
++        }                                                                      \
+     } while (false)
+     RUN_SELECTED_TEST (test_stream_disconnect_reconnect_without_application_poll);
+     RUN_SELECTED_TEST (test_stream_disconnect_reconnect_on_single_io_thread);

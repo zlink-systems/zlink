@@ -1,0 +1,515 @@
+{
+  "runner_exit": 0,
+  "captures": [
+    {
+      "implementation": "zlink-cpp",
+      "pid_source": 3146964,
+      "pid_target": 3146891,
+      "completed_delta": 694859,
+      "source_api_success_bpf": 254407,
+      "bpf_source_req_per_sec": 127203.5,
+      "wake_per_request": {
+        "send": 0.07513551120841801,
+        "read": 0.03125700157621449,
+        "write": 0.015616708659745997
+      },
+      "cpu_per_request_us": {
+        "source": {
+          "IO/0": 5.107437847102793,
+          "IO/1": 0.0016757313354220063,
+          "IO/2": 3.783822890687175,
+          "IO/3": 0.0017310576678146211
+        },
+        "target": {
+          "IO/2": 0.0017318146559230005,
+          "IO/3": 0.0016504557039629622,
+          "IO/1": 4.902515570784864,
+          "IO/0": 4.6164346853102565
+        }
+      },
+      "cpu_threads": {
+        "source": {
+          "IO/0": [
+            {
+              "tid": 3147002,
+              "us": 617.051,
+              "comm": "ZLINKbg/IO/0"
+            },
+            {
+              "tid": 3147030,
+              "us": 3548332.104,
+              "comm": "ZLINKbg/IO/0"
+            }
+          ],
+          "IO/1": [
+            {
+              "tid": 3147031,
+              "us": 536.9,
+              "comm": "ZLINKbg/IO/1"
+            },
+            {
+              "tid": 3147003,
+              "us": 627.497,
+              "comm": "ZLINKbg/IO/1"
+            }
+          ],
+          "IO/2": [
+            {
+              "tid": 3147032,
+              "us": 2628673.584,
+              "comm": "ZLINKbg/IO/2"
+            },
+            {
+              "tid": 3147004,
+              "us": 549.806,
+              "comm": "ZLINKbg/IO/2"
+            }
+          ],
+          "IO/3": [
+            {
+              "tid": 3147005,
+              "us": 600.498,
+              "comm": "ZLINKbg/IO/3"
+            },
+            {
+              "tid": 3147033,
+              "us": 602.343,
+              "comm": "ZLINKbg/IO/3"
+            }
+          ]
+        },
+        "target": {
+          "IO/2": [
+            {
+              "tid": 3146931,
+              "us": 663.398,
+              "comm": "ZLINKbg/IO/2"
+            },
+            {
+              "tid": 3146955,
+              "us": 539.969,
+              "comm": "ZLINKbg/IO/2"
+            }
+          ],
+          "IO/3": [
+            {
+              "tid": 3146956,
+              "us": 556.004,
+              "comm": "ZLINKbg/IO/3"
+            },
+            {
+              "tid": 3146932,
+              "us": 590.83,
+              "comm": "ZLINKbg/IO/3"
+            }
+          ],
+          "IO/1": [
+            {
+              "tid": 3146954,
+              "us": 3405941.659,
+              "comm": "ZLINKbg/IO/1"
+            },
+            {
+              "tid": 3146930,
+              "us": 615.408,
+              "comm": "ZLINKbg/IO/1"
+            }
+          ],
+          "IO/0": [
+            {
+              "tid": 3146953,
+              "us": 3207135.059,
+              "comm": "ZLINKbg/IO/0"
+            },
+            {
+              "tid": 3146929,
+              "us": 636.13,
+              "comm": "ZLINKbg/IO/0"
+            }
+          ]
+        }
+      },
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560/raw-condB/zlink-cpp-run-01"
+    },
+    {
+      "implementation": "zlink-framework-cpp",
+      "pid_source": 3148092,
+      "pid_target": 3148012,
+      "completed_delta": 172147,
+      "source_api_success_bpf": 68703,
+      "bpf_source_req_per_sec": 34351.5,
+      "wake_per_request": {
+        "send": 1.450417012357539,
+        "read": 0.951443168420593,
+        "write": 0.4485684759035268
+      },
+      "cpu_per_request_us": {
+        "source": {
+          "IO/0": 20.992802680267445,
+          "IO/3": 0.006786972761651379,
+          "IO/1": 0.0069133415046442855,
+          "IO/2": 16.76578737939087
+        },
+        "target": {
+          "IO/1": 21.38924712600278,
+          "IO/0": 19.1378483621556,
+          "IO/3": 0.003428720802569897,
+          "IO/2": 0.0037872283571598695
+        }
+      },
+      "cpu_threads": {
+        "source": {
+          "IO/0": [
+            {
+              "tid": 3148159,
+              "us": 3613227.827,
+              "comm": "ZLINKbg/IO/0"
+            },
+            {
+              "tid": 3148130,
+              "us": 620.176,
+              "comm": "ZLINKbg/IO/0"
+            }
+          ],
+          "IO/3": [
+            {
+              "tid": 3148162,
+              "us": 586.924,
+              "comm": "ZLINKbg/IO/3"
+            },
+            {
+              "tid": 3148133,
+              "us": 581.433,
+              "comm": "ZLINKbg/IO/3"
+            }
+          ],
+          "IO/1": [
+            {
+              "tid": 3148160,
+              "us": 586.557,
+              "comm": "ZLINKbg/IO/1"
+            },
+            {
+              "tid": 3148131,
+              "us": 603.554,
+              "comm": "ZLINKbg/IO/1"
+            }
+          ],
+          "IO/2": [
+            {
+              "tid": 3148161,
+              "us": 2885629.867,
+              "comm": "ZLINKbg/IO/2"
+            },
+            {
+              "tid": 3148132,
+              "us": 550.133,
+              "comm": "ZLINKbg/IO/2"
+            }
+          ]
+        },
+        "target": {
+          "IO/1": [
+            {
+              "tid": 3148052,
+              "us": 3682094.725,
+              "comm": "ZLINKbg/IO/1"
+            }
+          ],
+          "IO/0": [
+            {
+              "tid": 3148051,
+              "us": 3294523.182,
+              "comm": "ZLINKbg/IO/0"
+            }
+          ],
+          "IO/3": [
+            {
+              "tid": 3148054,
+              "us": 590.244,
+              "comm": "ZLINKbg/IO/3"
+            }
+          ],
+          "IO/2": [
+            {
+              "tid": 3148053,
+              "us": 651.96,
+              "comm": "ZLINKbg/IO/2"
+            }
+          ]
+        }
+      },
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560/raw-condB/zlink-framework-cpp-run-02"
+    },
+    {
+      "implementation": "zlink-cpp",
+      "pid_source": 3148933,
+      "pid_target": 3148861,
+      "completed_delta": 707977,
+      "source_api_success_bpf": 264176,
+      "bpf_source_req_per_sec": 132088.0,
+      "wake_per_request": {
+        "send": 0.07504466719156926,
+        "read": 0.0312556780328266,
+        "write": 0.015618375628368967
+      },
+      "cpu_per_request_us": {
+        "source": {
+          "IO/0": 5.018423570257226,
+          "IO/1": 0.0016335841418577157,
+          "IO/2": 3.148985822985775,
+          "IO/3": 0.0016372961268515786
+        },
+        "target": {
+          "IO/0": 4.569142385981466,
+          "IO/2": 0.001531251721454228,
+          "IO/3": 0.0016922484769985463,
+          "IO/1": 4.829843393217576
+        }
+      },
+      "cpu_threads": {
+        "source": {
+          "IO/0": [
+            {
+              "tid": 3148999,
+              "us": 3552336.539,
+              "comm": "ZLINKbg/IO/0"
+            },
+            {
+              "tid": 3148971,
+              "us": 591.925,
+              "comm": "ZLINKbg/IO/0"
+            }
+          ],
+          "IO/1": [
+            {
+              "tid": 3148972,
+              "us": 598.028,
+              "comm": "ZLINKbg/IO/1"
+            },
+            {
+              "tid": 3149000,
+              "us": 558.512,
+              "comm": "ZLINKbg/IO/1"
+            }
+          ],
+          "IO/2": [
+            {
+              "tid": 3148973,
+              "us": 630.227,
+              "comm": "ZLINKbg/IO/2"
+            },
+            {
+              "tid": 3149001,
+              "us": 2228779.309,
+              "comm": "ZLINKbg/IO/2"
+            }
+          ],
+          "IO/3": [
+            {
+              "tid": 3148974,
+              "us": 591.091,
+              "comm": "ZLINKbg/IO/3"
+            },
+            {
+              "tid": 3149002,
+              "us": 568.077,
+              "comm": "ZLINKbg/IO/3"
+            }
+          ]
+        },
+        "target": {
+          "IO/0": [
+            {
+              "tid": 3148899,
+              "us": 674.418,
+              "comm": "ZLINKbg/IO/0"
+            },
+            {
+              "tid": 3148922,
+              "us": 3234173.301,
+              "comm": "ZLINKbg/IO/0"
+            }
+          ],
+          "IO/2": [
+            {
+              "tid": 3148901,
+              "us": 618.603,
+              "comm": "ZLINKbg/IO/2"
+            },
+            {
+              "tid": 3148924,
+              "us": 465.488,
+              "comm": "ZLINKbg/IO/2"
+            }
+          ],
+          "IO/3": [
+            {
+              "tid": 3148902,
+              "us": 621.99,
+              "comm": "ZLINKbg/IO/3"
+            },
+            {
+              "tid": 3148925,
+              "us": 576.083,
+              "comm": "ZLINKbg/IO/3"
+            }
+          ],
+          "IO/1": [
+            {
+              "tid": 3148923,
+              "us": 3418773.858,
+              "comm": "ZLINKbg/IO/1"
+            },
+            {
+              "tid": 3148900,
+              "us": 644.178,
+              "comm": "ZLINKbg/IO/1"
+            }
+          ]
+        }
+      },
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560/raw-condB/zlink-cpp-run-03"
+    },
+    {
+      "implementation": "zlink-framework-cpp",
+      "pid_source": 3149878,
+      "pid_target": 3149809,
+      "completed_delta": 181345,
+      "source_api_success_bpf": 70727,
+      "bpf_source_req_per_sec": 35363.5,
+      "wake_per_request": {
+        "send": 1.473425990074512,
+        "read": 0.9201719286835296,
+        "write": 0.4426880823447905
+      },
+      "cpu_per_request_us": {
+        "source": {
+          "IO/3": 0.006138884446772725,
+          "IO/1": 0.006486249965535306,
+          "IO/2": 18.169304612754694,
+          "IO/0": 20.04855299015688
+        },
+        "target": {
+          "IO/1": 20.23021434834156,
+          "IO/3": 0.0034766274228680144,
+          "IO/0": 18.43259727591056,
+          "IO/2": 0.0033447241445862855
+        }
+      },
+      "cpu_threads": {
+        "source": {
+          "IO/3": [
+            {
+              "tid": 3149948,
+              "us": 557.514,
+              "comm": "ZLINKbg/IO/3"
+            },
+            {
+              "tid": 3149919,
+              "us": 555.742,
+              "comm": "ZLINKbg/IO/3"
+            }
+          ],
+          "IO/1": [
+            {
+              "tid": 3149946,
+              "us": 577.356,
+              "comm": "ZLINKbg/IO/1"
+            },
+            {
+              "tid": 3149917,
+              "us": 598.893,
+              "comm": "ZLINKbg/IO/1"
+            }
+          ],
+          "IO/2": [
+            {
+              "tid": 3149947,
+              "us": 3294299.923,
+              "comm": "ZLINKbg/IO/2"
+            },
+            {
+              "tid": 3149918,
+              "us": 612.622,
+              "comm": "ZLINKbg/IO/2"
+            }
+          ],
+          "IO/0": [
+            {
+              "tid": 3149916,
+              "us": 584.519,
+              "comm": "ZLINKbg/IO/0"
+            },
+            {
+              "tid": 3149945,
+              "us": 3635120.323,
+              "comm": "ZLINKbg/IO/0"
+            }
+          ]
+        },
+        "target": {
+          "IO/1": [
+            {
+              "tid": 3149848,
+              "us": 3668648.221,
+              "comm": "ZLINKbg/IO/1"
+            }
+          ],
+          "IO/3": [
+            {
+              "tid": 3149850,
+              "us": 630.469,
+              "comm": "ZLINKbg/IO/3"
+            }
+          ],
+          "IO/0": [
+            {
+              "tid": 3149847,
+              "us": 3342659.353,
+              "comm": "ZLINKbg/IO/0"
+            }
+          ],
+          "IO/2": [
+            {
+              "tid": 3149849,
+              "us": 606.549,
+              "comm": "ZLINKbg/IO/2"
+            }
+          ]
+        }
+      },
+      "raw": "/root/jobs/fx/cx/v21/s033/i3560/raw-condB/zlink-framework-cpp-run-04"
+    }
+  ],
+  "aggregate_io_cpu_us_per_request": {
+    "zlink-cpp": {
+      "source": {
+        "IO/0": 5.0625145198726,
+        "IO/1": 0.0016544606782261076,
+        "IO/2": 3.4634361578972874,
+        "IO/3": 0.0016837385125559937
+      },
+      "target": {
+        "IO/0": 4.592567419142366,
+        "IO/1": 4.8658397011482455,
+        "IO/2": 0.001630595450929403,
+        "IO/3": 0.0016715474937911488
+      }
+    },
+    "zlink-framework-cpp": {
+      "source": {
+        "IO/0": 20.508392962216966,
+        "IO/1": 0.006694239190703042,
+        "IO/2": 17.48580602955654,
+        "IO/3": 0.0064544968485849745
+      },
+      "target": {
+        "IO/0": 18.77604736457968,
+        "IO/1": 20.794651494234667,
+        "IO/2": 0.0035602191845925794,
+        "IO/3": 0.0034532973872110264
+      }
+    }
+  }
+}

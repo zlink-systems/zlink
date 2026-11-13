@@ -1,0 +1,19 @@
+5c5
+< HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+---
+> HERE="/root/worktree/zlink-v21-s033/xio/framework/bench/grpc/cpp"
+7c7
+< source "${HERE}/../runner_common.sh"
+---
+> source "/root/jobs/fx/cx/v21/s033/xio/raw/runner_common.capture.sh"
+64c64
+<         setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+---
+>         setsid taskset -c 8-15 "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+79c79,82
+<         setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+---
+>         if [[ -n "${TARGET_RATE:-}" ]]; then
+>           source_args+=(--target-rate "${TARGET_RATE}")
+>         fi
+>         setsid taskset -c 0-7 "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &

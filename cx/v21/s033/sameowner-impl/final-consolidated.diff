@@ -1,0 +1,3161 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index 06a2bc4915..c4c379b50f 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -2135,6 +2135,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+     test_cpp_framework_client_server_runtime
+     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
+     "framework-unit;framework-regression;framework-client-server;framework-monitoring")
++  zlink_framework_cpp_add_test(
++    NAME test_cpp_framework_same_owner_channel
++    COMMAND test_cpp_framework_client_server_runtime --same-owner-regression
++    LABELS "framework-contract;execution"
++    TIMEOUT 60)
++  zlink_framework_cpp_add_test(
++    NAME test_cpp_framework_same_owner_actor_control
++    COMMAND test_cpp_framework_client_server_runtime --same-owner-gated-control
++    LABELS "framework-contract;execution"
++    TIMEOUT 60)
+   target_include_directories(test_cpp_framework_client_server_runtime PRIVATE
+     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+   target_compile_definitions(test_cpp_framework_client_server_runtime PRIVATE
+@@ -2394,7 +2404,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
+     target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
+       "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
+-      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
+       "LINKER:--wrap=zlink_router_recv")
+     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
+       "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
+index 600716a7c9..4cca7562f7 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_host_service.cpp
+@@ -147,16 +147,20 @@ class channel_host_service_t::server_loop_t
+             if (!mailbox.begin_application_drain (owner))
+                 return;
+             try {
+-                while (auto claim =
+-                         mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
+-                                                  owner, dispatch_limits::receive_batch_messages,
+-                                                  dispatch_limits::receive_batch_bytes)) {
++                for (;;) {
++                    std::optional<mesh::service_mailbox_record_t> original;
++                    auto claim = mailbox.try_claim_owner (
++                      mesh::service_mailbox_domain_t::application, owner,
++                      dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
++                      [&] (const auto &claim) {
++                          original.emplace (std::move (*claim->records.front ()));
++                          claim->records.front ()->application.reset ();
++                      });
++                    if (!claim)
++                        break;
+                     try {
+-                        for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
+-                            if (auto record = mailbox.take ({claim, index}))
+-                                report_dispatch_rejection (
+-                                  messaging::message_parts_t (record->take_parts ()));
+-                        }
++                        report_dispatch_rejection (
++                          messaging::message_parts_t (original->take_parts ()));
+                     }
+                     catch (...) {
+                         mailbox.release (*claim);
+@@ -295,8 +299,7 @@ class channel_host_service_t::server_loop_t
+         auto application_job =
+           std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
+         auto record = mesh::service_mailbox_record_t::from_received (
+-          mesh::service_mailbox_t::application_owner (host::owner_kind_t::channel, _channel_name),
+-          mesh::service_mailbox_domain_t::application, std::move (received));
++          _channel_name, mesh::service_mailbox_domain_t::application, std::move (received));
+         record.before_application_handler = [application_job] {
+             application_job->release_for_handler_entry ();
+         };
+@@ -386,18 +389,21 @@ class channel_host_service_t::server_loop_t
+         std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+         try {
+             do {
+-                claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner,
+-                                                 dispatch_limits::receive_batch_messages,
+-                                                 dispatch_limits::receive_batch_bytes);
++                std::optional<mesh::service_mailbox_record_t> original;
++                claim = mailbox.try_claim_owner (
++                  mesh::service_mailbox_domain_t::application, owner,
++                  dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
++                  [&] (const auto &claim) {
++                      original.emplace (std::move (*claim->records.front ()));
++                      claim->records.front ()->application.reset ();
++                  });
+                 if (!claim)
+                     break;
+-                for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
+-                    if (auto record = mailbox.take ({claim, index})) {
+-                        // An ordinary Channel claim reserves FIFO entry, not terminal lifetime.
+-                        // Preserve the drain ambient while a suspended pipeline keeps its own.
+-                        flow_context_t::scope_t flow_scope (flow_context_t::current ());
+-                        dispatch_application (std::move (*record));
+-                    }
++                {
++                    // An ordinary Channel claim reserves FIFO entry, not terminal lifetime.
++                    // Preserve the drain ambient while a suspended pipeline keeps its own.
++                    flow_context_t::scope_t flow_scope (flow_context_t::current ());
++                    dispatch_application (std::move (*original));
+                 }
+                 mailbox.release (*claim);
+                 claim.reset ();
+diff --git a/framework/languages/cpp/framework/src/runtime/client_server/client_server_location_runtime.cpp b/framework/languages/cpp/framework/src/runtime/client_server/client_server_location_runtime.cpp
+index ca6641c02f..4125b3ea30 100644
+--- a/framework/languages/cpp/framework/src/runtime/client_server/client_server_location_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/client_server/client_server_location_runtime.cpp
+@@ -1630,6 +1630,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
+               mesh::service_mailbox_domain_t::application, owner_name, 1,
+               dispatch_limits::receive_batch_bytes, [&] (const auto &claim) noexcept {
+                   original.emplace (std::move (*claim->records.front ()));
++                  claim->records.front ()->application.reset ();
+               });
+             if (!active_claim)
+                 break;
+diff --git a/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp b/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
+index 74286a7472..34c0dd40c0 100644
+--- a/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/client_server/raw_client_server_owner.cpp
+@@ -194,7 +194,7 @@ raw_client_server_server_t::raw_client_server_server_t (
+         return runtime::state_lane_t ();
+     }()),
+     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
+-    _mailbox (),
++    _mailbox (_options.descriptor.channel_name),
+     _liveness (_lane)
+ {
+     if (!_options.runtime_failures)
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/application_record.hpp b/framework/languages/cpp/framework/src/runtime/dispatch/application_record.hpp
+index cfb826f830..4f76b34396 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/application_record.hpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/application_record.hpp
+@@ -24,6 +24,11 @@ namespace zlink::framework::runtime
+ struct serial_application_record_t;
+ }
+ 
++namespace zlink::framework::runtime::host
++{
++struct public_host_runtime_test_access_t;
++}
++
+ namespace zlink::framework::runtime::mesh
+ {
+ struct service_mailbox_record_t;
+@@ -43,6 +48,7 @@ class service_mailbox_settlement_t
+ 
+   private:
+     friend class service_mailbox_t;
++    friend struct host::public_host_runtime_test_access_t;
+     service_mailbox_settlement_t (std::shared_ptr<service_mailbox_claim_t> claim,
+                                   std::size_t index) noexcept :
+         _claim (std::move (claim)), _index (index)
+@@ -198,6 +204,7 @@ class mailbox_callback_t
+     }
+ 
+   private:
++    friend struct public_host_runtime_test_access_t;
+     std::variant<std::function<void ()>,
+                  mesh::service_mailbox_settlement_t,
+                  std::shared_ptr<std::atomic_bool>>
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+index daf55e2cd2..b62ad09dd0 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.cpp
+@@ -118,6 +118,78 @@ std::string service_mailbox_t::application_owner (host::owner_kind_t kind, std::
+     throw std::invalid_argument ("unknown application owner kind");
+ }
+ 
++service_mailbox_t::service_mailbox_t (std::string channel_owner)
++{
++    _state->application.owners.try_emplace (std::move (channel_owner), host::owner_kind_t::channel);
++}
++
++std::optional<host::owner_kind_t> service_mailbox_t::application_owner_kind (std::string_view owner)
++{
++    if (owner == "node")
++        return host::owner_kind_t::node;
++    if (owner.starts_with ("channel:"))
++        return host::owner_kind_t::channel;
++    if (owner.starts_with (detail::activation_admission_t::actor_key_prefix))
++        return host::owner_kind_t::actor;
++    if (owner.starts_with (detail::activation_admission_t::spot_key_prefix))
++        return host::owner_kind_t::spot;
++    return std::nullopt;
++}
++
++bool service_mailbox_t::eligible (const owner_queue_t &queue)
++{
++    return queue.unclaimed != queue.records.end ()
++           && (queue.independent () || queue.records.begin () == queue.unclaimed);
++}
++
++bool service_mailbox_t::refresh_ready_locked (state_t &state,
++                                              domain_t &domain,
++                                              const std::string &owner,
++                                              ready_step_t step)
++{
++    const auto found = domain.owners.find (owner);
++    if (found == domain.owners.end ())
++        return false;
++    auto &queue = found->second;
++    if (step == ready_step_t::begin) {
++        if (queue.phase != owner_phase_t::ready)
++            return false;
++        domain.ready.remove (owner);
++        queue.phase = owner_phase_t::draining;
++        return true;
++    }
++    if (step == ready_step_t::queued_claim || step == ready_step_t::direct_claim) {
++        if (queue.phase != owner_phase_t::draining
++            && (step == ready_step_t::queued_claim || &domain != &state.application
++                || !state.application_ready)) {
++            domain.ready.remove (owner);
++            queue.phase = owner_phase_t::idle;
++        }
++        return true;
++    }
++    if (step == ready_step_t::end) {
++        // An independent drain owns only its take; its end cannot revoke a successor.
++        if (queue.independent () || queue.phase != owner_phase_t::draining)
++            return false;
++        queue.phase = owner_phase_t::idle;
++    }
++    if (!queue.independent () && queue.phase == owner_phase_t::draining)
++        return false;
++    const auto next = eligible (queue)         ? owner_phase_t::ready
++                      : queue.records.empty () ? owner_phase_t::idle
++                                               : owner_phase_t::retained;
++    if (queue.phase == owner_phase_t::ready && next != owner_phase_t::ready)
++        domain.ready.remove (owner);
++    if (queue.phase != owner_phase_t::ready && next == owner_phase_t::ready)
++        domain.ready.push_back (owner);
++    queue.phase = next;
++    // Explicit raw Channel registrations survive an empty queue. Canonical Mesh
++    // owners can be reconstructed by this same registration owner on their next enqueue.
++    if (queue.records.empty () && (!queue.kind || queue.kind == application_owner_kind (owner)))
++        domain.owners.erase (found);
++    return next == owner_phase_t::ready;
++}
++
+ service_mailbox_t::domain_t &service_mailbox_t::domain (service_mailbox_domain_t value)
+ {
+     return value == service_mailbox_domain_t::application ? _state->application
+@@ -148,20 +220,21 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+     if (!record.received_at)
+         record.received_at = _utc_clock ();
+     const auto owner = record.owner;
+-    auto &queue = target.owners[owner];
++    auto &queue = target.owners
++                    .try_emplace (owner, record.domain == service_mailbox_domain_t::application
++                                           ? application_owner_kind (owner)
++                                           : std::nullopt)
++                    .first->second;
+     if (record.domain == service_mailbox_domain_t::application && _state->application_prepare)
+         _state->application_prepare (record);
+     if (admitted)
+         admitted ();
+-    queue.records.push_back (std::move (record));
+-    queue.bytes += retained;
+-    ++queue.messages;
++    const auto inserted = queue.records.insert (queue.records.end (), std::move (record));
++    if (queue.unclaimed == queue.records.end ())
++        queue.unclaimed = inserted;
+     ++target.messages;
+     target.bytes += retained;
+-    if (queue.phase == owner_phase_t::idle) {
+-        queue.phase = owner_phase_t::ready;
+-        target.ready.push_back (owner);
+-    }
++    refresh_ready_locked (*_state, target, owner);
+     const bool notify = &target == &_state->application && !_state->application_receive_turn;
+     lock.unlock ();
+     if (notify)
+@@ -181,17 +254,9 @@ service_mailbox_t::try_claim (service_mailbox_domain_t domain_value,
+     std::unique_lock lock (_state->mutex);
+     auto &source = domain (domain_value);
+     while (!source.ready.empty ()) {
+-        const auto &owner = source.ready.front ();
+-        auto found = source.owners.find (owner);
+-        if (found == source.owners.end () || found->second.phase != owner_phase_t::ready
+-            || found->second.records.empty ()) {
+-            source.ready.pop_front ();
+-            continue;
+-        }
+-        auto claim = claim_owner_locked (source, domain_value, owner, message_budget, byte_budget,
+-                                         claimed, lock);
+-        source.ready.pop_front ();
+-        return claim;
++        const auto owner = source.ready.front ();
++        return claim_owner_locked (source, domain_value, owner, message_budget, byte_budget,
++                                   claimed, true, lock);
+     }
+     return nullptr;
+ }
+@@ -208,18 +273,8 @@ service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
+     }
+     std::unique_lock lock (_state->mutex);
+     auto &source = domain (domain_value);
+-    const auto found = source.owners.find (owner);
+-    if (found == source.owners.end () || found->second.active_messages != 0
+-        || found->second.records.empty ()) {
+-        return nullptr;
+-    }
+-    auto claim =
+-      claim_owner_locked (source, domain_value, owner, message_budget, byte_budget, claimed, lock);
+-    if (found->second.phase != owner_phase_t::draining) {
+-        source.ready.erase (std::remove (source.ready.begin (), source.ready.end (), owner),
+-                            source.ready.end ());
+-    }
+-    return claim;
++    return claim_owner_locked (source, domain_value, owner, message_budget, byte_budget, claimed,
++                               false, lock);
+ }
+ 
+ std::shared_ptr<service_mailbox_claim_t>
+@@ -229,71 +284,104 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
+                                        std::size_t message_budget,
+                                        std::size_t byte_budget,
+                                        const claimed_t &claimed,
++                                       bool queued,
+                                        std::unique_lock<std::mutex> &lock)
+ {
+     const auto found = source.owners.find (owner);
+-    if (found == source.owners.end () || found->second.active_messages != 0
+-        || found->second.records.empty ()) {
++    if (found == source.owners.end () || !eligible (found->second)) {
+         return nullptr;
+     }
+-    auto &queue = found->second;
+-    auto claim = std::make_shared<service_mailbox_claim_t> ();
+-    claim->owner = owner;
+-    claim->domain = domain_value;
+-    const auto limit = std::min (message_budget, queue.records.size ());
+-    claim->records.reserve (limit);
+-    claim->record_bytes.reserve (limit);
+-    // The claim stays the front prefix of the FIFO; list references survive push_back.
+-    for (auto &slot : queue.records) {
+-        if (claim->records.size () == limit)
+-            break;
+-        const auto next_bytes = retained_bytes (slot);
+-        if (!claim->records.empty ()
+-            && (claim->claimed_bytes >= byte_budget
+-                || next_bytes > byte_budget - claim->claimed_bytes)) {
+-            break;
++    try {
++        auto &queue = found->second;
++        if (queue.independent () && !claimed)
++            throw std::invalid_argument ("independent mailbox claim requires original transfer");
++        auto claim = std::make_shared<service_mailbox_claim_t> ();
++        claim->owner = owner;
++        claim->domain = domain_value;
++        const auto limit =
++          queue.independent () ? 1 : std::min (message_budget, queue.records.size ());
++        claim->records.reserve (limit);
++        claim->record_bytes.reserve (limit);
++        // Claims append to the claimed prefix; list iterators survive enqueue and other claims.
++        auto unclaimed = queue.unclaimed;
++        for (; unclaimed != queue.records.end (); ++unclaimed) {
++            auto &slot = *unclaimed;
++            if (claim->records.size () == limit)
++                break;
++            const auto next_bytes = retained_bytes (slot);
++            if (!claim->records.empty ()
++                && (claim->claimed_bytes >= byte_budget
++                    || next_bytes > byte_budget - claim->claimed_bytes)) {
++                break;
++            }
++            if (next_bytes > std::numeric_limits<std::size_t>::max () - claim->claimed_bytes) {
++                break;
++            }
++            claim->claimed_bytes += next_bytes;
++            claim->record_bytes.push_back (next_bytes);
++            claim->records.push_back (unclaimed);
+         }
+-        if (next_bytes > std::numeric_limits<std::size_t>::max () - claim->claimed_bytes) {
+-            break;
++        claim->claimed_messages = claim->records.size ();
++        claim->_mailbox = _state;
++        claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
++        claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
++        // Each slot holds its own credit; whichever take moves the original out holds it.
++        for (std::size_t index = 0; index != claim->claimed_messages; ++index)
++            claim->records[index]->transferred = service_mailbox_settlement_t (claim, index);
++        queue.unclaimed = unclaimed;
++        source.bytes -= claim->claimed_bytes;
++        source.messages -= claim->claimed_messages;
++        // A bound application drain may already have published a successor. Keep that
++        // reservation while the current worker consumes fast records within its W5 budget.
++        refresh_ready_locked (*_state, source, owner,
++                              queued ? ready_step_t::queued_claim : ready_step_t::direct_claim);
++        // A consumer allocation may fail before or during transfer. Return every
++        // outstanding credit through the same release owner. Own the remaining originals
++        // before unlocking so a relocation cut cannot acquire credits being returned.
++        const auto rollback = [this, &lock, &claim] (service_mailbox_claim_t *failed) {
++            std::vector<service_mailbox_record_t> discarded;
++            discarded.reserve (failed->claimed_messages);
++            for (std::size_t index = 0; index != failed->claimed_messages; ++index)
++                if (auto *slot = slot_locked ({claim, index}))
++                    discarded.push_back (transfer_locked (*slot));
++            lock.unlock ();
++            release (*failed);
++        };
++        std::unique_ptr<service_mailbox_claim_t, decltype (rollback)> pending (claim.get (),
++                                                                               rollback);
++        if (claimed)
++            claimed (claim);
++        if (queue.independent () && has_original (*claim->records.front ()))
++            throw std::logic_error ("independent claim callback did not transfer its original");
++        refresh_ready_locked (*_state, source, owner);
++        pending.release ();
++        const bool notify = domain_value == service_mailbox_domain_t::application
++                            && !_state->application_receive_turn;
++        lock.unlock ();
++        if (notify) {
++            try {
++                notify_application_ready ();
++            }
++            catch (...) {
++                release (*claim);
++                throw;
++            }
+         }
+-        claim->claimed_bytes += next_bytes;
+-        claim->record_bytes.push_back (next_bytes);
+-        claim->records.push_back (&slot);
++        return claim;
++    }
++    catch (...) {
++        // Allocation can fail before a claim owns any credit. Republish through
++        // the same transition before an independent drain relinquishes its take.
++        if (lock.owns_lock ()) {
++            refresh_ready_locked (*_state, source, owner);
++            const bool notify = domain_value == service_mailbox_domain_t::application
++                                && !_state->application_receive_turn;
++            lock.unlock ();
++            if (notify)
++                notify_application_ready ();
++        }
++        throw;
+     }
+-    claim->claimed_messages = claim->records.size ();
+-    claim->_mailbox = _state;
+-    claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
+-    claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
+-    // Each slot holds its own credit; whichever take moves the original out holds it.
+-    for (std::size_t index = 0; index != claim->claimed_messages; ++index)
+-        claim->records[index]->transferred = service_mailbox_settlement_t (claim, index);
+-    queue.bytes -= claim->claimed_bytes;
+-    queue.messages -= claim->claimed_messages;
+-    source.bytes -= claim->claimed_bytes;
+-    source.messages -= claim->claimed_messages;
+-    queue.active_bytes += claim->claimed_bytes;
+-    queue.active_messages += claim->claimed_messages;
+-    source.active_bytes += claim->claimed_bytes;
+-    source.active_messages += claim->claimed_messages;
+-    if (queue.phase != owner_phase_t::draining)
+-        queue.phase = owner_phase_t::retained;
+-    // A consumer allocation may fail before or during transfer. Return every
+-    // outstanding credit through the same release owner. Own the remaining originals
+-    // before unlocking so a relocation cut cannot acquire credits being returned.
+-    const auto rollback = [this, &lock, &claim] (service_mailbox_claim_t *failed) {
+-        std::vector<service_mailbox_record_t> discarded;
+-        discarded.reserve (failed->claimed_messages);
+-        for (std::size_t index = 0; index != failed->claimed_messages; ++index)
+-            if (auto *slot = slot_locked ({claim, index}))
+-                discarded.push_back (transfer_locked (*slot));
+-        lock.unlock ();
+-        release (*failed);
+-    };
+-    std::unique_ptr<service_mailbox_claim_t, decltype (rollback)> pending (claim.get (), rollback);
+-    if (claimed)
+-        claimed (claim);
+-    pending.release ();
+-    return claim;
+ }
+ 
+ service_mailbox_record_t *service_mailbox_t::slot_locked (const claim_handle_t &handle)
+@@ -302,7 +390,7 @@ service_mailbox_record_t *service_mailbox_t::slot_locked (const claim_handle_t &
+     if (!handle.claim || handle.claim->_remaining.load (std::memory_order_acquire) == 0
+         || handle.index >= handle.claim->records.size ())
+         return nullptr;
+-    auto *slot = handle.claim->records[handle.index];
++    auto *slot = &*handle.claim->records[handle.index];
+     return has_original (*slot) ? slot : nullptr;
+ }
+ 
+@@ -311,7 +399,7 @@ bool service_mailbox_t::next_locked (const claim_handle_t &handle)
+     // Transfers leave a claim in FIFO order: the previous slot is already empty.
+     if (handle.index == 0)
+         return true;
+-    const auto *previous = handle.claim->records[handle.index - 1];
++    const auto *previous = &*handle.claim->records[handle.index - 1];
+     return !has_original (*previous);
+ }
+ 
+@@ -349,23 +437,18 @@ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
+         records.reserve (queue.records.size ());
+         // The claimed prefix keeps its slots until the claim settles; the remaining
+         // unclaimed records leave the FIFO now.
+-        const auto claimed = std::min (queue.active_messages, queue.records.size ());
+-        auto unclaimed = queue.records.begin ();
+-        for (std::size_t index = 0; index != claimed; ++index, ++unclaimed)
+-            if (has_original (*unclaimed))
+-                records.push_back (transfer_locked (*unclaimed));
+-        for (auto slot = unclaimed; slot != queue.records.end (); ++slot) {
++        for (auto slot = queue.records.begin (); slot != queue.unclaimed; ++slot)
++            if (has_original (*slot))
++                records.push_back (transfer_locked (*slot));
++        for (auto slot = queue.unclaimed; slot != queue.records.end (); ++slot) {
+             const auto bytes = retained_bytes (*slot);
+-            queue.bytes -= bytes;
+             source.bytes -= bytes;
+-            --queue.messages;
+             --source.messages;
+             records.push_back (transfer_locked (*slot));
+         }
+-        queue.records.erase (unclaimed, queue.records.end ());
+-        if (queue.records.empty () && queue.active_messages == 0
+-            && queue.phase != owner_phase_t::draining)
+-            source.owners.erase (found);
++        queue.records.erase (queue.unclaimed, queue.records.end ());
++        queue.unclaimed = queue.records.end ();
++        refresh_ready_locked (*_state, source, owners[index]);
+     }
+     if (cut)
+         cut ();
+@@ -436,7 +519,7 @@ bool service_mailbox_t::settles_last (service_mailbox_claim_t &claim, std::size_
+ 
+ bool service_mailbox_t::settle (const service_mailbox_settlement_t &settlement)
+ {
+-    // The last credit returns the claim to its owner FIFO under one lock.
++    // The last credit removes only this claim's slots under one lock.
+     auto &claim = *settlement._claim;
+     if (!settle_once (claim, settlement._index))
+         return false;
+@@ -461,21 +544,10 @@ bool service_mailbox_t::finish_locked (state_t &state, const service_mailbox_cla
+     if (found == target.owners.end ())
+         return false;
+     auto &queue = found->second;
+-    // Every slot of the prefix was taken or discarded before its credit settled.
+-    queue.records.erase (queue.records.begin (),
+-                         std::next (queue.records.begin (), claim.claimed_messages));
+-    queue.active_messages -= claim.claimed_messages;
+-    queue.active_bytes -= claim.claimed_bytes;
+-    target.active_messages -= claim.claimed_messages;
+-    target.active_bytes -= claim.claimed_bytes;
+-    if (queue.phase != owner_phase_t::draining) {
+-        if (queue.records.empty ())
+-            target.owners.erase (found);
+-        else {
+-            queue.phase = owner_phase_t::ready;
+-            target.ready.push_back (claim.owner);
+-        }
+-    }
++    // A younger claim may settle first. Only this claim's own slots leave the FIFO.
++    for (const auto slot : claim.records)
++        queue.records.erase (slot);
++    refresh_ready_locked (state, target, claim.owner);
+     return &target == &state.application && !state.application_receive_turn;
+ }
+ 
+@@ -507,29 +579,13 @@ bool service_mailbox_t::has_application_dispatch () const
+ bool service_mailbox_t::begin_application_drain (const std::string &owner)
+ {
+     std::lock_guard lock (_state->mutex);
+-    const auto found = _state->application.owners.find (owner);
+-    if (found == _state->application.owners.end () || found->second.phase != owner_phase_t::ready)
+-        return false;
+-    found->second.phase = owner_phase_t::draining;
+-    return true;
++    return refresh_ready_locked (*_state, _state->application, owner, ready_step_t::begin);
+ }
+ 
+ void service_mailbox_t::end_application_drain (const std::string &owner)
+ {
+     std::unique_lock lock (_state->mutex);
+-    const auto found = _state->application.owners.find (owner);
+-    if (found == _state->application.owners.end ()
+-        || found->second.phase != owner_phase_t::draining)
+-        return;
+-    auto &queue = found->second;
+-    if (queue.active_messages != 0) {
+-        queue.phase = owner_phase_t::retained;
+-    } else if (queue.records.empty ()) {
+-        _state->application.owners.erase (found);
+-    } else {
+-        queue.phase = owner_phase_t::ready;
+-        _state->application.ready.push_back (owner);
+-    }
++    refresh_ready_locked (*_state, _state->application, owner, ready_step_t::end);
+     const bool notify = !_state->application_receive_turn;
+     lock.unlock ();
+     if (notify)
+@@ -585,7 +641,15 @@ void service_mailbox_t::notify_application_ready_owned (const std::shared_ptr<st
+     std::unique_lock lock (state->mutex);
+     auto ready = take_application_ready_locked (*state);
+     lock.unlock ();
+-    notify_application_ready (ready);
++    try {
++        notify_application_ready (ready);
++    }
++    catch (...) {
++        // Only accepted callbacks leave the existing reservation list.
++        lock.lock ();
++        state->application.ready.splice (state->application.ready.begin (), ready->first);
++        throw;
++    }
+ }
+ 
+ void service_mailbox_t::close ()
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+index d29ad0f56a..d0668aa93c 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/service_mailbox.hpp
+@@ -308,6 +308,7 @@ class service_mailbox_t
+   public:
+     using utc_clock_t = std::function<std::chrono::system_clock::time_point ()>;
+     service_mailbox_t () = default;
++    explicit service_mailbox_t (std::string channel_owner);
+     explicit service_mailbox_t (utc_clock_t utc_clock) :
+         _utc_clock (utc_clock ? std::move (utc_clock)
+                               : utc_clock_t{[] { return std::chrono::system_clock::now (); }})
+@@ -318,6 +319,7 @@ class service_mailbox_t
+ 
+     static std::string application_owner (host::owner_kind_t kind, std::string_view id = {});
+     static std::string application_owner (const host::ready_record_t &owner);
++    static std::optional<host::owner_kind_t> application_owner_kind (std::string_view owner);
+ 
+     using application_prepare_t = std::function<void (service_mailbox_record_t &)>;
+     using application_ready_t = std::function<void (const std::string &)>;
+@@ -434,16 +436,18 @@ class service_mailbox_t
+         retained
+     };
+ 
+-    // A claim is the front prefix of records; it leaves the FIFO when its last
+-    // credit settles.
++    using records_t = std::list<service_mailbox_record_t>;
+     struct owner_queue_t
+     {
+-        std::list<service_mailbox_record_t> records;
+-        std::size_t messages = 0;
+-        std::size_t bytes = 0;
+-        std::size_t active_messages = 0;
+-        std::size_t active_bytes = 0;
++        explicit owner_queue_t (std::optional<host::owner_kind_t> kind) : kind (kind) {}
++        const std::optional<host::owner_kind_t> kind;
++        records_t records;
++        records_t::iterator unclaimed = records.end ();
+         owner_phase_t phase = owner_phase_t::idle;
++        bool independent () const noexcept
++        {
++            return kind == host::owner_kind_t::node || kind == host::owner_kind_t::channel;
++        }
+     };
+ 
+     struct domain_t
+@@ -452,10 +456,23 @@ class service_mailbox_t
+         std::list<std::string> ready;
+         std::size_t messages = 0;
+         std::size_t bytes = 0;
+-        std::size_t active_messages = 0;
+-        std::size_t active_bytes = 0;
+     };
+ 
++    static bool eligible (const owner_queue_t &queue);
++    // All reservation and drain state changes pass through this transition.
++    struct state_t;
++    enum class ready_step_t
++    {
++        changed,
++        begin,
++        queued_claim,
++        direct_claim,
++        end
++    };
++    static bool refresh_ready_locked (state_t &state,
++                                      domain_t &domain,
++                                      const std::string &owner,
++                                      ready_step_t step = ready_step_t::changed);
+     domain_t &domain (service_mailbox_domain_t value);
+     const domain_t &domain (service_mailbox_domain_t value) const;
+     std::shared_ptr<service_mailbox_claim_t>
+@@ -465,6 +482,7 @@ class service_mailbox_t
+                         std::size_t message_budget,
+                         std::size_t byte_budget,
+                         const claimed_t &claimed,
++                        bool queued,
+                         std::unique_lock<std::mutex> &lock);
+     static std::size_t retained_bytes (const service_mailbox_record_t &record);
+     static service_mailbox_record_t *slot_locked (const claim_handle_t &handle);
+@@ -494,13 +512,13 @@ class service_mailbox_t
+     utc_clock_t _utc_clock = [] { return std::chrono::system_clock::now (); };
+ };
+ 
+-// One claim of an owner's FIFO prefix. records views the claimed slots until the
++// One claim of an owner's FIFO records. records views the claimed slots until the
+ // claim settles; read them only before their take. Each slot credit settles once.
+ struct service_mailbox_claim_t
+ {
+     std::string owner;
+     service_mailbox_domain_t domain = service_mailbox_domain_t::application;
+-    std::vector<service_mailbox_record_t *> records;
++    std::vector<std::list<service_mailbox_record_t>::iterator> records;
+     std::vector<std::size_t> record_bytes;
+     std::size_t claimed_messages = 0;
+     std::size_t claimed_bytes = 0;
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index 21ecf741b9..842226aaac 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -700,14 +700,6 @@ local_application_dispatch_t local_application_query (const local_application_di
+     return query;
+ }
+ 
+-std::optional<owner_kind_t> stateful_application_owner (std::string_view owner)
+-{
+-    if (owner.starts_with (detail::activation_admission_t::actor_key_prefix))
+-        return owner_kind_t::actor;
+-    if (owner.starts_with (detail::activation_admission_t::spot_key_prefix))
+-        return owner_kind_t::spot;
+-    return std::nullopt;
+-}
+ 
+ } // namespace
+ 
+@@ -735,7 +727,8 @@ struct application_claim_batch_t
+                         bool stateful) noexcept
+     {
+         // These owners can enter a relocation cut even after this claim is made.
+-        if (stateful && stateful_application_owner (claim->owner))
++        const auto kind = mesh::service_mailbox_t::application_owner_kind (claim->owner);
++        if (stateful && (kind == owner_kind_t::actor || kind == owner_kind_t::spot))
+             return;
+         for (std::size_t index = 0; index < claim->claimed_messages; ++index)
+             entries[index].original.emplace (
+@@ -8225,7 +8218,8 @@ public_host_runtime_t::dispatch_application_claim (
+                         };
+                         std::optional<stateful::object_ref_t> native_owner;
+                         std::optional<stateful::retained_relocation_source_t> retained;
+-                        const auto owner_kind = stateful_application_owner (claim->owner);
++                        const auto owner_kind =
++                          mesh::service_mailbox_t::application_owner_kind (claim->owner);
+                         if (owner_kind == owner_kind_t::actor)
+                             native_owner = co_await self->_objects.find_async (
+                               stateful::object_kind_t::actor,
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/mailbox_claim_fixture.hpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/mailbox_claim_fixture.hpp
+new file mode 100644
+index 0000000000..5e76693b47
+--- /dev/null
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/mailbox_claim_fixture.hpp
+@@ -0,0 +1,60 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#pragma once
++#include "runtime/mesh/service_mailbox.hpp"
++
++namespace zlink::framework::test
++{
++// Raw transport tests own their received originals at the same claim boundary as
++// application drains. Views below refer to that consumer storage, not mailbox slots.
++struct mailbox_claim_t
++{
++    std::shared_ptr<runtime::mesh::service_mailbox_claim_t> claim;
++    std::vector<runtime::mesh::service_mailbox_record_t> originals;
++    std::vector<runtime::mesh::service_mailbox_record_t *> records;
++    std::string owner;
++    std::size_t claimed_messages = 0;
++    std::size_t claimed_bytes = 0;
++    explicit operator bool () const noexcept { return static_cast<bool> (claim); }
++    mailbox_claim_t *operator->() noexcept { return this; }
++    const mailbox_claim_t *operator->() const noexcept { return this; }
++    runtime::mesh::service_mailbox_claim_t &operator* () const { return *claim; }
++    std::size_t outstanding () const { return claim->outstanding (); }
++
++    void take_ordinary (const std::shared_ptr<runtime::mesh::service_mailbox_claim_t> &value)
++    {
++        originals.reserve (value->claimed_messages);
++        records.reserve (value->claimed_messages);
++        for (const auto slot : value->records) {
++            originals.push_back (std::move (*slot));
++            slot->application.reset ();
++            records.push_back (&originals.back ());
++        }
++        owner = value->owner;
++        claimed_messages = value->claimed_messages;
++        claimed_bytes = value->claimed_bytes;
++    }
++};
++
++inline mailbox_claim_t claim_mailbox (runtime::mesh::service_mailbox_t &mailbox,
++                                      runtime::mesh::service_mailbox_domain_t domain,
++                                      std::size_t messages,
++                                      std::size_t bytes)
++{
++    mailbox_claim_t result;
++    result.claim = mailbox.try_claim (domain, messages, bytes,
++                                      [&] (const auto &claim) { result.take_ordinary (claim); });
++    return result;
++}
++inline mailbox_claim_t claim_mailbox_owner (runtime::mesh::service_mailbox_t &mailbox,
++                                            runtime::mesh::service_mailbox_domain_t domain,
++                                            const std::string &owner,
++                                            std::size_t messages,
++                                            std::size_t bytes)
++{
++    mailbox_claim_t result;
++    result.claim = mailbox.try_claim_owner (
++      domain, owner, messages, bytes, [&] (const auto &claim) { result.take_ordinary (claim); });
++    return result;
++}
++
++}
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/same_owner_claim_controls.hpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/same_owner_claim_controls.hpp
+new file mode 100644
+index 0000000000..40afb1cb81
+--- /dev/null
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/same_owner_claim_controls.hpp
+@@ -0,0 +1,106 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#pragma once
++#include "runtime/dispatch/offload_executor.hpp"
++#include "runtime/mesh/service_mailbox.hpp"
++#include <array>
++#include <atomic>
++#include <iostream>
++
++namespace zlink::framework::test
++{
++namespace rt = runtime;
++namespace mesh = runtime::mesh;
++inline mesh::service_mailbox_record_t control_record (std::string owner, unsigned sequence)
++{
++    return mesh::service_mailbox_record_t::from_parts (
++      std::move (owner), mesh::service_mailbox_domain_t::application,
++      {zlink::message_t::from (std::to_string (sequence))});
++}
++
++// The same observer sees the production owner drain and deliberately broken
++// publication/submission adapters. Every focused test checks these controls.
++enum class publication_fault_t
++{
++    none,
++    lost_ready,
++    duplicate_ready,
++    per_record_wrapper
++};
++
++inline bool same_owner_drain_observation (const std::string &owner, publication_fault_t fault)
++{
++    rt::offload_executor_t executor (1);
++    mesh::service_mailbox_t mailbox;
++    constexpr unsigned count = 32;
++    std::atomic_uint publications{0}, submissions{0}, delivered{0};
++    std::atomic_bool single{true}, operations_ok{true};
++    std::array<std::atomic_uint, count> seen{};
++    std::function<void (const std::string &)> drain = [&] (const auto &key) {
++        if (!mailbox.begin_application_drain (key))
++            return;
++        for (;;) {
++            std::optional<mesh::service_mailbox_record_t> original;
++            auto claim =
++              mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, key, count,
++                                       65536, [&] (const auto &claim) {
++                                           single = single && claim->claimed_messages == 1;
++                                           original.emplace (std::move (*claim->records.front ()));
++                                           claim->records.front ()->application.reset ();
++                                       });
++            if (!claim)
++                break;
++            const auto id = std::stoul (original->parts ().front ().to_string ());
++            auto enter = [&, id] {
++                ++seen[id];
++                ++delivered;
++            };
++            if (fault == publication_fault_t::per_record_wrapper) {
++                ++submissions;
++                operations_ok = executor.try_submit_internal (enter) && operations_ok;
++            } else
++                enter ();
++            operations_ok = original->transferred () && operations_ok;
++        }
++        mailbox.end_application_drain (key);
++    };
++    mailbox.bind_application_dispatch ({}, [&] (const auto &key) {
++        ++publications;
++        if (fault == publication_fault_t::lost_ready)
++            return;
++        const auto copies = fault == publication_fault_t::duplicate_ready ? 2u : 1u;
++        for (unsigned i = 0; i != copies; ++i) {
++            ++submissions;
++            operations_ok =
++              executor.try_submit_internal ([&, key] { drain (key); }) && operations_ok;
++        }
++    });
++    mailbox.begin_application_receive_turn ();
++    for (unsigned i = 0; i != count; ++i)
++        operations_ok = mailbox.try_enqueue (control_record (owner, i)) && operations_ok;
++    mailbox.end_application_receive_turn ();
++    executor.drain ();
++    bool exactly_once = true;
++    for (const auto &value : seen)
++        exactly_once = exactly_once && value == 1;
++    const auto pending = mailbox.pending_messages (mesh::service_mailbox_domain_t::application);
++    std::cout << "owner-drain owner=" << owner << " fault=" << static_cast<int> (fault)
++              << " delivered=" << delivered << "/" << count << " publications=" << publications
++              << " submissions=" << submissions << " single=" << single
++              << " exactly_once=" << exactly_once << " pending=" << pending << '\n';
++    return operations_ok && delivered == count && single && exactly_once && publications <= 2
++           && submissions <= 2 && pending == 0;
++}
++
++inline bool same_owner_claim_controls (const std::string &owner = "node")
++{
++    bool passed = same_owner_drain_observation (owner, publication_fault_t::none);
++    for (const auto fault : {publication_fault_t::lost_ready, publication_fault_t::duplicate_ready,
++                             publication_fault_t::per_record_wrapper}) {
++        const bool detected = !same_owner_drain_observation (owner, fault);
++        passed = detected && passed;
++        std::cout << "negative control fault=" << static_cast<int> (fault)
++                  << " detected=" << detected << '\n';
++    }
++    return passed;
++}
++}
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+index 2a325755db..cf51d68abc 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+@@ -27,13 +27,6 @@ namespace zlink::framework::runtime::host
+ {
+ struct public_host_runtime_test_access_t
+ {
+-    static task_t<std::size_t>
+-    dispatch_claim (public_host_runtime_t &host,
+-                    std::shared_ptr<mesh::service_mailbox_claim_t> claim,
+-                    mesh::service_mailbox_t::application_dispatch_t dispatch)
+-    {
+-        return host.dispatch_application_claim (std::move (claim), std::move (dispatch));
+-    }
+     static task_t<void> forward_multicast (public_host_runtime_t &host,
+                                            task_t<std::vector<stateful::object_ref_t>> targets,
+                                            runtime::application_job_queue_t::permit_t permit)
+@@ -131,9 +124,12 @@ bool dispatch (host::public_host_runtime_t &target,
+                const dispatch_t &callback,
+                bool channel = false)
+ {
+-    return zlink::framework::test::application_owner_result (
++    bool handled = false;
++    while (zlink::framework::test::application_owner_result (
+              target.dispatch_application_owner (claim_owner (channel), callback, noop, noop))
+-      .value ();
++             .value ())
++        handled = true;
++    return handled;
+ }
+ 
+ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning_callback = false)
+@@ -144,9 +140,12 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
+     // a record move allocates on some standard libraries (MSVC std::map).
+     const auto claim_cost = tests::measure_allocations ([&] {
+         std::optional<mesh::service_mailbox_record_t> original;
+-        auto claim = mailbox.try_claim_owner (domain, claim_owner (channel), 1,
+-                                              runtime::dispatch_limits::receive_batch_bytes);
+-        original = mailbox.take ({claim, 0});
++        auto claim = mailbox.try_claim_owner (
++          domain, claim_owner (channel), 1, runtime::dispatch_limits::receive_batch_bytes,
++          [&] (const auto &claim) {
++              original.emplace (std::move (*claim->records.front ()));
++              claim->records.front ()->application.reset ();
++          });
+         require (static_cast<bool> (claim), "baseline claim failed");
+         require (original.has_value (), "baseline original transfer failed");
+         require (original->transferred (), "baseline release failed");
+@@ -239,12 +238,15 @@ void verify_batch_record_cost (host::public_host_runtime_t &target)
+             if (dispatch_records)
+                 require (dispatch (target, callback), "batch cost dispatch failed");
+             else {
+-                auto claim = mailbox.try_claim_owner (
+-                  domain, owner, size, runtime::dispatch_limits::receive_batch_bytes);
+-                require (static_cast<bool> (claim), "batch cost claim failed");
+-                const auto count = claim->claimed_messages;
+-                for (std::size_t index = 0; index < count; ++index) {
+-                    auto original = mailbox.take ({claim, index});
++                for (std::size_t i = 0; i != size; ++i) {
++                    std::optional<mesh::service_mailbox_record_t> original;
++                    auto claim = mailbox.try_claim_owner (
++                      domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes,
++                      [&] (const auto &claim) {
++                          original.emplace (std::move (*claim->records.front ()));
++                          claim->records.front ()->application.reset ();
++                      });
++                    require (claim && claim->claimed_messages == 1, "batch cost claim failed");
+                     require (original.has_value (), "batch baseline take failed");
+                     original->transferred ();
+                 }
+@@ -279,12 +281,10 @@ void verify_retained_batch (host::public_host_runtime_t &target)
+              "independent owner could not drain while first batch retained");
+     enqueue (mailbox);
+     const dispatch_t next = [] (const auto &, const auto &, auto, auto permit) {};
+-    require (!dispatch (target, next), "retained claim released early");
+-    releases[0]();
+-    releases[0]();
+-    require (!dispatch (target, next), "duplicate release ended another child");
++    require (dispatch (target, next), "retained independent claim blocked the next record");
++    releases[1]();
+     releases[1]();
+-    require (dispatch (target, next), "last child did not release claim");
++    releases[0]();
+     require (mailbox.pending_messages (domain) == 0, "next record was lost");
+ }
+ 
+@@ -293,18 +293,20 @@ void verify_original_transfer (host::public_host_runtime_t &target)
+     auto &mailbox = target.transport ().mailbox ();
+     enqueue (mailbox);
+     enqueue (mailbox);
+-    auto claim =
+-      mailbox.try_claim_owner (domain, owner, 2, runtime::dispatch_limits::receive_batch_bytes);
+-    require (claim && claim->claimed_messages == 2, "transfer fixture claim failed");
+-    auto first = mailbox.take ({claim, 0});
++    std::optional<mesh::service_mailbox_record_t> first;
++    auto claim = mailbox.try_claim_owner (
++      domain, owner, 2, runtime::dispatch_limits::receive_batch_bytes, [&] (const auto &claim) {
++          first.emplace (std::move (*claim->records.front ()));
++          claim->records.front ()->application.reset ();
++      });
++    require (claim && claim->claimed_messages == 1, "transfer fixture claim failed");
+     require (first && !claim->records[0]->application && !mailbox.take ({claim, 0}),
+              "local original remained present after transfer");
+     auto cut = mailbox.cut_owners ({owner}, [] (const auto &) { return true; }, [] {});
+     require (cut && cut->size () == 1 && cut->front ().size () == 1,
+              "relocation cut included an already transferred original");
+-    require (!mailbox.take ({claim, 1}), "relocation cut left its original in the slot");
+-    first->transferred ();
+-    cut->front ().front ().transferred ();
++    require (!cut->front ().front ().transferred, "unclaimed cut minted claim credit");
++    require (first->transferred (), "transferred original lost claim credit");
+     require (mailbox.pending_messages (domain) == 0, "transferred originals lost claim credit");
+ }
+ 
+@@ -351,11 +353,15 @@ void measure_permit_ownership_cost ()
+                 permit->mark_queued ();
+                 require (mailbox.try_enqueue (std::move (record)), "cost publication failed");
+             }
+-            auto claim = mailbox.try_claim_owner (domain, owner, count,
+-                                                  runtime::dispatch_limits::receive_batch_bytes);
+-            require (claim && claim->claimed_messages == count, "cost claim failed");
+             for (std::size_t i = 0; i < count; ++i) {
+-                auto original = mailbox.take ({claim, i});
++                std::optional<mesh::service_mailbox_record_t> original;
++                auto claim = mailbox.try_claim_owner (
++                  domain, owner, count, runtime::dispatch_limits::receive_batch_bytes,
++                  [&] (const auto &claim) {
++                      original.emplace (std::move (*claim->records.front ()));
++                      claim->records.front ()->application.reset ();
++                  });
++                require (claim && claim->claimed_messages == 1, "cost claim failed");
+                 auto &permit = admitted ? original->application_permit : external[i];
+                 runtime::application_dispatch_terminal_owner_t terminal ({}, {}, {},
+                                                                          std::move (*permit));
+@@ -386,9 +392,12 @@ void verify_inline_permit (bool bulk_release, bool enter_handler = true)
+     record.application_permit.emplace (std::move (*permit));
+     record.application_permit->mark_queued ();
+     require (mailbox.try_enqueue (std::move (record)), "inline permit publication failed");
+-    auto claim =
+-      mailbox.try_claim_owner (domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes);
+-    auto original = mailbox.take ({claim, 0});
++    std::optional<mesh::service_mailbox_record_t> original;
++    auto claim = mailbox.try_claim_owner (
++      domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes, [&] (const auto &claim) {
++          original.emplace (std::move (*claim->records.front ()));
++          claim->records.front ()->application.reset ();
++      });
+     require (original && original->application_permit && *original->application_permit,
+              "claim did not preserve inline permit ownership");
+     std::size_t delivered = 0;
+@@ -445,26 +454,20 @@ void verify_failure_permit ()
+     require (malformed.application_permit.has_value (), "failure permit unavailable");
+     malformed.application_permit->mark_queued ();
+     require (mailbox.try_enqueue (std::move (malformed)), "failure publication failed");
+-    auto claim =
+-      mailbox.try_claim_owner (domain, owner, 2, runtime::dispatch_limits::receive_batch_bytes);
+-    require (claim && claim->claimed_messages == 2, "failure claim failed");
+-    std::weak_ptr<mesh::service_mailbox_claim_t> lifetime = claim;
+     host::reply_token_t retained_reply;
+     std::size_t calls = 0;
+-    auto dispatched = host::public_host_runtime_test_access_t::dispatch_claim (
+-      *target, std::move (claim), [&] (const auto &, const auto &record, auto, auto) {
+-          retained_reply = record.reply_token;
+-          ++calls;
+-      });
+-    require (dispatched.result ().value () == 1 && calls == 1,
+-             "malformed original reached its application handler");
+-    require (lifetime.expired () && mailbox.pending_messages (domain) == 0,
+-             "failure fixture retained claim credit");
++    require (dispatch (*target,
++                       [&] (const auto &, const auto &record, auto, auto) {
++                           retained_reply = record.reply_token;
++                           ++calls;
++                       }),
++             "failure fixture dispatch failed");
++    require (calls == 1, "malformed original reached its application handler");
++    require (mailbox.pending_messages (domain) == 0, "failure fixture retained queued originals");
+     require (retained_reply.request && retained_reply.request->correlation == request_correlation
+                && retained_reply.request->source_routing_id == request_source,
+              "failure fixture lost retained reply routing metadata");
+-    std::cout << "permit-failure claim-destroyed=" << lifetime.expired ()
+-              << " retained-routing=" << static_cast<bool> (retained_reply.request)
++    std::cout << "permit-failure retained-routing=" << static_cast<bool> (retained_reply.request)
+               << " permits-after-terminal=" << jobs->snapshot ().permits_in_use << std::endl;
+     require (jobs->snapshot ().permits_in_use == 0,
+              "rejected original retained admission with reply routing metadata");
+@@ -550,9 +553,6 @@ void verify_multicast_admission (bool has_target)
+     original.application_permit->mark_queued ();
+     auto &mailbox = target->transport ().mailbox ();
+     require (mailbox.try_enqueue (std::move (original)), "multicast fixture publication failed");
+-    auto claim =
+-      mailbox.try_claim_owner (domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes);
+-    std::weak_ptr<mesh::service_mailbox_claim_t> source_claim = claim;
+     std::promise<void> entered, release;
+     auto resume = release.get_future ().share ();
+     auto blocked = std::async (std::launch::async, [&] {
+@@ -566,13 +566,15 @@ void verify_multicast_admission (bool has_target)
+     bool source_destroyed = false;
+     std::uint64_t queued = 0;
+     try {
+-        auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
+-          *target, std::move (claim), [] (const auto &, const auto &, auto, auto) {
++        auto pending = target->dispatch_application_owner (
++          owner,
++          [] (const auto &, const auto &, auto, auto) {
+               throw std::runtime_error ("multicast source reached application callback");
+-          });
+-        require (pending.await_ready () && pending.result ().value () == 1,
++          },
++          noop, noop);
++        require (std::holds_alternative<bool> (pending) && std::get<bool> (pending),
+                  "multicast source did not finish while target snapshot was suspended");
+-        source_destroyed = source_claim.expired ();
++        source_destroyed = mailbox.pending_messages (domain) == 0;
+         queued = jobs->snapshot ().queued_application_jobs;
+     }
+     catch (...) {
+@@ -669,10 +671,11 @@ void verify_retained_local_original ()
+                && original.application.retain () == retained,
+              "promotion did not retain the canonical original");
+     mesh::service_mailbox_t mailbox;
++    original.owner = "actor:promotion";
+     require (mailbox.try_enqueue (std::move (original)), "retained original publication failed");
+-    auto claim =
+-      mailbox.try_claim_owner (domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes);
+-    auto cut = mailbox.cut_owners ({owner}, [] (const auto &) { return true; }, [] {});
++    auto claim = mailbox.try_claim_owner (domain, "actor:promotion", 1,
++                                          runtime::dispatch_limits::receive_batch_bytes);
++    auto cut = mailbox.cut_owners ({"actor:promotion"}, [] (const auto &) { return true; }, [] {});
+     require (cut && cut->front ().size () == 1,
+              "retained original was not transferred by relocation cut");
+     auto &moved = cut->front ().front ();
+@@ -695,15 +698,17 @@ void verify_exception ()
+     enqueue (mailbox);
+     std::size_t starts = 0, rejects = 0, calls = 0;
+     bool caught = false;
+-    auto pending = target.dispatch_application_owner (
+-      owner,
+-      [&] (const auto &, const auto &, auto, auto permit) {
+-          if (++calls == 2)
+-              throw std::runtime_error ("handler fixture");
+-      },
+-      [&] { ++starts; }, [&] { ++rejects; });
+-    require (zlink::framework::test::application_owner_result (pending).value (),
+-             "record failure aborted claim continuation");
++    while (mailbox.pending_messages (domain) != 0) {
++        auto pending = target.dispatch_application_owner (
++          owner,
++          [&] (const auto &, const auto &, auto, auto permit) {
++              if (++calls == 2)
++                  throw std::runtime_error ("handler fixture");
++          },
++          [&] { ++starts; }, [&] { ++rejects; });
++        require (zlink::framework::test::application_owner_result (pending).value (),
++                 "record failure aborted claim continuation");
++    }
+     try {
+         failures->rethrow_if_failed ();
+     }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
+index 78906cc203..5f50f40851 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
+@@ -1,4 +1,6 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
++#include "same_owner_claim_controls.hpp"
+ #include <zlink/json.hpp>
+ #include "../support/runtime_failure_fixture.hpp"
+ #include "../support/telemetry_observation.hpp"
+@@ -37,6 +39,7 @@
+ #include <mutex>
+ #include <optional>
+ #include <stdexcept>
++#include <stop_token>
+ #include <string>
+ #include <thread>
+ #include <utility>
+@@ -230,6 +233,301 @@ struct other_owner_request_handler_t
+     std::string handle (const other_owner_request_t &) { return "other"; }
+ };
+ 
++struct same_owner_probe_request_t
++{
++    static constexpr const char *packet_name = "same-owner.probe";
++    int id = 0;
++};
++}
++
++template <> struct zlink::json::dto_traits<same_owner_probe_request_t>
++{
++    static constexpr auto fields =
++      std::tuple{zlink::json::field ("id", &same_owner_probe_request_t::id)};
++};
++
++namespace
++{
++
++struct same_owner_probe_state_t
++{
++    std::mutex mutex;
++    std::condition_variable changed;
++    bool first_entered = false;
++    bool release_first = false;
++    bool second_entered = false;
++};
++
++struct same_owner_probe_handler_t
++{
++    using request_type = same_owner_probe_request_t;
++    using reply_type = int;
++
++    int handle (const same_owner_probe_request_t &request)
++    {
++        auto current = state;
++        if (request.id == 1) {
++            std::unique_lock lock (current->mutex);
++            current->first_entered = true;
++            current->changed.notify_all ();
++            current->changed.wait (lock, [&] { return current->release_first; });
++        } else {
++            std::lock_guard lock (current->mutex);
++            current->second_entered = true;
++            current->changed.notify_all ();
++        }
++        return request.id;
++    }
++
++    inline static std::shared_ptr<same_owner_probe_state_t> state;
++};
++
++class gated_probe_actor_t final : public zlink::framework::actor_t
++{
++  public:
++    explicit gated_probe_actor_t (zlink::framework::actor_context_t context) :
++        _context (std::move (context))
++    {
++    }
++
++    zlink::framework::actor_context_t &context () noexcept override { return _context; }
++    const zlink::framework::actor_context_t &context () const noexcept override { return _context; }
++
++  private:
++    zlink::framework::actor_context_t _context;
++};
++
++class gated_probe_actor_factory_t final
++    : public zlink::framework::actor_factory_t<gated_probe_actor_t>
++{
++  public:
++    zlink::framework::task_t<std::shared_ptr<gated_probe_actor_t>>
++    create (zlink::framework::actor_context_t context, std::stop_token) override
++    {
++        co_return std::make_shared<gated_probe_actor_t> (std::move (context));
++    }
++};
++
++class gated_probe_entry_spot_t final : public zlink::framework::entry_spot_t<gated_probe_actor_t>
++{
++  public:
++    explicit gated_probe_entry_spot_t (zlink::framework::entry_spot_context_t context) :
++        _context (std::move (context))
++    {
++    }
++
++    zlink::framework::entry_spot_context_t &context () noexcept override { return _context; }
++    const zlink::framework::entry_spot_context_t &context () const noexcept override
++    {
++        return _context;
++    }
++
++    void configure () override
++    {
++        _context.handlers ().add_actor_request<&gated_probe_entry_spot_t::on_request> ();
++    }
++
++    zlink::framework::task_t<zlink::framework::actor_create_response_t>
++    on_create_actor (gated_probe_actor_t &, const zlink::framework::message_t &) override
++    {
++        co_return zlink::framework::actor_create_response_t::accept ();
++    }
++
++    zlink::framework::task_t<void> on_actor_joined (gated_probe_actor_t &) override { co_return; }
++    zlink::framework::task_t<void> on_leave_actor (gated_probe_actor_t &) override { co_return; }
++    zlink::framework::task_t<void> on_disconnect_actor (gated_probe_actor_t &) override
++    {
++        co_return;
++    }
++
++    int on_request (gated_probe_actor_t &,
++                    zlink::framework::message_context_t &,
++                    const same_owner_probe_request_t &request)
++    {
++        return same_owner_probe_handler_t{}.handle (request);
++    }
++
++  private:
++    zlink::framework::entry_spot_context_t _context;
++};
++
++bool run_same_owner_probe_case (zlink::framework::channel_client_t &channels,
++                                std::string first_channel,
++                                std::string second_channel)
++{
++    auto state = std::make_shared<same_owner_probe_state_t> ();
++    same_owner_probe_handler_t::state = state;
++    auto first =
++      channels.request_to_channel (std::move (first_channel), same_owner_probe_request_t{1})
++        .async<int> ();
++    {
++        std::unique_lock lock (state->mutex);
++        assert (state->changed.wait_for (lock, 5s, [&] { return state->first_entered; }));
++    }
++    auto second =
++      channels.request_to_channel (std::move (second_channel), same_owner_probe_request_t{2})
++        .async<int> ();
++    bool started_before_release = false;
++    {
++        std::unique_lock lock (state->mutex);
++        started_before_release =
++          state->changed.wait_for (lock, 250ms, [&] { return state->second_entered; });
++        state->release_first = true;
++    }
++    state->changed.notify_all ();
++    const auto first_result = first.result_for (5s);
++    const auto second_result = second.result_for (5s);
++    assert (first_result && first_result->value () == 1);
++    assert (second_result && second_result->value () == 2);
++    return started_before_release;
++}
++
++bool verify_same_owner_blocking_public_api_repro ()
++{
++    auto app = zlink::framework::app_t::create ();
++    if (const auto *log = std::getenv ("ZLINK_CPP_SAME_OWNER_FLOW_LOG"))
++        app.logging ().use_file (std::string (log) + ".channel");
++    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
++        options.add_location_store (
++          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
++        options.handlers ().group ("same-owner-probe").add<same_owner_probe_handler_t> ();
++        for (const auto &name : {"same-owner-probe-a", "actor:same-owner-probe-b"}) {
++            auto channel = options.add_client_server_channel (name);
++            channel.server ().listen ().add_handler_group ("same-owner-probe");
++            channel.client ();
++        }
++    });
++    auto provider = app.advanced ().services ().build_provider ();
++    auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
++    auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
++    app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
++    char program[] = "same-owner-blocking-repro";
++    char *arguments[] = {program, nullptr};
++    std::thread app_thread ([&] { (void) app.run (1, arguments); });
++    const auto deadline = std::chrono::steady_clock::now () + 10s;
++    while (
++      (!runtime.is_ready ("same-owner-probe-a") || !runtime.is_ready ("actor:same-owner-probe-b"))
++      && std::chrono::steady_clock::now () < deadline)
++        std::this_thread::sleep_for (1ms);
++    assert (runtime.is_ready ("same-owner-probe-a")
++            && runtime.is_ready ("actor:same-owner-probe-b"));
++
++    int same_owner_started = 0;
++    int different_owner_started = 0;
++    int raw_channel_started = 0;
++    for (int i = 0; i < 20; ++i) {
++        same_owner_started +=
++          run_same_owner_probe_case (channels, "same-owner-probe-a", "same-owner-probe-a");
++        different_owner_started +=
++          run_same_owner_probe_case (channels, "same-owner-probe-a", "actor:same-owner-probe-b");
++        raw_channel_started += run_same_owner_probe_case (channels, "actor:same-owner-probe-b",
++                                                          "actor:same-owner-probe-b");
++    }
++    std::fprintf (stdout,
++                  "same-owner B before release: %d/20; different-owner B before release: %d/20\n",
++                  same_owner_started, different_owner_started);
++    std::fprintf (stdout, "raw Channel with Actor-looking name B before release: %d/20\n",
++                  raw_channel_started);
++    std::fflush (stdout);
++    app.stop ();
++    app_thread.join ();
++    assert (different_owner_started == 20);
++    return same_owner_started == 20 && raw_channel_started == 20;
++}
++
++void verify_gated_owner_control ()
++{
++    auto location_store =
++      std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
++    auto app = zlink::framework::app_t::create ();
++    if (const auto *log = std::getenv ("ZLINK_CPP_SAME_OWNER_FLOW_LOG"))
++        app.logging ().use_file (std::string (log) + ".actor");
++    app.add_zlink_framework (
++      [location_store] (zlink::framework::zlink_framework_options_t &options) {
++          options.configure_locations ().owner_lease_renew_interval = 10ms;
++          options.configure_locations ().owner_lease_fencing_margin = 1ms;
++          options.configure_locations ().polling_interval = 10ms;
++          options.add_location_store (location_store);
++          options.add_relocation_store (
++            std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ());
++          auto mesh = options.add_route_mesh ("same-owner-gated-probe-mesh");
++          mesh.set_object_role (zlink::framework::object_role_t::server)
++            .set_routing_id (zlink::routing_id_t::from ("same-owner-gated-probe-node"))
++            .listen ("tcp://127.0.0.1:0");
++          mesh.add_entry_spot<gated_probe_entry_spot_t> ()
++            .add_actor_factory<gated_probe_actor_t, gated_probe_actor_factory_t> (
++              "same-owner-gated-probe-actor", std::make_shared<gated_probe_actor_factory_t> (),
++              [] (auto &factory) { factory.disable_relocation (); });
++      });
++    auto provider = app.advanced ().services ().build_provider ();
++    auto &actors = provider.get_required<zlink::framework::actor_manager_t> ();
++    auto &client = provider.get_required<zlink::framework::actor_client_t> ();
++    app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
++    char program[] = "same-owner-gated-probe";
++    char *arguments[] = {program, nullptr};
++    std::atomic_int app_exit_code{-1};
++    std::thread app_thread ([&] { app_exit_code.store (app.run (1, arguments)); });
++    const auto deadline = std::chrono::steady_clock::now () + 10s;
++    while (!app.is_ready () && app_exit_code.load () == -1
++           && std::chrono::steady_clock::now () < deadline)
++        std::this_thread::sleep_for (1ms);
++    if (!app.is_ready ()) {
++        const auto state = static_cast<int> (app.runtime_state ());
++        app.request_stop ();
++        app_thread.join ();
++        std::fprintf (stderr, "gated owner app readiness failed: state=%d exit=%d\n", state,
++                      app_exit_code.load ());
++    }
++    assert (app.is_ready ());
++
++    int second_started_while_first_blocked = 0;
++    for (int i = 0; i < 20; ++i) {
++        auto state = std::make_shared<same_owner_probe_state_t> ();
++        same_owner_probe_handler_t::state = state;
++        const auto actor_id_text = "same-owner-gated-" + std::to_string (i);
++        const auto created = actors
++                               .get_or_create (zlink::framework::actor_id_t (actor_id_text),
++                                               "same-owner-gated-probe-actor")
++                               .timeout (5s)
++                               .async ()
++                               .result ();
++        assert (
++          created
++          && std::holds_alternative<zlink::framework::actor_create_created_t> (created.value ()));
++        auto first =
++          client
++            .request (zlink::framework::actor_id_t (actor_id_text), same_owner_probe_request_t{1})
++            .timeout (5s)
++            .async<int> ();
++        {
++            std::unique_lock lock (state->mutex);
++            assert (state->changed.wait_for (lock, 5s, [&] { return state->first_entered; }));
++        }
++        auto second =
++          client
++            .request (zlink::framework::actor_id_t (actor_id_text), same_owner_probe_request_t{2})
++            .timeout (5s)
++            .async<int> ();
++        {
++            std::unique_lock lock (state->mutex);
++            second_started_while_first_blocked +=
++              state->changed.wait_for (lock, 250ms, [&] { return state->second_entered; });
++            state->release_first = true;
++        }
++        state->changed.notify_all ();
++        const auto first_result = first.result_for (5s);
++        const auto second_result = second.result_for (5s);
++        assert (first_result && first_result->value () == 1);
++        assert (second_result && second_result->value () == 2);
++    }
++    std::fprintf (stdout, "gated owner B before release: %d/20\n",
++                  second_started_while_first_blocked);
++    std::fflush (stdout);
++    app.stop ();
++    app_thread.join ();
++    assert (second_started_while_first_blocked == 0);
++}
++
+ struct budget_owner_send_t
+ {
+     static constexpr const char *packet_name = "budget-owner.send";
+@@ -1166,8 +1464,8 @@ void verify_invalid_metadata_is_a_protocol_error ()
+       .async ();
+     pump (client_server::client_server_pump_result_t::application);
+     using zlink::framework::runtime::mesh::service_mailbox_domain_t;
+-    const auto claim =
+-      server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
++    const auto claim = zlink::framework::test::claim_mailbox (
++      server.mailbox (), service_mailbox_domain_t::application, 1, 1024 * 1024);
+     assert (claim && claim->records.size () == 1);
+     assert (server.mailbox ().release (*claim));
+     for (const auto &bad : invalid_metadata_headers ()) {
+@@ -1332,11 +1630,11 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
+       server->mailbox ().pending_messages (service_mailbox_domain_t::application);
+     assert (jobs->snapshot ().queued_application_jobs == records);
+     assert (jobs->snapshot ().permits_in_use == records);
+-    const auto claim =
+-      server->mailbox ().try_claim (service_mailbox_domain_t::application, records, 1024 * 1024);
+-    assert (claim && claim->records.size () == records);
+     for (std::size_t index = 0; index < records; ++index) {
+-        auto &record = *claim->records[index];
++        auto claim = zlink::framework::test::claim_mailbox (
++          server->mailbox (), service_mailbox_domain_t::application, 1, 1024 * 1024);
++        assert (claim && claim->records.size () == 1);
++        auto &record = *claim->records.front ();
+         const auto &payload = record.parts ()[1];
+         assert (payload.to_string () == std::to_string (index));
+         auto application_permit =
+@@ -1346,9 +1644,9 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
+         zlink::framework::runtime::handler_entry_t before_application_handler (
+           record.before_application_handler, std::move (application_permit));
+         before_application_handler ();
++        assert (server->mailbox ().release (*claim));
+     }
+     assert (jobs->snapshot ().permits_in_use == 0);
+-    assert (server->mailbox ().release (*claim));
+     server->close ();
+     return records;
+ }
+@@ -1463,8 +1761,8 @@ void verify_client_server_closed_reply_finishes_without_server_lane ()
+                      .async ();
+     pump (client_server::client_server_pump_result_t::application);
+     using zlink::framework::runtime::mesh::service_mailbox_domain_t;
+-    const auto claim =
+-      server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
++    const auto claim = zlink::framework::test::claim_mailbox (
++      server.mailbox (), service_mailbox_domain_t::application, 1, 1024 * 1024);
+     assert (claim && claim->records.size () == 1);
+     const auto &request = (*claim->records.front ());
+     server.close ();
+@@ -2422,10 +2720,27 @@ int main (int argc, char **argv)
+         verify_client_server_owner_gate_and_budget ();
+         return 0;
+     }
++    if (argc == 2 && std::string (argv[1]) == "--same-owner-gated-control") {
++        verify_gated_owner_control ();
++        assert (zlink::framework::test::same_owner_claim_controls ());
++        return 0;
++    }
++    if (argc == 2 && std::string (argv[1]) == "--same-owner-regression") {
++        const bool independent = verify_same_owner_blocking_public_api_repro ();
++        const bool controls = zlink::framework::test::same_owner_claim_controls ();
++        assert (independent && controls);
++        return 0;
++    }
+     if (argc == 3 && std::string (argv[1]) == "--terminal-overlap") {
+         verify_client_server_terminal_overlap_matrix (std::stoi (argv[2]));
+         return 0;
+     }
++    {
++        const bool independent = verify_same_owner_blocking_public_api_repro ();
++        verify_gated_owner_control ();
++        const bool controls = zlink::framework::test::same_owner_claim_controls ();
++        assert (independent && controls);
++    }
+     verify_zero_weight_target_stays_ready ();
+     verify_first_observation_contains_current_status ();
+     verify_reconnecting_target_status ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp
+index 0f452180e4..052c8aaa17 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp
+@@ -14,12 +14,11 @@ namespace zlink::framework::runtime::host
+ {
+ struct public_host_runtime_test_access_t
+ {
+-    static task_t<std::size_t>
+-    dispatch_claim (public_host_runtime_t &host,
+-                    std::shared_ptr<mesh::service_mailbox_claim_t> claim,
+-                    mesh::service_mailbox_t::application_dispatch_t dispatch)
++    static std::weak_ptr<mesh::service_mailbox_claim_t>
++    claim_of (const mailbox_callback_t &callback)
+     {
+-        return host.dispatch_application_claim (std::move (claim), std::move (dispatch));
++        const auto *settlement = std::get_if<mesh::service_mailbox_settlement_t> (&callback._value);
++        return settlement ? settlement->_claim : std::weak_ptr<mesh::service_mailbox_claim_t>{};
+     }
+ };
+ }
+@@ -172,14 +171,16 @@ class HandlerEntryPermit : public ::testing::Test
+               ++invocation->permit_returns;
+           },
+           queue_t::origin_t::remote);
+-        auto claim =
+-          mailbox.try_claim_owner (domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes);
+-        ASSERT_TRUE (claim);
+-        std::weak_ptr<mesh::service_mailbox_claim_t> claim_lifetime = claim;
++        std::weak_ptr<mesh::service_mailbox_claim_t> claim_lifetime;
++        std::size_t dispatched_records = 0;
+         std::optional<task_t<std::optional<detail::route_dispatch_reply_t>>> pending;
+-        auto dispatched = host::public_host_runtime_test_access_t::dispatch_claim (
+-          target, std::move (claim),
++        auto dispatched = target.dispatch_application_owner (
++          owner,
+           [&] (const auto &, const auto &received, auto payload, auto permit) {
++              ++dispatched_records;
++              claim_lifetime = host::public_host_runtime_test_access_t::claim_of (
++                received.release_mailbox_reservation);
++              EXPECT_FALSE (claim_lifetime.expired ());
+               EXPECT_EQ (host::record_kind_t::node_send, received.kind);
+               EXPECT_EQ ("peer", received.source_node_rid.to_string ());
+               // This is the hosted Node pipeline handoff. Its ordinary prefix
+@@ -190,9 +191,11 @@ class HandlerEntryPermit : public ::testing::Test
+                                                                        std::move (permit));
+               pending.emplace (
+                 dispatcher.dispatch (received, std::move (payload), header, std::move (terminal)));
+-          });
+-        ASSERT_TRUE (dispatched.await_ready ());
+-        ASSERT_EQ (1u, dispatched.result ().value ());
++          },
++          [] {}, [] {});
++        ASSERT_TRUE (test::application_owner_ready (dispatched));
++        ASSERT_TRUE (test::application_owner_result (dispatched).value ());
++        ASSERT_EQ (1u, dispatched_records);
+         EXPECT_TRUE (claim_lifetime.expired ());
+         RecordProperty ("claim_destroyed_before_resume", claim_lifetime.expired ());
+         EXPECT_EQ (0u, mailbox.pending_messages (domain));
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp
+index fc295ef2e5..0562a3a22c 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+ 
+ #include "runtime/diagnostics/dispatch_options_access.hpp"
+@@ -269,8 +270,8 @@ TEST (ListenerIdentity, WildcardMeshAdvertisesLoopbackAndSupportsExpectedRidRout
+     // channel message belong to different owners, so claim until both arrived.
+     std::size_t claimed_records = 0;
+     for (int attempt = 0; attempt != 8 && claimed_records < 2; ++attempt) {
+-        const auto claimed =
+-          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 2, 4096);
++        const auto claimed = zlink::framework::test::claim_mailbox (
++          target.mailbox (), mesh::service_mailbox_domain_t::application, 2, 4096);
+         if (!claimed)
+             break;
+         claimed_records += claimed->records.size ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
+index c6484d5690..d365486e01 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "../support/telemetry_observation.hpp"
+ 
+ #include "../support/runtime_failure_fixture.hpp"
+@@ -1937,8 +1938,8 @@ void verify_completion_receipt_without_application_receive ()
+     while (terminal.wait_for (0ms) != std::future_status::ready
+            && std::chrono::steady_clock::now () < reply_deadline) {
+         (void) await_task (replier.pump_one (std::chrono::steady_clock::now ()));
+-        auto claim =
+-          replier.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
++        auto claim = zlink::framework::test::claim_mailbox (
++          replier.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
+         if (claim) {
+             assert (replier.reply ((*claim->records.front ()),
+                                    {"Answer", "application/json", bytes ("reply")}));
+@@ -2435,8 +2436,8 @@ void verify_client_server_independent_raw_path ()
+         send_pump = server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+     }
+     assert (send_pump == client_server::client_server_pump_result_t::application);
+-    auto send_claim =
+-      server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
++    auto send_claim = zlink::framework::test::claim_mailbox (
++      server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+     assert (send_claim && send_claim->records.size () == 1);
+     {
+         const auto send_header = runtime::messaging::envelope_codec_t{}.decode_header (
+@@ -2460,8 +2461,8 @@ void verify_client_server_independent_raw_path ()
+         request_pump = server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+     }
+     assert (request_pump == client_server::client_server_pump_result_t::application);
+-    auto request_claim =
+-      server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
++    auto request_claim = zlink::framework::test::claim_mailbox (
++      server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+     assert (request_claim && request_claim->records.size () == 1);
+     assert (request_claim->records.front ()->reply_token ());
+     assert (server
+@@ -2494,8 +2495,8 @@ void verify_client_server_independent_raw_path ()
+         request_pump = server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+     }
+     assert (request_pump == client_server::client_server_pump_result_t::application);
+-    request_claim =
+-      server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
++    request_claim = zlink::framework::test::claim_mailbox (
++      server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+     assert (request_claim && request_claim->records.size () == 1);
+     assert (server
+               .reply ((*request_claim->records.front ()),
+@@ -2523,13 +2524,13 @@ void verify_client_server_independent_raw_path ()
+                                                         large_payload};
+     auto large_task = client.request (large_request, 3s);
+     const auto large_deadline = std::chrono::steady_clock::now () + 5s;
+-    auto large_claim = server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
+-                                                    2u * 1024u * 1024u);
++    auto large_claim = zlink::framework::test::claim_mailbox (
++      server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 2u * 1024u * 1024u);
+     while (!large_claim && std::chrono::steady_clock::now () < large_deadline) {
+         const auto pump = server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+         assert (pump != client_server::client_server_pump_result_t::protocol_error);
+-        large_claim = server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
+-                                                   2u * 1024u * 1024u);
++        large_claim = zlink::framework::test::claim_mailbox (
++          server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 2u * 1024u * 1024u);
+         if (!large_claim)
+             std::this_thread::sleep_for (1ms);
+     }
+@@ -3012,7 +3013,8 @@ void verify_raw_owner_node_send_and_liveness (
+     }
+     assert (paused_ack_pump == mesh::raw_mesh_pump_result_t::infrastructure);
+ 
+-    auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
++    auto claim = zlink::framework::test::claim_mailbox (
++      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+     assert (claim && claim->records.size () == 1);
+     assert (
+       protocol::decode_header (protocol::message_bytes (claim->records.front ()->parts ().front ()))
+@@ -3034,11 +3036,12 @@ void verify_raw_owner_node_send_and_liveness (
+             break;
+     }
+     // The second payload was retained, not dropped, so it is still claimable.
+-    auto retained_claim =
+-      second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
++    auto retained_claim = zlink::framework::test::claim_mailbox (
++      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+     assert (retained_claim && retained_claim->records.size () == 1);
+     assert (second.mailbox ().release (*retained_claim));
+-    assert (!second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024));
++    assert (!zlink::framework::test::claim_mailbox (
++      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024));
+ 
+     bool channel_submitted = false;
+     while (!channel_submitted && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+@@ -3058,8 +3061,8 @@ void verify_raw_owner_node_send_and_liveness (
+         assert (channel_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+     }
+     assert (channel_pump == mesh::raw_mesh_pump_result_t::application);
+-    auto channel_claim =
+-      second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
++    auto channel_claim = zlink::framework::test::claim_mailbox (
++      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+     assert (channel_claim && channel_claim->owner == "channel:alpha");
+     assert (protocol::decode_channel_send_header (
+               protocol::message_bytes (channel_claim->records.front ()->parts ().front ()))
+@@ -3087,8 +3090,8 @@ void verify_raw_owner_node_send_and_liveness (
+         assert (request_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+     }
+     assert (request_pump == mesh::raw_mesh_pump_result_t::application);
+-    auto request_claim =
+-      second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
++    auto request_claim = zlink::framework::test::claim_mailbox (
++      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+     assert (request_claim && request_claim->records.size () == 1);
+     const auto &request_record = (*request_claim->records.front ());
+     assert (request_record.reply_token ());
+@@ -3288,17 +3291,18 @@ void verify_raw_owner_node_send_and_liveness (
+                                        std::move (saturated_payload))));
+     }
+     assert (first.pending_operation_count () != 0);
+-    const auto verify_retained_payloads = [] (const mesh::service_mailbox_claim_t &claim) {
+-        for (const auto &record : claim.records) {
+-            const auto payload = protocol::decode_application_payload (
+-              protocol::message_bytes (record->parts ().back ()), false);
+-            assert (payload.packet_name () == "SaturatedControl");
+-            const auto &body = payload.payload_bytes ();
+-            assert (body.size () == 512u * 1024u);
+-            assert (
+-              std::all_of (body.begin (), body.end (), [] (auto byte) { return byte == 0x5a; }));
+-        }
+-    };
++    const auto verify_retained_payloads =
++      [] (const zlink::framework::test::mailbox_claim_t &claim) {
++          for (const auto &record : claim.records) {
++              const auto payload = protocol::decode_application_payload (
++                protocol::message_bytes (record->parts ().back ()), false);
++              assert (payload.packet_name () == "SaturatedControl");
++              const auto &body = payload.payload_bytes ();
++              assert (body.size () == 512u * 1024u);
++              assert (
++                std::all_of (body.begin (), body.end (), [] (auto byte) { return byte == 0x5a; }));
++          }
++      };
+ 
+     // The reverse-direction probe itself is not behind the saturated route.
+     // Claiming it starts one ACK binding operation, then I3 must return so the
+@@ -3334,10 +3338,10 @@ void verify_raw_owner_node_send_and_liveness (
+         assert (target_pump.await_ready ());
+         const auto target_result = target_pump.result ().value ();
+         assert (target_result != mesh::raw_mesh_pump_result_t::protocol_error);
+-        auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
+-                                                  1024u * 1024u);
++        auto claim = zlink::framework::test::claim_mailbox (
++          second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024u * 1024u);
+         if (claim) {
+-            verify_retained_payloads (*claim);
++            verify_retained_payloads (claim);
+             saturated_received += claim->records.size ();
+             assert (saturated_received <= saturated_sends.size ());
+             assert (second.mailbox ().release (*claim));
+@@ -3363,9 +3367,10 @@ void verify_raw_owner_node_send_and_liveness (
+         const auto pumped_quiesce =
+           await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+         assert (pumped_quiesce != mesh::raw_mesh_pump_result_t::protocol_error);
+-        while (auto quiesce_claim = second.mailbox ().try_claim (
+-                 mesh::service_mailbox_domain_t::application, 256, 16u * 1024u * 1024u)) {
+-            verify_retained_payloads (*quiesce_claim);
++        while (auto quiesce_claim = zlink::framework::test::claim_mailbox (
++                 second.mailbox (), mesh::service_mailbox_domain_t::application, 256,
++                 16u * 1024u * 1024u)) {
++            verify_retained_payloads (quiesce_claim);
+             saturated_received += quiesce_claim->records.size ();
+             assert (saturated_received <= saturated_sends.size ());
+             assert (second.mailbox ().release (*quiesce_claim));
+@@ -3410,8 +3415,8 @@ void verify_raw_owner_node_send_and_liveness (
+         const auto target_pump =
+           await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+         assert (target_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+-        auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 256,
+-                                                  16u * 1024u * 1024u);
++        auto claim = zlink::framework::test::claim_mailbox (
++          second.mailbox (), mesh::service_mailbox_domain_t::application, 256, 16u * 1024u * 1024u);
+         if (claim) {
+             for (const auto &slot : claim->records) {
+                 const auto &record = *slot;
+@@ -4364,11 +4369,11 @@ void verify_liveness_without_selected_route ()
+     assert (await_task (source.send_to_node (live.node_routing_id, payload)));
+     assert (await_task (survivor.send_to_node (local.node_routing_id, payload)));
+     for (auto *receiver : {&source, &survivor}) {
+-        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
++        zlink::framework::test::mailbox_claim_t claim;
+         while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+             (void) await_task (receiver->pump_one (now));
+-            claim =
+-              receiver->mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
++            claim = zlink::framework::test::claim_mailbox (
++              receiver->mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
+         }
+         assert (claim && claim->records.size () == 1);
+         assert (protocol::decode_application_payload (
+@@ -4744,8 +4749,8 @@ void verify_unadmitted_route (bool repeat_hello)
+         }
+         assert (pending.await_ready ());
+         assert (await_task (std::move (pending)).terminal == zlink::request_result_t::timed_out);
+-        assert (
+-          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096));
++        assert (!zlink::framework::test::claim_mailbox (
++          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096));
+     }
+     port.close ();
+     target.close ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+index 5e84b8ee8c..ad949ae129 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "../support/stateful_object_sync.hpp"
+ #include "runtime/mesh/mesh_node_host_service.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+@@ -4109,7 +4110,7 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
+     }
+ }
+ 
+-void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
++void verify_public_host_dispatches_one_node_record_per_claim ()
+ {
+     auto target = std::make_shared<host::public_host_runtime_t> (
+       host::host_options_t{mesh::raw_mesh_node_options_t{
+@@ -4140,20 +4141,25 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
+     std::vector<std::string> dispatched;
+     std::size_t started = 0;
+     std::size_t rejected = 0;
+-    assert (zlink::framework::test::application_owner_result (
+-              target->dispatch_application_owner (
+-                owner,
+-                [&] (const host::ready_record_t &, const host::receive_record_t &record,
+-                     std::vector<zlink::message_t> parts, auto) {
+-                    assert (record.retain_mailbox_reservation);
+-                    assert (record.release_mailbox_reservation);
+-                    record.retain_mailbox_reservation ();
+-                    assert (parts.size () == 1);
+-                    dispatched.push_back (parts.front ().to_string ());
+-                    record.release_mailbox_reservation ();
+-                },
+-                [&] { ++started; }, [&] { ++rejected; }))
+-              .value ());
++    for (std::size_t index = 0; index != 3; ++index) {
++        assert (zlink::framework::test::application_owner_result (
++                  target->dispatch_application_owner (
++                    owner,
++                    [&] (const host::ready_record_t &, const host::receive_record_t &record,
++                         std::vector<zlink::message_t> parts, auto) {
++                        assert (record.retain_mailbox_reservation);
++                        assert (record.release_mailbox_reservation);
++                        record.retain_mailbox_reservation ();
++                        assert (parts.size () == 1);
++                        dispatched.push_back (parts.front ().to_string ());
++                        record.release_mailbox_reservation ();
++                    },
++                    [&] { ++started; }, [&] { ++rejected; }))
++                  .value ());
++        assert (dispatched.size () == index + 1);
++        assert (mailbox.pending_messages (mesh::service_mailbox_domain_t::application)
++                == 2 - index);
++    }
+     mailbox.end_application_drain (owner);
+ 
+     assert ((dispatched == std::vector<std::string>{"first", "second", "third"}));
+@@ -4407,8 +4413,8 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
+             wait_for_input (source->transport (), io_deadline);
+     }
+     assert (ack_barrier == mesh::raw_mesh_pump_result_t::application);
+-    auto marker = source->transport ().mailbox ().try_claim (
+-      mesh::service_mailbox_domain_t::application, 1, 1024);
++    auto marker = zlink::framework::test::claim_mailbox (
++      source->transport ().mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+     assert (marker && marker->records.size () == 1);
+     const auto &record = (*marker->records.front ());
+     assert (record.source_routing_id == target_status.routing_id ().to_bytes ());
+@@ -4561,8 +4567,8 @@ void verify_logical_multicast_continues_after_one_target_failure ()
+       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
+       == 1);
+ 
+-    auto claim = target->transport ().mailbox ().try_claim (
+-      mesh::service_mailbox_domain_t::application, 1, 4096);
++    auto claim = zlink::framework::test::claim_mailbox (
++      target->transport ().mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
+     assert (claim && claim->records.size () == 1);
+     const auto &received = (*claim->records.front ());
+     assert (received.parts ().size () == 3);
+@@ -6708,7 +6714,7 @@ void verify_node_request_requires_remote_admission ()
+ 
+     assert (submitted.result ().value ());
+ 
+-    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
++    zlink::framework::test::mailbox_claim_t claim;
+     while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+         (void) source.observe_routes ();
+@@ -6717,7 +6723,8 @@ void verify_node_request_requires_remote_admission ()
+         const auto target_pump = target.pump_one (now).result ().value ();
+         assert (source_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+         assert (target_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+-        claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
++        claim = zlink::framework::test::claim_mailbox (
++          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
+         if (!claim)
+             std::this_thread::sleep_for (1ms);
+     }
+@@ -6861,16 +6868,21 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
+         assert (queued != mesh::raw_mesh_pump_result_t::protocol_error);
+     }
+     assert (queued == mesh::raw_mesh_pump_result_t::application);
+-    auto queued_claim =
+-      target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 2, 4096);
+-    assert (queued_claim && queued_claim->records.size () == 2);
+-    const auto request_record =
+-      std::find_if (queued_claim->records.begin (), queued_claim->records.end (),
+-                    [] (const auto &record) { return record->reply_token ().has_value (); });
+-    assert (request_record != queued_claim->records.end ());
+-    assert (
+-      target.reply (**request_record, {"OwnerCapacityReply", "application/json", bytes ("reply")}));
+-    assert (target.mailbox ().release (*queued_claim));
++    std::size_t queued_records = 0, queued_requests = 0;
++    for (unsigned i = 0; i != 2; ++i) {
++        auto queued_claim = zlink::framework::test::claim_mailbox (
++          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
++        assert (queued_claim && queued_claim->records.size () == 1);
++        ++queued_records;
++        auto &record = *queued_claim->records.front ();
++        if (record.reply_token ()) {
++            ++queued_requests;
++            assert (
++              target.reply (record, {"OwnerCapacityReply", "application/json", bytes ("reply")}));
++        }
++        assert (target.mailbox ().release (*queued_claim));
++    }
++    assert (queued_records == 2 && queued_requests == 1);
+     while (accepted.wait_for (0ms) != std::future_status::ready
+            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+         assert (
+@@ -6910,8 +6922,9 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
+         assert (independent_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+     }
+     assert (independent_pump == mesh::raw_mesh_pump_result_t::application);
+-    auto claim = target.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
+-                                                    "channel:independent-channel", 1, 1024);
++    auto claim = zlink::framework::test::claim_mailbox_owner (
++      target.mailbox (), mesh::service_mailbox_domain_t::application, "channel:independent-channel",
++      1, 1024);
+     assert (claim && claim->records.size () == 1);
+     assert (target.reply ((*claim->records.front ()),
+                           {"OwnerCapacityReply", "application/json", bytes ("reply")}));
+@@ -9880,7 +9893,7 @@ int main (int argc, char **argv)
+     verify_terminal_journal_preserves_outstanding_entries ();
+     verify_unbounded_actor_handoff_backlog ();
+     verify_public_host_dispatches_one_application_record_per_turn ();
+-    verify_public_host_dispatches_one_owner_claim_as_a_batch ();
++    verify_public_host_dispatches_one_node_record_per_claim ();
+     verify_public_host_batches_with_finite_permits ();
+     verify_public_host_fifo_drains_before_liveness_probe ();
+     verify_logical_multicast_continues_after_one_target_failure ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
+index f64274173b..2c118214fe 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_fifo_cost.cpp
+@@ -38,11 +38,15 @@ void rotate (mailbox_t &mailbox, std::size_t count)
+     require (ready && ready->first.size () == 1, "owner ready count differs");
+     mailbox_t::notify_application_ready (ready);
+     require (mailbox.begin_application_drain ("node"), "owner drain did not begin");
+-    auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "node",
+-                                          count, 1024 * count);
+-    require (claim && claim->claimed_messages == count, "owner claim count differs");
+     for (std::size_t index = 0; index != count; ++index) {
+-        auto original = mailbox.take ({claim, index});
++        std::optional<record_t> original;
++        auto claim =
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "node", count,
++                                   1024 * count, [&] (const auto &claim) {
++                                       original.emplace (std::move (*claim->records.front ()));
++                                       claim->records.front ()->application.reset ();
++                                   });
++        require (claim && claim->claimed_messages == 1, "independent owner claim count differs");
+         require (original && original->transferred (), "original did not settle");
+     }
+     mailbox.end_application_drain ("node");
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+index 65017067bd..07e257fb52 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
+@@ -8,7 +8,9 @@
+ #include "runtime/mesh/mesh_node_host_service.hpp"
+ #include "runtime/messaging/client_call_codec.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
++#include "same_owner_claim_controls.hpp"
+ #include <zlink.h>
++#include <array>
+ #include <cassert>
+ #include <future>
+ #include <iostream>
+@@ -21,23 +23,6 @@ namespace zlink::framework::runtime
+ {
+ struct offload_executor_test_access_t
+ {
+-    static auto ready (offload_executor_t &executor)
+-    {
+-        const auto deadline = std::chrono::steady_clock::now () + 5s;
+-        while (true) {
+-            {
+-                std::lock_guard lock (executor._mutex);
+-                if (executor.idle_worker_count_locked () == executor._live_workers) {
+-                    std::vector<std::condition_variable *> result;
+-                    for (const auto &worker : executor._workers)
+-                        result.push_back (&worker->ready);
+-                    return result;
+-                }
+-            }
+-            assert (std::chrono::steady_clock::now () < deadline);
+-            std::this_thread::yield ();
+-        }
+-    }
+     static bool receiving (offload_executor_t &executor)
+     {
+         std::lock_guard lock (executor._mutex);
+@@ -54,9 +39,6 @@ struct offload_executor_test_access_t
+ namespace
+ {
+ rt::offload_executor_t *application_executor = nullptr;
+-std::vector<std::condition_variable *> application_ready;
+-std::atomic_size_t worker_notifications{0};
+-std::atomic_bool watch_notifications{false};
+ std::atomic_uint receive_active{0}, receive_maximum{0}, receive_rotations{0}, publications{0};
+ struct observed_role_t final : rt::offload_executor_t::role_t
+ {
+@@ -92,6 +74,7 @@ std::atomic_bool handler_blocked{false};
+ constexpr std::size_t queued_records = 128;
+ std::atomic_size_t received_queued{0};
+ std::atomic_size_t handled_queued{0};
++std::array<std::atomic_uint, queued_records> handled_indices{};
+ std::promise<void> queue_drained;
+ std::promise<void> parallel_started;
+ std::shared_future<void> release_handler_turn;
+@@ -109,8 +92,9 @@ struct handler_t
+         }
+         if (probe.value.starts_with ("queued-probe-")) {
+             const auto index = std::stoul (probe.value.substr (13));
+-            assert (handled_queued.fetch_add (1) == index);
+-            if (index + 1 == queued_records)
++            assert (index < queued_records);
++            assert (handled_indices[index].fetch_add (1) == 0);
++            if (handled_queued.fetch_add (1) + 1 == queued_records)
+                 queue_drained.set_value ();
+             return;
+         }
+@@ -149,7 +133,6 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
+                 && std::string_view (data, bytes).find (marker) != std::string_view::npos) {
+                 std::lock_guard lock (observation_mutex);
+                 received_on = std::this_thread::get_id ();
+-                watch_notifications = true;
+             }
+         }
+     }
+@@ -169,31 +152,20 @@ extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
+                                     std::shared_ptr<rt::offload_executor_t::role_t> role)
+ {
+     application_executor = executor;
+-    application_ready = rt::offload_executor_test_access_t::ready (*executor);
+     return real_start_role (executor, std::make_shared<observed_role_t> (std::move (role)));
+ }
+ 
+-extern "C" void
+-real_notify (std::condition_variable *) __asm__ ("__real__ZNSt18condition_variable10notify_oneEv");
+-extern "C" void wrapped_notify (std::condition_variable *) __asm__ (
+-  "__wrap__ZNSt18condition_variable10notify_oneEv");
+-extern "C" void wrapped_notify (std::condition_variable *ready)
+-{
+-    if (watch_notifications.load ()
+-        && std::find (application_ready.begin (), application_ready.end (), ready)
+-             != application_ready.end ())
+-        ++worker_notifications;
+-    real_notify (ready);
+-}
+-
+ int main ()
+ {
++    assert (fw::test::same_owner_claim_controls ());
+     bool correct = true;
+     {
+         fw::completion_owner_t completion;
+         handled = {};
+         received_queued = 0;
+         handled_queued = 0;
++        for (auto &seen : handled_indices)
++            seen = 0;
+         queue_drained = {};
+         auto drained = queue_drained.get_future ();
+         handler_blocked = false;
+@@ -317,13 +289,10 @@ int main ()
+                 assert (std::chrono::steady_clock::now () < receive_deadline);
+                 std::this_thread::yield ();
+             }
+-            assert (handled_queued.load () == 0);
+-            const auto notifications_while_busy = worker_notifications.load ();
+-            std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
+-                      << std::endl;
+-            // The receive notification replaces the application wake on a
+-            // successful handoff. This one-owner batch still needs one wake.
+-            correct = correct && notifications_while_busy == 1;
++            assert (drained.wait_for (5s) == std::future_status::ready);
++            assert (handled_queued.load () == queued_records);
++            for (const auto &seen : handled_indices)
++                assert (seen == 1);
+             auto completed = std::make_shared<std::promise<void>> ();
+             auto terminal = completed->get_future ();
+             const auto operation =
+@@ -401,7 +370,6 @@ int main ()
+             late_peer.stop ();
+             const bool completion_ready = terminal.wait_for (5s) == std::future_status::ready;
+             release_handler.set_value ();
+-            assert (drained.wait_for (5s) == std::future_status::ready);
+             correct = correct && operation && parallel_send
+                       && parallel_send.value () == zlink::submit_result_t::ok && other_owner
+                       && completion_ready && handler_blocked.load ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+index 47aa3a28ce..aaf6f16061 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+@@ -109,31 +109,38 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
+     auto &failure_size = zlink::framework::tests::process_allocation_failure_size;
+     auto &failure_count = zlink::framework::tests::process_allocation_failure_count;
+     failure_count.store (0, std::memory_order_relaxed);
+-    // The batch's record storage is larger than its pointer/byte claim vectors.
+-    std::promise<void> begin_dispatch;
+-    auto begin = begin_dispatch.get_future ().share ();
+-    auto cold = std::async (std::launch::async, [&] {
+-        begin.wait ();
+-        failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
+-                            std::memory_order_relaxed);
+-        try {
+-            auto result = owner->dispatch_application_owner (
+-              "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
+-              [&] { ++started; }, [&] { ++rejected; });
+-            failure_size.store (0, std::memory_order_relaxed);
+-            return result;
+-        }
+-        catch (...) {
+-            failure_size.store (0, std::memory_order_relaxed);
+-            throw;
+-        }
+-    });
+-    begin_dispatch.set_value ();
+-    auto pending = cold.get ();
+-    const auto &result = zlink::framework::test::application_owner_result (pending);
+-    ASSERT_EQ (failure_count.load (std::memory_order_relaxed), 1);
+-    ASSERT_FALSE (result);
+-    EXPECT_THROW (result.value (), std::bad_alloc);
++    // Dispatcher storage has fixed batch capacity, but a Node claim owns one
++    // record. Fail that allocation once for each of the queued originals.
++    for (std::size_t index = 0; index != count; ++index) {
++        std::promise<void> begin_dispatch;
++        auto begin = begin_dispatch.get_future ().share ();
++        auto cold = std::async (std::launch::async, [&] {
++            begin.wait ();
++            failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
++                                std::memory_order_relaxed);
++            try {
++                auto result = owner->dispatch_application_owner (
++                  "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
++                  [&] { ++started; }, [&] { ++rejected; });
++                failure_size.store (0, std::memory_order_relaxed);
++                return result;
++            }
++            catch (...) {
++                failure_size.store (0, std::memory_order_relaxed);
++                throw;
++            }
++        });
++        begin_dispatch.set_value ();
++        auto pending = cold.get ();
++        const auto &result = zlink::framework::test::application_owner_result (pending);
++        ASSERT_EQ (failure_count.load (std::memory_order_relaxed), index + 1);
++        ASSERT_FALSE (result);
++        EXPECT_THROW (result.value (), std::bad_alloc);
++        EXPECT_EQ (started, index + 1);
++        EXPECT_EQ (rejected, index + 1);
++        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
++                   count - index - 1);
++    }
+     EXPECT_EQ (started, count);
+     EXPECT_EQ (rejected, count);
+     EXPECT_EQ (dispatched, 0u);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp
+index 60860b4504..2eedd0d1f6 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+ 
+ #include "metric_test_reader.hpp"
+@@ -398,12 +399,13 @@ void verify_not_required_peer_counts_as_configured ()
+     require_metric (provider, "zlink.mesh_node.peers.ready", "gauge", "{peer}", peer_labels, 0);
+ }
+ 
+-std::shared_ptr<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_node_owner_t &target,
+-                                                              mesh::service_mailbox_domain_t domain)
++zlink::framework::test::mailbox_claim_t claim_request (mesh::raw_mesh_node_owner_t &target,
++                                                       mesh::service_mailbox_domain_t domain)
+ {
+     const auto deadline = std::chrono::steady_clock::now () + 2s;
+     while (std::chrono::steady_clock::now () < deadline) {
+-        auto claim = target.mailbox ().try_claim (domain, 1, 64u * 1024u);
++        auto claim =
++          zlink::framework::test::claim_mailbox (target.mailbox (), domain, 1, 64u * 1024u);
+         if (claim)
+             return claim;
+         const auto pumped =
+@@ -412,7 +414,7 @@ std::shared_ptr<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_nod
+                  "raw request pump reported a protocol error");
+         std::this_thread::yield ();
+     }
+-    return nullptr;
++    return {};
+ }
+ 
+ using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+index 4301f7feda..a92a4b621b 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp
+@@ -1443,7 +1443,7 @@ void verify_local_node_submit_bridge ()
+         assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 1; }));
+         assert (probe->completed == 0);
+     }
+-    {
++    const auto verify_released_capacity = [&] {
+         // The receive pump shares this queue and can reserve the released
+         // permit. Acquire it through the same FIFO to prove that the running
+         // handler returned capacity at entry, independent of pump scheduling.
+@@ -1463,11 +1463,11 @@ void verify_local_node_submit_bridge ()
+         assert (capacity_while_handlers_are_pending.reserved_supply_permits == 1);
+         assert (capacity_while_handlers_are_pending.queued_application_jobs == 0);
+         assert (capacity_while_handlers_are_pending.permits_in_use == 1);
+-    }
++    };
++    verify_released_capacity ();
+ 
+-    // A different node owns a different gate and must enter while the first
+-    // handler is blocked. The same-node successor retains its permit until
+-    // that node's first handler reaches terminal completion (02 §2).
++    // Node pipelines have no gate. Both another Node and this Node's successor
++    // enter before the first handler completes (02 §2).
+     auto independent = encode ("independent-owner", "independent-mesh");
+     assert (
+       service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
+@@ -1482,16 +1482,13 @@ void verify_local_node_submit_bridge ()
+             == zlink::submit_result_t::ok);
+     {
+         std::unique_lock lock (probe->mutex);
+-        assert (!probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
++        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
+         assert (probe->completed == 0);
+-        assert (node->pending_application_callbacks () == 1);
+-        assert (node->active_application_callbacks () == 1);
++        assert (node->pending_application_callbacks () == 0);
++        assert (node->active_application_callbacks () == 2);
+         assert (independent_node->active_application_callbacks () == 1);
+-        const auto queued = application_jobs->snapshot ();
+-        assert (queued.effective_max_queued_application_jobs == 1);
+-        assert (queued.queued_application_jobs == 1);
+-        assert (queued.permits_in_use == 1);
+     }
++    verify_released_capacity ();
+ 
+     {
+         std::lock_guard lock (probe->mutex);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_selected_route.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_selected_route.cpp
+index 2aa1982c1a..15ca4e42aa 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_selected_route.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_selected_route.cpp
+@@ -7,6 +7,7 @@
+ // the new route admits through a new handshake, even when Core keeps the old
+ // pipe as a standby and never reports it disconnected.
+ 
++#include "mailbox_claim_fixture.hpp"
+ #include "runtime/mesh/raw_mesh_node_owner.hpp"
+ 
+ #include <gtest/gtest.h>
+@@ -173,9 +174,10 @@ TEST_P (CppFrameworkRequestAdmission, FirstRequestWaitsForAdmissionAndSendsOnce)
+                              [&] { return target.mailbox ().pending_messages (domain) != 0; }));
+     EXPECT_EQ (1u, target.mailbox ().pending_messages (domain));
+     EXPECT_FALSE (terminal.await_ready ());
+-    auto claim = target.mailbox ().try_claim (domain, 1, 65536);
++    auto claim = zlink::framework::test::claim_mailbox (target.mailbox (), domain, 1, 65536);
+     ASSERT_TRUE (claim);
+-    auto request = target.mailbox ().take ({claim, 0});
++    auto request =
++      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
+     ASSERT_TRUE (request);
+     EXPECT_TRUE (instance ? target.reply_instance_spot_activation (*request, 0, 0, payload)
+                           : target.reply (*request, payload));
+@@ -253,9 +255,10 @@ TEST (CppFrameworkMeshSelectedRoute, ReplacedIntentFailsWaitingRequestBeforeHeal
+     ASSERT_TRUE (source.connect_peer (target.endpoint (), descriptor));
+     std::size_t received = 0;
+     ASSERT_TRUE (pump_until ({&source, &target}, [&] {
+-        if (auto claim =
+-              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 65536)) {
+-            if (auto request = target.mailbox ().take ({claim, 0})) {
++        if (auto claim = zlink::framework::test::claim_mailbox (
++              target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 65536)) {
++            if (auto request = std::optional<mesh::service_mailbox_record_t> (
++                  std::move (claim.originals.front ()))) {
+                 ++received;
+                 (void) target.reply (*request, payload);
+             }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
+index 9f79692ccd..e535a00eeb 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "runtime/mesh/raw_mesh_node_owner.hpp"
+ #include "runtime/mesh/receive_path_probe.hpp"
+ #include "../support/native_call_counter.hpp"
+@@ -264,8 +265,8 @@ class ReceiveRecord : public testing::Test
+     }
+     auto take ()
+     {
+-        auto claim =
+-          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 3, 65536);
++        auto claim = zlink::framework::test::claim_mailbox (
++          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 65536);
+         if (!claim)
+             throw std::runtime_error ("receive fixture has no queued record");
+         return claim;
+@@ -287,11 +288,11 @@ TEST_F (ReceiveRecord, CountsAndOriginalTokenAcrossOneRotation)
+         EXPECT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::no_data);
+     }
+     ASSERT_EQ (observation.records, 3u);
+-    auto claim = take ();
+-    ASSERT_EQ (claim->claimed_messages, 3u);
+     std::array<std::optional<mesh::service_mailbox_record_t>, 3> owned_records;
+     for (std::size_t index = 0; index != 3; ++index) {
+-        owned_records[index] = target.mailbox ().take ({claim, index});
++        auto claim = take ();
++        ASSERT_EQ (claim->claimed_messages, 1u);
++        owned_records[index].emplace (std::move (claim.originals.front ()));
+         auto &record = owned_records[index];
+         ASSERT_TRUE (record);
+         const auto &original = observation.originals[index];
+@@ -308,9 +309,9 @@ TEST_F (ReceiveRecord, CountsAndOriginalTokenAcrossOneRotation)
+                    zlink::framework::runtime::host::record_kind_t::node_request);
+         EXPECT_EQ (record->owner, "node");
+         EXPECT_TRUE (target.reply (*record, payload ()));
++        EXPECT_TRUE (target.mailbox ().release (*claim));
+     }
+     EXPECT_NE (observation.originals[0].token, observation.originals[1].token);
+-    (void) target.mailbox ().release (*claim);
+     EXPECT_EQ (observation.body_copies, 0u);
+     EXPECT_EQ (native[6], 0u);
+     EXPECT_EQ (probe.counts ().classifications, 3u);
+@@ -349,11 +350,9 @@ TEST_F (ReceiveRecord, CallerWrapperDestructionKeepsQueuedNativeStorage)
+     }
+     auto claim = take ();
+     if (fault () == "drop")
+-        target.mailbox ().prepare ({claim, 0}, [] (auto &record) {
+-            record.replace_parts ({});
+-            return true;
+-        });
+-    auto record = target.mailbox ().take ({claim, 0});
++        claim.originals.front ().replace_parts ({});
++    auto record =
++      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
+     ASSERT_TRUE (record);
+     ASSERT_EQ (record->parts ().size (), 2u);
+     EXPECT_EQ (record->parts ().back ().data (), original_body);
+@@ -374,7 +373,8 @@ TEST_F (ReceiveRecord, ImmediateReplyBorrowsMetadataWithoutEntryAllocationsOrCop
+     const auto turn = target.begin_receive_turn ();
+     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
+     auto claim = take ();
+-    auto record = target.mailbox ().take ({claim, 0});
++    auto record =
++      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
+     ASSERT_TRUE (record);
+     ASSERT_TRUE (record->routing_id ());
+     ASSERT_TRUE (record->reply_token ());
+@@ -417,7 +417,8 @@ TEST_F (ReceiveRecord, ReplySourceRetainsOnlyTargetWithoutPartCopies)
+     const auto turn = target.begin_receive_turn ();
+     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
+     auto claim = take ();
+-    auto record = target.mailbox ().take ({claim, 0});
++    auto record =
++      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
+     ASSERT_TRUE (record);
+     ASSERT_EQ (record->parts ().size (), 2u);
+     ASSERT_FALSE (record->source_routing_id.empty ());
+@@ -466,7 +467,8 @@ TEST_F (ReceiveRecord, EmptyLogicalSourceKeepsNativeContextButRejectsReplies)
+     const auto turn = target.begin_receive_turn ();
+     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
+     auto claim = take ();
+-    auto record = target.mailbox ().take ({claim, 0});
++    auto record =
++      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
+     ASSERT_TRUE (record);
+     ASSERT_TRUE (record->routing_id ());
+     ASSERT_TRUE (record->reply_token ());
+@@ -503,7 +505,8 @@ TEST_F (ReceiveRecord, LocalReplyDecisionsUseLogicalIdentityDespiteDifferentNati
+     const auto turn = target.begin_receive_turn ();
+     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
+     auto claim = take ();
+-    auto record = target.mailbox ().take ({claim, 0});
++    auto record =
++      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
+     ASSERT_TRUE (record);
+     ASSERT_TRUE (record->routing_id ());
+     const auto correlation = record->correlation;
+@@ -627,7 +630,8 @@ TEST_F (ReceiveRecord, CloseDuringRotationKeepsLeaseAndRejectsLaterReply)
+     const auto turn = target.begin_receive_turn ();
+     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
+     auto claim = take ();
+-    auto record = target.mailbox ().take ({claim, 0});
++    auto record =
++      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
+     ASSERT_TRUE (record);
+     const auto token = record->reply_token ();
+     const auto generation = record->route_generation ();
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_handoff.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_handoff.cpp
+index 57e966c691..f21a90d169 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_handoff.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_handoff.cpp
+@@ -1,5 +1,6 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #include <gtest/gtest.h>
++#include "same_owner_claim_controls.hpp"
+ #include "runtime/dispatch/offload_executor.hpp"
+ #include "runtime/mesh/service_mailbox.hpp"
+ #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
+@@ -11,6 +12,9 @@
+ #include <atomic>
+ #include <future>
+ #include <latch>
++#include <array>
++#include <algorithm>
++#include <iostream>
+ 
+ #ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
+ #include <pthread.h>
+@@ -372,19 +376,378 @@ mesh::service_mailbox_record_t record (std::string owner, unsigned sequence)
+       {zlink::message_t::from (std::to_string (sequence))});
+ }
+ 
++void same_owner_negative_controls (const std::string &owner = "node")
++{
++    EXPECT_TRUE (zlink::framework::test::same_owner_claim_controls (owner));
++}
++
++using original_t = std::optional<mesh::service_mailbox_record_t>;
++std::shared_ptr<mesh::service_mailbox_claim_t>
++take_independent (mesh::service_mailbox_t &mailbox, const std::string &owner, original_t &original)
++{
++    return mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 64, 65536,
++                                    [&] (const auto &claim) {
++                                        original.emplace (std::move (*claim->records.front ()));
++                                        claim->records.front ()->application.reset ();
++                                    });
++}
++
++TEST (SameOwner, NodePreexistingBacklog)
++{
++    same_owner_negative_controls ("node");
++}
++
++TEST (SameOwner, ChannelPreexistingBacklog)
++{
++    same_owner_negative_controls ("channel:actor:raw-looking-name");
++}
++
++TEST (SameOwner, FifoTakeWithReverseEntry)
++{
++    for (const auto &owner : {"node", "channel:fifo"}) {
++        mesh::service_mailbox_t mailbox;
++        ASSERT_TRUE (mailbox.try_enqueue (record (owner, 0)));
++        ASSERT_TRUE (mailbox.try_enqueue (record (owner, 1)));
++        std::promise<void> taken, enter;
++        auto did_take = taken.get_future ();
++        auto may_enter = enter.get_future ();
++        std::vector<unsigned> entries;
++        std::mutex mutex;
++        std::thread first ([&] {
++            original_t a;
++            auto claim = take_independent (mailbox, owner, a);
++            EXPECT_TRUE (claim && a);
++            if (a)
++                EXPECT_EQ ("0", a->parts ().front ().to_string ());
++            taken.set_value ();
++            may_enter.wait ();
++            std::lock_guard lock (mutex);
++            entries.push_back (0);
++            if (a)
++                EXPECT_TRUE (a->transferred ());
++        });
++        const auto took = did_take.wait_for (5s);
++        EXPECT_EQ (std::future_status::ready, took);
++        original_t b;
++        auto claim = take_independent (mailbox, owner, b);
++        EXPECT_TRUE (claim && b);
++        if (b) {
++            EXPECT_EQ ("1", b->parts ().front ().to_string ());
++            entries.push_back (1);
++            EXPECT_TRUE (b->transferred ());
++        }
++        enter.set_value ();
++        first.join ();
++        EXPECT_EQ ((std::vector<unsigned>{1, 0}), entries);
++    }
++    same_owner_negative_controls ();
++}
++
++TEST (SameOwner, ReverseAndDuplicateSettlement)
++{
++    mesh::service_mailbox_t mailbox;
++    auto a_record = record ("node", 0);
++    a_record.correlation = 123;
++    a_record.source_routing_id = {'a'};
++    ASSERT_TRUE (mailbox.try_enqueue (std::move (a_record)));
++    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 1)));
++    original_t a, b, c;
++    auto a_claim = take_independent (mailbox, "node", a);
++    auto b_claim = take_independent (mailbox, "node", b);
++    ASSERT_TRUE (a_claim && b_claim && a && b);
++    auto reply = a->reply_source ();
++    EXPECT_TRUE (mailbox.release (*b_claim));
++    EXPECT_FALSE (b->transferred ());
++    EXPECT_FALSE (mailbox.release (*b_claim));
++    EXPECT_EQ (1u, a_claim->outstanding ());
++    EXPECT_EQ (123u, reply->correlation);
++    EXPECT_EQ ((std::vector<std::uint8_t>{'a'}), reply->source_routing_id);
++    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 2)));
++    auto c_claim = take_independent (mailbox, "node", c);
++    ASSERT_TRUE (c_claim && c);
++    EXPECT_TRUE (c->transferred ());
++    EXPECT_TRUE (a->transferred ());
++    EXPECT_FALSE (a->transferred ());
++    EXPECT_FALSE (mailbox.release (*a_claim));
++    EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
++    same_owner_negative_controls ();
++}
++
++TEST (SameOwner, EnqueueAgainstLastSettlement)
++{
++    mesh::service_mailbox_t mailbox;
++    std::atomic_uint ready{0};
++    mailbox.bind_application_dispatch ({}, [&] (const auto &) { ++ready; });
++    ASSERT_TRUE (mailbox.try_enqueue (record ("channel:race", 0)));
++    ASSERT_TRUE (mailbox.begin_application_drain ("channel:race"));
++    original_t a, b;
++    auto claim = take_independent (mailbox, "channel:race", a);
++    ASSERT_TRUE (claim && a);
++    std::latch start (2);
++    std::thread settlement ([&] {
++        start.arrive_and_wait ();
++        EXPECT_TRUE (a->transferred ());
++        mailbox.end_application_drain ("channel:race");
++    });
++    start.arrive_and_wait ();
++    EXPECT_TRUE (mailbox.try_enqueue (record ("channel:race", 1)));
++    settlement.join ();
++    EXPECT_EQ (2u, ready.load ());
++    EXPECT_TRUE (mailbox.begin_application_drain ("channel:race"));
++    auto next = take_independent (mailbox, "channel:race", b);
++    ASSERT_TRUE (next && b);
++    EXPECT_EQ ("1", b->parts ().front ().to_string ());
++    EXPECT_TRUE (b->transferred ());
++    mailbox.end_application_drain ("channel:race");
++    same_owner_negative_controls ("channel:race");
++}
++
++TEST (SameOwner, CutAgainstEnqueueAndClaim)
++{
++    mesh::service_mailbox_t mailbox;
++    for (unsigned i = 0; i != 3; ++i)
++        ASSERT_TRUE (mailbox.try_enqueue (record ("node", i)));
++    original_t a, b;
++    auto first = take_independent (mailbox, "node", a);
++    ASSERT_TRUE (first && a);
++    std::latch start (3);
++    std::shared_ptr<mesh::service_mailbox_claim_t> second;
++    std::thread claimant ([&] {
++        start.arrive_and_wait ();
++        second = take_independent (mailbox, "node", b);
++    });
++    std::thread producer ([&] {
++        start.arrive_and_wait ();
++        EXPECT_TRUE (mailbox.try_enqueue (record ("node", 3)));
++    });
++    start.arrive_and_wait ();
++    bool cut = false;
++    auto originals = mailbox.cut_owners ({"node"}, {}, [&] { cut = true; });
++    claimant.join ();
++    producer.join ();
++    ASSERT_TRUE (originals && cut);
++    std::vector<unsigned> seen{0};
++    if (b) {
++        seen.push_back (std::stoul (b->parts ().front ().to_string ()));
++        EXPECT_TRUE (b->transferred ());
++    }
++    for (auto &original : originals->front ()) {
++        seen.push_back (std::stoul (original.parts ().front ().to_string ()));
++        if (original.transferred)
++            EXPECT_TRUE (original.transferred ());
++    }
++    for (;;) {
++        original_t rest;
++        auto next = take_independent (mailbox, "node", rest);
++        if (!next)
++            break;
++        ASSERT_TRUE (rest);
++        seen.push_back (std::stoul (rest->parts ().front ().to_string ()));
++        EXPECT_TRUE (rest->transferred ());
++    }
++    std::sort (seen.begin (), seen.end ());
++    EXPECT_EQ ((std::vector<unsigned>{0, 1, 2, 3}), seen);
++    EXPECT_TRUE (a->transferred ());
++    EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
++    same_owner_negative_controls ();
++}
++
++TEST (SameOwner, RollbackAgainstEnqueue)
++{
++    for (const bool transfer : {false, true}) {
++        SCOPED_TRACE (transfer);
++        mesh::service_mailbox_t mailbox;
++        ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
++        original_t failed;
++        std::latch locked (2);
++        std::thread producer ([&] {
++            locked.arrive_and_wait ();
++            EXPECT_TRUE (mailbox.try_enqueue (record ("node", 1)));
++        });
++        EXPECT_THROW (
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "node", 1, 65536,
++                                   [&] (const auto &claim) {
++                                       if (transfer) {
++                                           failed.emplace (std::move (*claim->records.front ()));
++                                           claim->records.front ()->application.reset ();
++                                       }
++                                       locked.arrive_and_wait ();
++                                       throw std::bad_alloc ();
++                                   }),
++          std::bad_alloc);
++        producer.join ();
++        if (failed)
++            EXPECT_FALSE (failed->transferred ());
++        original_t b;
++        auto next = take_independent (mailbox, "node", b);
++        ASSERT_TRUE (next && b);
++        EXPECT_EQ ("1", b->parts ().front ().to_string ());
++        EXPECT_TRUE (b->transferred ());
++        EXPECT_FALSE (mailbox.try_claim (mesh::service_mailbox_domain_t::application, 1, 65536));
++    }
++    same_owner_negative_controls ();
++}
++
++TEST (SameOwner, ShutdownAgainstEnqueueAndSettlement)
++{
++    mesh::service_mailbox_t mailbox;
++    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
++    original_t a;
++    auto claim = take_independent (mailbox, "node", a);
++    ASSERT_TRUE (claim && a);
++    std::latch start (3);
++    bool accepted = false;
++    std::thread producer ([&] {
++        start.arrive_and_wait ();
++        accepted = mailbox.try_enqueue (record ("node", 1));
++    });
++    std::thread settlement ([&] {
++        start.arrive_and_wait ();
++        EXPECT_TRUE (a->transferred ());
++    });
++    start.arrive_and_wait ();
++    mailbox.close ();
++    producer.join ();
++    settlement.join ();
++    EXPECT_FALSE (mailbox.try_enqueue (record ("node", 2)));
++    original_t b;
++    auto next = take_independent (mailbox, "node", b);
++    EXPECT_EQ (accepted, static_cast<bool> (next));
++    if (b)
++        EXPECT_TRUE (b->transferred ());
++    EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
++    same_owner_negative_controls ();
++}
++
++TEST (SameOwner, ClaimAllocationFailureRepublishesUntakenOriginal)
++{
++#ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
++    for (int allocation = 0; allocation != 3; ++allocation) {
++        SCOPED_TRACE (allocation);
++        mesh::service_mailbox_t mailbox;
++        unsigned publications = 0;
++        mailbox.bind_application_dispatch ({}, [&] (const auto &) { ++publications; });
++        mailbox.begin_application_receive_turn ();
++        ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
++        ASSERT_TRUE (mailbox.try_enqueue (record ("node", 1)));
++        mailbox.end_application_receive_turn ();
++        ASSERT_TRUE (mailbox.begin_application_drain ("node"));
++        bool failed = false;
++        original_t original;
++        allocation_failure_after = allocation;
++        try {
++            (void) take_independent (mailbox, "node", original);
++        }
++        catch (const std::bad_alloc &) {
++            failed = true;
++        }
++        allocation_failure_after = -1;
++        EXPECT_TRUE (failed);
++        EXPECT_FALSE (original);
++        EXPECT_EQ (2u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
++        EXPECT_EQ (2u, publications);
++        mailbox.end_application_drain ("node");
++        ASSERT_TRUE (mailbox.begin_application_drain ("node"));
++        for (unsigned sequence = 0; sequence != 2; ++sequence) {
++            original_t next;
++            auto claim = take_independent (mailbox, "node", next);
++            ASSERT_TRUE (claim && next);
++            EXPECT_EQ (std::to_string (sequence), next->parts ().front ().to_string ());
++            EXPECT_TRUE (next->transferred ());
++        }
++        mailbox.end_application_drain ("node");
++    }
++    same_owner_negative_controls ();
++#else
++    GTEST_SKIP () << "allocation injection requires Linux/GNU linker wrapping";
++#endif
++}
++
++TEST (SameOwner, RejectedReadyPublicationKeepsNextOriginal)
++{
++    mesh::service_mailbox_t mailbox;
++    unsigned publications = 0;
++    mailbox.bind_application_dispatch ({}, [&] (const auto &) {
++        if (++publications == 2)
++            throw std::bad_alloc ();
++    });
++    mailbox.begin_application_receive_turn ();
++    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
++    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 1)));
++    mailbox.end_application_receive_turn ();
++    ASSERT_TRUE (mailbox.begin_application_drain ("node"));
++    original_t a, b;
++    EXPECT_THROW (take_independent (mailbox, "node", a), std::bad_alloc);
++    ASSERT_TRUE (a);
++    EXPECT_FALSE (a->transferred ());
++    EXPECT_EQ (1u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
++    mailbox.end_application_receive_turn ();
++    EXPECT_EQ (3u, publications);
++    ASSERT_TRUE (mailbox.begin_application_drain ("node"));
++    auto next = take_independent (mailbox, "node", b);
++    ASSERT_TRUE (next && b);
++    EXPECT_EQ ("1", b->parts ().front ().to_string ());
++    EXPECT_TRUE (b->transferred ());
++    mailbox.end_application_drain ("node");
++    same_owner_negative_controls ();
++}
++
++TEST (SameOwner, SerialOwnerBudgetsAndRetainedLifetime)
++{
++    for (const auto &owner : {"spot:serial", "actor:serial"}) {
++        mesh::service_mailbox_t mailbox;
++        for (unsigned i = 0; i != 4; ++i)
++            ASSERT_TRUE (mailbox.try_enqueue (record (owner, i)));
++        auto claim =
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 3, 65536);
++        ASSERT_TRUE (claim);
++        EXPECT_EQ (3u, claim->claimed_messages);
++        EXPECT_FALSE (
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1, 65536));
++        std::array<original_t, 3> originals;
++        for (unsigned i = 0; i != 3; ++i) {
++            originals[i] = mailbox.take ({claim, i});
++            ASSERT_TRUE (originals[i]);
++            EXPECT_EQ (std::to_string (i), originals[i]->parts ().front ().to_string ());
++        }
++        EXPECT_TRUE (originals[2]->transferred ());
++        EXPECT_TRUE (originals[0]->transferred ());
++        EXPECT_FALSE (
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1, 65536));
++        EXPECT_TRUE (originals[1]->transferred ());
++        auto last =
++          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 4, 1);
++        ASSERT_TRUE (last);
++        EXPECT_EQ (1u, last->claimed_messages); // First record may exceed the byte budget.
++        EXPECT_TRUE (mailbox.release (*last));
++    }
++    mesh::service_mailbox_t infrastructure;
++    for (unsigned i = 0; i != 2; ++i) {
++        auto original = record ("node", i);
++        original.domain = mesh::service_mailbox_domain_t::infrastructure;
++        ASSERT_TRUE (infrastructure.try_enqueue (std::move (original)));
++    }
++    auto claim =
++      infrastructure.try_claim (mesh::service_mailbox_domain_t::infrastructure, 2, 65536);
++    ASSERT_TRUE (claim);
++    EXPECT_EQ (2u, claim->claimed_messages);
++    EXPECT_TRUE (infrastructure.release (*claim));
++    same_owner_negative_controls ();
++}
++
+ TEST (ReceiveRoleHandoff, T05OtherOwnerFifoAndExclusiveClaim)
+ {
+     mesh::service_mailbox_t mailbox;
+     mailbox.bind_application_dispatch ({}, [] (const auto &) {});
+     for (unsigned i = 0; i != 64; ++i)
+-        ASSERT_TRUE (mailbox.try_enqueue (record ("node", i)));
++        ASSERT_TRUE (mailbox.try_enqueue (record ("spot:serial-control", i)));
+     ASSERT_TRUE (mailbox.try_enqueue (record ("channel", 0)));
+-    ASSERT_TRUE (mailbox.begin_application_drain ("node"));
++    ASSERT_TRUE (mailbox.begin_application_drain ("spot:serial-control"));
+     const auto domain = mesh::service_mailbox_domain_t::application;
+-    auto a = mailbox.try_claim_owner (domain, "node", 64, 65536);
++    auto a = mailbox.try_claim_owner (domain, "spot:serial-control", 64, 65536);
+     ASSERT_TRUE (a);
+-    EXPECT_FALSE (mailbox.try_claim_owner (domain, "node", 64, 65536));
+-    EXPECT_FALSE (mailbox.begin_application_drain ("node"));
++    EXPECT_FALSE (mailbox.try_claim_owner (domain, "spot:serial-control", 64, 65536));
++    EXPECT_FALSE (mailbox.begin_application_drain ("spot:serial-control"));
+     EXPECT_TRUE (mailbox.begin_application_drain ("channel"));
+     auto b = mailbox.try_claim_owner (domain, "channel", 1, 65536);
+     ASSERT_TRUE (b);
+@@ -400,7 +763,7 @@ TEST (ReceiveRoleHandoff, T05OtherOwnerFifoAndExclusiveClaim)
+     ASSERT_TRUE (independent);
+     EXPECT_TRUE (independent->transferred ());
+     mailbox.end_application_drain ("channel");
+-    mailbox.end_application_drain ("node");
++    mailbox.end_application_drain ("spot:serial-control");
+     EXPECT_EQ (0u, mailbox.pending_messages (domain));
+ }
+ 
+@@ -465,20 +828,22 @@ TEST (ReceiveRoleHandoff, T05IndependentGatesDuringSynchronousHandler)
+         EXPECT_EQ (1u, same_gate.load ());
+         EXPECT_EQ (1u, other_gate.load ());
+     }
++    same_owner_negative_controls ();
+ }
+ 
+-// Excluded from the pass set: the independently tracked active-prefix defect
+-// prevents same-owner B from claiming before synchronous A returns (#1639).
+-TEST (ReceiveRoleHandoff, DISABLED_T05KnownFailureSameNodeOwnerProgress)
++TEST (ReceiveRoleHandoff, T05SameNodeOwnerProgress)
+ {
+     mesh::service_mailbox_t mailbox;
+-    const auto domain = mesh::service_mailbox_domain_t::application;
+     ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
+-    auto a = mailbox.try_claim_owner (domain, "node", 1, 65536);
+-    ASSERT_TRUE (a);
++    original_t a, b;
++    auto first = take_independent (mailbox, "node", a);
++    ASSERT_TRUE (first && a);
+     ASSERT_TRUE (mailbox.try_enqueue (record ("node", 1)));
+-    auto b = mailbox.try_claim_owner (domain, "node", 1, 65536);
+-    EXPECT_TRUE (b) << "known failure: service_mailbox.cpp active_messages prefix checks";
++    auto second = take_independent (mailbox, "node", b);
++    ASSERT_TRUE (first && second && a && b);
++    EXPECT_TRUE (b->transferred ());
++    EXPECT_TRUE (a->transferred ());
++    same_owner_negative_controls ();
+ }
+ 
+ TEST (ReceiveRoleHandoff, T06ReceiveAndPublicationReturnBeforePermitEntry)
+@@ -626,6 +991,7 @@ TEST (ReceiveRoleHandoff, T07AwaitKeepsGateAndYieldReacquiresIt)
+         stop = true;
+         executor.drain ();
+     }
++    same_owner_negative_controls ();
+ }
+ 
+ TEST (ReceiveRoleHandoff, T08IndependentCompletionWhileLocalCallbackBlocks)
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+index 52ca81b24a..2d52f8429d 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "../support/telemetry_observation.hpp"
+ 
+ #include "../support/stateful_object_sync.hpp"
+@@ -1330,12 +1331,12 @@ TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_sto
+                                           std::chrono::seconds (1), 2)
+                        .result ()
+                        .value ());
+-        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
++        zlink::framework::test::mailbox_claim_t claim;
+         const auto receive_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+         while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
+             (void) target.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+-            claim =
+-              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 65536);
++            claim = zlink::framework::test::claim_mailbox (
++              target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 65536);
+             std::this_thread::yield ();
+         }
+         ASSERT_TRUE (claim);
+@@ -1371,13 +1372,13 @@ TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_sto
+         EXPECT_FALSE (extra);
+         // Drain an unexpected send so each regression row observes its own packet.
+         if (extra) {
+-            std::shared_ptr<mesh::service_mailbox_claim_t> unexpected;
++            zlink::framework::test::mailbox_claim_t unexpected;
+             const auto drain_deadline =
+               std::chrono::steady_clock::now () + std::chrono::seconds (5);
+             while (!unexpected && std::chrono::steady_clock::now () < drain_deadline) {
+                 (void) target.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+-                unexpected = target.mailbox ().try_claim (
+-                  mesh::service_mailbox_domain_t::application, 1, 65536);
++                unexpected = zlink::framework::test::claim_mailbox (
++                  target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 65536);
+             }
+             ASSERT_TRUE (unexpected);
+             if (request)
+@@ -1647,7 +1648,7 @@ TEST (FrameworkRelocationSealContract, ordinary_claim_transfers_batch_before_cut
+         ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+     }
+     const auto claim = mailbox.try_claim (domain, 64, 65536, [&] (const auto &claimed) noexcept {
+-        for (auto *original : claimed->records)
++        for (auto original : claimed->records)
+             batch.push_back (std::move (*original));
+     });
+     ASSERT_TRUE (claim);
+@@ -1728,14 +1729,19 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
+     for (int index = 0; index < 64; ++index)
+         enqueue ();
+     unsigned started = 0, rejected = 0, calls = 0;
+-    auto failed = host->dispatch_application_owner (
+-      "node",
+-      [&] (const auto &, const auto &, auto, auto) {
+-          ++calls;
+-          std::rethrow_exception (injected);
+-      },
+-      [&] { ++started; }, [&] { ++rejected; });
+-    EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
++    for (unsigned index = 0; index != 64; ++index) {
++        auto failed = host->dispatch_application_owner (
++          "node",
++          [&] (const auto &, const auto &, auto, auto) {
++              ++calls;
++              std::rethrow_exception (injected);
++          },
++          [&] { ++started; }, [&] { ++rejected; });
++        EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
++        EXPECT_EQ (calls, index + 1);
++        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
++                   63 - index);
++    }
+     EXPECT_EQ (calls, 64u);
+     EXPECT_EQ (reported, 64u);
+     EXPECT_EQ (started, 64u);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
+index 96c5172d0a..614c751d71 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "runtime/backend/raw_binding_adapter.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+ #include "../support/stateful_ingress_fixture.hpp"
+@@ -64,9 +65,9 @@ stateful::object_ref_t create_ready (stateful::stateful_object_runtime_t &object
+     return *ready;
+ }
+ 
+-std::pair<bool, bool>
+-submit_client_server_reply_and_release_claim (client_server::raw_client_server_server_t &server,
+-                                              std::shared_ptr<mesh::service_mailbox_claim_t> claim)
++std::pair<bool, bool> submit_client_server_reply_and_release_claim (
++  client_server::raw_client_server_server_t &server,
++  std::shared_ptr<zlink::framework::test::mailbox_claim_t> claim)
+ {
+     const auto &request = *claim->records.front ();
+     const auto delivered =
+@@ -75,7 +76,7 @@ submit_client_server_reply_and_release_claim (client_server::raw_client_server_s
+                                                          bytes ("reply")})
+         .result ()
+         .value ();
+-    const auto released = server.mailbox ().release (*claim);
++    const auto released = server.mailbox ().release (**claim);
+     return std::make_pair (delivered, released);
+ }
+ 
+@@ -224,8 +225,9 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
+     assert (server.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
+       mailbox_owner, mesh::service_mailbox_domain_t::application,
+       zlink::framework::detail::backend::materialize_binding_parts ({{0x02}}))));
+-    auto claim = server.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
+-                                                    mailbox_owner, 1, 1024);
++    auto claim = std::make_shared<zlink::framework::test::mailbox_claim_t> (
++      zlink::framework::test::claim_mailbox_owner (
++        server.mailbox (), mesh::service_mailbox_domain_t::application, mailbox_owner, 1, 1024));
+     assert (claim && claim->records.size () == 1);
+     auto retained_claim = claim;
+ 
+@@ -244,8 +246,8 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
+     assert (claim_released);
+     assert (terminal_count.load (std::memory_order_relaxed) == 1);
+ 
+-    auto released = server.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
+-                                                       mailbox_owner, 1, 1024);
++    auto released = zlink::framework::test::claim_mailbox_owner (
++      server.mailbox (), mesh::service_mailbox_domain_t::application, mailbox_owner, 1, 1024);
+     assert (released && released->records.size () == 1);
+     assert (server.mailbox ().release (*released));
+ 
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
+index d4010493b7..36c374e135 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "../support/runtime_failure_fixture.hpp"
+ #include "allocation_counter.hpp"
+ #include "scope_exit.hpp"
+@@ -101,13 +102,13 @@ struct fixture_t
+         (void) owner.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+     }
+ 
+-    std::shared_ptr<mesh::service_mailbox_claim_t> claim ()
++    zlink::framework::test::mailbox_claim_t claim ()
+     {
+         const auto deadline = std::chrono::steady_clock::now () + 5s;
+         for (;;) {
+             pump (replier);
+-            auto claim =
+-              replier.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
++            auto claim = zlink::framework::test::claim_mailbox (
++              replier.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
+             if (claim)
+                 return claim;
+             require (std::chrono::steady_clock::now () < deadline, "request did not arrive");
+@@ -115,7 +116,7 @@ struct fixture_t
+         }
+     }
+ 
+-    void deliver (std::shared_ptr<mesh::service_mailbox_claim_t> claim)
++    void deliver (zlink::framework::test::mailbox_claim_t claim)
+     {
+         require (replier.reply (*claim->records.front (), reply_payload), "reply rejected");
+         require (replier.mailbox ().release (*claim), "claim release failed");
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
+index e67357b61a..d99d3a1def 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#include "mailbox_claim_fixture.hpp"
+ #include "../support/telemetry_observation.hpp"
+ 
+ #include "../support/runtime_failure_fixture.hpp"
+@@ -507,11 +508,11 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
+           promise.set_value ({terminal, std::move (payload)});
+       })));
+ 
+-    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
++    zlink::framework::test::mailbox_claim_t claim;
+     const auto request_deadline = std::chrono::steady_clock::now () + 2s;
+     while (!claim && std::chrono::steady_clock::now () < request_deadline) {
+-        claim =
+-          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 64u * 1024u);
++        claim = zlink::framework::test::claim_mailbox (
++          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 64u * 1024u);
+         if (!claim) {
+             ASSERT_NE (
+               mesh::raw_mesh_pump_result_t::protocol_error,
+@@ -767,11 +768,11 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
+           "X", payload, 2s, [replied] (auto, auto) { replied->set_value (); })));
+     else
+         ASSERT_TRUE (await_task (source.send_to_channel ("X", payload)));
+-    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
++    zlink::framework::test::mailbox_claim_t claim;
+     ASSERT_TRUE (pump_until (source, target, [&] {
+         if (!claim)
+-            claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
+-                                                 64u * 1024u);
++            claim = zlink::framework::test::claim_mailbox (
++              target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 64u * 1024u);
+         return static_cast<bool> (claim);
+     }));
+     auto &received = *claim->records.front ();

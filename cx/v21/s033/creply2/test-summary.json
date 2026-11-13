@@ -1,0 +1,120 @@
+{
+  "focused_race": {
+    "iterations": 100,
+    "closed_native_handles": 100,
+    "busy_calls": 0,
+    "iterations_with_busy": 0,
+    "close_attempts_min": 1,
+    "close_attempts_max": 1,
+    "submit_result_codes": {
+      "0": 134
+    },
+    "message_ownership_verified": true
+  },
+  "deterministic": {
+    "iterations": 2,
+    "closed_native_handles": 2,
+    "busy_calls": 1,
+    "iterations_with_busy": 1,
+    "close_attempts_min": 1,
+    "close_attempts_max": 2,
+    "submit_result_codes": {
+      "0": 1,
+      "4": 1
+    },
+    "message_ownership_verified": true
+  },
+  "stress": {
+    "iterations": 1000,
+    "closed_native_handles": 1000,
+    "busy_calls": 0,
+    "iterations_with_busy": 0,
+    "close_attempts_min": 1,
+    "close_attempts_max": 1,
+    "submit_result_codes": {
+      "0": 10177,
+      "4": 1
+    },
+    "message_ownership_verified": true
+  },
+  "negative_control": {
+    "iterations": 100,
+    "closed_native_handles": 0,
+    "busy_calls": 200,
+    "iterations_with_busy": 100,
+    "close_attempts_min": 2,
+    "close_attempts_max": 2,
+    "submit_result_codes": {
+      "0": 100
+    },
+    "message_ownership_verified": true
+  },
+  "stress_process": {
+    "command": [
+      "taskset",
+      "-c",
+      "0-15",
+      "stress-ng",
+      "--cpu",
+      "16",
+      "--cpu-load",
+      "90",
+      "--metrics-brief",
+      "--timeout",
+      "300s"
+    ],
+    "stress_exit": 0,
+    "race_exit": 0,
+    "started": 1794155878.5590665,
+    "ended": 1794155884.1995277
+  },
+  "suite_race": {
+    "iterations": 100,
+    "closed_native_handles": 100,
+    "busy_calls": 0,
+    "iterations_with_busy": 0,
+    "close_attempts_min": 1,
+    "close_attempts_max": 1,
+    "submit_result_codes": {
+      "0": 3774
+    },
+    "message_ownership_verified": true
+  },
+  "suite_deterministic": {
+    "iterations": 2,
+    "closed_native_handles": 2,
+    "busy_calls": 1,
+    "iterations_with_busy": 1,
+    "close_attempts_min": 1,
+    "close_attempts_max": 2,
+    "submit_result_codes": {
+      "0": 1,
+      "4": 1
+    },
+    "message_ownership_verified": true
+  },
+  "suite": {
+    "tests": 299,
+    "failures": 2,
+    "skipped": 0,
+    "failed_tests": [
+      {
+        "name": "test_cpp_framework_operation_registry",
+        "output": "test_cpp_framework_operation_registry: /root/worktree/zlink-3867-creply2/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp:983: int main(int, char**): Assertion `!ordered.next_deadline () && ordered.index_size () == 0' failed.\n"
+      },
+      {
+        "name": "test_cpp_framework_label_contract",
+        "output": "CMake Error at /root/worktree/zlink-3867-creply2/framework/languages/cpp/tests/Zlink.Framework.ContractTests/verify_ctest_label_contract.cmake:88 (file):\n  file failed to open for reading (No such file or directory):\n\n    /root/worktree/zlink-3867-creply2/framework/bench/grpc/cpp/build/framework/CMakeCache.txt\n\n\n"
+      }
+    ]
+  },
+  "registry_isolated": {
+    "exit": 0,
+    "time": 1794156780.7568264
+  },
+  "binary_sha256": {
+    "test_cpp_framework_reply_close": "5c277a7f187c88be7d976d15b8762948a25812680808f22aa5eb67cbe035a09d",
+    "creply_prototype_close_control": "4041de100dac7bb6118c343c5cd33afc5826a23039f0233fafe359be1a6af3ad",
+    "libtest_cpp_framework_reply_close_clock.so": "53eb6877249978a6e309ed86633a7e99ce581d63efc7ada0b78e6faea8c44e8d"
+  }
+}

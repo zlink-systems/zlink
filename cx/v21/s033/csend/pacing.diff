@@ -1,0 +1,56 @@
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -571,6 +571,10 @@
+         _payload_size = payload_size;
+         _counters = &counters;
+         _latency = latency;
++        _pace_start = clock_t_::now ();
++        _pace_first = _seq;
++        const char *pace = std::getenv ("CSEND_PACE");
++        _pace_rate = pace ? std::stod (pace) : 0;
+ 
+         std::vector<task_t> slots;
+         slots.reserve (static_cast<size_t> (slot_count));
+@@ -724,6 +728,10 @@
+         co_await _ready.schedule ();
+         while (clock_t_::now () < _deadline) {
+             const uint64_t seq = _seq++;
++            if (_pace_rate > 0 && (seq - _pace_first) % 64 == 0)
++                std::this_thread::sleep_until (
++                  _pace_start + std::chrono::duration_cast<clock_t_::duration> (
++                    std::chrono::duration<double> ((seq - _pace_first) / _pace_rate)));
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+@@ -780,6 +788,9 @@
+     zlink::poller_t _poller;
+     ready_queue_t _ready;
+ 
++    clock_t_::time_point _pace_start{};
++    uint64_t _pace_first = 0;
++    double _pace_rate = 0;
+     clock_t_::time_point _deadline{};
+     phase_t _phase = phase_warmup;
+     size_t _payload_size = 1024;
+@@ -892,6 +903,10 @@
+                     counters_t &counters,
+                     latency_sampler_t *latency)
+     {
++        const char *pace = std::getenv ("CSEND_PACE");
++        const double pace_rate = pace ? std::stod (pace) : 0;
++        const auto pace_start = clock_t_::now ();
++        const uint64_t pace_first = _seq;
+         struct pending_t
+         {
+             pending_t (fw::task_t<T> task_, uint64_t sent_ns_, uint64_t seq_) :
+@@ -926,6 +941,10 @@
+                 uint64_t sent = 0;
+                 if constexpr (!std::is_void_v<T>)
+                     sent = now_ns ();
++                if (pace_rate > 0 && (_seq - pace_first) % 64 == 0)
++                    std::this_thread::sleep_until (
++                      pace_start + std::chrono::duration_cast<clock_t_::duration> (
++                        std::chrono::duration<double> ((_seq - pace_first) / pace_rate)));
+                 auto payload = make_payload (size, phase);
+                 counters.enter ();
+                 counters.submitted.fetch_add (1, std::memory_order_relaxed);

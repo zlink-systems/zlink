@@ -1,0 +1,30 @@
+Model gpt-6.1-sol, effort high: .NET binding socket lifecycle under concurrency — submit vs close ordering needs an atomic reservation design with memory-ordering arguments and a load race test.
+
+# Task: .NET binding finishes submits on a closing/closed socket with TERMINATED, never passing a released handle to Core (#4060, .NET PR)
+
+Earlier briefs in other folders are history, not instructions for this task.
+
+## Situation
+Issue #4060 contract: bindings/doc/spec/README.ko.md:1851 (reply().submit() after close -> SubmitError(TERMINATED)), :2829 (socket close -> RequestError(TERMINATED)), :2845 (socket/context terminated -> SubmitError(TERMINATED)). A submit on a closing or closed socket must not touch the native handle. Core: core/doc/spec/core/socket/README.ko.md :58, :647, :657 — close gives EBUSY while an admitted API runs on the same handle; ESHUTDOWN after close accepted; a released pointer must not be passed (EFAULT/ESTALE).
+Java (#4073) and C++ (#4112) are merged with the same contract. The C++ design is the reference for .NET: bindings/cpp/src/Runtime/Native/socket_handle.hpp on main (one atomic state word: closed and closing bits plus a reservation count; reserve before each native call, release after; close sets closing, publishes the zlink_close result; on BUSY it clears closing so reservations resume; a failed reserve ends with TERMINATED without native access). Read the C++ source on main for the approach and memory orders; .NET need not copy it line by line.
+Known .NET gap (static reading on main 85835f03ad, verify it): bindings/dotnet/src/Zlink/Runtime/Sockets/SocketHandle.cs keeps a plain IntPtr; Dispose calls zlink_close and zeroes it after success, no reservation. SocketKernel.cs:25 exposes Handle and :47 passes the raw IntPtr into CompletionOwner, which keeps the copy; CompletionOwner.cs:407 EnsureOpenForSubmit only reads _closing (volatile) before native calls, so close can finish between the check and the call. There are about 22 `.Handle` reads and 4 SocketOptionAccessor DangerousGetHandle uses.
+PM decision (approved plan): the same atomic reservation in the existing SocketHandle; CompletionOwner's IntPtr copy and its separate _closing submit check are replaced by the reservation (do not add decision sites). .NET SafeHandle ref counting was considered and is not used because its close is deferred to the last release and cannot return the close result (BUSY etc.) to the caller; confirm or refute this from the .NET runtime behaviour in code/tests and say which in the report. No public API or ABI change is expected; if any public type or member changes, list it.
+Worktree: /root/worktree/zlink-4060-dotnet, branch fix/4060-dotnet-binding-submit-close = main 85835f03ad.
+
+## Do
+1. Trace submit (send, request, reply, publish) and close paths with file:line: where the handle is read, where Core is entered, where it is released, and each window. List other handle uses racing close (receive, options, subscribe, monitor) and say which you cover.
+2. Implement the reservation. Concurrent submits must not serialize on a new lock. State memory orders (Interlocked/Volatile) and the ordering argument in the report. One TERMINATED predicate; give decision-site counts before/after. Explain every new field. Message ownership on refusal follows the existing binding rule (keep existing restore paths).
+3. Tests under bindings/dotnet/tests/Zlink.Tests following the existing layout: same-handle reply x close, send x close, request x close, publish x close, 1000 repetitions each under stress-ng load (load inside /root/jobs/fx/cx/measure-shared.sh, stop with SIGTERM). Outcomes only success or TERMINATED. Run the same tests on main first and record failures by kind (EFAULT/ENOENT/INVALID_HANDLE/NOT_FOUND/other). Then the full .NET binding test suite (bindings/dotnet/tests/run_tests.sh).
+4. Cost: a table of Interlocked/volatile operations per path (main vs after) for send, publish, request, reply, async first attempt. Then measure .NET binding throughput with bindings/dotnet/perf single PAIR and DEALER_DEALER inproc 1024 B: same build settings, main vs change, 6 pairs alternating AB/BA, each run inside `flock -o /root/jobs/fx/cx/measure.lock` with source on CPUs 0-7 and target 8-15 when the runner allows pinning. Keep every raw output. Target: at most +1 Interlocked per ordinary submit; if more, merge with existing atomics as C++ did.
+5. Format: match surrounding style; run the repository formatter if one covers bindings/dotnet (check scripts/format/format.sh), else `dotnet format whitespace --verify-no-changes` scoped to touched files if it works; git diff --check.
+
+## Rules
+- Do not start sub-agents and do not call any other model or AI tool. Work alone.
+- Do not read other job folders under /root/jobs/fx/cx/v21/s033; write only in dnclose/ and this worktree.
+- No git operations except git diff and git status; do not commit. No spec edits; no GitHub operations. Do not read Core C headers (core/include). Do not run scripts/dev/internal-docs.sh. Do not modify core/, other bindings or framework/.
+- Native Core: use the existing local Core runtime the test scripts pick (bindings/tools/local_core_runtime.sh); do not build Core unless that fails, and then only Release with `/root/jobs/fx/cx/cpp-build-slot.sh` bare, no -g, under 25 GB.
+- Tests: `/root/jobs/fx/cx/measure-shared.sh <cmd>`. MemAvailable >= 12 GiB. SIGTERM/SIGINT only; no background jobs with &. Keep every raw log and measurement output in dnclose/raw; never delete them. Keep your own output short.
+- 리팩토링 점검: list duplicate checks/handoffs you see with file:line and whether your change removed them.
+- Time box about 5 hours.
+
+## Output: /root/jobs/fx/cx/v21/s033/dnclose/report.md (Korean, plain sentences): (1) paths and windows with file:line, other racing uses; (2) design, reserve/release sites, memory orders, decision sites before/after, SafeHandle finding, public API/ABI change; (3) tests with log paths, main vs after 1000-run outcomes; (4) cost table and throughput pairs with raw paths; (5) duplicate work. Save the full diff (including new files) as dnclose/change.diff.

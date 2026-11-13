@@ -1,0 +1,180 @@
+diff --git a/root/worktree/zlink-v21-s033/sameowner3/framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkSameOwnerPublicApiReproTest.java b/root/worktree/zlink-v21-s033/sameowner3/framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkSameOwnerPublicApiReproTest.java
+new file mode 100644
+index 0000000000..7ab94a96f3
+--- /dev/null
++++ b/root/worktree/zlink-v21-s033/sameowner3/framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkSameOwnerPublicApiReproTest.java
+@@ -0,0 +1,174 @@
++package systems.zlink.framework.runtime.channels;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++
++import org.junit.jupiter.api.Test;
++
++import systems.zlink.contracts.core.RoutingId;
++import systems.zlink.framework.ZLinkMessageContext;
++import systems.zlink.framework.actors.ZLinkActor;
++import systems.zlink.framework.actors.ZLinkActorContext;
++import systems.zlink.framework.actors.ZLinkActorFactory;
++import systems.zlink.framework.channels.ZLinkRequestHandler;
++import systems.zlink.framework.channels.ZLinkClient;
++import systems.zlink.framework.monitoring.ZLinkListenerKind;
++import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
++import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
++import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
++import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
++import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
++import systems.zlink.framework.spots.ZLinkEntrySpot;
++import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
++import systems.zlink.framework.spots.ZLinkEntrySpotContext;
++
++import java.time.Duration;
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.CompletionStage;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicReference;
++
++final class ZLinkSameOwnerPublicApiReproTest {
++    private static final AtomicReference<Probe> CHANNEL_PROBE = new AtomicReference<>();
++    private static final AtomicReference<Gate> ACTOR_GATE = new AtomicReference<>();
++
++    @Test
++    void clientServerSameAndDifferentChannelAndGatedActor() throws Exception {
++        Probe probe = new Probe();
++        CHANNEL_PROBE.set(probe);
++        var serverOptions = new DefaultZLinkFrameworkOptions();
++        serverOptions.addClientServerChannel("owner-a").server().listen(0)
++                .addRequestHandler(ChannelHandler.class, Request.class, Reply.class);
++        serverOptions.addClientServerChannel("owner-b").server().listen(0)
++                .addRequestHandler(ChannelHandler.class, Request.class, Reply.class);
++        ZLinkFrameworkRuntime server = ZLinkFrameworkRuntimeTestAccess.start(
++                serverOptions, new ZLinkJavaBackendAdapterFactory());
++        var clientOptions = new DefaultZLinkFrameworkOptions();
++        clientOptions.addClientServerChannel("owner-a").client().connect(
++                server.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, "owner-a").endpoint());
++        clientOptions.addClientServerChannel("owner-b").client().connect(
++                server.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, "owner-b").endpoint());
++        ZLinkFrameworkRuntime client = ZLinkFrameworkRuntimeTestAccess.start(
++                clientOptions, new ZLinkJavaBackendAdapterFactory());
++        try {
++            var route = client.client();
++            int same = 0;
++            int different = 0;
++            for (int i = 0; i < 20; i++) {
++                same += runChannelCase(route, probe, "owner-a", "owner-a", i * 2);
++                different += runChannelCase(route, probe, "owner-a", "owner-b", i * 2 + 1);
++            }
++            System.out.println("same-owner B before release: " + same + "/20; different-owner B before release: " + different + "/20");
++        } finally {
++            client.close();
++            server.close();
++        }
++        runGatedActorControl();
++    }
++
++    private static int runChannelCase(ZLinkClient client,
++            Probe probe, String firstChannel, String secondChannel, int id) throws Exception {
++        probe.reset();
++        var first = client.requestToChannel(firstChannel, new Request(1))
++                .timeout(Duration.ofSeconds(10)).submit(Reply.class).toCompletableFuture();
++        if (!probe.first.await(5, TimeUnit.SECONDS)) throw new AssertionError("first handler did not start");
++        var second = client.requestToChannel(secondChannel, new Request(2))
++                .timeout(Duration.ofSeconds(10)).submit(Reply.class).toCompletableFuture();
++        boolean started = probe.second.await(250, TimeUnit.MILLISECONDS);
++        probe.release.countDown();
++        assertEquals(1, first.get(10, TimeUnit.SECONDS).value());
++        assertEquals(2, second.get(10, TimeUnit.SECONDS).value());
++        return started ? 1 : 0;
++    }
++
++    private static void runGatedActorControl() throws Exception {
++        Gate gate = new Gate();
++        ACTOR_GATE.set(gate);
++        var options = new DefaultZLinkFrameworkOptions();
++        options.addLocationStore(new ZLinkInMemoryLocationStore());
++        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
++        options.addRouteMesh("gate-mesh").listen("tcp://127.0.0.1:0")
++                .setRoutingId(RoutingId.from("same-owner-gate-node"))
++                .objects().server().addEntrySpot(Entry.class)
++                .addActorFactory("probe-actor", Actor.class, Factory.class, f -> f.disableRelocation());
++        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options,
++                new ZLinkJavaBackendAdapterFactory())) {
++            runtime.actorManager().create("same-owner-actor", "probe-actor").submit()
++                    .toCompletableFuture().get(10, TimeUnit.SECONDS);
++            for (int i = 0; i < 20; i++) {
++                gate.reset();
++                var first = runtime.actorClient().requestToActor("same-owner-actor", new ActorRequest(1))
++                        .timeout(Duration.ofSeconds(10)).submit(Reply.class).toCompletableFuture();
++                if (!gate.first.await(5, TimeUnit.SECONDS)) throw new AssertionError("first actor request did not start");
++                var second = runtime.actorClient().requestToActor("same-owner-actor", new ActorRequest(2))
++                        .timeout(Duration.ofSeconds(10)).submit(Reply.class).toCompletableFuture();
++                assertFalse(gate.second.await(250, TimeUnit.MILLISECONDS));
++                gate.release.countDown();
++                first.get(10, TimeUnit.SECONDS);
++                second.get(10, TimeUnit.SECONDS);
++            }
++        }
++        System.out.println("gated Actor second before release: 0/20");
++    }
++
++    public record Request(int id) {}
++    public record ActorRequest(int id) {}
++    public record Reply(int value) {}
++
++    public static final class ChannelHandler implements ZLinkRequestHandler<Request, Reply> {
++        public CompletionStage<Reply> handle(Request request, ZLinkMessageContext context) {
++            Probe probe = CHANNEL_PROBE.get();
++            if (request.id() == 1) {
++                probe.first.countDown();
++                await(probe.release);
++            } else probe.second.countDown();
++            return CompletableFuture.completedFuture(new Reply(request.id()));
++        }
++    }
++
++    public static final class Actor implements ZLinkActor {
++        private final ZLinkActorContext context;
++        public Actor(ZLinkActorContext context) { this.context = context; }
++        public ZLinkActorContext context() { return context; }
++    }
++
++    public static final class Factory implements ZLinkActorFactory {
++        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
++            return CompletableFuture.completedFuture(new Actor(context));
++        }
++    }
++
++    public static final class Entry implements ZLinkEntrySpot<Actor> {
++        private final ZLinkEntrySpotContext context;
++        public Entry(ZLinkEntrySpotContext context) { this.context = context; }
++        public ZLinkEntrySpotContext context() { return context; }
++        public void configure() { context.handlers().addHandler(ActorHandler.class); }
++        public CompletionStage<Void> onJoinedActor(Actor actor) { return CompletableFuture.completedFuture(null); }
++        public CompletionStage<Void> onLeaveActor(Actor actor) { return CompletableFuture.completedFuture(null); }
++    }
++
++    public static final class ActorHandler implements ZLinkEntrySpotActorRequestHandler<Entry, Actor, ActorRequest, Reply> {
++        public CompletionStage<Reply> handle(Entry spot, Actor actor, ZLinkMessageContext context, ActorRequest request) {
++            Gate gate = ACTOR_GATE.get();
++            if (request.id() == 1) { gate.first.countDown(); await(gate.release); }
++            else gate.second.countDown();
++            return CompletableFuture.completedFuture(new Reply(request.id()));
++        }
++    }
++
++    private static final class Probe {
++        volatile CountDownLatch first, second, release;
++        Probe() { reset(); }
++        void reset() { first = new CountDownLatch(1); second = new CountDownLatch(1); release = new CountDownLatch(1); }
++    }
++    private static final class Gate {
++        volatile CountDownLatch first, second, release;
++        Gate() { reset(); }
++        void reset() { first = new CountDownLatch(1); second = new CountDownLatch(1); release = new CountDownLatch(1); }
++    }
++    private static void await(CountDownLatch latch) {
++        try { if (!latch.await(10, TimeUnit.SECONDS)) throw new AssertionError("latch timeout"); }
++        catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new AssertionError(e); }
++    }
++}

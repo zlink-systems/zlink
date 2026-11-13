@@ -1,0 +1,3324 @@
+[
+  {
+    "round": 1,
+    "variant": "base",
+    "implementation": "zlink-cpp",
+    "messages": 149490,
+    "rate": 29471.169638510128,
+    "io": {
+      "target": {
+        "tid": "2154625",
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 6.501422737306844,
+        "instructions_per_msg": 13235.936912168037,
+        "ipc": 0.6502392515677335,
+        "effective_ghz": 3.8690951808901546,
+        "sendto_per_msg": 0.33281824871228843
+      },
+      "source": {
+        "tid": "2154673",
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 7.76048739715031,
+        "instructions_per_msg": 16287.21583383504,
+        "ipc": 0.650626946663772,
+        "effective_ghz": 3.8542286151743017,
+        "sendto_per_msg": 0.48401230851561977
+      }
+    },
+    "wakes_per_message": {
+      "target": 1.0488260084286574,
+      "source": 1.0478159074185565
+    },
+    "threads": {
+      "2154587": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0034841193390862265,
+        "instructions_per_msg": 2.9292795504716036,
+        "ipc": 0.5193213569066853,
+        "effective_ghz": 3.618449752620099,
+        "sendto_per_msg": 0.0
+      },
+      "2154588": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154589": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154590": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154591": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154592": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154593": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154594": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154595": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154596": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.27589363837045955,
+        "instructions_per_msg": 278.56753629005283,
+        "ipc": 0.6491932558330886,
+        "effective_ghz": 3.345187875616811,
+        "sendto_per_msg": 0.0
+      },
+      "2154598": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154599": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154600": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154601": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154602": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154603": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154604": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154605": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154607": {
+        "role": "target",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.004769770553214262,
+        "instructions_per_msg": 4.050478292862399,
+        "ipc": 0.45665755623129645,
+        "effective_ghz": 3.558944555528563,
+        "sendto_per_msg": 0.0
+      },
+      "2154608": {
+        "role": "target",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154609": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 0.004180132450331126,
+        "instructions_per_msg": 3.9643119941133187,
+        "ipc": 0.48520379173305256,
+        "effective_ghz": 3.6602397352922815,
+        "sendto_per_msg": 0.0
+      },
+      "2154610": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.004951816174994982,
+        "instructions_per_msg": 3.929894976252592,
+        "ipc": 0.49215293031547447,
+        "effective_ghz": 3.3213111388956276,
+        "sendto_per_msg": 0.0
+      },
+      "2154611": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.004626342899190581,
+        "instructions_per_msg": 3.947508194528062,
+        "ipc": 0.487829738689064,
+        "effective_ghz": 3.424224056649156,
+        "sendto_per_msg": 0.0
+      },
+      "2154612": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.003960224764198274,
+        "instructions_per_msg": 3.804916716837247,
+        "ipc": 0.5603458636839191,
+        "effective_ghz": 3.4760809381259987,
+        "sendto_per_msg": 0.0
+      },
+      "2154613": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154614": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154615": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154616": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154617": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154618": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154619": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154620": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0588067830624122,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154621": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.000363181483711285,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154622": {
+        "role": "target",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.004484259816710147,
+        "instructions_per_msg": 3.7677102147300823,
+        "ipc": 0.5177253854433713,
+        "effective_ghz": 3.4343976747146434,
+        "sendto_per_msg": 0.0
+      },
+      "2154623": {
+        "role": "target",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154624": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 6.5475493946083345,
+        "instructions_per_msg": 13245.012569402636,
+        "ipc": 0.6411954724055288,
+        "effective_ghz": 3.868857187402387,
+        "sendto_per_msg": 0.0
+      },
+      "2154625": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 6.501422737306844,
+        "instructions_per_msg": 13235.936912168037,
+        "ipc": 0.6502392515677335,
+        "effective_ghz": 3.8690951808901546,
+        "sendto_per_msg": 0.33281824871228843
+      },
+      "2154626": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.003900301023479832,
+        "instructions_per_msg": 3.7659241420830827,
+        "ipc": 0.5717477585807662,
+        "effective_ghz": 3.3195766129032256,
+        "sendto_per_msg": 0.0
+      },
+      "2154627": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.0038978861462305174,
+        "instructions_per_msg": 3.751046892768747,
+        "ipc": 0.573849576631101,
+        "effective_ghz": 3.3576956363305093,
+        "sendto_per_msg": 0.0
+      },
+      "2154628": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 5.77448083483845,
+        "instructions_per_msg": 18454.697832630944,
+        "ipc": 1.0641413149606351,
+        "effective_ghz": 3.8683451264845816,
+        "sendto_per_msg": 0.0
+      },
+      "2154629": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0009076393069770552,
+        "instructions_per_msg": 0.7303565455883336,
+        "ipc": 0.4341710740843838,
+        "effective_ghz": 3.325810708898944,
+        "sendto_per_msg": 0.0
+      },
+      "2156302": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0011618569804000267,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154632": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.003428135661248244,
+        "instructions_per_msg": 2.877429928423306,
+        "ipc": 0.5389334018254829,
+        "effective_ghz": 3.522984687677226,
+        "sendto_per_msg": 0.0
+      },
+      "2154634": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154635": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154636": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154637": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154638": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154639": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154640": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154641": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154643": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.27406064619707005,
+        "instructions_per_msg": 277.8046290721787,
+        "ipc": 0.6198901453352249,
+        "effective_ghz": 3.5266568526339626,
+        "sendto_per_msg": 0.0
+      },
+      "2154644": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154645": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154646": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154647": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154648": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154649": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154650": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154651": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154652": {
+        "role": "source",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.004611378687537628,
+        "instructions_per_msg": 3.810709746471336,
+        "ipc": 0.46545734133630967,
+        "effective_ghz": 3.455809427425947,
+        "sendto_per_msg": 0.0
+      },
+      "2154653": {
+        "role": "source",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154654": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 0.004785350190648204,
+        "instructions_per_msg": 4.133901933239682,
+        "ipc": 0.495839367741159,
+        "effective_ghz": 3.3297650812606125,
+        "sendto_per_msg": 0.0
+      },
+      "2154655": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.004087169710348519,
+        "instructions_per_msg": 3.9013847080072246,
+        "ipc": 0.5629870599989382,
+        "effective_ghz": 3.3719809058902306,
+        "sendto_per_msg": 0.0
+      },
+      "2154656": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.004875188975851228,
+        "instructions_per_msg": 4.108682855040471,
+        "ipc": 0.4697499615684361,
+        "effective_ghz": 3.2464460033939226,
+        "sendto_per_msg": 0.0
+      },
+      "2154657": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.004370312395477958,
+        "instructions_per_msg": 3.8456084018997925,
+        "ipc": 0.5004731546750032,
+        "effective_ghz": 3.4934295268763935,
+        "sendto_per_msg": 0.0
+      },
+      "2154658": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154659": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154660": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154661": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154662": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154663": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154664": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.00035507391798782526,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154665": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154666": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154667": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0003552077062010837,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154669": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0009537025888019264,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154671": {
+        "role": "source",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.004081216134858519,
+        "instructions_per_msg": 3.7382032242959395,
+        "ipc": 0.5001660286571727,
+        "effective_ghz": 3.6308082478773844,
+        "sendto_per_msg": 0.0
+      },
+      "2154672": {
+        "role": "source",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2154673": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 7.76048739715031,
+        "instructions_per_msg": 16287.21583383504,
+        "ipc": 0.650626946663772,
+        "effective_ghz": 3.8542286151743017,
+        "sendto_per_msg": 0.48401230851561977
+      },
+      "2154674": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.00426062612883805,
+        "instructions_per_msg": 3.8478961803465115,
+        "ipc": 0.4830299396571559,
+        "effective_ghz": 3.7609861950145027,
+        "sendto_per_msg": 0.0
+      },
+      "2154675": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 5.081353227640644,
+        "instructions_per_msg": 10221.818208575825,
+        "ipc": 0.6787943195010288,
+        "effective_ghz": 3.8712041760394933,
+        "sendto_per_msg": 0.0
+      },
+      "2154676": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.003937306843267108,
+        "instructions_per_msg": 3.7186433875175595,
+        "ipc": 0.5415621422830561,
+        "effective_ghz": 3.587001116382919,
+        "sendto_per_msg": 0.0
+      },
+      "2154677": {
+        "role": "source",
+        "comm": "zlink-req-time",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2156319": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2156320": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 8.61922644992976,
+        "instructions_per_msg": 27433.091551274334,
+        "ipc": 0.9720732797662988,
+        "effective_ghz": 3.8640139099532487,
+        "sendto_per_msg": 0.0
+      }
+    },
+    "framework_target_role_us_per_message": {},
+    "raw": "/root/jobs/fx/cx/v21/s033/psched8/measure/1/22k/base-zlink-cpp/runner/run1/zlink-cpp-request-backpressure-1024/capture"
+  },
+  {
+    "round": 1,
+    "variant": "base",
+    "implementation": "zlink-framework-cpp",
+    "messages": 163438,
+    "rate": 32138.34348511834,
+    "io": {
+      "target": {
+        "tid": "2157293",
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 16.889932500397705,
+        "instructions_per_msg": 23992.417075588295,
+        "ipc": 0.5550454167468469,
+        "effective_ghz": 2.868848093218052,
+        "sendto_per_msg": 0.8043417075588296
+      },
+      "source": {
+        "tid": "2157359",
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 17.045375396174695,
+        "instructions_per_msg": 21761.369656995314,
+        "ipc": 0.48698742257642247,
+        "effective_ghz": 2.881377797349485,
+        "sendto_per_msg": 0.7238585885779317
+      }
+    },
+    "wakes_per_message": {
+      "target": 1.410944823113352,
+      "source": 2.9752995019518105
+    },
+    "threads": {
+      "2157268": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0044088278123814535,
+        "instructions_per_msg": 3.1065480488013804,
+        "ipc": 0.49464464903307515,
+        "effective_ghz": 2.7704189695132824,
+        "sendto_per_msg": 0.0
+      },
+      "2157271": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157272": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157273": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157274": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157275": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157276": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157277": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157278": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157279": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.3727387204933981,
+        "instructions_per_msg": 283.05963117512454,
+        "ipc": 0.5441725648581494,
+        "effective_ghz": 2.730410734930869,
+        "sendto_per_msg": 0.0
+      },
+      "2157280": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157281": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157282": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157283": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157284": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157285": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157286": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157288": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157289": {
+        "role": "target",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.005822311824667458,
+        "instructions_per_msg": 3.7726477318616234,
+        "ipc": 0.41514995637045254,
+        "effective_ghz": 2.806173450948372,
+        "sendto_per_msg": 0.0
+      },
+      "2157291": {
+        "role": "target",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157292": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 11.753216767214479,
+        "instructions_per_msg": 15550.265079112569,
+        "ipc": 0.5544407241122831,
+        "effective_ghz": 2.868831235305168,
+        "sendto_per_msg": 1.2237056253747598e-05
+      },
+      "2157293": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 16.889932500397705,
+        "instructions_per_msg": 23992.417075588295,
+        "ipc": 0.5550454167468469,
+        "effective_ghz": 2.868848093218052,
+        "sendto_per_msg": 0.8043417075588296
+      },
+      "2157294": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.005739313990626415,
+        "instructions_per_msg": 3.927415900830896,
+        "ipc": 0.46093907083891056,
+        "effective_ghz": 2.743040142580654,
+        "sendto_per_msg": 0.0
+      },
+      "2157295": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.005173399087115603,
+        "instructions_per_msg": 3.5478897196490413,
+        "ipc": 0.4877622039388737,
+        "effective_ghz": 2.7146280748952485,
+        "sendto_per_msg": 0.0
+      },
+      "2157297": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 15.681827182173055,
+        "instructions_per_msg": 28498.975391279873,
+        "ipc": 0.7423177514425598,
+        "effective_ghz": 2.8687294584717495,
+        "sendto_per_msg": 0.0
+      },
+      "2157298": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.09700014684467505,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157299": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157300": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157301": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157302": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157303": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157304": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157305": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157310": {
+        "role": "target",
+        "comm": "zlink-timer",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157311": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.014880480671569647,
+        "instructions_per_msg": 11.530145988081108,
+        "ipc": 0.3551040421015023,
+        "effective_ghz": 2.676527158339749,
+        "sendto_per_msg": 0.0
+      },
+      "2157312": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0003251385846620737,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157390": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 11.50918226483437,
+        "instructions_per_msg": 47759.544824337056,
+        "ipc": 0.8035707937178737,
+        "effective_ghz": 2.867812425354907,
+        "sendto_per_msg": 0.0
+      },
+      "2158885": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0016675008260012972,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157317": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.004825609711327843,
+        "instructions_per_msg": 3.0489482250149904,
+        "ipc": 0.4452428350351502,
+        "effective_ghz": 2.8595455232528844,
+        "sendto_per_msg": 0.0
+      },
+      "2157318": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.013547797941727138,
+        "instructions_per_msg": 54.34149341034521,
+        "ipc": 1.416918308989119,
+        "effective_ghz": 2.8648223984728314,
+        "sendto_per_msg": 0.0
+      },
+      "2157319": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.014975483057795617,
+        "instructions_per_msg": 54.12849520919248,
+        "ipc": 1.2163772014444754,
+        "effective_ghz": 3.000992101833312,
+        "sendto_per_msg": 0.0
+      },
+      "2157321": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.014242385491746105,
+        "instructions_per_msg": 54.386947955799755,
+        "ipc": 1.3670531494579552,
+        "effective_ghz": 2.831338475773744,
+        "sendto_per_msg": 0.0
+      },
+      "2157322": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.01275499577821559,
+        "instructions_per_msg": 53.99140346798174,
+        "ipc": 1.5096771290659117,
+        "effective_ghz": 2.83529184588722,
+        "sendto_per_msg": 0.0
+      },
+      "2157323": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.013265507409537563,
+        "instructions_per_msg": 54.398046965821905,
+        "ipc": 1.4052962647070166,
+        "effective_ghz": 2.952015809176559,
+        "sendto_per_msg": 0.0
+      },
+      "2157324": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.01641666564691198,
+        "instructions_per_msg": 54.543184571519475,
+        "ipc": 1.1327126119586282,
+        "effective_ghz": 2.9582575944585323,
+        "sendto_per_msg": 0.0
+      },
+      "2157325": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.008507232100245964,
+        "instructions_per_msg": 26.627143014476438,
+        "ipc": 1.1481442689175663,
+        "effective_ghz": 2.7426467938507666,
+        "sendto_per_msg": 0.0
+      },
+      "2157326": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.01469252560604021,
+        "instructions_per_msg": 53.47095534698173,
+        "ipc": 1.260787808979492,
+        "effective_ghz": 2.9200868552858603,
+        "sendto_per_msg": 0.0
+      },
+      "2157327": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.36585048764669176,
+        "instructions_per_msg": 288.4467810423524,
+        "ipc": 0.5158033268700316,
+        "effective_ghz": 2.9035270964262336,
+        "sendto_per_msg": 0.0
+      },
+      "2157328": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 3.8097057783379626,
+        "instructions_per_msg": 4423.3983467737,
+        "ipc": 0.5565531148179126,
+        "effective_ghz": 2.900932620012699,
+        "sendto_per_msg": 0.0
+      },
+      "2157330": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 3.8057704267061516,
+        "instructions_per_msg": 4415.041765072994,
+        "ipc": 0.5560344349598397,
+        "effective_ghz": 2.900878969726129,
+        "sendto_per_msg": 0.0
+      },
+      "2157331": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 3.8230021720774854,
+        "instructions_per_msg": 4443.462475066998,
+        "ipc": 0.5573738832511906,
+        "effective_ghz": 2.9006774381656655,
+        "sendto_per_msg": 0.0
+      },
+      "2157332": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 3.8195123961379847,
+        "instructions_per_msg": 4417.274630134974,
+        "ipc": 0.5531317733309018,
+        "effective_ghz": 2.9009940157999954,
+        "sendto_per_msg": 0.0
+      },
+      "2157333": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 3.804634130373597,
+        "instructions_per_msg": 4396.770806054896,
+        "ipc": 0.5545118694830312,
+        "effective_ghz": 2.900445325254744,
+        "sendto_per_msg": 0.0
+      },
+      "2157334": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 3.8146225235257405,
+        "instructions_per_msg": 4402.311543215164,
+        "ipc": 0.5511972035075664,
+        "effective_ghz": 2.9009933945965103,
+        "sendto_per_msg": 0.0
+      },
+      "2157335": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 3.823392723846352,
+        "instructions_per_msg": 4458.922429300407,
+        "ipc": 0.5571928641850976,
+        "effective_ghz": 2.899945983312808,
+        "sendto_per_msg": 0.0
+      },
+      "2157336": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 3.8062787417858757,
+        "instructions_per_msg": 4401.985474614226,
+        "ipc": 0.5529582215308242,
+        "effective_ghz": 2.9009236473732547,
+        "sendto_per_msg": 0.0
+      },
+      "2157337": {
+        "role": "source",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.0050905970459746205,
+        "instructions_per_msg": 3.8685434231941165,
+        "ipc": 0.4470959520960794,
+        "effective_ghz": 2.912949419301992,
+        "sendto_per_msg": 0.0
+      },
+      "2157338": {
+        "role": "source",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157339": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 0.005323896523452318,
+        "instructions_per_msg": 4.057685483180166,
+        "ipc": 0.4540842107857838,
+        "effective_ghz": 2.90929308632379,
+        "sendto_per_msg": 0.0
+      },
+      "2157340": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.0052304237692580675,
+        "instructions_per_msg": 4.030035854574823,
+        "ipc": 0.46927147826062177,
+        "effective_ghz": 2.918333259557641,
+        "sendto_per_msg": 0.0
+      },
+      "2157341": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.005276753264234756,
+        "instructions_per_msg": 4.073960767997651,
+        "ipc": 0.4601059327157956,
+        "effective_ghz": 2.9275923408440114,
+        "sendto_per_msg": 0.0
+      },
+      "2157342": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.005279463772194961,
+        "instructions_per_msg": 4.049761989255865,
+        "ipc": 0.4355254421976405,
+        "effective_ghz": 2.913441220861982,
+        "sendto_per_msg": 0.0
+      },
+      "2157343": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157344": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0004581003193871682,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157345": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157346": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157347": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157348": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157349": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157350": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157351": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157352": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.00042837039121868843,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157354": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0012454998225626844,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157356": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.3662470355731225,
+        "instructions_per_msg": 287.80539409439666,
+        "ipc": 0.518638238965146,
+        "effective_ghz": 2.9044595933811825,
+        "sendto_per_msg": 0.0
+      },
+      "2157357": {
+        "role": "source",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.0052248681457188655,
+        "instructions_per_msg": 3.8526230130079906,
+        "ipc": 0.4434672800570194,
+        "effective_ghz": 2.918156758111355,
+        "sendto_per_msg": 0.0
+      },
+      "2157358": {
+        "role": "source",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157359": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 17.045375396174695,
+        "instructions_per_msg": 21761.369656995314,
+        "ipc": 0.48698742257642247,
+        "effective_ghz": 2.881377797349485,
+        "sendto_per_msg": 0.7238585885779317
+      },
+      "2157360": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.005390600717091496,
+        "instructions_per_msg": 3.887180459868574,
+        "ipc": 0.4278118474454034,
+        "effective_ghz": 2.8593289598043032,
+        "sendto_per_msg": 0.0
+      },
+      "2157361": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 13.878930585298402,
+        "instructions_per_msg": 16416.324624628298,
+        "ipc": 0.48295115831043584,
+        "effective_ghz": 2.882697173633704,
+        "sendto_per_msg": 0.0
+      },
+      "2157362": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.005216314443397496,
+        "instructions_per_msg": 3.6485395073361153,
+        "ipc": 0.44327505116198856,
+        "effective_ghz": 2.8617856556214254,
+        "sendto_per_msg": 0.0
+      },
+      "2157363": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.004716241021059974,
+        "instructions_per_msg": 3.634723870825634,
+        "ipc": 0.45614517353883155,
+        "effective_ghz": 2.9127076884199887,
+        "sendto_per_msg": 0.0
+      },
+      "2157364": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 18.77449039391084,
+        "instructions_per_msg": 30080.550587990554,
+        "ipc": 0.6219196555290347,
+        "effective_ghz": 2.8838160772682797,
+        "sendto_per_msg": 0.0
+      },
+      "2157366": {
+        "role": "source",
+        "comm": "zlink-timer",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2157367": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.013160011747574004,
+        "instructions_per_msg": 10.368898297825474,
+        "ipc": 0.33462470154387614,
+        "effective_ghz": 2.860073018609604,
+        "sendto_per_msg": 0.0
+      },
+      "2157368": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.004049492774018282,
+        "instructions_per_msg": 3.1691773027080608,
+        "ipc": 0.4093965407539901,
+        "effective_ghz": 3.0091487428052104,
+        "sendto_per_msg": 0.0
+      },
+      "2158903": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2158904": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 19.63399375910131,
+        "instructions_per_msg": 37241.31020937603,
+        "ipc": 0.710364176973974,
+        "effective_ghz": 2.880947477910246,
+        "sendto_per_msg": 0.0
+      },
+      "2158905": {
+        "role": "source",
+        "comm": "zlink-req-time",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      }
+    },
+    "framework_target_role_us_per_message": {
+      "receive": 15.681827182173055,
+      "app-worker": 11.50918226483437
+    },
+    "raw": "/root/jobs/fx/cx/v21/s033/psched8/measure/1/22k/base-zlink-framework-cpp/runner/run1/zlink-framework-cpp-request-backpressure-1024/capture"
+  },
+  {
+    "round": 1,
+    "variant": "chained",
+    "implementation": "zlink-cpp",
+    "messages": 148287,
+    "rate": 29266.779357534466,
+    "io": {
+      "target": {
+        "tid": "2159877",
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 6.664008314956806,
+        "instructions_per_msg": 13192.955855874083,
+        "ipc": 0.6434253141998828,
+        "effective_ghz": 3.859405049892443,
+        "sendto_per_msg": 0.3344932462049944
+      },
+      "source": {
+        "tid": "2159925",
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 8.380696642321983,
+        "instructions_per_msg": 17266.885606964872,
+        "ipc": 0.6353018222036834,
+        "effective_ghz": 3.8471988146835874,
+        "sendto_per_msg": 0.5284482119133842
+      }
+    },
+    "wakes_per_message": {
+      "target": 1.0498357914045062,
+      "source": 1.0487568026866818
+    },
+    "threads": {
+      "2159839": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0036102085820065143,
+        "instructions_per_msg": 2.87307720838644,
+        "ipc": 0.5685718708795755,
+        "effective_ghz": 3.3172924168608344,
+        "sendto_per_msg": 0.0
+      },
+      "2159840": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159841": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159842": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159843": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159844": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159845": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159846": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159847": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159849": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.2787805943879099,
+        "instructions_per_msg": 279.7878573307168,
+        "ipc": 0.6674552359999328,
+        "effective_ghz": 3.228207041413577,
+        "sendto_per_msg": 0.0
+      },
+      "2159850": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159851": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159852": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159853": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159854": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159855": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159856": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159857": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159859": {
+        "role": "target",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.004189665985555039,
+        "instructions_per_msg": 3.9625590914914994,
+        "ipc": 0.5618433482878769,
+        "effective_ghz": 3.3429741637436905,
+        "sendto_per_msg": 0.0
+      },
+      "2159860": {
+        "role": "target",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159861": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 0.00444296533074376,
+        "instructions_per_msg": 3.970415478093157,
+        "ipc": 0.5224310625716527,
+        "effective_ghz": 3.3133798860261656,
+        "sendto_per_msg": 0.0
+      },
+      "2159862": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.004115923850371239,
+        "instructions_per_msg": 3.969033023798445,
+        "ipc": 0.5110692183251897,
+        "effective_ghz": 3.677896214414177,
+        "sendto_per_msg": 0.0
+      },
+      "2159863": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.00458117029813807,
+        "instructions_per_msg": 4.0350873643677465,
+        "ipc": 0.48638672211582545,
+        "effective_ghz": 3.6184835178177552,
+        "sendto_per_msg": 0.0
+      },
+      "2159864": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.004243925630702624,
+        "instructions_per_msg": 4.020231038459204,
+        "ipc": 0.5344021112607146,
+        "effective_ghz": 3.4937263970806636,
+        "sendto_per_msg": 0.0
+      },
+      "2159865": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159866": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159867": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159868": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159869": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159870": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159871": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159872": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.060798573037420686,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159873": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0002936332921968885,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159874": {
+        "role": "target",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.004536662013527821,
+        "instructions_per_msg": 3.820800205007856,
+        "ipc": 0.5123235249703181,
+        "effective_ghz": 3.502528401810882,
+        "sendto_per_msg": 0.0
+      },
+      "2159875": {
+        "role": "target",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159876": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 6.736148212587752,
+        "instructions_per_msg": 13578.186260427414,
+        "ipc": 0.6318141213908149,
+        "effective_ghz": 3.8605901402231444,
+        "sendto_per_msg": 0.0
+      },
+      "2159877": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 6.664008314956806,
+        "instructions_per_msg": 13192.955855874083,
+        "ipc": 0.6434253141998828,
+        "effective_ghz": 3.859405049892443,
+        "sendto_per_msg": 0.3344932462049944
+      },
+      "2159878": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.003988421102321849,
+        "instructions_per_msg": 3.7809315718842513,
+        "ipc": 0.5852994233266661,
+        "effective_ghz": 3.2886662706753174,
+        "sendto_per_msg": 0.0
+      },
+      "2159879": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.004152413900072157,
+        "instructions_per_msg": 3.7540310344129963,
+        "ipc": 0.5370289441924944,
+        "effective_ghz": 3.5599118743644786,
+        "sendto_per_msg": 0.0
+      },
+      "2159880": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 6.201136525791203,
+        "instructions_per_msg": 18397.82286377093,
+        "ipc": 0.9836129628263607,
+        "effective_ghz": 3.866647642296063,
+        "sendto_per_msg": 0.0
+      },
+      "2159881": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0009330487500590072,
+        "instructions_per_msg": 0.7830693182814408,
+        "ipc": 0.4158141067189005,
+        "effective_ghz": 3.5693164933135217,
+        "sendto_per_msg": 0.0
+      },
+      "2161568": {
+        "role": "target",
+        "comm": "bench_cpp_zlink",
+        "us_per_msg": 0.0011534524267130632,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159884": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0035671029827294373,
+        "instructions_per_msg": 2.883765940372386,
+        "ipc": 0.5563477308298281,
+        "effective_ghz": 3.3492488362251374,
+        "sendto_per_msg": 0.0
+      },
+      "2159886": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159887": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159888": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159889": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159891": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159892": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159893": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159894": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159895": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.2769003351608705,
+        "instructions_per_msg": 280.0327877696629,
+        "ipc": 0.6250028239741824,
+        "effective_ghz": 3.485603453041395,
+        "sendto_per_msg": 0.0
+      },
+      "2159896": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159897": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159898": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159899": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159900": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159901": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159902": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159903": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159904": {
+        "role": "source",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.0042845158375312735,
+        "instructions_per_msg": 3.8125864033934196,
+        "ipc": 0.5059421853997641,
+        "effective_ghz": 3.425525864592481,
+        "sendto_per_msg": 0.0
+      },
+      "2159905": {
+        "role": "source",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159906": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 0.003823106543392206,
+        "instructions_per_msg": 3.8568249408242123,
+        "ipc": 0.5919399611250148,
+        "effective_ghz": 3.4154712948119235,
+        "sendto_per_msg": 0.0
+      },
+      "2159907": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.0043771807373539145,
+        "instructions_per_msg": 3.7964892404593793,
+        "ipc": 0.46446565864822564,
+        "effective_ghz": 3.6766950730153476,
+        "sendto_per_msg": 0.0
+      },
+      "2159908": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.0050305421243939125,
+        "instructions_per_msg": 4.076028242529689,
+        "ipc": 0.4746278853364639,
+        "effective_ghz": 3.3645412785271134,
+        "sendto_per_msg": 0.0
+      },
+      "2159909": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.003963145791606816,
+        "instructions_per_msg": 3.845549508722949,
+        "ipc": 0.575821834466811,
+        "effective_ghz": 3.3957618886253247,
+        "sendto_per_msg": 0.0
+      },
+      "2159910": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159911": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159912": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159913": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159914": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159915": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0003851854849042735,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159916": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159917": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159918": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159919": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0005438912379372433,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159921": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0010721708578634674,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159923": {
+        "role": "source",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.0038711620034123017,
+        "instructions_per_msg": 3.771989452885283,
+        "ipc": 0.5450889207017763,
+        "effective_ghz": 3.525263869148862,
+        "sendto_per_msg": 0.0
+      },
+      "2159924": {
+        "role": "source",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2159925": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 8.380696642321983,
+        "instructions_per_msg": 17266.885606964872,
+        "ipc": 0.6353018222036834,
+        "effective_ghz": 3.8471988146835874,
+        "sendto_per_msg": 0.5284482119133842
+      },
+      "2159926": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.004215858436680222,
+        "instructions_per_msg": 3.8331343947884844,
+        "ipc": 0.5352178191251453,
+        "effective_ghz": 3.3859743689656665,
+        "sendto_per_msg": 0.0
+      },
+      "2159927": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 6.0639316123463285,
+        "instructions_per_msg": 12314.421399043746,
+        "ipc": 0.6617786250419695,
+        "effective_ghz": 3.8596251239446038,
+        "sendto_per_msg": 0.0
+      },
+      "2159928": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.0040433146533411565,
+        "instructions_per_msg": 3.712287658392172,
+        "ipc": 0.5435247096180504,
+        "effective_ghz": 3.4030910796444367,
+        "sendto_per_msg": 0.0
+      },
+      "2159929": {
+        "role": "source",
+        "comm": "zlink-req-time",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2161587": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2161588": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 8.935524772906593,
+        "instructions_per_msg": 27521.871546393144,
+        "ipc": 0.9449022631738043,
+        "effective_ghz": 3.8497364192899357,
+        "sendto_per_msg": 0.0
+      }
+    },
+    "framework_target_role_us_per_message": {},
+    "raw": "/root/jobs/fx/cx/v21/s033/psched8/measure/1/22k/chained-zlink-cpp/runner/run1/zlink-cpp-request-backpressure-1024/capture"
+  },
+  {
+    "round": 1,
+    "variant": "chained",
+    "implementation": "zlink-framework-cpp",
+    "messages": 162116,
+    "rate": 31915.559336328297,
+    "io": {
+      "target": {
+        "tid": "2162557",
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 16.24518415208863,
+        "instructions_per_msg": 19694.51820918355,
+        "ipc": 0.4954418251014389,
+        "effective_ghz": 2.7444566146972655,
+        "sendto_per_msg": 0.639264477287868
+      },
+      "source": {
+        "tid": "2162618",
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 17.256417799600285,
+        "instructions_per_msg": 21075.67882257149,
+        "ipc": 0.4887098740637885,
+        "effective_ghz": 2.7419017211336434,
+        "sendto_per_msg": 0.7077401366922451
+      }
+    },
+    "wakes_per_message": {
+      "target": 2.0562621826346565,
+      "source": 2.9014594487897556
+    },
+    "threads": {
+      "2162534": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.005097892866836093,
+        "instructions_per_msg": 3.0411125367021143,
+        "ipc": 0.4358780988082187,
+        "effective_ghz": 2.8077970156974956,
+        "sendto_per_msg": 0.0
+      },
+      "2162535": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162536": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162538": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162539": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162540": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162541": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162542": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162543": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162544": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.407293382516223,
+        "instructions_per_msg": 301.7197500555158,
+        "ipc": 0.49759973859370105,
+        "effective_ghz": 2.758267069697853,
+        "sendto_per_msg": 0.0
+      },
+      "2162546": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162547": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162548": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162549": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162550": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162551": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162552": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162553": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162554": {
+        "role": "target",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.006011312887068519,
+        "instructions_per_msg": 4.203070640775741,
+        "ipc": 0.4322516021066227,
+        "effective_ghz": 2.746828122853253,
+        "sendto_per_msg": 0.0
+      },
+      "2162555": {
+        "role": "target",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162556": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 13.12416520886279,
+        "instructions_per_msg": 14682.076075156061,
+        "ipc": 0.47680205938056974,
+        "effective_ghz": 2.7440623886277447,
+        "sendto_per_msg": 1.2336845221939846e-05
+      },
+      "2162557": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 16.24518415208863,
+        "instructions_per_msg": 19694.51820918355,
+        "ipc": 0.4954418251014389,
+        "effective_ghz": 2.7444566146972655,
+        "sendto_per_msg": 0.639264477287868
+      },
+      "2162558": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.0058330578104567096,
+        "instructions_per_msg": 3.866873103210047,
+        "ipc": 0.43973296801269923,
+        "effective_ghz": 2.7942190220846346,
+        "sendto_per_msg": 0.0
+      },
+      "2162559": {
+        "role": "target",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.00591484492585556,
+        "instructions_per_msg": 3.937075920945496,
+        "ipc": 0.4342412583725384,
+        "effective_ghz": 2.735498720552932,
+        "sendto_per_msg": 0.0
+      },
+      "2162560": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 16.197580066125493,
+        "instructions_per_msg": 26723.51030126576,
+        "ipc": 0.6803531772088768,
+        "effective_ghz": 2.743706820789872,
+        "sendto_per_msg": 0.0
+      },
+      "2162561": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 16.867221594413877,
+        "instructions_per_msg": 25204.444064743762,
+        "ipc": 0.6035394607110086,
+        "effective_ghz": 2.746936516400038,
+        "sendto_per_msg": 0.0
+      },
+      "2162562": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.10123671938611858,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162563": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162564": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162565": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162566": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162567": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162568": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162569": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162571": {
+        "role": "target",
+        "comm": "zlink-timer",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162572": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.01618182042488095,
+        "instructions_per_msg": 12.224166646105258,
+        "ipc": 0.3248620133994948,
+        "effective_ghz": 2.72518471606502,
+        "sendto_per_msg": 0.0
+      },
+      "2162573": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0003921883096054677,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2164348": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.0014692442448617038,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2164385": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 13.203117977250859,
+        "instructions_per_msg": 17892.30298675023,
+        "ipc": 0.5594552841460135,
+        "effective_ghz": 2.744579613950333,
+        "sendto_per_msg": 0.0
+      },
+      "2164386": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 10.341855350489773,
+        "instructions_per_msg": 12797.042956895062,
+        "ipc": 0.5218466157401725,
+        "effective_ghz": 2.743582721572101,
+        "sendto_per_msg": 0.0
+      },
+      "2164387": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 4.948408084334674,
+        "instructions_per_msg": 5233.018468257297,
+        "ipc": 0.49317266084593275,
+        "effective_ghz": 2.7244317187161835,
+        "sendto_per_msg": 0.0
+      },
+      "2164388": {
+        "role": "target",
+        "comm": "bench_cpp_frame",
+        "us_per_msg": 0.6779234375385527,
+        "instructions_per_msg": 656.0971279824323,
+        "ipc": 0.4525194330420511,
+        "effective_ghz": 2.6725183536411494,
+        "sendto_per_msg": 0.0
+      },
+      "2162576": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.005173826149177133,
+        "instructions_per_msg": 3.1899997532630957,
+        "ipc": 0.4447358802915314,
+        "effective_ghz": 2.748379329215855,
+        "sendto_per_msg": 0.0
+      },
+      "2162577": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.08599734757827729,
+        "instructions_per_msg": 323.5951787608873,
+        "ipc": 1.3377919977020356,
+        "effective_ghz": 2.840869114059961,
+        "sendto_per_msg": 0.0
+      },
+      "2162578": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162579": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162580": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162581": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162583": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162584": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162585": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162586": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.3977541143378815,
+        "instructions_per_msg": 298.52236053196475,
+        "ipc": 0.5083518162036257,
+        "effective_ghz": 2.7599272924814144,
+        "sendto_per_msg": 0.0
+      },
+      "2162587": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 4.268564293468875,
+        "instructions_per_msg": 4671.698203755335,
+        "ipc": 0.5419969110720744,
+        "effective_ghz": 2.760008223809282,
+        "sendto_per_msg": 0.0
+      },
+      "2162588": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 4.278097541266747,
+        "instructions_per_msg": 4694.283260134718,
+        "ipc": 0.5435106927954779,
+        "effective_ghz": 2.7597358536449037,
+        "sendto_per_msg": 0.0
+      },
+      "2162589": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 4.269771330405389,
+        "instructions_per_msg": 4681.70371832515,
+        "ipc": 0.544323505352956,
+        "effective_ghz": 2.759542930031561,
+        "sendto_per_msg": 0.0
+      },
+      "2162591": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 4.2739360581312145,
+        "instructions_per_msg": 4663.2172086654,
+        "ipc": 0.5408693659731771,
+        "effective_ghz": 2.7586358712596426,
+        "sendto_per_msg": 0.0
+      },
+      "2162592": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 4.275400133237929,
+        "instructions_per_msg": 4685.104480742185,
+        "ipc": 0.5412242977024662,
+        "effective_ghz": 2.758318279446986,
+        "sendto_per_msg": 0.0
+      },
+      "2162593": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 4.290478823805176,
+        "instructions_per_msg": 4689.4275025290535,
+        "ipc": 0.5434174547597319,
+        "effective_ghz": 2.7593371213684126,
+        "sendto_per_msg": 0.0
+      },
+      "2162594": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 4.282152705470157,
+        "instructions_per_msg": 4703.889665424757,
+        "ipc": 0.5435424462261335,
+        "effective_ghz": 2.7592793378934064,
+        "sendto_per_msg": 0.0
+      },
+      "2162595": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 4.27527416787979,
+        "instructions_per_msg": 4714.611469565003,
+        "ipc": 0.5457172853593513,
+        "effective_ghz": 2.7587740879646785,
+        "sendto_per_msg": 0.0
+      },
+      "2162596": {
+        "role": "source",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.006008530928470971,
+        "instructions_per_msg": 4.222180414024526,
+        "ipc": 0.43773294110123423,
+        "effective_ghz": 2.751835332718138,
+        "sendto_per_msg": 0.0
+      },
+      "2162597": {
+        "role": "source",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162598": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 0.0055903673912507095,
+        "instructions_per_msg": 3.914339115201461,
+        "ipc": 0.4415554504084501,
+        "effective_ghz": 2.755242368355859,
+        "sendto_per_msg": 0.0
+      },
+      "2162599": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.0057796207653778775,
+        "instructions_per_msg": 4.162217177823287,
+        "ipc": 0.4494314518492468,
+        "effective_ghz": 2.7240688018979835,
+        "sendto_per_msg": 0.0
+      },
+      "2162600": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 0.005852081225788942,
+        "instructions_per_msg": 4.22042858200301,
+        "ipc": 0.45496220057864467,
+        "effective_ghz": 2.7263184008147383,
+        "sendto_per_msg": 0.0
+      },
+      "2162601": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.005855677416171137,
+        "instructions_per_msg": 4.043098768782847,
+        "ipc": 0.44432174688782056,
+        "effective_ghz": 2.760524260276693,
+        "sendto_per_msg": 0.0
+      },
+      "2162602": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162603": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162604": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162605": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.00038495274988279994,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162606": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162607": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162608": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162609": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162610": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162611": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0004432381751338547,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162613": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.001267839078190925,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162615": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.3985582977620963,
+        "instructions_per_msg": 295.5752300821634,
+        "ipc": 0.5044852067706663,
+        "effective_ghz": 2.7600257605318577,
+        "sendto_per_msg": 0.0
+      },
+      "2162616": {
+        "role": "source",
+        "comm": "ZLINKbg/Reaper",
+        "us_per_msg": 0.005842421475980162,
+        "instructions_per_msg": 4.067908164524168,
+        "ipc": 0.44308315187120434,
+        "effective_ghz": 2.764272947955291,
+        "sendto_per_msg": 0.0
+      },
+      "2162617": {
+        "role": "source",
+        "comm": "ZLINKbg/core-ct",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162618": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/0",
+        "us_per_msg": 17.256417799600285,
+        "instructions_per_msg": 21075.67882257149,
+        "ipc": 0.4887098740637885,
+        "effective_ghz": 2.7419017211336434,
+        "sendto_per_msg": 0.7077401366922451
+      },
+      "2162619": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/1",
+        "us_per_msg": 0.005633219423129118,
+        "instructions_per_msg": 3.978330331367663,
+        "ipc": 0.4342291476747114,
+        "effective_ghz": 2.776859957700854,
+        "sendto_per_msg": 0.0
+      },
+      "2162620": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/2",
+        "us_per_msg": 13.797627421105874,
+        "instructions_per_msg": 15942.583724000098,
+        "ipc": 0.48213453224502417,
+        "effective_ghz": 2.7477976958410237,
+        "sendto_per_msg": 0.0
+      },
+      "2162621": {
+        "role": "source",
+        "comm": "ZLINKbg/IO/3",
+        "us_per_msg": 0.0058227318710059464,
+        "instructions_per_msg": 3.9421031853734365,
+        "ipc": 0.42835512270976955,
+        "effective_ghz": 2.7730476126699255,
+        "sendto_per_msg": 0.0
+      },
+      "2162622": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 18.5383676071455,
+        "instructions_per_msg": 27803.61318438649,
+        "ipc": 0.6049602863942988,
+        "effective_ghz": 2.7468054592654867,
+        "sendto_per_msg": 0.0
+      },
+      "2162623": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.006179229687384342,
+        "instructions_per_msg": 3.8700560092773078,
+        "ipc": 0.3998903707952898,
+        "effective_ghz": 2.7261756359582447,
+        "sendto_per_msg": 0.0
+      },
+      "2162625": {
+        "role": "source",
+        "comm": "zlink-timer",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2162626": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.014508820844333687,
+        "instructions_per_msg": 10.619352809099658,
+        "ipc": 0.31271924916877863,
+        "effective_ghz": 2.7683827524996376,
+        "sendto_per_msg": 0.0
+      },
+      "2162627": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0047909644945594515,
+        "instructions_per_msg": 3.033216955760073,
+        "ipc": 0.35734228433729337,
+        "effective_ghz": 2.9292804366212915,
+        "sendto_per_msg": 0.0
+      },
+      "2164382": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      },
+      "2164383": {
+        "role": "source",
+        "comm": "bench_cpp_clien",
+        "us_per_msg": 20.25789398948901,
+        "instructions_per_msg": 37162.62356584174,
+        "ipc": 0.719466651475822,
+        "effective_ghz": 2.742134284789783,
+        "sendto_per_msg": 0.0
+      },
+      "2164384": {
+        "role": "source",
+        "comm": "zlink-req-time",
+        "us_per_msg": 0.0,
+        "instructions_per_msg": 0.0,
+        "ipc": null,
+        "effective_ghz": null,
+        "sendto_per_msg": 0.0
+      }
+    },
+    "framework_target_role_us_per_message": {
+      "receive": 16.197580066125493,
+      "app-worker": 46.03852644402774
+    },
+    "raw": "/root/jobs/fx/cx/v21/s033/psched8/measure/1/22k/chained-zlink-framework-cpp/runner/run1/zlink-framework-cpp-request-backpressure-1024/capture"
+  }
+]

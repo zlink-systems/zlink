@@ -1,0 +1,374 @@
+[
+  {
+    "job": {
+      "lang": "dotnet",
+      "fw": false,
+      "pattern": "request-backpressure",
+      "mode": "alloc",
+      "rate": 7000,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 126428,
+    "roles": {
+      "source": {
+        "ticks": 3811,
+        "tick_bytes": 406291096,
+        "valid_ticks": 3811,
+        "estimated_objects": 590159.14962895,
+        "tick_bytes_per_msg": 3213.6164140854876,
+        "count_per_msg_estimate": 4.6679465753547476
+      },
+      "target": {
+        "ticks": 1732,
+        "tick_bytes": 184553672,
+        "valid_ticks": 1732,
+        "estimated_objects": 1481672.4033684807,
+        "tick_bytes_per_msg": 1459.7531559464676,
+        "count_per_msg_estimate": 11.719495707979883
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "dotnet",
+      "fw": false,
+      "pattern": "request-serial",
+      "mode": "alloc",
+      "rate": 2100,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 37935,
+    "roles": {
+      "source": {
+        "ticks": 1207,
+        "tick_bytes": 128683040,
+        "valid_ticks": 1207,
+        "estimated_objects": 927119.2763620747,
+        "tick_bytes_per_msg": 3392.1982338210096,
+        "count_per_msg_estimate": 24.43968041022999
+      },
+      "target": {
+        "ticks": 525,
+        "tick_bytes": 55813664,
+        "valid_ticks": 525,
+        "estimated_objects": 501131.2817177583,
+        "tick_bytes_per_msg": 1471.297324370634,
+        "count_per_msg_estimate": 13.210261808824523
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "dotnet",
+      "fw": false,
+      "pattern": "send-saturation",
+      "mode": "alloc",
+      "rate": 29000,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 524099,
+    "roles": {
+      "source": {
+        "ticks": 10778,
+        "tick_bytes": 1148874760,
+        "valid_ticks": 10778,
+        "estimated_objects": 9866730.597229991,
+        "tick_bytes_per_msg": 2192.0949286298965,
+        "count_per_msg_estimate": 18.826081708284104
+      },
+      "target": {
+        "ticks": 5882,
+        "tick_bytes": 642752400,
+        "valid_ticks": 5882,
+        "estimated_objects": 2865962.282123304,
+        "tick_bytes_per_msg": 1226.3950131559113,
+        "count_per_msg_estimate": 5.468360523724152
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "dotnet",
+      "fw": true,
+      "pattern": "request-backpressure",
+      "mode": "alloc",
+      "rate": 7000,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 126553,
+    "roles": {
+      "source": {
+        "ticks": 8223,
+        "tick_bytes": 876107920,
+        "valid_ticks": 8223,
+        "estimated_objects": 10187936.764709447,
+        "tick_bytes_per_msg": 6922.853824089512,
+        "count_per_msg_estimate": 80.50332085931939
+      },
+      "target": {
+        "ticks": 6008,
+        "tick_bytes": 640512888,
+        "valid_ticks": 6008,
+        "estimated_objects": 9132779.969261019,
+        "tick_bytes_per_msg": 5061.222475958689,
+        "count_per_msg_estimate": 72.16565367285658
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "dotnet",
+      "fw": true,
+      "pattern": "request-serial",
+      "mode": "alloc",
+      "rate": 2100,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 37941,
+    "roles": {
+      "source": {
+        "ticks": 2559,
+        "tick_bytes": 272714824,
+        "valid_ticks": 2559,
+        "estimated_objects": 2789687.920157399,
+        "tick_bytes_per_msg": 7187.866002477531,
+        "count_per_msg_estimate": 73.52700034678577
+      },
+      "target": {
+        "ticks": 2098,
+        "tick_bytes": 223590608,
+        "valid_ticks": 2098,
+        "estimated_objects": 3782025.9778535054,
+        "tick_bytes_per_msg": 5893.113202076909,
+        "count_per_msg_estimate": 99.68176847878298
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "dotnet",
+      "fw": true,
+      "pattern": "send-saturation",
+      "mode": "alloc",
+      "rate": 29000,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 524506,
+    "roles": {
+      "source": {
+        "ticks": 10101,
+        "tick_bytes": 1075451288,
+        "valid_ticks": 10101,
+        "estimated_objects": 1338551.853465987,
+        "tick_bytes_per_msg": 2050.4079800803042,
+        "count_per_msg_estimate": 2.5520239110057594
+      },
+      "target": {
+        "ticks": 18656,
+        "tick_bytes": 2005067208,
+        "valid_ticks": 18656,
+        "estimated_objects": 24933594.65584953,
+        "tick_bytes_per_msg": 3822.7726813420627,
+        "count_per_msg_estimate": 47.53729157693054
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "java",
+      "fw": false,
+      "pattern": "request-backpressure",
+      "mode": "alloc",
+      "rate": 7000,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 126426,
+    "roles": {
+      "source": {
+        "tlab_bytes": 762833824,
+        "refills": 1475,
+        "outside_bytes": 5216,
+        "outside_objects": 5,
+        "tlab_capacity_bytes_per_msg": 6033.8778415832185,
+        "tlab_events_per_msg": 0.011706452786610349
+      },
+      "target": {
+        "tlab_bytes": 581530648,
+        "refills": 1122,
+        "outside_bytes": 1069312,
+        "outside_objects": 6,
+        "tlab_capacity_bytes_per_msg": 4608.229003527756,
+        "tlab_events_per_msg": 0.008922215367092211
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "java",
+      "fw": false,
+      "pattern": "request-serial",
+      "mode": "alloc",
+      "rate": 2100,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 37924,
+    "roles": {
+      "source": {
+        "tlab_bytes": 229229608,
+        "refills": 518,
+        "outside_bytes": 56,
+        "outside_objects": 1,
+        "tlab_capacity_bytes_per_msg": 6044.448475899167,
+        "tlab_events_per_msg": 0.013685265267376859
+      },
+      "target": {
+        "tlab_bytes": 182786720,
+        "refills": 355,
+        "outside_bytes": 189792,
+        "outside_objects": 2,
+        "tlab_capacity_bytes_per_msg": 4824.821010441937,
+        "tlab_events_per_msg": 0.009413563970045355
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "java",
+      "fw": false,
+      "pattern": "send-saturation",
+      "mode": "alloc",
+      "rate": 29000,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 524153,
+    "roles": {
+      "source": {
+        "tlab_bytes": 2059240000,
+        "refills": 6578,
+        "outside_bytes": 8488,
+        "outside_objects": 13,
+        "tlab_capacity_bytes_per_msg": 3928.7164015087196,
+        "tlab_events_per_msg": 0.012574572691561434
+      },
+      "target": {
+        "tlab_bytes": 1005889552,
+        "refills": 1940,
+        "outside_bytes": 5945584,
+        "outside_objects": 13,
+        "tlab_capacity_bytes_per_msg": 1930.4194309676755,
+        "tlab_events_per_msg": 0.0037260112982278075
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "java",
+      "fw": true,
+      "pattern": "request-backpressure",
+      "mode": "alloc",
+      "rate": 7000,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 126462,
+    "roles": {
+      "source": {
+        "tlab_bytes": 1095762976,
+        "refills": 3745,
+        "outside_bytes": 3728,
+        "outside_objects": 10,
+        "tlab_capacity_bytes_per_msg": 8664.790245291075,
+        "tlab_events_per_msg": 0.02969271401685882
+      },
+      "target": {
+        "tlab_bytes": 1011687464,
+        "refills": 2046,
+        "outside_bytes": 1352944,
+        "outside_objects": 10,
+        "tlab_capacity_bytes_per_msg": 8010.630924704655,
+        "tlab_events_per_msg": 0.01625784820736664
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "java",
+      "fw": true,
+      "pattern": "request-serial",
+      "mode": "alloc",
+      "rate": 2100,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 37921,
+    "roles": {
+      "source": {
+        "tlab_bytes": 322106016,
+        "refills": 790,
+        "outside_bytes": 1064,
+        "outside_objects": 2,
+        "tlab_capacity_bytes_per_msg": 8494.16101896047,
+        "tlab_events_per_msg": 0.020885525170749715
+      },
+      "target": {
+        "tlab_bytes": 342365736,
+        "refills": 782,
+        "outside_bytes": 2104,
+        "outside_objects": 3,
+        "tlab_capacity_bytes_per_msg": 9028.449671685874,
+        "tlab_events_per_msg": 0.020700930882624403
+      }
+    }
+  },
+  {
+    "job": {
+      "lang": "java",
+      "fw": true,
+      "pattern": "send-saturation",
+      "mode": "alloc",
+      "rate": 29000,
+      "warmup": 10,
+      "duration": 20,
+      "run": 1
+    },
+    "messages": 525259,
+    "roles": {
+      "source": {
+        "tlab_bytes": 1401948224,
+        "refills": 5022,
+        "outside_bytes": 2368,
+        "outside_objects": 9,
+        "tlab_capacity_bytes_per_msg": 2669.0653410983914,
+        "tlab_events_per_msg": 0.009578131931104465
+      },
+      "target": {
+        "tlab_bytes": 2633733352,
+        "refills": 5315,
+        "outside_bytes": 5957456,
+        "outside_objects": 25,
+        "tlab_capacity_bytes_per_msg": 5025.503243161945,
+        "tlab_events_per_msg": 0.010166413140945706
+      }
+    }
+  }
+]

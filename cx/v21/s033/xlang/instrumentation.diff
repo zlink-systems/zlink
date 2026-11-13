@@ -1,0 +1,368 @@
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..b76f18645c 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -39,6 +39,23 @@ using clock_t_ = std::chrono::steady_clock;
+ 
+ namespace
+ {
++// Measurement-only open-loop pacing; disabled unless XLANG_RATE is set.
++std::atomic<uint64_t> xlang_next {0};
++void xlang_pace ()
++{
++    static const uint64_t rate = std::getenv ("XLANG_RATE") ? std::strtoull (std::getenv ("XLANG_RATE"), nullptr, 10) : 0;
++    if (!rate) return;
++    auto &next = xlang_next;
++    const auto now = std::chrono::steady_clock::now ();
++    uint64_t zero = 0;
++    next.compare_exchange_strong (zero, static_cast<uint64_t> (now.time_since_epoch ().count ()));
++    const auto step = std::chrono::duration_cast<std::chrono::steady_clock::duration> (std::chrono::nanoseconds (1000000000 / rate)).count ();
++    auto ticket = next.fetch_add (step);
++    const auto quantum = std::chrono::duration_cast<std::chrono::steady_clock::duration> (std::chrono::milliseconds (1)).count ();
++    ticket -= ticket % quantum;
++    std::this_thread::sleep_until (std::chrono::steady_clock::time_point (std::chrono::steady_clock::duration (ticket)));
++}
++
+ 
+ 
+ struct options_t
+@@ -629,6 +646,7 @@ class zlink_raw_driver_t : public driver_t
+     {
+         co_await _ready.schedule ();
+         while (clock_t_::now () < _deadline) {
++            xlang_pace ();
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -675,6 +693,7 @@ class zlink_raw_driver_t : public driver_t
+         co_await _ready.schedule ();
+         size_t submitted_since_progress = 0;
+         while (clock_t_::now () < _deadline) {
++            xlang_pace ();
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -723,6 +742,7 @@ class zlink_raw_driver_t : public driver_t
+     {
+         co_await _ready.schedule ();
+         while (clock_t_::now () < _deadline) {
++            xlang_pace ();
+             const uint64_t seq = _seq++;
+             auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+@@ -923,6 +943,7 @@ class framework_driver_t final : public driver_t
+                 completion_signal->take_completed (completed_slots);
+             // Admission sequences submits; the pattern window bounds replies.
+             if (can_submit (clock_t_::now ())) {
++                xlang_pace ();
+                 uint64_t sent = 0;
+                 if constexpr (!std::is_void_v<T>)
+                     sent = now_ns ();
+@@ -1198,6 +1219,7 @@ class source_t
+ 
+     void run_phase (const std::string &phase, int64_t duration, const json &trigger)
+     {
++        xlang_next = 0;
+         const bool active = phase == "active";
+         if (!active) {
+             _warmup_throughput.clear ();
+diff --git a/framework/bench/grpc/cpp/run_local.sh b/framework/bench/grpc/cpp/run_local.sh
+index edb5410cf2..ecda846f29 100755
+--- a/framework/bench/grpc/cpp/run_local.sh
++++ b/framework/bench/grpc/cpp/run_local.sh
+@@ -61,7 +61,7 @@ for run in $(seq 1 "${RUNS}"); do
+         mkdir -p "${cell_dir}"
+         log "cell=${cell_id} run=${run}: start target B then source A"
+ 
+-        setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -76,7 +76,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
++        setsid taskset -c 0-7 "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/dotnet/Client/BenchMeasurement.cs b/framework/bench/grpc/dotnet/Client/BenchMeasurement.cs
+index d2b36cae67..9c4ab6cf5a 100644
+--- a/framework/bench/grpc/dotnet/Client/BenchMeasurement.cs
++++ b/framework/bench/grpc/dotnet/Client/BenchMeasurement.cs
+@@ -8,6 +8,27 @@ namespace WithGrpcBench.Client;
+ 
+ internal static class BenchMeasurement
+ {
++    private static readonly long XlangRate = long.Parse(Environment.GetEnvironmentVariable("XLANG_RATE") ?? "0");
++    private static long XlangNext;
++    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "nanosleep")]
++    private static extern int XlangSleep(ref XlangTimespec requested, nint remaining);
++    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
++    private struct XlangTimespec { public long Seconds; public long Nanoseconds; }
++    private static void XlangPace()
++    {
++        if (XlangRate == 0) return;
++        Interlocked.CompareExchange(ref XlangNext, Stopwatch.GetTimestamp(), 0);
++        long step = Stopwatch.Frequency / XlangRate;
++        long ticket = Interlocked.Add(ref XlangNext, step) - step;
++        ticket -= ticket % (Stopwatch.Frequency / 1000);
++        long remaining;
++        while ((remaining = ticket - Stopwatch.GetTimestamp()) > 0) {
++            long ns = remaining * 1_000_000_000L / Stopwatch.Frequency;
++            var delay = new XlangTimespec { Seconds = ns / 1_000_000_000, Nanoseconds = ns % 1_000_000_000 };
++            XlangSleep(ref delay, 0);
++        }
++    }
++
+     internal static void ConfigureThreadPool(int sendConcurrency)
+     {
+         ThreadPool.GetMinThreads(out var workers, out var completionPorts);
+@@ -41,6 +62,7 @@ internal static class BenchMeasurement
+             reset.EnsureSuccessStatusCode();
+         }
+ 
++        Interlocked.Exchange(ref XlangNext, 0);
+         var resources = ResourceSample.Start();
+         var deadline =
+             Stopwatch.GetTimestamp()
+@@ -220,6 +242,7 @@ internal static class BenchMeasurement
+                     {
+                         while (Stopwatch.GetTimestamp() < deadline)
+                         {
++                            XlangPace();
+                             var sequence = next.Next();
+                             await ExecuteRequestAsync(
+                                 transport,
+@@ -253,6 +276,7 @@ internal static class BenchMeasurement
+         var issuedSincePump = 0;
+         while (Stopwatch.GetTimestamp() < deadline)
+         {
++            XlangPace();
+             var sequence = next.Next();
+             if (transport is FrameworkBenchTransport framework)
+             {
+@@ -342,6 +366,7 @@ internal static class BenchMeasurement
+ 
+         while (Stopwatch.GetTimestamp() < deadline)
+         {
++            XlangPace();
+             var submitted = false;
+             if (pendingAdmission is null || pendingAdmission.IsCompleted)
+             {
+@@ -523,6 +548,7 @@ internal static class BenchMeasurement
+                     {
+                         while (Stopwatch.GetTimestamp() < deadline)
+                         {
++                            XlangPace();
+                             var sequence = next.Next();
+                             var payload = BenchMetricHeaders.CreatePayload(
+                                 trigger.payloadBytes,
+diff --git a/framework/bench/grpc/dotnet/run_local.sh b/framework/bench/grpc/dotnet/run_local.sh
+index 4874eb88a9..a1bf2e8534 100755
+--- a/framework/bench/grpc/dotnet/run_local.sh
++++ b/framework/bench/grpc/dotnet/run_local.sh
+@@ -62,7 +62,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -80,7 +80,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
+index 2ebc4da40e..05b88dfb3b 100644
+--- a/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
++++ b/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchDrivers.java
+@@ -30,6 +30,19 @@ import java.util.concurrent.locks.LockSupport;
+ 
+ /** Pattern-to-logical-stream implementation shared by the Java and Kotlin sources. */
+ public final class BenchDrivers {
++    // Measurement-only pacing, shared by all submit workers.
++    private static final long XLANG_RATE = Long.parseLong(System.getenv().getOrDefault("XLANG_RATE", "0"));
++    private static final java.util.concurrent.atomic.AtomicLong XLANG_NEXT = new java.util.concurrent.atomic.AtomicLong();
++    private static void xlangPace() {
++        if (XLANG_RATE == 0) return;
++        XLANG_NEXT.compareAndSet(0, System.nanoTime());
++        long ticket = XLANG_NEXT.getAndAdd(1_000_000_000L / XLANG_RATE);
++        ticket -= Math.floorMod(ticket, 1_000_000L);
++        long remaining;
++        while ((remaining = ticket - System.nanoTime()) > 0)
++            java.util.concurrent.locks.LockSupport.parkNanos(remaining);
++    }
++
+     // Maximum wait before the completion poll returns to recheck completion or its deadline.
+     private static final long COMPLETION_POLL_INTERVAL_NS = 50_000_000L;
+     private static final int SUBMISSIONS_PER_YIELD = 256;
+@@ -87,6 +100,7 @@ public final class BenchDrivers {
+ 
+     private Map<String, Object> runPhase(
+             BenchHttpApplication.Trigger trigger, BenchOperation operation) throws Exception {
++        XLANG_NEXT.set(0);
+         validateTrigger(trigger);
+         stats.reset(options.targetStatsUrl);
+         ClientResources resources = new ClientResources();
+@@ -236,6 +250,7 @@ public final class BenchDrivers {
+         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+         CompletableFuture<Void> admissionPending = null;
+         while (BenchMetricHeader.nowNs() < deadline) {
++            xlangPace();
+             if (admissionPending != null) {
+                 try {
+                     if (!operation.await(
+@@ -328,6 +343,7 @@ public final class BenchDrivers {
+                                         long cpuStart = resources.beginSubmit();
+                                         try {
+                                             while (BenchMetricHeader.nowNs() < deadline) {
++            xlangPace();
+                                                 long value = sequence.getAndIncrement();
+                                                 long started = source.begin();
+                                                 RawStack.PreparedSend prepared = null;
+@@ -476,6 +492,7 @@ public final class BenchDrivers {
+                                     () -> {
+                                         long cpuStart = resources.beginSubmit();
+                                         while (BenchMetricHeader.nowNs() < deadline) {
++            xlangPace();
+                                             long value = sequence.getAndIncrement();
+                                             long started = source.begin();
+                                             try {
+@@ -515,6 +532,7 @@ public final class BenchDrivers {
+         long sequence = 0;
+         long cpuStart = resources.beginSubmit();
+         while (BenchMetricHeader.nowNs() < deadline) {
++            xlangPace();
+             if (!slots.tryAcquire(1, TimeUnit.MILLISECONDS)) {
+                 continue;
+             }
+@@ -558,6 +576,7 @@ public final class BenchDrivers {
+                         ? requestOperation
+                         : null;
+         while (BenchMetricHeader.nowNs() < deadline) {
++            xlangPace();
+             long started = source.begin();
+             CompletableFuture<Void> future;
+             BenchRequestOperation.Submission submitted;
+diff --git a/framework/bench/grpc/java/run_local.sh b/framework/bench/grpc/java/run_local.sh
+index e9ab239086..11621d900b 100755
+--- a/framework/bench/grpc/java/run_local.sh
++++ b/framework/bench/grpc/java/run_local.sh
+@@ -70,7 +70,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -88,7 +88,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/node/client/bench-core.js b/framework/bench/grpc/node/client/bench-core.js
+index fb1247d5d9..71b1edcaa8 100644
+--- a/framework/bench/grpc/node/client/bench-core.js
++++ b/framework/bench/grpc/node/client/bench-core.js
+@@ -194,6 +194,8 @@ function headerRunId(runId) {
+ }
+ 
+ async function runActive(transport, metrics, options, trigger) {
++  xlangNext = 0n;
++  xlangSerial = trigger.pattern === 'request-serial';
+   await resetTarget(options.targetStatsUrl);
+   const resources = new ResourceSample();
+   const deadline = header.nowNs() + BigInt(Math.round(trigger.durationMs * 1e6));
+@@ -284,10 +286,30 @@ async function runActive(transport, metrics, options, trigger) {
+   };
+ }
+ 
++// Measurement-only open-loop pacing; the aggregate rate covers all submit workers.
++const xlangRate = Number(process.env.XLANG_RATE || 0);
++let xlangNext = 0n;
++let xlangSerial = false;
++const xlangWaitWord = new Int32Array(new SharedArrayBuffer(4));
++async function xlangPace(pump) {
++  if (!xlangRate) return;
++  const now = header.nowNs();
++  if (xlangNext === 0n) xlangNext = now;
++  const ticket = xlangNext - xlangNext % 1_000_000n;
++  xlangNext += BigInt(Math.floor(1e9 / xlangRate));
++  while (header.nowNs() < ticket) {
++    pump?.poll(0);
++    const leftMs = Number(ticket - header.nowNs()) / 1e6;
++    if (xlangSerial) Atomics.wait(xlangWaitWord, 0, 0, Math.max(0, leftMs));
++    else await delay(Math.max(1, Math.ceil(leftMs)));
++  }
++}
++
+ async function requestWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
+   const workers = Array.from({ length: count }, () =>
+     (async () => {
+       while (header.nowNs() < deadline) {
++        if (xlangRate) await xlangPace(transport.requestCompletionPump);
+         await executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
+       }
+     })()
+@@ -309,6 +331,7 @@ async function requestBackpressure(
+     const completionPump = transport.requestCompletionPump;
+     let blocked = null;
+     while (header.nowNs() < deadline) {
++        if (xlangRate) await xlangPace(transport.requestCompletionPump);
+       // A backpressured socket skips this sweep only. Its admission task is
+       // observed separately so the completion pump and other event-loop work
+       // continue to make progress.
+@@ -369,6 +392,7 @@ async function requestBackpressure(
+   const pending = new Set();
+   let issuedSinceYield = 0;
+   while (header.nowNs() < deadline) {
++        if (xlangRate) await xlangPace(transport.requestCompletionPump);
+     const operation = executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
+     pending.add(operation);
+     operation.finally(() => pending.delete(operation));
+@@ -387,6 +411,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
+   const workers = Array.from({ length: count }, (_, stream) =>
+     (async () => {
+       while (header.nowNs() < deadline) {
++        if (xlangRate) await xlangPace(transport.requestCompletionPump);
+         const sequence = nextSequence();
+         const payload = header.createPayloadBytes(
+           trigger.payloadBytes,
+diff --git a/framework/bench/grpc/node/run_local.sh b/framework/bench/grpc/node/run_local.sh
+index a04f4b1708..172a2ce554 100644
+--- a/framework/bench/grpc/node/run_local.sh
++++ b/framework/bench/grpc/node/run_local.sh
+@@ -68,7 +68,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run} starting target B then source A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -94,7 +94,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 

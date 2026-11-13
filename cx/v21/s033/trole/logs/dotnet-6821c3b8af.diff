@@ -1,0 +1,355 @@
+commit 6821c3b8afed1949ceadca094cf370a08491f6c9
+Author: zlink-systems <zlink@zlink.systems>
+Date:   Sun Nov 8 06:39:35 2026 +0900
+
+    perf(dotnet): hand the receive role to an unstarted application reservation (#1639)
+    
+    At the end of a receive pass, the process execution pool now gives the
+    receiving worker an application reservation that its worker has not started,
+    and assigns the donor worker the next receive pass (spec 08 section 4.4).
+    A NodeRequest that arrives on an idle pool then runs its handler on the
+    worker that received it, without a wake and a thread switch. If no unstarted
+    reservation exists, the pool is stopping, or the source is closing, the
+    receiver keeps its role. The receive role moves only under the existing
+    gate, and at most one worker receives at a time.
+    
+    MeshReceiveHandoffTests asserted that the receive thread stays the same
+    across passes. Spec 08 section 4.4 ties the receive role to no thread, so
+    those assertions now check that the blocked handler is not the receiver.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01D9jfevecSH9qJxjtX358f4
+
+diff --git a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkProcessExecutionPool.cs b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkProcessExecutionPool.cs
+index 92dc997a1a..7b3d5188cf 100644
+--- a/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkProcessExecutionPool.cs
++++ b/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkProcessExecutionPool.cs
+@@ -306,6 +306,22 @@ internal sealed class ZLinkProcessExecutionPool
+ 
+     private void DispatchApplicationsUnderLock(Worker? currentWorker = null)
+     {
++        // Spec 08 §4.4: only an unconsumed reservation can exchange roles.
++        // The previous receive scope has ended; the donor has no running turn.
++        if (!_stopping && currentWorker is { Receiving: true })
++        {
++            foreach (var worker in _workers)
++            {
++                if (worker.Application is not { Closing: false } application)
++                    continue;
++                currentWorker.Application = application;
++                worker.Application = null;
++                currentWorker.Receiving = false;
++                worker.Receiving = true;
++                NotifyWorkerUnderLock(worker);
++                break;
++            }
++        }
+         while (!_stopping && _idle.First is { } entry)
+         {
+             var application = TakeApplicationUnderLock();
+@@ -392,7 +408,9 @@ internal sealed class ZLinkProcessExecutionPool
+                     {
+                         _receiving = null;
+                     }
+-                    return;
++                    lock (_gate)
++                        DispatchApplicationsUnderLock(worker);
++                    continue;
+                 }
+                 application?.Run(worker.Turn);
+             }
+@@ -452,124 +470,117 @@ internal sealed class ZLinkProcessExecutionPool
+     private void Receive()
+     {
+         var readySources = _receiveReady;
+-        while (true)
++        TimeSpan timeout = Timeout.InfiniteTimeSpan;
++        List<(Action<object?> Callback, object? State)>? failedContinuations = null;
++        var terminating = false;
++        lock (_gate)
+         {
+-            TimeSpan timeout = Timeout.InfiniteTimeSpan;
+-            List<(Action<object?> Callback, object? State)>? failedContinuations = null;
+-            var terminating = false;
+-            lock (_gate)
++            while (_dirty.Count != 0)
++            {
++                var enumerator = _dirty.GetEnumerator();
++                enumerator.MoveNext();
++                var source = enumerator.Current;
++                _dirty.Remove(source);
++                ApplySourceUnderLock(source);
++            }
++            if (_stopping)
+             {
+-                while (_dirty.Count != 0)
++                if (_failure is { } failure)
++                    failedContinuations = FailReceiveUnderLock(failure);
++                else
+                 {
+-                    var enumerator = _dirty.GetEnumerator();
+-                    enumerator.MoveNext();
+-                    var source = enumerator.Current;
+-                    _dirty.Remove(source);
+-                    ApplySourceUnderLock(source);
++                    _poller.Remove(_wake!);
++                    _wake!.Dispose();
++                    _wake = null;
++                    _poller.Dispose();
++                    _poller = null!;
+                 }
+-                if (_stopping)
++                terminating = true;
++                NotifyAllUnderLock();
++            }
++            if (!terminating)
++            {
++                CollectReadySourcesUnderLock(readySources);
++                if (readySources.Count != 0)
++                    timeout = TimeSpan.Zero;
++                else if (_deadlines.Count != 0)
+                 {
+-                    if (_failure is { } failure)
+-                        failedContinuations = FailReceiveUnderLock(failure);
+-                    else
+-                    {
+-                        _poller.Remove(_wake!);
+-                        _wake!.Dispose();
+-                        _wake = null;
+-                        _poller.Dispose();
+-                        _poller = null!;
+-                    }
+-                    terminating = true;
+-                    NotifyAllUnderLock();
++                    var remaining = Stopwatch.GetElapsedTime(
++                        Stopwatch.GetTimestamp(),
++                        _deadlines[0].Deadline
++                    );
++                    timeout = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+                 }
+-                if (!terminating)
++                if (_events.Length != _registrations.Count + 1)
++                    _events = new PollEvent[_registrations.Count + 1];
++            }
++        }
++        if (terminating)
++        {
++            NotifyFailedSources(failedContinuations);
++            return;
++        }
++        var count = _poller.Wait(_events, timeout);
++        lock (_gate)
++        {
++            for (var index = 0; index < count; index++)
++            {
++                var item = _events[index];
++                if (item.SourceKind == PollSourceKind.Timer && item.Slot == 0)
+                 {
+-                    CollectReadySourcesUnderLock(readySources);
+-                    if (readySources.Count != 0)
+-                        timeout = TimeSpan.Zero;
+-                    else if (_deadlines.Count != 0)
+-                    {
+-                        var remaining = Stopwatch.GetElapsedTime(
+-                            Stopwatch.GetTimestamp(),
+-                            _deadlines[0].Deadline
+-                        );
+-                        timeout = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+-                    }
+-                    if (_events.Length != _registrations.Count + 1)
+-                        _events = new PollEvent[_registrations.Count + 1];
++                    _wake!.Recv();
++                    continue;
+                 }
++                if (!_registrations.TryGetValue(item.Slot, out var registration))
++                    continue;
++                var source = registration.Source;
++                if (!source.Waiting || source.Continuation is null)
++                    continue;
++                source.Events.Add(
++                    new ReceiveEvent(item.SourceKind, registration.LocalSlot, item.Revents)
++                );
++                readySources.Add(source);
+             }
+-            if (terminating)
++            CollectReadySourcesUnderLock(readySources);
++        }
++        // Completing these waits resumes only the finite source turn. Every source
++        // reaches its next readiness/permit/management await on this receive resource.
++        foreach (var source in readySources)
++        {
++            Action<object?>? continuation;
++            object? continuationState;
++            int received;
++            lock (_gate)
+             {
+-                NotifyFailedSources(failedContinuations);
+-                return;
++                continuation = source.Continuation;
++                continuationState = source.ContinuationState;
++                source.Continuation = null;
++                source.Waiting = false;
++                RemoveDeadlineUnderLock(source);
++                _resuming.Remove(source);
++                source.Woken = false;
++                received = source.Events.Count;
++                for (var index = 0; index < Math.Min(received, source.Destination!.Length); index++)
++                    source.Destination![index] = source.Events[index];
++                source.Events.Clear();
++                source.Received = Math.Min(received, source.Destination!.Length);
+             }
+-            var count = _poller.Wait(_events, timeout);
+-            lock (_gate)
++            try
+             {
+-                for (var index = 0; index < count; index++)
+-                {
+-                    var item = _events[index];
+-                    if (item.SourceKind == PollSourceKind.Timer && item.Slot == 0)
+-                    {
+-                        _wake!.Recv();
+-                        continue;
+-                    }
+-                    if (!_registrations.TryGetValue(item.Slot, out var registration))
+-                        continue;
+-                    var source = registration.Source;
+-                    if (!source.Waiting || source.Continuation is null)
+-                        continue;
+-                    source.Events.Add(
+-                        new ReceiveEvent(item.SourceKind, registration.LocalSlot, item.Revents)
+-                    );
+-                    readySources.Add(source);
+-                }
+-                CollectReadySourcesUnderLock(readySources);
++                continuation?.Invoke(continuationState);
+             }
+-            // Completing these waits resumes only the finite source turn. Every source
+-            // reaches its next readiness/permit/management await on this receive resource.
+-            foreach (var source in readySources)
++            finally
+             {
+-                Action<object?>? continuation;
+-                object? continuationState;
+-                int received;
+                 lock (_gate)
+                 {
+-                    continuation = source.Continuation;
+-                    continuationState = source.ContinuationState;
+-                    source.Continuation = null;
+-                    source.Waiting = false;
+-                    RemoveDeadlineUnderLock(source);
+-                    _resuming.Remove(source);
+-                    source.Woken = false;
+-                    received = source.Events.Count;
+-                    for (
+-                        var index = 0;
+-                        index < Math.Min(received, source.Destination!.Length);
+-                        index++
+-                    )
+-                        source.Destination![index] = source.Events[index];
+-                    source.Events.Clear();
+-                    source.Received = Math.Min(received, source.Destination!.Length);
+-                }
+-                try
+-                {
+-                    continuation?.Invoke(continuationState);
+-                }
+-                finally
+-                {
+-                    lock (_gate)
+-                    {
+-                        if (source.Closing)
+-                            source.Removed.TrySetResult();
+-                        else if (!source.Waiting || source.Continuation is null)
+-                            _dirty.Add(source);
+-                    }
++                    if (source.Closing)
++                        source.Removed.TrySetResult();
++                    else if (!source.Waiting || source.Continuation is null)
++                        _dirty.Add(source);
+                 }
+             }
+-            readySources.Clear();
+         }
++        readySources.Clear();
+     }
+ 
+     private void CollectReadySourcesUnderLock(HashSet<ReceiveSource> ready)
+@@ -704,7 +715,7 @@ internal sealed class ZLinkProcessExecutionPool
+     {
+         internal Thread? Thread;
+         internal readonly ApplicationTurn Turn = new();
+-        internal bool Receiving { get; init; }
++        internal bool Receiving;
+         internal readonly AutoResetEvent Wake = new(false);
+         internal readonly LinkedListNode<Worker> IdleEntry;
+         internal ApplicationSource? Application;
+@@ -984,7 +995,7 @@ internal sealed class ZLinkProcessExecutionPool
+         internal readonly int MaximumConcurrentTurns = maximumConcurrentTurns;
+         internal readonly LinkedListNode<ApplicationSource> ReadyEntry = new(null!);
+         internal Task Completion => _drained.Task;
+-        private bool _closing;
++        internal bool Closing;
+         internal int Running;
+         private int _retained;
+         private Exception? _failure;
+@@ -1011,7 +1022,7 @@ internal sealed class ZLinkProcessExecutionPool
+ 
+         internal void FailUnderLock()
+         {
+-            _closing = true;
++            Closing = true;
+             if (ReadyEntry.List is not null)
+                 pool._ready.Remove(ReadyEntry);
+             CompleteDrainedUnderLock();
+@@ -1021,7 +1032,7 @@ internal sealed class ZLinkProcessExecutionPool
+         {
+             lock (pool._gate)
+             {
+-                if (_closing)
++                if (Closing)
+                     return;
+                 if (ReadyEntry.List is not null)
+                     return;
+@@ -1112,7 +1123,7 @@ internal sealed class ZLinkProcessExecutionPool
+ 
+         private void CompleteDrainedUnderLock()
+         {
+-            if (!_closing || ReadyEntry.List is not null || Running != 0 || _retained != 0)
++            if (!Closing || ReadyEntry.List is not null || Running != 0 || _retained != 0)
+                 return;
+             if ((_failure ?? pool._failure) is { } error)
+                 _drained.TrySetException(error);
+@@ -1141,7 +1152,7 @@ internal sealed class ZLinkProcessExecutionPool
+             {
+                 if (_dispose is null)
+                 {
+-                    _closing = true;
++                    Closing = true;
+                     CompleteDrainedUnderLock();
+                     _dispose = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(
+                         DisposeLaterAsync
+diff --git a/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/MeshReceiveHandoffTests.cs b/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/MeshReceiveHandoffTests.cs
+index 26bb0cbba6..66b885cbac 100644
+--- a/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/MeshReceiveHandoffTests.cs
++++ b/framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/MeshReceiveHandoffTests.cs
+@@ -284,8 +284,7 @@ public sealed class MeshReceiveHandoffTests
+             Assert.False(capture.ReleaseSync.IsSet);
+             Assert.False(first.IsCompleted);
+             Assert.False(second.IsCompleted);
+-            Assert.Equal(receiveThread, router.SecondReceiveThread);
+-            Assert.NotEqual(receiveThread, capture.Starts["first"].Thread);
++            Assert.NotEqual(capture.Starts["first"].Thread, router.SecondReceiveThread);
+             capture.ReleaseSync.Set();
+             Assert.Equal("first", await first.WaitAsync(CompletionBound));
+             Assert.Equal("second", await second.WaitAsync(CompletionBound));
+@@ -605,8 +604,7 @@ public sealed class MeshReceiveHandoffTests
+             }
+             else
+             {
+-                Assert.NotEqual(receiveThread, handlerThread);
+-                Assert.Equal(receiveThread, router.SecondReceiveThread);
++                Assert.NotEqual(handlerThread, router.SecondReceiveThread);
+             }
+             var deadline = source.RunDeadlineRequestAsync<int>(
+                 TimeSpan.FromMilliseconds(10),

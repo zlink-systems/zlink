@@ -1,0 +1,2035 @@
+diff --git a/framework/languages/cpp/CMakeLists.txt b/framework/languages/cpp/CMakeLists.txt
+index 383089fc1b..689f810777 100644
+--- a/framework/languages/cpp/CMakeLists.txt
++++ b/framework/languages/cpp/CMakeLists.txt
+@@ -3098,6 +3098,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+   target_use_zlink_gtest_main(test_cpp_framework_request_encoder_allocations)
+   target_sources(test_cpp_framework_request_encoder_allocations PRIVATE
+     tests/support/allocation_counter.cpp)
++  add_zlink_framework_test(test_cpp_framework_request_wire_identity
++    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp
++    "framework-unit;framework-contract;framework-regression;messaging" "unit")
++  target_use_zlink_gtest_main(test_cpp_framework_request_wire_identity)
++  target_include_directories(test_cpp_framework_request_wire_identity PRIVATE
++    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
++  target_compile_definitions(test_cpp_framework_request_wire_identity PRIVATE
++    ZLINK_REQUEST_WIRE_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/request-wire-main-213e579f52.json")
+   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
+     add_zlink_framework_test(test_cpp_framework_request_native_counts
+       tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+index b9ae463b4f..fe9c5968c8 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/channel.hpp
+@@ -912,8 +912,9 @@ class route_client_t
+               auto encode_payload = [&request_value,
+                                      &selected_serializer] (serializer_registry_t &serializers) {
+                   selected_serializer.emplace (serializers.template get<TRequest> ());
+-                  return std::pair{selected_serializer->serialize (request_value),
+-                                   std::cref (selected_serializer->content_type ())};
++                  return std::pair{
++                    selected_serializer->serialize (request_value),
++                    detail::serializer_registry_access_t::request_plan (*selected_serializer)};
+               };
+               // Erased submit consumes this encoder before its first suspension.
+               submit_request_reply_message_erased (state, router_channel_id, target_node_rid,
+@@ -1011,8 +1012,8 @@ class route_client_t
+                              payload_encoder_t encode_payload,
+                              const route_send_call_t::metadata_map_t &metadata);
+ 
+-    using node_payload_encoder_t =
+-      std::function<std::pair<encoded_payload_t, std::reference_wrapper<const std::string>> (
++    using node_payload_encoder_t = std::function<
++      std::pair<encoded_payload_t, std::shared_ptr<const detail::request_type_plan_t>> (
+         serializer_registry_t &)>;
+ 
+     static void
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
+index d4c7c2dcb5..d5bc6bcaf8 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/codecs/serializer.hpp
+@@ -8,9 +8,11 @@
+ #include <zlink/json_profile.hpp>
+ 
+ #include <zlink/Contracts/Messaging/message.hpp>
++#include <zlink/framework/contracts/detail/message_name.hpp>
+ #include <zlink/framework/contracts/errors/error.hpp>
+ #include <zlink/framework/codecs/json.hpp>
+ 
++#include <exception>
+ #include <cstddef>
+ #include <cstdint>
+ #include <functional>
+@@ -33,6 +35,21 @@ class codec_registration_context_t;
+ 
+ namespace detail
+ {
++struct prepared_header_fragment_t
++{
++    std::string bytes;
++    std::exception_ptr error;
++};
++struct request_type_plan_t
++{
++    std::string content_type;
++    std::string prefix;
++    std::string middle;
++    std::exception_ptr error;
++};
++prepared_header_fragment_t prepare_request_channel (std::string_view channel);
++request_type_plan_t prepare_request_type (std::string_view name, std::string content_type);
++
+ inline constexpr std::size_t serializer_send_type_cache_capacity = 1024;
+ class serializer_registry_state_t;
+ struct serializer_registry_access_t;
+@@ -219,8 +236,9 @@ template <typename T> class serializer_t
+     serializer_t (serialize_fn_t serialize,
+                   deserialize_fn_t deserialize,
+                   std::string content_type) :
+-        _state (std::make_shared<const state_t> (
+-          state_t{std::move (serialize), std::move (deserialize), std::move (content_type)}))
++        _state (std::make_shared<const state_t> (state_t{
++          std::move (serialize), std::move (deserialize),
++          detail::prepare_request_type (detail::message_name<T> (), std::move (content_type))}))
+     {
+     }
+ 
+@@ -241,7 +259,7 @@ template <typename T> class serializer_t
+ 
+     serialized_payload_t serialize_with_content_type (const T &value) const
+     {
+-        return serialized_payload_t{serialize (value), _state->content_type};
++        return serialized_payload_t{serialize (value), _state->plan.content_type};
+     }
+ 
+     T deserialize (const encoded_payload_t &payload) const
+@@ -259,14 +277,15 @@ template <typename T> class serializer_t
+         }
+     }
+ 
+-    const std::string &content_type () const noexcept { return _state->content_type; }
++    const std::string &content_type () const noexcept { return _state->plan.content_type; }
+ 
+   private:
++    friend struct detail::serializer_registry_access_t;
+     struct state_t
+     {
+         serialize_fn_t serialize;
+         deserialize_fn_t deserialize;
+-        std::string content_type;
++        detail::request_type_plan_t plan;
+     };
+ 
+     std::shared_ptr<const state_t> _state;
+@@ -436,6 +455,12 @@ namespace detail
+ 
+ struct serializer_registry_access_t
+ {
++    template <typename T>
++    static std::shared_ptr<const request_type_plan_t>
++    request_plan (const serializer_t<T> &serializer) noexcept
++    {
++        return {serializer._state, &serializer._state->plan};
++    }
+     static serializer_registry_t retain (const serializer_registry_t &registry)
+     {
+         return serializer_registry_t (registry._state);
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/detail/test_creation_probe.hpp b/framework/languages/cpp/framework/include/zlink/framework/detail/test_creation_probe.hpp
+index a4537c248e..07f0aba21e 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/detail/test_creation_probe.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/detail/test_creation_probe.hpp
+@@ -17,7 +17,6 @@ inline std::atomic_size_t request_capture_value_bytes{0};
+ inline std::atomic_size_t request_block_bytes{0};
+ inline std::atomic_size_t request_callback_owner_bytes{0};
+ extern std::atomic<void (*) ()> local_completion_sink_fault;
+-extern std::atomic<void (*) ()> node_admission_observer_context_fault;
+ inline std::atomic<void (*) ()> task_terminal_context_fault{nullptr};
+ } // namespace zlink::framework::detail::test_creation_probe
+ #endif
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+index b3242f59ff..8d1b331d5c 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+@@ -113,28 +113,15 @@ spot_mesh_sender (const std::shared_ptr<channel_runtime_state_t> &state,
+              : std::optional<channel_runtime_state_t::spot_mesh_send_t> (found->second);
+ }
+ 
+-using node_transport_t = std::variant<std::monostate,
+-                                      std::shared_ptr<route_channel_runtime_t>,
+-                                      channel_runtime_state_t::mesh_node_transport_ptr_t>;
++using node_transport_t = channel_runtime_state_t::node_transport_t;
+ 
+-result_t<node_transport_t>
+-resolve_node_transport (const std::shared_ptr<channel_runtime_state_t> &state,
+-                        const std::string &mesh_name)
++node_transport_t resolve_node_transport (const std::shared_ptr<channel_runtime_state_t> &state,
++                                         const std::string &mesh_name)
+ {
+     const auto index =
+       std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+-    if (index->route_channels.contains (mesh_name))
+-        return state->lane
+-          .run_task ([&] () -> node_transport_t {
+-              if (const auto route = state->route_channels.find (mesh_name);
+-                  route != state->route_channels.end ())
+-                  return route->second;
+-              return std::monostate{};
+-          })
+-          .result ();
+-    if (const auto mesh = index->mesh_nodes.find (mesh_name); mesh != index->mesh_nodes.end ())
+-        return result_t<node_transport_t>::success (mesh->second);
+-    return result_t<node_transport_t>::success (std::monostate{});
++    const auto found = index->nodes.find (mesh_name);
++    return found == index->nodes.end () ? node_transport_t{} : found->second.transport;
+ }
+ 
+ template <typename TClientServerTransports, typename TRouteMeshTransports>
+@@ -183,7 +170,10 @@ bool has_route_channel (const std::shared_ptr<channel_runtime_state_t> &state,
+ {
+     const auto index =
+       std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+-    return index->route_channels.contains (channel_name);
++    const auto found = index->nodes.find (channel_name);
++    return found != index->nodes.end ()
++           && std::holds_alternative<std::shared_ptr<route_channel_runtime_t>> (
++             found->second.transport);
+ }
+ 
+ } // namespace
+@@ -778,7 +768,15 @@ void channel_runtime_t::bind_mesh_node_transport (
+             channel_runtime_state_t::mesh_node_transport_t{std::move (send), std::move (request)});
+           _state->publish_node_transports ([&] (auto &index) {
+               // A publication can retry, so the change copies its inputs.
+-              index.mesh_nodes.insert_or_assign (mesh_name, transport);
++              const auto found = index.nodes.find (mesh_name);
++              if (found == index.nodes.end ()
++                  || !std::holds_alternative<std::shared_ptr<route_channel_runtime_t>> (
++                    found->second.transport))
++                  index.nodes.insert_or_assign (
++                    mesh_name,
++                    channel_runtime_state_t::node_transport_index_t::entry_t{
++                      transport, prepare_request_channel (mesh_name),
++                      &runtime::messaging::client_call_codec_t::encode_service_payload_parts});
+           });
+       })
+       .get ();
+@@ -1458,7 +1456,7 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
+                                          "route client is not configured");
+         }
+         const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
+-        if (std::holds_alternative<std::monostate> (transport.value ())) {
++        if (std::holds_alternative<std::monostate> (transport)) {
+             throw framework_exception_t (framework_error_kind_t::unavailable,
+                                          "route channel or SPOT mesh '" + router_channel_id
+                                            + "' is not registered");
+@@ -1486,12 +1484,11 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
+               *state->serializers, encode_payload);
+             if (const auto mesh =
+                   std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (
+-                    &transport.value ())) {
++                    &transport)) {
+                 auto submitted = (*mesh)->send (target_node_rid, std::move (parts));
+                 return detail::project_task_terminal<void> (submitted, finish);
+             }
+-            auto &runtime =
+-              *std::get<std::shared_ptr<detail::route_channel_runtime_t>> (transport.value ());
++            auto &runtime = *std::get<std::shared_ptr<detail::route_channel_runtime_t>> (transport);
+             runtime.submit_send_parts (target_node_rid, std::move (parts)).value ();
+             return task_t<void> (result_t<void>::success ());
+         }
+@@ -1752,19 +1749,17 @@ void route_client_t::submit_request_reply_message_erased (
+                                      "route client is not configured");
+     }
+     runtime::messaging::message_parts_t parts;
+-    auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
+-    if (!transport)
+-        detail::propagate_failure<encoded_payload_t> (transport, "node transport lookup failed")
+-          .value ();
+-    const auto route =
+-      std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport.value ());
+-    const auto mesh =
+-      std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (&transport.value ());
+-    if (!route && !mesh) {
++    const auto index =
++      std::atomic_load_explicit (&state->runtime->node_transports, std::memory_order_acquire);
++    const auto endpoint = index->nodes.find (router_channel_id);
++    if (endpoint == index->nodes.end ())
+         throw framework_exception_t (framework_error_kind_t::unavailable,
+                                      "route channel or MeshNode '" + router_channel_id
+                                        + "' is not registered");
+-    }
++    const auto &transport = endpoint->second.transport;
++    const auto route = std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport);
++    const auto mesh =
++      std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (&transport);
+     using reply_parts_t = runtime::messaging::message_parts_t;
+     using node_reply_t = result_t<reply_parts_t>;
+     struct request_decoder_t
+@@ -1845,8 +1840,8 @@ void route_client_t::submit_request_reply_message_erased (
+                          ? std::shared_ptr<const zlink::routing_id_t> (
+                              std::shared_ptr<const zlink::routing_id_t>{}, target_owner.get ())
+                          : std::shared_ptr<const zlink::routing_id_t> (target_owner);
+-    request_decoder_t decode{state, transport.value (), std::move (target_view),
+-                             std::move (packet_name), std::move (router_channel_id)};
++    request_decoder_t decode{state, transport, std::move (target_view), std::move (packet_name),
++                             std::move (router_channel_id)};
+ 
+     auto effective_timeout = timeout;
+     if (route) {
+@@ -1881,9 +1876,11 @@ void route_client_t::submit_request_reply_message_erased (
+                                               std::nullopt};
+               });
+         }
+-        auto [payload, content_type] = encode_payload (*state->serializers);
+-        parts =
+-          codec.encode_payload_parts (std::move (header), std::move (payload), content_type.get ());
++        auto [payload, type_plan] = encode_payload (*state->serializers);
++        parts = (codec.*endpoint->second.encode_request) (
++          std::move (header), std::move (payload), std::move (type_plan),
++          std::shared_ptr<const detail::prepared_header_fragment_t> (index,
++                                                                     &endpoint->second.channel));
+     }
+     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
+     try {
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
+index ca8083be76..8ab4885d97 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.hpp
+@@ -1,5 +1,7 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ #pragma once
++#include <variant>
++
+ #include <boost/asio/awaitable.hpp>
+ 
+ #include <zlink/framework/contracts/channels/channel.hpp>
+@@ -18,6 +20,7 @@
+ #include "runtime/execution/state_lane.hpp"
+ #include "runtime/locations/spot_address_resolvers.hpp"
+ #include "runtime/messaging/envelope_codec.hpp"
++#include "runtime/messaging/client_call_codec.hpp"
+ #include "runtime/streams/stream_runtime.hpp"
+ 
+ #include <cstdint>
+@@ -182,14 +185,28 @@ class channel_runtime_state_t
+         mesh_node_request_t request;
+     };
+     using mesh_node_transport_ptr_t = std::shared_ptr<const mesh_node_transport_t>;
++    using node_transport_t = std::
++      variant<std::monostate, std::shared_ptr<route_channel_runtime_t>, mesh_node_transport_ptr_t>;
+     // Node direct and Spot send transports by name, published when a route channel
+     // is initialized or a MeshNode or Spot transport is bound. Submit reads with
+     // one atomic load (08-messaging-hot-path E2: prepared at change time). A
+-    // route channel name takes precedence and is resolved on the lane.
++    // route channel name takes precedence and is retained when the index is published.
+     struct node_transport_index_t
+     {
+-        std::set<std::string> route_channels;
+-        std::map<std::string, mesh_node_transport_ptr_t> mesh_nodes;
++        struct entry_t
++        {
++            using request_encoder_t =
++              runtime::messaging::message_parts_t (runtime::messaging::client_call_codec_t::*) (
++                runtime::messaging::envelope_header_t,
++                encoded_payload_t,
++                std::shared_ptr<const request_type_plan_t>,
++                std::shared_ptr<const prepared_header_fragment_t>) const;
++            node_transport_t transport;
++            prepared_header_fragment_t channel;
++            request_encoder_t encode_request =
++              &runtime::messaging::client_call_codec_t::encode_payload_parts;
++        };
++        std::map<std::string, entry_t> nodes;
+         std::map<std::string, spot_mesh_send_t> spot_mesh_senders;
+     };
+     std::shared_ptr<const node_transport_index_t> node_transports =
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime_manager.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime_manager.cpp
+index 869dbdcb2d..451b4e8b3e 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime_manager.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime_manager.cpp
+@@ -183,8 +183,12 @@ void channel_runtime_manager_t::initialize_route_channels (
+             }
+         }
+         _state->route_channels.emplace (route_id, std::move (runtime));
+-        _state->publish_node_transports (
+-          [&route_id] (auto &index) { index.route_channels.insert (route_id); });
++        _state->publish_node_transports ([&] (auto &index) {
++            index.nodes.insert_or_assign (
++              route_id,
++              channel_runtime_state_t::node_transport_index_t::entry_t{
++                _state->route_channels.at (route_id), prepare_request_channel (route_id)});
++        });
+     }
+ }
+ 
+@@ -199,8 +203,12 @@ void channel_runtime_manager_t::initialize_route_channels (
+         auto initialized = initializer.initialize (registration->registration);
+         _state->route_handlers[route_id] = std::move (initialized.handlers);
+         _state->route_channels.emplace (route_id, std::move (initialized.runtime));
+-        _state->publish_node_transports (
+-          [&route_id] (auto &index) { index.route_channels.insert (route_id); });
++        _state->publish_node_transports ([&] (auto &index) {
++            index.nodes.insert_or_assign (
++              route_id,
++              channel_runtime_state_t::node_transport_index_t::entry_t{
++                _state->route_channels.at (route_id), prepare_request_channel (route_id)});
++        });
+     }
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/host/app.cpp b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+index e8db2e32cc..9632b6ec9a 100644
+--- a/framework/languages/cpp/framework/src/runtime/host/app.cpp
++++ b/framework/languages/cpp/framework/src/runtime/host/app.cpp
+@@ -2629,8 +2629,7 @@ void app_t::_apply_zlink_framework ()
+             const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
+             std::chrono::milliseconds timeout,
+             detail::request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver) {
+-              mesh->request_node_reply (target, std::move (parts).take_items (), timeout,
+-                                        std::move (receiver));
++              mesh->request_node_reply (target, std::move (parts), timeout, std::move (receiver));
+           });
+         for (const auto &channel_name : mesh->channel_names ()) {
+             channel_runtime.bind_mesh_channel_transport (
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
+index e8ae472b8d..3ea9dcb001 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp
+@@ -43,13 +43,6 @@
+ #include <tuple>
+ #include <utility>
+ 
+-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+-namespace zlink::framework::detail::test_creation_probe
+-{
+-std::atomic<void (*) ()> node_admission_observer_fault{nullptr};
+-std::atomic<void (*) ()> node_admission_observer_context_fault{nullptr};
+-}
+-#endif
+ 
+ namespace mesh_endpoint_notation = zlink::framework::runtime::transport;
+ 
+@@ -4339,14 +4332,8 @@ namespace
+ using node_reply_t = result_t<runtime::messaging::message_parts_t>;
+ node_reply_t node_submission_failure (zlink::submit_result_t submitted)
+ {
+-    if (submitted == zlink::submit_result_t::not_found)
+-        return node_reply_t::failure (framework_error_kind_t::not_found,
+-                                      "MeshNode request target was not found");
+-    if (submitted == zlink::submit_result_t::terminated)
+-        return detail::boundary_failure<runtime::messaging::message_parts_t> (
+-          detail::boundary_error_t::shutdown, "MeshNode request runtime is stopped");
+-    return node_reply_t::failure (runtime::messaging::map_submit_result_error_kind (submitted),
+-                                  "MeshNode request was not submitted");
++    return detail::result_access_t::failure<runtime::messaging::message_parts_t> (
++      runtime::messaging::map_node_request_submit_exception (submitted));
+ }
+ }
+ 
+@@ -4415,7 +4402,7 @@ void mesh_node_runtime_t::compose_node_request_reply (host::pending_operation_t
+ }
+ 
+ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &target,
+-                                                     std::vector<zlink::message_t> parts,
++                                                     runtime::messaging::message_parts_t parts,
+                                                      std::chrono::milliseconds timeout,
+                                                      request_receiver_t<node_reply_t> receiver)
+ {
+@@ -4460,34 +4447,9 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
+         // The stored callback now owns this receiver, including submission failures
+         // before registration. Keep no independent physical fallback after transfer.
+         receiver.complete = {};
+-        auto submission = _node->request_to_node (target, std::move (parts), timeout,
+-                                                  std::move (completion), receiver.admitted);
+-        // A callback retained here was never registered. Once C1 accepts it,
+-        // submission observes admission only; C1 alone owns reply delivery.
+-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+-        if (auto fault = test_creation_probe::node_admission_observer_fault.exchange (nullptr))
+-            fault ();
+-#endif
+-        auto submission_observer = [admitted = receiver.admitted, completion] (
+-                                     const result_t<zlink::submit_result_t> &submitted) mutable {
+-            if (submitted && submitted.value () == zlink::submit_result_t::ok) {
+-                admitted->complete (result_t<void>::success ());
+-                return;
+-            }
+-            const auto failure = submitted
+-                                   ? node_submission_failure (submitted.value ()).exception ()
+-                                   : submitted.exception ();
+-            admitted->complete (result_access_t::failure<void> (failure));
+-            if (completion)
+-                completion (runtime::foundation::operation_terminal_t::transport_failed,
+-                            result_access_t::failure<zlink::message_t> (failure));
+-        };
+-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+-        if (auto fault =
+-              test_creation_probe::node_admission_observer_context_fault.exchange (nullptr))
+-            test_creation_probe::task_terminal_context_fault.store (fault);
+-#endif
+-        observe_task_terminal (submission, std::move (submission_observer));
++        _node->transport ().submit_node_request (
++          {target.data (), target.size ()}, std::move (parts).take_application_payload (), timeout,
++          std::move (completion), receiver.admitted);
+     }
+     catch (...) {
+         const auto failure = std::current_exception ();
+@@ -4501,7 +4463,7 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
+ }
+ 
+ void mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,
+-                                              std::vector<zlink::message_t> parts,
++                                              runtime::messaging::message_parts_t parts,
+                                               std::chrono::milliseconds timeout,
+                                               request_receiver_t<node_reply_t> receiver)
+ {
+@@ -4521,7 +4483,7 @@ void mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,
+ 
+ void mesh_node_runtime_t::request_unknown_node_reply (
+   zlink::routing_id_t target,
+-  std::vector<zlink::message_t> parts,
++  runtime::messaging::message_parts_t parts,
+   std::chrono::milliseconds timeout,
+   task_t<std::optional<zlink::submit_result_t>> classification,
+   request_receiver_t<node_reply_t> receiver)
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
+index bef23aae47..7273864ca0 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.hpp
+@@ -267,7 +267,7 @@ class mesh_node_runtime_t
+       request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
+     void
+     request_node_reply (const zlink::routing_id_t &target,
+-                        std::vector<zlink::message_t> parts,
++                        runtime::messaging::message_parts_t parts,
+                         std::chrono::milliseconds timeout,
+                         request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
+     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
+@@ -644,12 +644,12 @@ class mesh_node_runtime_t
+                                 Unknown &&unknown) -> decltype (known ());
+     void submit_node_request_reply (
+       const zlink::routing_id_t &target,
+-      std::vector<zlink::message_t> parts,
++      runtime::messaging::message_parts_t parts,
+       std::chrono::milliseconds timeout,
+       request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
+     void request_unknown_node_reply (
+       zlink::routing_id_t target,
+-      std::vector<zlink::message_t> parts,
++      runtime::messaging::message_parts_t parts,
+       std::chrono::milliseconds timeout,
+       task_t<std::optional<zlink::submit_result_t>> classification,
+       request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+index f7b2077fd6..fb52ea551a 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp
+@@ -1343,6 +1343,38 @@ catch (...) {
+     return task_t<bool> (detail::current_exception_result<bool> ());
+ }
+ 
++zlink::submit_result_t raw_mesh_node_owner_t::node_request_submission_result (
++  std::span<const std::uint8_t> target_routing_id, bool accepted) const
++{
++    if (accepted)
++        return zlink::submit_result_t::ok;
++    // The error model classifies a rejected target absent from the live peer
++    // table as NotFound. An expected descriptor alone is not a live peer.
++    return _topology.peer (target_routing_id) ? zlink::submit_result_t::not_connected
++                                              : zlink::submit_result_t::not_found;
++}
++
++void raw_mesh_node_owner_t::submit_node_request (
++  std::span<const std::uint8_t> target_routing_id,
++  const protocol::application_payload_t &application_payload,
++  std::chrono::milliseconds timeout,
++  foundation::operation_registry_t::callback_t &&callback,
++  std::shared_ptr<task_completion_source_t<void>> admitted)
++{
++    const auto deadline = capture_request_deadline (timeout);
++    auto source = start_request_with_header (
++      target_routing_id,
++      [] (std::uint64_t correlation) {
++          return protocol::encode_node_request_header_message (correlation);
++      },
++      application_payload, deadline, std::move (callback), {}, false,
++      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node), {},
++      std::move (admitted));
++    if (!source)
++        throw messaging::map_node_request_submit_exception (
++          node_request_submission_result (target_routing_id, false));
++}
++
+ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
+   const std::string &channel_name,
+   const protocol::application_payload_t &application_payload,
+@@ -1495,7 +1527,7 @@ service_topology_registry_t::peer_observer_t raw_mesh_node_owner_t::observe_requ
+                                                         : expected->second.advertised_endpoint);
+ }
+ 
+-task_t<bool> raw_mesh_node_owner_t::request_with_header (
++std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_request_with_header (
+   std::span<const std::uint8_t> target_routing_id,
+   const std::function<zlink::message_t (std::uint64_t)> &header,
+   const protocol::application_payload_t &application_payload,
+@@ -1507,7 +1539,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
+   std::optional<foundation::operation_registry_t::request_identity_t> request,
+   std::shared_ptr<task_completion_source_t<void>> admitted,
+   physical_receiver_t receiver)
+-try {
++{
+     const auto wait_owner = detail::current_wait_owner ();
+     struct request_start_t
+     {
+@@ -1577,13 +1609,34 @@ try {
+           return std::optional<request_start_t>{std::move (value)};
+       });
+     if (!start)
+-        return task_t<bool> (result_t<bool>::success (false));
++        return {};
+     if (!start->registered) {
+         throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                      "raw mesh request registry is closed");
+     }
+-    auto admission = start->admitted->task ();
+-    return await_request_admission (std::move (admission));
++    return std::move (start->admitted);
++}
++
++task_t<bool> raw_mesh_node_owner_t::request_with_header (
++  std::span<const std::uint8_t> target_routing_id,
++  const std::function<zlink::message_t (std::uint64_t)> &header,
++  const protocol::application_payload_t &application_payload,
++  foundation::operation_registry_t::clock_t::time_point deadline,
++  foundation::operation_registry_t::callback_t &&callback,
++  std::optional<std::uint64_t> requested_correlation,
++  bool target_claimed,
++  mesh_request_metric_t request_metric,
++  std::optional<foundation::operation_registry_t::request_identity_t> request,
++  std::shared_ptr<task_completion_source_t<void>> admitted,
++  physical_receiver_t receiver)
++try {
++    auto source = start_request_with_header (
++      target_routing_id, header, application_payload, deadline, std::move (callback),
++      requested_correlation, target_claimed, std::move (request_metric), std::move (request),
++      std::move (admitted), std::move (receiver));
++    if (!source)
++        return task_t<bool> (result_t<bool>::success (false));
++    return await_request_admission (source->task ());
+ }
+ catch (...) {
+     return task_t<bool> (detail::current_exception_result<bool> ());
+diff --git a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+index 33a08d28ef..2fd02ad246 100644
+--- a/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
++++ b/framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.hpp
+@@ -237,6 +237,14 @@ class raw_mesh_node_owner_t
+                                   foundation::operation_registry_t::callback_t &&callback,
+                                   std::optional<std::uint64_t> correlation = std::nullopt,
+                                   std::shared_ptr<task_completion_source_t<void>> admitted = {});
++    zlink::submit_result_t
++    node_request_submission_result (std::span<const std::uint8_t> target_routing_id,
++                                    bool accepted) const;
++    void submit_node_request (std::span<const std::uint8_t> target_routing_id,
++                              const protocol::application_payload_t &application_payload,
++                              std::chrono::milliseconds timeout,
++                              foundation::operation_registry_t::callback_t &&callback,
++                              std::shared_ptr<task_completion_source_t<void>> admitted);
+     task_t<bool> request_to_channel (const std::string &channel_name,
+                                      const protocol::application_payload_t &application_payload,
+                                      std::chrono::milliseconds timeout,
+@@ -622,6 +630,18 @@ class raw_mesh_node_owner_t
+       std::optional<foundation::operation_registry_t::request_identity_t> request = {},
+       std::shared_ptr<task_completion_source_t<void>> admitted = {},
+       physical_receiver_t receiver = {});
++    std::shared_ptr<task_completion_source_t<void>> start_request_with_header (
++      std::span<const std::uint8_t> target_routing_id,
++      const std::function<zlink::message_t (std::uint64_t)> &header,
++      const protocol::application_payload_t &application_payload,
++      foundation::operation_registry_t::clock_t::time_point deadline,
++      foundation::operation_registry_t::callback_t &&callback,
++      std::optional<std::uint64_t> correlation = std::nullopt,
++      bool target_claimed = false,
++      mesh_request_metric_t request_metric = {},
++      std::optional<foundation::operation_registry_t::request_identity_t> request = {},
++      std::shared_ptr<task_completion_source_t<void>> admitted = {},
++      physical_receiver_t receiver = {});
+     task_t<bool> request_infrastructure (
+       const std::vector<std::uint8_t> &target_routing_id,
+       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+index f8312cc975..826a50bec2 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.cpp
+@@ -70,6 +70,27 @@ message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header
+     return message_parts_t (_codec.encode_header (header, content_type), std::move (body));
+ }
+ 
++message_parts_t client_call_codec_t::encode_payload_parts (
++  envelope_header_t header,
++  encoded_payload_t payload,
++  std::shared_ptr<const detail::request_type_plan_t> type,
++  std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
++{
++    auto body = detail::encoded_payload_to_raw (std::move (payload));
++    return message_parts_t (_codec.encode_header (header, *type, *channel), std::move (body));
++}
++
++message_parts_t client_call_codec_t::encode_service_payload_parts (
++  envelope_header_t header,
++  encoded_payload_t payload,
++  std::shared_ptr<const detail::request_type_plan_t> type,
++  std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
++{
++    auto body = detail::encoded_payload_to_raw (std::move (payload));
++    return message_parts_t::from_envelope_encoder (_codec.prepare_service_payload (
++      std::move (header), std::move (body), std::move (type), std::move (channel)));
++}
++
+ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
+                                                         std::string channel_name,
+                                                         std::string message_name,
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+index 294acbca54..558fa28295 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/client_call_codec.hpp
+@@ -40,6 +40,17 @@ class client_call_codec_t
+                                           encoded_payload_t payload,
+                                           std::string_view content_type) const;
+ 
++    message_parts_t
++    encode_payload_parts (envelope_header_t header,
++                          encoded_payload_t payload,
++                          std::shared_ptr<const detail::request_type_plan_t> type,
++                          std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
++    message_parts_t encode_service_payload_parts (
++      envelope_header_t header,
++      encoded_payload_t payload,
++      std::shared_ptr<const detail::request_type_plan_t> type,
++      std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
++
+     template <typename TEncodePayload>
+     message_parts_t encode_node_send_parts (const std::string &channel_name,
+                                             const std::string &packet_name,
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+index 1c087eebfa..efe82c7560 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.cpp
+@@ -3,6 +3,7 @@
+ #include "runtime/messaging/envelope_codec.hpp"
+ 
+ #include "runtime/diagnostics/flow_context.hpp"
++#include "runtime/protocol/service_wire_codec.hpp"
+ 
+ #include <nlohmann/json.hpp>
+ #include <service_wire_constants.hpp>
+@@ -32,8 +33,28 @@ message_parts_t::message_parts_t (std::vector<zlink::message_t> parts) : _parts
+ {
+ }
+ 
++message_parts_t
++message_parts_t::from_envelope_encoder (protocol::application_envelope_encoder_t encode)
++{
++    message_parts_t result;
++    result._parts = std::move (encode);
++    return result;
++}
++
++protocol::application_payload_t message_parts_t::take_application_payload () &&
++{
++    if (auto *encode = std::get_if<protocol::application_envelope_encoder_t> (&_parts))
++        return protocol::application_payload_t::from_envelope_encoder (std::move (*encode));
++    return protocol::application_payload_t::from_parts (std::move (*this).take_items ());
++}
++
+ message_parts_t::message_parts_t (const message_parts_t &other)
+ {
++    if (const auto *encode =
++          std::get_if<protocol::application_envelope_encoder_t> (&other._parts)) {
++        _parts = *encode;
++        return;
++    }
+     if (!std::holds_alternative<std::span<const std::span<const std::byte>>> (other._parts)) {
+         _parts = other.items ();
+         return;
+@@ -69,7 +90,10 @@ std::size_t message_parts_t::size () const noexcept
+ {
+     return std::visit (
+       [] (const auto &parts) {
+-          if constexpr (std::is_pointer_v<std::decay_t<decltype (parts)>>)
++          if constexpr (std::is_same_v<std::decay_t<decltype (parts)>,
++                                       protocol::application_envelope_encoder_t>)
++              return std::size_t{2};
++          else if constexpr (std::is_pointer_v<std::decay_t<decltype (parts)>>)
+               return parts->size ();
+           else
+               return parts.size ();
+@@ -79,6 +103,8 @@ std::size_t message_parts_t::size () const noexcept
+ 
+ const std::vector<zlink::message_t> &message_parts_t::items () const
+ {
++    if (auto *encode = std::get_if<protocol::application_envelope_encoder_t> (&_parts))
++        _parts = protocol::decode_application_parts ((*encode) ({}, {}), false);
+     if (const auto *parts = std::get_if<const std::vector<zlink::message_t> *> (&_parts))
+         return **parts;
+     return std::get<std::vector<zlink::message_t>> (_parts);
+@@ -86,6 +112,8 @@ const std::vector<zlink::message_t> &message_parts_t::items () const
+ 
+ std::vector<zlink::message_t> message_parts_t::take_items () &&
+ {
++    if (auto *encode = std::get_if<protocol::application_envelope_encoder_t> (&_parts))
++        return protocol::decode_application_parts ((*encode) ({}, {}), false);
+     if (auto *parts = std::get_if<std::vector<zlink::message_t>> (&_parts))
+         return std::move (*parts);
+     return std::move (message_parts_t (*this)).take_items ();
+@@ -203,7 +231,7 @@ bool valid_utf8 (std::string_view value) noexcept
+ }
+ 
+ // The envelope has a fixed field order. Count the escaped bytes first, then
+-// write directly into its native message; there is no header DOM or byte copy.
++// write directly into the destination frame.
+ class header_writer_t
+ {
+   public:
+@@ -320,6 +348,30 @@ void write_metadata (header_writer_t &writer, const std::map<std::string, std::s
+                                        + std::to_string (protocol::metadataBytes) + " bytes");
+ }
+ 
++void write_channel_fragment (header_writer_t &writer, std::string_view channel)
++{
++    writer.append ("{\"channelName\":");
++    writer.string (channel);
++}
++
++void write_type_fragments (header_writer_t &prefix,
++                           header_writer_t &middle,
++                           std::string_view name,
++                           std::string_view content_type,
++                           message_kind_t kind)
++{
++    prefix.append (",\"contentType\":");
++    prefix.string (content_type);
++    prefix.append (",\"correlationId\":");
++    middle.append (",\"formatMarker\":");
++    middle.number (static_cast<int> (flow_id_t::format_marker));
++    middle.append (",\"kind\":");
++    middle.number (static_cast<int> (kind));
++    middle.append (",\"messageName\":");
++    middle.string (name);
++    middle.append (",\"metadata\":");
++}
++
+ struct header_plan_t
+ {
+     std::optional<message_kind_t> kind;
+@@ -355,20 +407,10 @@ struct header_plan_t
+         content_type = selected_content_type;
+ 
+         header_writer_t prefix_writer (prefix);
+-        prefix_writer.append ("{\"channelName\":");
+-        prefix_writer.string (channel_name);
+-        prefix_writer.append (",\"contentType\":");
+-        prefix_writer.string (content_type);
+-        prefix_writer.append (",\"correlationId\":");
+-
+         header_writer_t middle_writer (middle);
+-        middle_writer.append (",\"formatMarker\":");
+-        middle_writer.number (static_cast<int> (flow_id_t::format_marker));
+-        middle_writer.append (",\"kind\":");
+-        middle_writer.number (static_cast<int> (header.kind));
+-        middle_writer.append (",\"messageName\":");
+-        middle_writer.string (message_name);
+-        middle_writer.append (",\"metadata\":");
++        write_channel_fragment (prefix_writer, channel_name);
++        write_type_fragments (prefix_writer, middle_writer, message_name, content_type,
++                              header.kind);
+         kind = header.kind;
+     }
+ };
+@@ -383,9 +425,12 @@ void write_header (header_writer_t &writer,
+                    const envelope_header_t &header,
+                    const std::string *flow_id,
+                    const std::optional<flow_origin_t> &flow_origin,
+-                   const header_plan_t &plan)
++                   std::string_view prefix,
++                   std::string_view middle,
++                   std::string_view content = {})
+ {
+-    writer.append (plan.prefix);
++    writer.append (prefix);
++    writer.append (content);
+     if (header.correlation_id.empty ())
+         writer.append ("null");
+     else
+@@ -406,7 +451,7 @@ void write_header (header_writer_t &writer,
+         writer.number (static_cast<int> (*flow_origin));
+     else
+         writer.append ("null");
+-    writer.append (plan.middle);
++    writer.append (middle);
+     write_metadata (writer, header.metadata);
+     writer.append (",\"source\":");
+     writer.optional_string (header.source);
+@@ -415,6 +460,32 @@ void write_header (header_writer_t &writer,
+     writer.append ("}");
+ }
+ 
++std::pair<const std::string *, std::optional<flow_origin_t>>
++validate_outgoing_header (const envelope_header_t &header)
++{
++    const auto &flow = flow_context_t::current ();
++    const bool stamp = !header.flow_id && flow && !flow->flow_id.empty ();
++    const auto *id = stamp ? &flow->flow_id : header.flow_id ? &*header.flow_id : nullptr;
++    const auto origin = stamp ? std::optional<flow_origin_t> (flow->origin) : header.flow_origin;
++    if (auto valid = validate_protocol_header (header, flow_id_t::format_marker, id, origin);
++        !valid)
++        throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
++    return {id, origin};
++}
++
++std::pair<const std::string *, std::optional<flow_origin_t>>
++validate_request_header (const envelope_header_t &header,
++                         const detail::request_type_plan_t &type,
++                         const detail::prepared_header_fragment_t &channel)
++{
++    const auto flow = validate_outgoing_header (header);
++    if (channel.error)
++        std::rethrow_exception (channel.error);
++    if (type.error)
++        std::rethrow_exception (type.error);
++    return flow;
++}
++
+ } // namespace
+ 
+ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header) const
+@@ -425,29 +496,63 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
+ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header,
+                                                   std::string_view content_type) const
+ {
+-    const auto &flow = flow_context_t::current ();
+-    const bool stamp_flow = !header.flow_id && flow && !flow->flow_id.empty ();
+-    const auto *flow_id = stamp_flow ? &flow->flow_id : header.flow_id ? &*header.flow_id : nullptr;
+-    const auto flow_origin =
+-      stamp_flow ? std::optional<flow_origin_t> (flow->origin) : header.flow_origin;
+-    if (auto valid =
+-          validate_protocol_header (header, flow_id_t::format_marker, flow_id, flow_origin);
+-        !valid) {
+-        throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
+-    }
++    const auto [flow_id, flow_origin] = validate_outgoing_header (header);
+     auto &plan = header_plan ();
+     if (!plan.matches (header, content_type))
+         plan.rebuild (header, content_type);
+     header_writer_t measure;
+-    write_header (measure, header, flow_id, flow_origin, plan);
++    write_header (measure, header, flow_id, flow_origin, plan.prefix, plan.middle);
+     auto message = zlink::message_t::allocate (measure.size ());
+     if (!message.valid ())
+         throw std::bad_alloc ();
+     header_writer_t writer (reinterpret_cast<char *> (message.data ()));
+-    write_header (writer, header, flow_id, flow_origin, plan);
++    write_header (writer, header, flow_id, flow_origin, plan.prefix, plan.middle);
+     return message;
+ }
+ 
++zlink::message_t
++envelope_codec_t::encode_header (const envelope_header_t &header,
++                                 const detail::request_type_plan_t &type,
++                                 const detail::prepared_header_fragment_t &channel) const
++{
++    const auto [flow_id, origin] = validate_request_header (header, type, channel);
++    header_writer_t measure;
++    write_header (measure, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
++    auto message = zlink::message_t::allocate (measure.size ());
++    if (!message.valid ())
++        throw std::bad_alloc ();
++    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
++    write_header (writer, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
++    return message;
++}
++
++protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_payload (
++  envelope_header_t header,
++  zlink::message_t body,
++  std::shared_ptr<const detail::request_type_plan_t> type,
++  std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
++{
++    const auto [flow_id, origin] = validate_request_header (header, *type, *channel);
++    // Preserve the E1 flow snapshot when target resolution defers the E3 pack.
++    if (flow_id && !header.flow_id)
++        header.flow_id = *flow_id;
++    header.flow_origin = origin;
++    header_writer_t measure;
++    write_header (measure, header, header.flow_id ? &*header.flow_id : nullptr, header.flow_origin,
++                  channel->bytes, type->middle, type->prefix);
++    return [header = std::move (header), body = std::move (body), type = std::move (type),
++            channel = std::move (channel), size = measure.size ()] (
++             const std::optional<std::string> &flow_id, std::optional<flow_origin_t> flow_origin) {
++        auto write = [&] (std::span<std::byte> destination) {
++            header_writer_t writer (reinterpret_cast<char *> (destination.data ()));
++            write_header (writer, header, header.flow_id ? &*header.flow_id : nullptr,
++                          header.flow_origin, channel->bytes, type->middle, type->prefix);
++        };
++        return protocol::encode_application_envelope_message (size, std::ref (write), body.bytes (),
++                                                              flow_id, flow_origin);
++    };
++}
++
+ namespace
+ {
+ 
+@@ -1193,3 +1298,35 @@ result_t<zlink::message_t> envelope_codec_t::decode_body (const message_parts_t
+ }
+ 
+ } // namespace zlink::framework::runtime::messaging
++
++namespace zlink::framework::detail
++{
++prepared_header_fragment_t prepare_request_channel (std::string_view channel)
++{
++    prepared_header_fragment_t result;
++    try {
++        runtime::messaging::header_writer_t writer (result.bytes);
++        runtime::messaging::write_channel_fragment (writer, channel);
++    }
++    catch (const nlohmann::json::exception &) {
++        result.error = std::current_exception ();
++    }
++    return result;
++}
++
++request_type_plan_t prepare_request_type (std::string_view name, std::string content_type)
++{
++    request_type_plan_t result;
++    result.content_type = std::move (content_type);
++    try {
++        runtime::messaging::header_writer_t prefix (result.prefix);
++        runtime::messaging::header_writer_t middle (result.middle);
++        runtime::messaging::write_type_fragments (prefix, middle, name, result.content_type,
++                                                  runtime::messaging::message_kind_t::request);
++    }
++    catch (const nlohmann::json::exception &) {
++        result.error = std::current_exception ();
++    }
++    return result;
++}
++} // namespace zlink::framework::detail
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+index fda3e23614..b451f97508 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/envelope_codec.hpp
+@@ -2,6 +2,8 @@
+ #pragma once
+ #include <variant>
+ 
++#include "runtime/protocol/application_envelope_encoder.hpp"
++
+ #include <zlink/Contracts/Messaging/message.hpp>
+ #include <zlink/framework/contracts/codecs/serializer.hpp>
+ #include <zlink/framework/contracts/dispatch/execution.hpp>
+@@ -17,6 +19,11 @@
+ #include <utility>
+ #include <vector>
+ 
++namespace zlink::framework::runtime::protocol
++{
++struct application_payload_t;
++}
++
+ namespace zlink::framework::runtime::messaging
+ {
+ 
+@@ -169,6 +176,8 @@ class message_parts_t
+     std::span<const std::byte> part_bytes (std::size_t index) const;
+     message_parts_t (zlink::message_t header, zlink::message_t body);
+     explicit message_parts_t (std::vector<zlink::message_t> parts);
++    static message_parts_t from_envelope_encoder (protocol::application_envelope_encoder_t encode);
++    protocol::application_payload_t take_application_payload () &&;
+ 
+     std::size_t size () const noexcept;
+     const zlink::message_t &operator[] (std::size_t index) const;
+@@ -177,9 +186,10 @@ class message_parts_t
+ 
+   private:
+     friend class envelope_codec_t;
+-    std::variant<std::vector<zlink::message_t>,
+-                 const std::vector<zlink::message_t> *,
+-                 std::span<const std::span<const std::byte>>>
++    mutable std::variant<std::vector<zlink::message_t>,
++                         const std::vector<zlink::message_t> *,
++                         std::span<const std::span<const std::byte>>,
++                         protocol::application_envelope_encoder_t>
+       _parts;
+ };
+ 
+@@ -242,6 +252,14 @@ class envelope_codec_t
+     friend class client_call_codec_t;
+     zlink::message_t encode_header (const envelope_header_t &header,
+                                     std::string_view content_type) const;
++    zlink::message_t encode_header (const envelope_header_t &header,
++                                    const detail::request_type_plan_t &type,
++                                    const detail::prepared_header_fragment_t &channel) const;
++    protocol::application_envelope_encoder_t prepare_service_payload (
++      envelope_header_t header,
++      zlink::message_t body,
++      std::shared_ptr<const detail::request_type_plan_t> type,
++      std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+ };
+ 
+ } // namespace zlink::framework::runtime::messaging
+diff --git a/framework/languages/cpp/framework/src/runtime/messaging/submit_result_mapper.hpp b/framework/languages/cpp/framework/src/runtime/messaging/submit_result_mapper.hpp
+index 8bad1d2278..68bf90b6c7 100644
+--- a/framework/languages/cpp/framework/src/runtime/messaging/submit_result_mapper.hpp
++++ b/framework/languages/cpp/framework/src/runtime/messaging/submit_result_mapper.hpp
+@@ -64,6 +64,18 @@ inline framework_error_kind_t map_submit_result_error_kind (zlink::submit_result
+     return map_submit_result_exception (result, {}).kind ();
+ }
+ 
++inline framework_exception_t map_node_request_submit_exception (zlink::submit_result_t result)
++{
++    if (result == zlink::submit_result_t::not_found)
++        return framework_exception_t (framework_error_kind_t::not_found,
++                                      "MeshNode request target was not found");
++    if (result == zlink::submit_result_t::terminated)
++        return detail::make_boundary_exception (detail::boundary_error_t::shutdown,
++                                                "MeshNode request runtime is stopped");
++    return framework_exception_t (map_submit_result_error_kind (result),
++                                  "MeshNode request was not submitted");
++}
++
+ inline framework_exception_t map_request_result_exception (zlink::request_result_t result,
+                                                            std::string message)
+ {
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+index 8511be2dd0..c39387f304 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp
+@@ -91,6 +91,13 @@ class native_wire_writer_t
+     {
+         insert (position, bytes.begin (), bytes.end ());
+     }
++    void generate (std::size_t size, const std::function<void (std::span<std::byte>)> &write)
++    {
++        if (size > _message.size () - _size)
++            throw service_wire_error_t ("native wire writer exceeded allocated size");
++        write ({reinterpret_cast<std::byte *> (end ()), size});
++        _size += size;
++    }
+     zlink::message_t take () &&
+     {
+         if (_size != _message.size ())
+@@ -2923,22 +2930,38 @@ retain_application_messages (std::span<const zlink::message_t> parts)
+ }
+ } // namespace
+ 
++namespace
++{
++const std::string &multipart_packet_name_text ()
++{
++    static const std::string value (framework_multipart_packet_name);
++    return value;
++}
++const std::string &multipart_content_type_text ()
++{
++    static const std::string value (framework_multipart_content_type);
++    return value;
++}
++} // namespace
++
+ const std::string &application_payload_t::packet_name () const noexcept
+ {
+-    static const std::string multipart_name (framework_multipart_packet_name);
+-    return parts () ? multipart_name : std::get<byte_payload_t> (_body).packet_name;
++    return parts () || envelope_encoder () ? multipart_packet_name_text ()
++                                           : std::get<byte_payload_t> (_body).packet_name;
+ }
+ 
+ const std::string &application_payload_t::content_type () const noexcept
+ {
+-    static const std::string multipart_type (framework_multipart_content_type);
+-    return parts () ? multipart_type : std::get<byte_payload_t> (_body).content_type;
++    return parts () || envelope_encoder () ? multipart_content_type_text ()
++                                           : std::get<byte_payload_t> (_body).content_type;
+ }
+ 
+ application_payload_t::application_payload_t (const application_payload_t &other) :
+     flow_id (other.flow_id), flow_origin (other.flow_origin)
+ {
+-    if (const auto *parts = other.parts ()) {
++    if (const auto *encode = other.envelope_encoder ()) {
++        _body = *encode;
++    } else if (const auto *parts = other.parts ()) {
+         _body = retain_application_messages (*parts);
+     } else {
+         _body = std::get<byte_payload_t> (other._body);
+@@ -2952,6 +2975,23 @@ application_payload_t &application_payload_t::operator= (const application_paylo
+     return *this;
+ }
+ 
++application_payload_t
++application_payload_t::from_envelope_encoder (application_envelope_encoder_t encode)
++{
++    application_payload_t result;
++    result._body = std::move (encode);
++    return result;
++}
++
++void application_payload_t::materialize_envelope () const
++{
++    if (const auto *encode = envelope_encoder ()) {
++        auto frame = (*encode) (flow_id, flow_origin);
++        auto decoded = decode_application_payload (message_bytes (frame));
++        _body = std::move (decoded._body);
++    }
++}
++
+ application_payload_t application_payload_t::from_parts (const multipart_t &parts)
+ {
+     if (parts.empty ())
+@@ -3110,8 +3150,8 @@ bool operator== (const application_payload_t &left, const application_payload_t
+     return offset == bytes.size ();
+ }
+ 
+-template <typename Buffer>
+-Buffer encode_application_payload_into (const application_payload_t &payload)
++template <typename Buffer, typename Payload>
++Buffer encode_application_payload_into (const Payload &payload)
+ {
+     if (payload.flow_id.has_value () != payload.flow_origin.has_value ()) {
+         throw service_wire_error_t (
+@@ -3153,10 +3193,14 @@ Buffer encode_application_payload_into (const application_payload_t &payload)
+         append_u32 (result, static_cast<std::uint32_t> (parts->size ()));
+         for (const auto &part : *parts) {
+             append_u32 (result, static_cast<std::uint32_t> (part.size ()));
+-            const auto bytes = part.bytes ();
+-            if (!bytes.empty ()) {
+-                const auto *begin = reinterpret_cast<const std::uint8_t *> (bytes.data ());
+-                result.insert (result.end (), begin, begin + bytes.size ());
++            if constexpr (requires { part.append_to (result); }) {
++                part.append_to (result);
++            } else {
++                const auto bytes = part.bytes ();
++                if (!bytes.empty ()) {
++                    const auto *begin = reinterpret_cast<const std::uint8_t *> (bytes.data ());
++                    result.insert (result.end (), begin, begin + bytes.size ());
++                }
+             }
+         }
+     } else {
+@@ -3172,11 +3216,59 @@ Buffer encode_application_payload_into (const application_payload_t &payload)
+ 
+ std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload)
+ {
++    if (const auto *encode = payload.envelope_encoder ())
++        return (*encode) (payload.flow_id, payload.flow_origin).to_bytes ();
+     return encode_application_payload_into<std::vector<std::uint8_t>> (payload);
+ }
+ 
+ zlink::message_t encode_application_payload_message (const application_payload_t &payload)
+ {
++    if (const auto *encode = payload.envelope_encoder ())
++        return (*encode) (payload.flow_id, payload.flow_origin);
++    return encode_application_payload_into<native_wire_writer_t> (payload).take ();
++}
++
++namespace
++{
++struct envelope_part_t
++{
++    std::size_t length;
++    const std::function<void (std::span<std::byte>)> *write;
++    std::span<const std::byte> body;
++    std::size_t size () const noexcept { return length; }
++    void append_to (native_wire_writer_t &output) const
++    {
++        if (write)
++            output.generate (length, *write);
++        else if (!body.empty ()) {
++            const auto *begin = reinterpret_cast<const std::uint8_t *> (body.data ());
++            output.insert (output.end (), begin, begin + body.size ());
++        }
++    }
++};
++struct envelope_parts_t
++{
++    std::array<envelope_part_t, 2> messages;
++    std::optional<std::string> flow_id;
++    std::optional<flow_origin_t> flow_origin;
++    const auto *parts () const noexcept { return &messages; }
++    const std::string &packet_name () const noexcept { return multipart_packet_name_text (); }
++    const std::string &content_type () const noexcept { return multipart_content_type_text (); }
++    std::span<const std::uint8_t> payload_bytes () const noexcept { return {}; }
++};
++} // namespace
++
++zlink::message_t
++encode_application_envelope_message (std::size_t header_size,
++                                     const std::function<void (std::span<std::byte>)> &write_header,
++                                     std::span<const std::byte> body,
++                                     const std::optional<std::string> &flow_id,
++                                     std::optional<flow_origin_t> flow_origin)
++{
++    envelope_parts_t payload{{envelope_part_t{header_size, &write_header, {}},
++                              envelope_part_t{body.size (), nullptr, body}},
++                             flow_id,
++                             flow_origin};
+     return encode_application_payload_into<native_wire_writer_t> (payload).take ();
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
+index 9c9d01aa72..80ae03b1b1 100644
+--- a/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
++++ b/framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.hpp
+@@ -3,6 +3,7 @@
+ 
+ #include "runtime/mesh/service_topology_registry.hpp"
+ #include "runtime/operations/call_id.hpp"
++#include "runtime/protocol/application_envelope_encoder.hpp"
+ 
+ #include <service_wire_constants.hpp>
+ #include <service_wire_pilot_codec.hpp>
+@@ -12,6 +13,7 @@
+ #include <zlink/Contracts/Messaging/message.hpp>
+ 
+ #include <cstdint>
++#include <functional>
+ #include <memory>
+ #include <memory_resource>
+ #include <optional>
+@@ -88,17 +90,31 @@ struct application_payload_t
+     {
+     }
+ 
++    static application_payload_t from_envelope_encoder (application_envelope_encoder_t encode);
++    const application_envelope_encoder_t *envelope_encoder () const noexcept
++    {
++        return std::get_if<application_envelope_encoder_t> (&_body);
++    }
+     static application_payload_t from_parts (const multipart_t &parts);
+     static application_payload_t from_parts (multipart_t &&parts);
+     const multipart_t *parts () const noexcept { return std::get_if<multipart_t> (&_body); }
+     const std::vector<std::uint8_t> &payload_bytes () const
+     {
++        materialize_envelope ();
++        return std::get<byte_payload_t> (_body).bytes;
++    }
++    std::vector<std::uint8_t> &payload_bytes ()
++    {
++        materialize_envelope ();
+         return std::get<byte_payload_t> (_body).bytes;
+     }
+-    std::vector<std::uint8_t> &payload_bytes () { return std::get<byte_payload_t> (_body).bytes; }
+ 
+     void release_body ()
+     {
++        if (envelope_encoder ()) {
++            _body = multipart_t{};
++            return;
++        }
+         if (auto *messages = std::get_if<multipart_t> (&_body))
+             multipart_t{}.swap (*messages);
+         else
+@@ -112,14 +128,15 @@ struct application_payload_t
+     friend bool operator== (const application_payload_t &, const application_payload_t &);
+ 
+   private:
+-    // The codec owns either incoming bytes or outgoing parts, never both.
++    // The codec owns one body representation and materializes it only on demand.
+     struct byte_payload_t
+     {
+         std::string packet_name;
+         std::string content_type;
+         std::vector<std::uint8_t> bytes;
+     };
+-    std::variant<byte_payload_t, multipart_t> _body;
++    void materialize_envelope () const;
++    mutable std::variant<byte_payload_t, multipart_t, application_envelope_encoder_t> _body;
+ };
+ 
+ // Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
+@@ -1036,6 +1053,12 @@ service_wire_header_t decode_header (std::span<const std::uint8_t> bytes);
+ std::string decode_channel_send_header (std::span<const std::uint8_t> bytes);
+ std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload);
+ zlink::message_t encode_application_payload_message (const application_payload_t &payload);
++zlink::message_t
++encode_application_envelope_message (std::size_t header_size,
++                                     const std::function<void (std::span<std::byte>)> &write_header,
++                                     std::span<const std::byte> body,
++                                     const std::optional<std::string> &flow_id = {},
++                                     std::optional<flow_origin_t> flow_origin = {});
+ /* capture_flow gates the observation-only flow pair (flow-correlation §4):
+  * false skips it structurally — no semantic validation, no materialization —
+  * so malformed observation fields cannot fail a frame at Off or at pure
+diff --git a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+index aec912ab49..58f938e645 100644
+--- a/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp
+@@ -3401,29 +3401,9 @@ try {
+     auto classify = [host, target] (const result_t<bool> &result) {
+         if (!result)
+             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
+-        const auto accepted = result.value ();
+-        if (!accepted) {
+-            //  Spec 32-framework-error-model:76-77 -- a target this runtime has
+-            //  never admitted (absent from the live peer table) does not exist
+-            //  from the requester's perspective and must complete NotFound, not
+-            //  Unavailable. `submitted(false)` below collapses every rejected
+-            //  request_to_node into `not_connected` (-> Unavailable via
+-            //  boundary_error_t::disconnected, see call_facade_runtime.cpp), but
+-            //  that is only correct for a target that WAS reachable and merely
+-            //  is not right now. service_topology_registry_t has no "known but
+-            //  currently unreachable" state distinct from "not a peer" --
+-            //  disconnect() erases the peer entry outright -- so any target
+-            //  absent from the live peer table is, by this runtime's own model,
+-            //  simply a target that does not exist. Matches Java's
+-            //  ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState absent ->
+-            //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
+-            //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
+-            //  RequestResult.NotFound).
+-            if (!host->_transport->topology ().peer ({target.data (), target.size ()}))
+-                return result_t<zlink::submit_result_t>::success (
+-                  zlink::submit_result_t::not_found);
+-        }
+-        return result_t<zlink::submit_result_t>::success (submitted (accepted));
++        return result_t<zlink::submit_result_t>::success (
++          host->_transport->node_request_submission_result ({target.data (), target.size ()},
++                                                            result.value ()));
+     };
+     if (accepted.await_ready ())
+         return task_t<zlink::submit_result_t> (
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
+index 6edc3b22fd..e86d180c76 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
+@@ -100,7 +100,6 @@ TEST (RequestNativeCounts, RegistryReservationDoesNotCreateAPayloadPlaceholder)
+     EXPECT_EQ (calls[4], 0u);
+     EXPECT_TRUE (registry.unregister ({81, 1}));
+ }
+-#ifndef J1672_BEFORE
+ TEST (RequestNativeCounts, PackedReplyViewsStayUnderTheirParentWithoutNativeSlices)
+ {
+     std::vector<zlink::message_t> parts;
+@@ -154,7 +153,6 @@ TEST (RequestNativeCounts, WaitReadinessIsConsumedWithoutAnotherPollEvenAtPermit
+     }
+     node.stop ();
+ }
+-#endif
+ struct count_payload_t
+ {
+     static constexpr const char *packet_name = "CountPayload";
+@@ -539,8 +537,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
+     runtime.bind_mesh_node_transport (
+       "native-count", {}, [&] (const auto &rid, auto parts, auto timeout, auto receiver) {
+           physical_admission = receiver.admitted;
+-          source.request_node_reply (rid, std::move (parts).take_items (), timeout,
+-                                     std::move (receiver));
++          source.request_node_reply (rid, std::move (parts), timeout, std::move (receiver));
+       });
+     auto client = builder.route_client (serializers);
+     constexpr std::size_t requests = 8;
+@@ -572,11 +569,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
+                   codec.encode_raw_body_parts (header, zlink::message_t::from (std::string ("41")));
+                 replied = target.native_node ().reply (record.reply_token, response.items ());
+             };
+-#ifdef J1672_BEFORE
+-            target.dispatch_ready (receive).result ().value ();
+-#else
+             target.dispatch_ready (receive, true, {}, waited).result ().value ();
+-#endif
+         }
+         ASSERT_TRUE (replied);
+         fw::tests::count_native_calls.store (true);
+@@ -586,11 +579,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
+               std::chrono::ceil<std::chrono::milliseconds> (deadline
+                                                             - std::chrono::steady_clock::now ()),
+               false, {});
+-#ifdef J1672_BEFORE
+-            source.dispatch_ready (discard, false).result ().value ();
+-#else
+             source.dispatch_ready (discard, false, {}, waited).result ().value ();
+-#endif
+             if (fw::tests::native_completion_events.load () != completions) {
+                 ASSERT_TRUE (reply.result_for (std::chrono::ceil<std::chrono::milliseconds> (
+                   deadline - std::chrono::steady_clock::now ())));
+@@ -602,11 +591,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
+         EXPECT_EQ (reply.result ().value ().value, 41);
+         // Keep source cleanup in the measured window before excluding the next
+         // target turn. These are lifecycle counts, not elapsed-time budgets.
+-#ifdef J1672_BEFORE
+-        constexpr std::size_t closes_per_request = 21;
+-#else
+-        constexpr std::size_t closes_per_request = 10;
+-#endif
++        constexpr std::size_t closes_per_request = 9;
+         ASSERT_TRUE (calls.wait_for_closes ((i + 1) * closes_per_request, deadline));
+     }
+     source.stop ();
+@@ -615,11 +600,12 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
+       "source-native requests=%zu init=%zu init_size=%zu init_data=%zu copy=%zu "
+       "close=%zu poller_wait=%zu (excludes service controls; includes source shutdown)\n",
+       requests, calls[0], calls[1], calls[2], calls[3], calls[4], calls[5]);
+-    // Binding retains two native send views. Framework adds two inner parts
++    // Binding retains two native send views. Framework creates one typed body
+     // and two service parts; the receive owner initializes two adoption slots.
++    // The JSON header is written directly into the service payload frame.
+     EXPECT_EQ (calls[3], requests * 2);
+-    EXPECT_EQ (calls[0] + calls[1] + calls[2], requests * 8);
+-    EXPECT_EQ (calls[4], requests * 10);
++    EXPECT_EQ (calls[0] + calls[1] + calls[2], requests * 7);
++    EXPECT_EQ (calls[4], requests * 9);
+     target.stop ();
+ }
+ 
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp
+index 0b6cd66e15..00246d1e2a 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp
+@@ -230,8 +230,8 @@ TEST (RequestCallAllocations, UnknownLookupRetainsOwnerCancellationAcrossRuntime
+     // Cancellation §5.1 ends this owner's wait, without replacing the producer's result.
+     auto pending =
+       fw::detail::request_task_access_t::receive_public<transport_reply_t> ([&] (auto receiver) {
+-          runtime.request_node_reply (target, std::move (parts).take_items (),
+-                                      std::chrono::seconds (1), std::move (receiver));
++          runtime.request_node_reply (target, std::move (parts), std::chrono::seconds (1),
++                                      std::move (receiver));
+       });
+     auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+     ASSERT_EQ (store->calls, 1u);
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
+index 5092c61946..d9d7072fcb 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
+@@ -13,10 +13,6 @@
+ #include <atomic>
+ #include <optional>
+ #include <thread>
+-namespace zlink::framework::detail::test_creation_probe
+-{
+-extern std::atomic<void (*) ()> node_admission_observer_fault;
+-}
+ 
+ namespace zlink::framework::runtime::mesh
+ {
+@@ -63,7 +59,9 @@ struct request_receiver_mesh_t
+         return fw::detail::request_task_access_t::receive_public<int, reply_t> (
+           [&] (auto receiver) {
+               std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
+-              runtime.request_node_reply (target, std::move (parts), timeout, std::move (receiver));
++              runtime.request_node_reply (
++                target, fw::runtime::messaging::message_parts_t (std::move (parts)), timeout,
++                std::move (receiver));
+           },
+           [&conversions] (const fw::result_t<reply_t> &terminal) {
+               ++conversions;
+@@ -145,8 +143,7 @@ TEST (RequestCallAllocations, NodeAndChannelNameCaptureStorageBytes)
+     channel.bind_serializers (serializers);
+     channel.bind_mesh_node_transport (
+       "m", {}, [&] (const auto &rid, auto parts, auto timeout, auto receiver) {
+-          source.runtime.request_node_reply (rid, std::move (parts).take_items (), timeout,
+-                                             std::move (receiver));
++          source.runtime.request_node_reply (rid, std::move (parts), timeout, std::move (receiver));
+       });
+     channel.bind_mesh_channel_transport ("work", {}, [&] (auto, auto) {
+         return fw::request_task_t<reply_t> (fw::result_t<reply_t>::success (
+@@ -225,9 +222,8 @@ class held_mesh_nodes_t final : public fw::runtime::in_memory_location_repositor
+     }
+ };
+ 
+-void unknown_node_observer_failure (bool shutdown, bool native_rejection = false)
++void unknown_node_submission_terminal (bool shutdown, bool native_rejection = false)
+ {
+-    namespace probe = fw::detail::test_creation_probe;
+     auto store = std::make_shared<held_mesh_nodes_t> ();
+     request_receiver_mesh_t source (shutdown ? "unknown-shutdown" : "unknown-deadline", store);
+     store->hold = true;
+@@ -249,54 +245,69 @@ void unknown_node_observer_failure (bool shutdown, bool native_rejection = false
+     std::atomic<unsigned> public_results{0};
+     auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+     fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
+-    struct clear_fault_t
+-    {
+-        ~clear_fault_t () { probe::node_admission_observer_fault.store (nullptr); }
+-    } clear_fault;
+-    probe::node_admission_observer_fault.store (+[] { throw std::bad_alloc (); });
+     store->listed.complete (
+       fw::result_t<fw::location_page_t<fw::mesh_node_descriptor_t>>::success ({}));
+-    EXPECT_FALSE (pending.result ());
+-    // C1 already owns physical delivery, even when admission observation cannot be installed.
+-    if (!native_rejection)
++    if (native_rejection) {
++        // The classification continuation submits asynchronously after list completion.
++        ASSERT_FALSE (pending.result ());
++        ASSERT_TRUE (pending.admitted ().await_ready ());
++        ASSERT_FALSE (physical.result ());
++    } else {
++        auto &raw = source.runtime.native_node ().transport ();
++        const auto registration_deadline =
++          std::chrono::steady_clock::now () + std::chrono::seconds (2);
++        while (raw.pending_operation_count () == 0 && !pending.admitted ().await_ready ()
++               && std::chrono::steady_clock::now () < registration_deadline) {
++            source.pump ();
++            std::this_thread::yield ();
++        }
++        ASSERT_EQ (raw.pending_operation_count (), 1u);
++        EXPECT_FALSE (pending.admitted ().await_ready ());
+         EXPECT_FALSE (physical.await_ready ());
+-    if (shutdown || native_rejection)
+-        source.runtime.stop ();
+-    else
+-        EXPECT_EQ (source.runtime.native_node ()
+-                     .transport ()
+-                     .expire_requests (std::chrono::steady_clock::now () + std::chrono::seconds (6))
+-                     .result ()
+-                     .value (),
+-                   1u);
++        if (shutdown)
++            source.runtime.stop ();
++        else
++            EXPECT_EQ (
++              raw.expire_requests (std::chrono::steady_clock::now () + std::chrono::seconds (6))
++                .result ()
++                .value (),
++              1u);
++    }
++    // Binding owns native rejection classification; all stages retain that failure.
++    EXPECT_FALSE (pending.result ());
++    EXPECT_FALSE (pending.admitted ().result ());
+     EXPECT_FALSE (physical.result ());
++    const auto expected = native_rejection ? pending.admitted ().result ().error_kind ()
++                          : shutdown       ? fw::framework_error_kind_t::shutting_down
++                                           : fw::framework_error_kind_t::deadline_exceeded;
++    EXPECT_EQ (pending.result ().error_kind (), expected);
++    EXPECT_EQ (pending.admitted ().result ().error_kind (), expected);
++    EXPECT_EQ (physical.result ().error_kind (), expected);
+     source.runtime.stop ();
+     EXPECT_EQ (conversions.load (), 1u);
+     EXPECT_EQ (public_results.load (), 1u);
+ }
+ 
+-TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureAfterNativeRejectionDeliversOnce)
++TEST (RequestCallAllocations, UnknownNodeNativeRejectionDeliversOnce)
+ {
+-    unknown_node_observer_failure (false, true);
++    unknown_node_submission_terminal (false, true);
+ }
+ 
+-TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenDeadlineDeliversOnce)
++TEST (RequestCallAllocations, UnknownNodeDeadlineDeliversOnce)
+ {
+-    unknown_node_observer_failure (false);
++    unknown_node_submission_terminal (false);
+ }
+ 
+-TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenShutdownDeliversOnce)
++TEST (RequestCallAllocations, UnknownNodeShutdownDeliversOnce)
+ {
+-    unknown_node_observer_failure (true);
++    unknown_node_submission_terminal (true);
+ }
+ 
+-TEST (RequestCallAllocations,
+-      UnknownNodeAdmissionObserverSnapshotFailureAfterRegistryCloseDeliversOnce)
++TEST (RequestCallAllocations, UnknownNodeRegistryCloseDeliversOnce)
+ {
+-    namespace probe = fw::detail::test_creation_probe;
+-    const auto deliveries = probe::request_deliveries.load ();
++    const auto deliveries = fw::detail::test_creation_probe::request_deliveries.load ();
+     auto store = std::make_shared<held_mesh_nodes_t> ();
+-    request_receiver_mesh_t source ("unknown-observer-snapshot", store);
++    request_receiver_mesh_t source ("unknown-registry-close", store);
+     store->hold = true;
+     const auto target = zlink::routing_id_t::from ("closed-registry-classification");
+     std::atomic<unsigned> conversions{0};
+@@ -304,22 +315,12 @@ TEST (RequestCallAllocations,
+     auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+     EXPECT_FALSE (pending.admitted ().await_ready ());
+ 
++    source.runtime.expect_peer (target, "tcp://127.0.0.1:1", 1, "default");
+     fw::runtime::mesh::raw_mesh_node_owner_test_access_t::close_registry (
+       source.runtime.native_node ().transport ());
+     std::atomic<unsigned> public_results{0};
+     auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+     fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
+-    struct clear_fault_t
+-    {
+-        ~clear_fault_t ()
+-        {
+-            zlink::framework::detail::test_creation_probe::node_admission_observer_context_fault
+-              .store (nullptr);
+-            zlink::framework::detail::test_creation_probe::task_terminal_context_fault.store (
+-              nullptr);
+-        }
+-    } clear_fault;
+-    probe::node_admission_observer_context_fault.store (+[] { throw std::bad_alloc (); });
+     store->listed.complete (
+       fw::result_t<fw::location_page_t<fw::mesh_node_descriptor_t>>::success ({}));
+ 
+@@ -328,8 +329,8 @@ TEST (RequestCallAllocations,
+         std::this_thread::yield ();
+     ASSERT_TRUE (pending.await_ready ());
+     EXPECT_FALSE (pending.result ());
+-    EXPECT_EQ (probe::node_admission_observer_context_fault.load (), nullptr);
+-    EXPECT_EQ (probe::task_terminal_context_fault.load (), nullptr);
++    EXPECT_EQ (pending.admitted ().result ().error_kind (),
++               fw::framework_error_kind_t::shutting_down);
+ 
+     const auto physical_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+     while (!physical.await_ready () && std::chrono::steady_clock::now () < physical_deadline)
+@@ -339,7 +340,7 @@ TEST (RequestCallAllocations,
+     if (physical_ready)
+         EXPECT_FALSE (physical.result ());
+     source.runtime.stop ();
+-    EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
++    EXPECT_EQ (fw::detail::test_creation_probe::request_deliveries.load () - deliveries, 1u);
+     EXPECT_EQ (conversions.load (), 1u);
+     EXPECT_EQ (public_results.load (), 1u);
+ }
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
+index 21dea1e000..3485ad2ace 100644
+--- a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
+@@ -949,8 +949,13 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithout
+       [action = publication_copy_action_t ([&] {
+            if (std::exchange (compete, false)) {
+                ++competing_publications;
+-               state->publish_node_transports (
+-                 [] (auto &index) { index.route_channels.insert ("concurrent-route"); });
++               state->publish_node_transports ([] (auto &index) {
++                   index.nodes.emplace (
++                     "concurrent-route",
++                     detail::channel_runtime_state_t::node_transport_index_t::entry_t{
++                       std::shared_ptr<detail::route_channel_runtime_t>{},
++                       detail::prepare_request_channel ("concurrent-route")});
++               });
+                EXPECT_TRUE (state->spot_mesh_requesters.contains ("retry"));
+                signalled = true;
+                prepared.set_value ();
+@@ -991,7 +996,7 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithout
+         prepared_future.get ();
+         const auto before =
+           std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+-        EXPECT_TRUE (before->route_channels.contains ("concurrent-route"));
++        EXPECT_TRUE (before->nodes.contains ("concurrent-route"));
+         EXPECT_FALSE (before->spot_mesh_senders.contains ("retry"));
+     }
+     binder.join ();
+@@ -999,7 +1004,7 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithout
+         std::rethrow_exception (bind_error);
+     const auto index =
+       std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+-    ASSERT_TRUE (index->route_channels.contains ("concurrent-route"));
++    ASSERT_TRUE (index->nodes.contains ("concurrent-route"));
+     ASSERT_TRUE (index->spot_mesh_senders.contains ("existing"));
+     ASSERT_TRUE (index->spot_mesh_senders.contains ("retry"));
+     EXPECT_EQ (competing_publications, 1u);
+@@ -1068,20 +1073,22 @@ TEST (CppFrameworkRouteClientChannelRouting, BothRouteInitializersPublishAfterPr
+             EXPECT_TRUE (state->route_channels.contains ("published"));
+             EXPECT_TRUE (state->route_channels.at ("published")->running ());
+             EXPECT_EQ (std::atomic_load (&state->node_transports), before);
+-            EXPECT_FALSE (before->route_channels.contains ("published"));
++            EXPECT_FALSE (before->nodes.contains ("published"));
+         }
+         initializer.join ();
+         if (initialization_error)
+             std::rethrow_exception (initialization_error);
+         const auto after = std::atomic_load (&state->node_transports);
+-        EXPECT_TRUE (after->route_channels.contains ("published"));
++        EXPECT_TRUE (after->nodes.contains ("published"));
++        EXPECT_EQ (std::get<std::shared_ptr<detail::route_channel_runtime_t>> (
++                     after->nodes.at ("published").transport),
++                   state->route_channels.at ("published"));
+         EXPECT_TRUE (after->spot_mesh_senders.contains ("existing"));
+-        EXPECT_FALSE (before->route_channels.contains ("published"));
++        EXPECT_FALSE (before->nodes.contains ("published"));
+         manager.initialize_route_channels (std::vector<std::string>{"published"});
+         EXPECT_EQ (std::atomic_load (&state->node_transports), after);
+         channel.close ();
+-        EXPECT_TRUE (
+-          std::atomic_load (&state->node_transports)->route_channels.contains ("published"));
++        EXPECT_TRUE (std::atomic_load (&state->node_transports)->nodes.contains ("published"));
+     }
+ }
+ 
+diff --git a/framework/languages/cpp/framework/src/runtime/protocol/application_envelope_encoder.hpp b/framework/languages/cpp/framework/src/runtime/protocol/application_envelope_encoder.hpp
+new file mode 100644
+index 0000000000..47d3e55568
+--- /dev/null
++++ b/framework/languages/cpp/framework/src/runtime/protocol/application_envelope_encoder.hpp
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++#pragma once
++
++#include <zlink/Contracts/Messaging/message.hpp>
++#include <zlink/framework/contracts/dispatch/execution.hpp>
++
++#include <functional>
++#include <optional>
++#include <string>
++
++namespace zlink::framework::runtime::protocol
++{
++using application_envelope_encoder_t = std::function<zlink::message_t (
++  const std::optional<std::string> &, std::optional<flow_origin_t>)>;
++} // namespace zlink::framework::runtime::protocol
+diff --git a/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp
+new file mode 100644
+index 0000000000..7532f84353
+--- /dev/null
++++ b/framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp
+@@ -0,0 +1,213 @@
++/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
++
++#include "runtime/diagnostics/flow_context.hpp"
++#include "runtime/messaging/client_call_codec.hpp"
++#include "runtime/protocol/service_wire_codec.hpp"
++
++#include <zlink/framework/detail/binary_text_codec.hpp>
++
++#include <gtest/gtest.h>
++#include <nlohmann/json.hpp>
++
++#include <fstream>
++#include <string>
++
++namespace
++{
++namespace fw = zlink::framework;
++namespace messaging = fw::runtime::messaging;
++namespace protocol = fw::runtime::protocol;
++
++const nlohmann::json &wire_fixtures ()
++{
++    static const auto fixtures = [] {
++        std::ifstream input (ZLINK_REQUEST_WIRE_FIXTURE_PATH);
++        return nlohmann::json::parse (input);
++    }();
++    return fixtures.at ("cases");
++}
++
++messaging::envelope_header_t request_header (int scenario)
++{
++    messaging::envelope_header_t header;
++    header.kind = messaging::message_kind_t::request;
++    header.channel_name = scenario == 1 ? "b\\\"ench" : "bench";
++    header.message_name = "BenchPayload";
++    header.content_type = "application/x-protobuf";
++    header.correlation_id = "123abc";
++    header.deadline = "2026-11-07T12:34:56Z";
++    if (scenario == 2)
++        header.metadata = {{"escape\n", "v\\\"\t"}, {"utf8", "한글"}};
++    if (scenario == 3) {
++        header.flow_id = "019a55d5-0000-7000-8000-000000000001";
++        header.flow_origin = fw::flow_origin_t::application;
++    }
++    if (scenario == 4) {
++        header.topic = "topic";
++        header.source = "source";
++    }
++    if (scenario == 5)
++        header.deadline.reset ();
++    return header;
++}
++
++fw::encoded_payload_t request_payload ()
++{
++    // BenchPayload { bytes body = 1; }: protobuf tag and length, then the 1 KiB body.
++    std::string body ("\x0a\x80\x08", 3);
++    body.append (1024, '\xab');
++    return fw::encoded_payload_t::from_string (body);
++}
++
++messaging::message_parts_t encode_request (messaging::envelope_header_t header, bool service)
++{
++    auto type = std::make_shared<const fw::detail::request_type_plan_t> (
++      fw::detail::prepare_request_type (std::string_view (header.message_name),
++                                        std::string (std::string_view (header.content_type))));
++    auto channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
++      fw::detail::prepare_request_channel (std::string_view (header.channel_name)));
++    messaging::client_call_codec_t codec;
++    return service ? codec.encode_service_payload_parts (std::move (header), request_payload (),
++                                                         std::move (type), std::move (channel))
++                   : codec.encode_payload_parts (std::move (header), request_payload (),
++                                                 std::move (type), std::move (channel));
++}
++
++std::string frame_hex (const zlink::message_t &frame)
++{
++    return fw::detail::encode_hex (frame.bytes ());
++}
++
++class RequestWireIdentity : public testing::TestWithParam<int>
++{
++};
++
++TEST_P (RequestWireIdentity, PreparedServiceAndRouteMatchMainEncoderBytes)
++{
++    const auto scenario = GetParam ();
++    const auto &fixture = wire_fixtures ().at (scenario);
++    SCOPED_TRACE (fixture.at ("name").get<std::string> ());
++    const auto expected = fixture.at ("application_payload_hex").get<std::string> ();
++    EXPECT_EQ (frame_hex (protocol::encode_node_request_header_message (0x123abc)),
++               fixture.at ("service_header_hex").get<std::string> ());
++    for (const bool service : {false, true}) {
++        SCOPED_TRACE (service ? "MeshNode" : "RouteChannel");
++        auto parts = encode_request (request_header (scenario), service);
++        auto application = std::move (parts).take_application_payload ();
++        auto frame = protocol::encode_application_payload_message (application);
++        EXPECT_EQ (frame_hex (frame), expected);
++        EXPECT_EQ (fw::detail::encode_hex (std::span<const std::uint8_t> (
++                     protocol::encode_application_payload (application))),
++                   expected);
++    }
++}
++
++INSTANTIATE_TEST_SUITE_P (MainEncoderFixtures, RequestWireIdentity, testing::Range (0, 6));
++
++TEST (RequestWireIdentity, ChangedByteDoesNotMatchFixture)
++{
++    auto parts = encode_request (request_header (0), true);
++    auto frame =
++      protocol::encode_application_payload_message (std::move (parts).take_application_payload ());
++    const auto expected =
++      wire_fixtures ().at (0).at ("application_payload_hex").get<std::string> ();
++    ASSERT_EQ (frame_hex (frame), expected);
++    reinterpret_cast<std::byte *> (frame.data ())[frame.size () - 1] ^= std::byte{1};
++    EXPECT_NE (frame_hex (frame), expected);
++}
++
++TEST (RequestWireIdentity, InvalidMetadataFailsBeforeServicePacking)
++{
++    for (const bool service : {false, true}) {
++        auto header = request_header (0);
++        header.metadata = {{std::string ("bad\0key", 7), "value"}};
++        try {
++            (void) encode_request (std::move (header), service);
++            FAIL () << "Invalid metadata reached transport packing";
++        }
++        catch (const fw::framework_exception_t &error) {
++            EXPECT_EQ (error.kind (), fw::framework_error_kind_t::protocol_error);
++        }
++    }
++}
++
++
++TEST (RequestWireIdentity, InvalidStaticTextFailsBeforeServicePacking)
++{
++    for (const bool service : {false, true}) {
++        for (int field = 0; field != 3; ++field) {
++            auto header = request_header (0);
++            if (field == 0)
++                header.channel_name = std::string (1, '\xff');
++            else if (field == 1)
++                header.message_name = std::string (1, '\xff');
++            else
++                header.content_type = std::string (1, '\xff');
++            EXPECT_THROW (encode_request (std::move (header), service), nlohmann::json::type_error);
++        }
++    }
++}
++
++TEST (RequestWireIdentity, ServiceRetainsSubmitFlowAfterAmbientScopeEnds)
++{
++    auto parts = [] {
++        const fw::runtime::flow_context_t::scope_t flow (fw::runtime::flow_value_t{
++          "019a55d5-0000-7000-8000-000000000001", fw::flow_origin_t::application,
++          fw::message_flow_log_mode_t::normal});
++        return encode_request (request_header (0), true);
++    }();
++    auto frame =
++      protocol::encode_application_payload_message (std::move (parts).take_application_payload ());
++    EXPECT_EQ (frame_hex (frame),
++               wire_fixtures ().at (3).at ("application_payload_hex").get<std::string> ());
++}
++
++TEST (RequestWireIdentity, CopiesCanMaterializePartsAndReleaseWithoutEncoding)
++{
++    auto parts = encode_request (request_header (2), true);
++    auto copied = parts;
++    EXPECT_EQ (copied.size (), 2u);
++    auto application = std::move (parts).take_application_payload ();
++    auto application_copy = application;
++    auto materialized =
++      protocol::application_payload_t::from_parts (std::move (copied).take_items ());
++    EXPECT_EQ (application_copy, materialized);
++    EXPECT_EQ (application, application_copy);
++    EXPECT_EQ (frame_hex (protocol::encode_application_payload_message (materialized)),
++               wire_fixtures ().at (2).at ("application_payload_hex").get<std::string> ());
++
++    unsigned encoded = 0;
++    auto discarded =
++      protocol::application_payload_t::from_envelope_encoder ([&] (const auto &, auto) {
++          ++encoded;
++          return zlink::message_t::from ("discarded");
++      });
++    discarded.release_body ();
++    EXPECT_EQ (encoded, 0u);
++    ASSERT_NE (discarded.parts (), nullptr);
++    EXPECT_TRUE (discarded.parts ()->empty ());
++}
++
++TEST (RequestWireIdentity, OuterFlowUsesTheSharedWireValidationAndWriter)
++{
++    for (const bool service : {false, true}) {
++        auto parts = encode_request (request_header (0), service);
++        auto application = std::move (parts).take_application_payload ();
++        application.flow_id = "019a55d5-0000-7000-8000-000000000001";
++        EXPECT_THROW (protocol::encode_application_payload_message (application),
++                      protocol::service_wire_error_t);
++        EXPECT_THROW (protocol::encode_application_payload (application),
++                      protocol::service_wire_error_t);
++        application.flow_origin = fw::flow_origin_t::application;
++        auto frame = protocol::encode_application_payload_message (application);
++        auto decoded = protocol::decode_application_payload (protocol::message_bytes (frame));
++        EXPECT_EQ (decoded.flow_id, application.flow_id);
++        EXPECT_EQ (decoded.flow_origin, application.flow_origin);
++        EXPECT_EQ (protocol::encode_application_payload (decoded), frame.to_bytes ());
++        EXPECT_EQ (protocol::encode_application_payload (application), frame.to_bytes ());
++        application.flow_id = "invalid";
++        EXPECT_THROW (protocol::encode_application_payload_message (application),
++                      protocol::service_wire_error_t);
++    }
++}
++} // namespace
+diff --git a/framework/languages/cpp/tests/fixtures/request-wire-main-213e579f52.json b/framework/languages/cpp/tests/fixtures/request-wire-main-213e579f52.json
+new file mode 100644
+index 0000000000..42a2f542d5
+--- /dev/null
++++ b/framework/languages/cpp/tests/fixtures/request-wire-main-213e579f52.json
+@@ -0,0 +1,37 @@
++{
++  "source_revision": "213e579f52",
++  "encoder": "client_call_codec_t::encode_payload_parts -> application_payload_t::from_parts -> encode_application_payload_message",
++  "body": "BenchPayload field 1, bytes(1024, 0xab); protobuf tag 0a and length 8008",
++  "cases": [
++    {
++      "name": "basic",
++      "service_header_hex": "5a4d0111000000000000123abc",
++      "application_payload_hex": "0100000569175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000052f00000002000001207b226368616e6e656c4e616d65223a2262656e6368222c22636f6e74656e7454797065223a226170706c69636174696f6e2f782d70726f746f627566222c22636f7272656c6174696f6e4964223a22313233616263222c22646561646c696e65223a22323032362d31312d30375431323a33343a35365a222c226572726f72436f6465223a6e756c6c2c226572726f724d657373616765223a6e756c6c2c22666c6f774964223a6e756c6c2c22666c6f774f726967696e223a6e756c6c2c22666f726d61744d61726b6572223a3234322c226b696e64223a312c226d6573736167654e616d65223a2242656e63685061796c6f6164222c226d65746164617461223a7b7d2c22736f75726365223a6e756c6c2c22746f706963223a6e756c6c7d000004030a8008abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
++    },
++    {
++      "name": "escaped_channel",
++      "service_header_hex": "5a4d0111000000000000123abc",
++      "application_payload_hex": "010000056d175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000053300000002000001247b226368616e6e656c4e616d65223a22625c5c5c22656e6368222c22636f6e74656e7454797065223a226170706c69636174696f6e2f782d70726f746f627566222c22636f7272656c6174696f6e4964223a22313233616263222c22646561646c696e65223a22323032362d31312d30375431323a33343a35365a222c226572726f72436f6465223a6e756c6c2c226572726f724d657373616765223a6e756c6c2c22666c6f774964223a6e756c6c2c22666c6f774f726967696e223a6e756c6c2c22666f726d61744d61726b6572223a3234322c226b696e64223a312c226d6573736167654e616d65223a2242656e63685061796c6f6164222c226d65746164617461223a7b7d2c22736f75726365223a6e756c6c2c22746f706963223a6e756c6c7d000004030a8008abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
++    },
++    {
++      "name": "metadata",
++      "service_header_hex": "5a4d0111000000000000123abc",
++      "application_payload_hex": "010000058d175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000055300000002000001447b226368616e6e656c4e616d65223a2262656e6368222c22636f6e74656e7454797065223a226170706c69636174696f6e2f782d70726f746f627566222c22636f7272656c6174696f6e4964223a22313233616263222c22646561646c696e65223a22323032362d31312d30375431323a33343a35365a222c226572726f72436f6465223a6e756c6c2c226572726f724d657373616765223a6e756c6c2c22666c6f774964223a6e756c6c2c22666c6f774f726967696e223a6e756c6c2c22666f726d61744d61726b6572223a3234322c226b696e64223a312c226d6573736167654e616d65223a2242656e63685061796c6f6164222c226d65746164617461223a7b226573636170655c6e223a22765c5c5c225c74222c2275746638223a22ed959ceab880227d2c22736f75726365223a6e756c6c2c22746f706963223a6e756c6c7d000004030a8008abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
++    },
++    {
++      "name": "flow",
++      "service_header_hex": "5a4d0111000000000000123abc",
++      "application_payload_hex": "0100000588175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000054e000000020000013f7b226368616e6e656c4e616d65223a2262656e6368222c22636f6e74656e7454797065223a226170706c69636174696f6e2f782d70726f746f627566222c22636f7272656c6174696f6e4964223a22313233616263222c22646561646c696e65223a22323032362d31312d30375431323a33343a35365a222c226572726f72436f6465223a6e756c6c2c226572726f724d657373616765223a6e756c6c2c22666c6f774964223a2230313961353564352d303030302d373030302d383030302d303030303030303030303031222c22666c6f774f726967696e223a332c22666f726d61744d61726b6572223a3234322c226b696e64223a312c226d6573736167654e616d65223a2242656e63685061796c6f6164222c226d65746164617461223a7b7d2c22736f75726365223a6e756c6c2c22746f706963223a6e756c6c7d000004030a8008abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
++    },
++    {
++      "name": "topic_source",
++      "service_header_hex": "5a4d0111000000000000123abc",
++      "application_payload_hex": "0100000570175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000053600000002000001277b226368616e6e656c4e616d65223a2262656e6368222c22636f6e74656e7454797065223a226170706c69636174696f6e2f782d70726f746f627566222c22636f7272656c6174696f6e4964223a22313233616263222c22646561646c696e65223a22323032362d31312d30375431323a33343a35365a222c226572726f72436f6465223a6e756c6c2c226572726f724d657373616765223a6e756c6c2c22666c6f774964223a6e756c6c2c22666c6f774f726967696e223a6e756c6c2c22666f726d61744d61726b6572223a3234322c226b696e64223a312c226d6573736167654e616d65223a2242656e63685061796c6f6164222c226d65746164617461223a7b7d2c22736f75726365223a22736f75726365222c22746f706963223a22746f706963227d000004030a8008abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
++    },
++    {
++      "name": "no_deadline",
++      "service_header_hex": "5a4d0111000000000000123abc",
++      "application_payload_hex": "0100000557175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000051d000000020000010e7b226368616e6e656c4e616d65223a2262656e6368222c22636f6e74656e7454797065223a226170706c69636174696f6e2f782d70726f746f627566222c22636f7272656c6174696f6e4964223a22313233616263222c22646561646c696e65223a6e756c6c2c226572726f72436f6465223a6e756c6c2c226572726f724d657373616765223a6e756c6c2c22666c6f774964223a6e756c6c2c22666c6f774f726967696e223a6e756c6c2c22666f726d61744d61726b6572223a3234322c226b696e64223a312c226d6573736167654e616d65223a2242656e63685061796c6f6164222c226d65746164617461223a7b7d2c22736f75726365223a6e756c6c2c22746f706963223a6e756c6c7d000004030a8008abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
++    }
++  ]
++}

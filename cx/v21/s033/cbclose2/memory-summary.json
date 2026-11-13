@@ -1,0 +1,37 @@
+{
+  "after-admission-memory.log": {
+    "samples": 2,
+    "min_kB": 19521100,
+    "min_GiB": 18.616771697998047
+  },
+  "after-full-binding-memory.log": {
+    "samples": 31,
+    "min_kB": 20247608,
+    "min_GiB": 19.30962371826172
+  },
+  "after-full-memory.log": {
+    "samples": 54,
+    "min_kB": 25327700,
+    "min_GiB": 24.154376983642578
+  },
+  "after-races-memory.log": {
+    "samples": 49,
+    "min_kB": 18074080,
+    "min_GiB": 17.236785888671875
+  },
+  "extra-memory.log": {
+    "samples": 1,
+    "min_kB": 27330696,
+    "min_GiB": 26.06458282470703
+  },
+  "main-admission-memory.log": {
+    "samples": 1,
+    "min_kB": 26346832,
+    "min_GiB": 25.126296997070312
+  },
+  "main-races-memory.log": {
+    "samples": 30,
+    "min_kB": 26008124,
+    "min_GiB": 24.803279876708984
+  }
+}

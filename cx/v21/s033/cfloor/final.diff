@@ -1,0 +1,416 @@
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+index 82c20c79ec..69860de8d7 100644
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -793,6 +793,39 @@ namespace fw = zlink::framework;
+ using payload_t = zlink::framework::bench::withgrpc::BenchPayload;
+ using json = nlohmann::json;
+ 
++// Temporary V2/V3 native observers. Results live in stable driver slots;
++// no Framework task state, request_task, or receiver is created.
++struct cfloor_admission_state_t {
++ std::atomic<bool> ready{true};
++ std::exception_ptr failure;
++};
++template <typename TSlot>
++fw::detail::cfloor::detached_t cfloor_observe_reply(
++  zlink::async_result_t<std::vector<zlink::message_t>> native, TSlot *output,
++  std::shared_ptr<void> slot_lifetime,
++  std::shared_ptr<completion_signal_t> signal, size_t slot) {
++ (void)slot_lifetime;
++ try {
++  output->reply.emplace(co_await std::move(native));
++  if (output->reply->empty()) throw std::runtime_error("cfloor empty native reply");
++ } catch (...) {
++  output->failure = std::current_exception();
++ }
++ signal->notify(slot);
++}
++fw::detail::cfloor::detached_t cfloor_observe_admitted(
++  zlink::async_result_t<void> native,
++  std::shared_ptr<cfloor_admission_state_t> output,
++  std::shared_ptr<completion_signal_t> signal, size_t slot) {
++ try {
++  co_await std::move(native);
++ } catch (...) {
++  output->failure = std::current_exception();
++ }
++ output->ready.store(true, std::memory_order_release);
++ signal->notify(slot);
++}
++
+ class framework_driver_t final : public driver_t
+ {
+   public:
+@@ -844,10 +877,31 @@ class framework_driver_t final : public driver_t
+               counters_t &counters,
+               latency_sampler_t *latency) override
+     {
++        if (fw::detail::cfloor::variant > 0) {
++            // One normal request prepares this phase's constant service frame.
++            // Count it in the same cell; it is not an unreported server message.
++            fw::detail::cfloor::enabled.store(false, std::memory_order_relaxed);
++            fw::detail::cfloor::capture.store(true, std::memory_order_release);
++            auto payload = make_payload(size, phase);
++            counters.enter();
++            counters.submitted.fetch_add(1, std::memory_order_relaxed);
++            auto prepare = _client->request_to_node("bench", _target_node, std::move(payload))
++              .timeout(std::chrono::milliseconds(_options.request_timeout_ms)).async<payload_t>();
++            const auto &ready = prepare.result();
++            counters.leave();
++            if (!ready || !fw::detail::cfloor::binding_request || fw::detail::cfloor::capture.load())
++                throw std::runtime_error("cfloor could not prepare native request frame");
++            counters.completed.fetch_add(1, std::memory_order_relaxed);
++            fw::detail::cfloor::enabled.store(true, std::memory_order_release);
++        }
++        if (fw::detail::cfloor::variant >= 2) {
++            run_cfloor_tasks(deadline, size, phase, counters, latency);
++        } else {
+         if (_command)
+             run_tasks<void> (deadline, size, phase, counters, latency);
+         else
+             run_tasks<payload_t> (deadline, size, phase, counters, latency);
++        }
+     }
+ 
+   private:
+@@ -957,7 +1011,7 @@ class framework_driver_t final : public driver_t
+                 const auto &result = item.task.result ();
+                 bool valid = static_cast<bool> (result);
+                 if constexpr (!std::is_void_v<T>) {
+-                    if (valid) {
++                    if (valid && fw::detail::cfloor::variant == 0) {
+                         const auto &reply = result.value ();
+                         decoded_header_t header;
+                         valid =
+@@ -998,6 +1052,100 @@ class framework_driver_t final : public driver_t
+         close_window (deadline);
+     }
+ 
++    void run_cfloor_tasks (clock_t_::time_point deadline,
++                          size_t size,
++                          phase_t phase,
++                          counters_t &counters,
++                          latency_sampler_t *latency)
++    {
++        struct pending_t
++        {
++            pending_t (uint64_t sent, uint64_t sequence) : sent_ns(sent), seq(sequence) {}
++            std::optional<std::vector<zlink::message_t>> reply;
++            std::exception_ptr failure;
++            uint64_t sent_ns;
++            uint64_t seq;
++        };
++        // Stable addresses let the native completion fill the slot directly.
++        // One owner per phase also keeps late results safe at a drain bound.
++        auto slot_lifetime = std::make_shared<std::deque<std::optional<pending_t>>>();
++        auto &pending = *slot_lifetime;
++        std::vector<size_t> free_slots;
++        std::vector<size_t> completed_slots;
++        size_t in_flight = 0;
++        constexpr size_t admission_notification = std::numeric_limits<size_t>::max ();
++        auto preceding_admission = std::make_shared<cfloor_admission_state_t>();
++        auto completion_signal = std::make_shared<completion_signal_t> ();
++        const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
++        const auto can_submit = [&] (clock_t_::time_point now) {
++            return can_submit_framework_task<payload_t> (now, deadline, in_flight, _window, [&] {
++                if (!preceding_admission->ready.load(std::memory_order_acquire)) return false;
++                if (preceding_admission->failure) std::rethrow_exception(preceding_admission->failure);
++                return true;
++            });
++        };
++        do {
++            close_window (deadline);
++            completed_slots.clear ();
++            completion_signal->take_completed (completed_slots);
++            if (can_submit (clock_t_::now ())) {
++                const uint64_t sent = now_ns ();
++                auto payload = make_payload (size, phase);
++                asm volatile("" : : "g"(&payload) : "memory");
++                counters.enter ();
++                counters.submitted.fetch_add (1, std::memory_order_relaxed);
++                size_t slot = 0;
++                if (free_slots.empty ()) {
++                    slot = pending.size ();
++                    pending.emplace_back (std::nullopt);
++                } else {
++                    slot = free_slots.back ();
++                    free_slots.pop_back ();
++                }
++                auto submission = fw::detail::cfloor::variant == 2
++                  ? _client->request_to_node("bench", _target_node, std::move(payload))
++                      .timeout(std::chrono::milliseconds(_options.request_timeout_ms)).cfloor_async()
++                  : fw::detail::cfloor::binding_request();
++                if (submission.result == ZLINK_SUBMIT_BACKPRESSURED) {
++                    preceding_admission->ready.store(false, std::memory_order_relaxed);
++                    cfloor_observe_admitted(std::move(submission.admitted), preceding_admission,
++                                            completion_signal, admission_notification);
++                } else if (submission.result == ZLINK_SUBMIT_OK) {
++                    completion_signal->notify(admission_notification);
++                } else {
++                    throw std::runtime_error("cfloor native submission failed");
++                }
++                pending[slot].emplace(sent, _seq - 1);
++                cfloor_observe_reply(std::move(submission.reply), &*pending[slot], slot_lifetime,
++                                     completion_signal, slot);
++                ++in_flight;
++            }
++            for (const size_t slot : completed_slots) {
++                if (slot == admission_notification) continue;
++                auto &item = *pending[slot];
++                if (item.failure) {
++                    try { std::rethrow_exception(item.failure); }
++                    catch (const std::exception &error) { counters.record_exception(error); }
++                } else if (item.reply) {
++                    counters.completed.fetch_add (1, std::memory_order_relaxed);
++                    if (latency)
++                        latency->add_us (static_cast<double> (now_ns () - item.sent_ns) / 1000.0);
++                } else {
++                    throw std::runtime_error("cfloor reply notification has no native result");
++                }
++                counters.leave ();
++                pending[slot].reset ();
++                free_slots.push_back (slot);
++                --in_flight;
++            }
++            const auto now = clock_t_::now ();
++            if (now >= hard_stop) break;
++            if (in_flight != 0 && !can_submit (now))
++                completion_signal->wait_until (now < deadline ? deadline : hard_stop);
++        } while (clock_t_::now () < deadline || in_flight != 0);
++        close_window (deadline);
++    }
++
+     const options_t &_options;
+     int _window;
+     bool _command;
+diff --git a/framework/bench/grpc/cpp/run_local.sh b/framework/bench/grpc/cpp/run_local.sh
+index edb5410cf2..ecda846f29 100755
+--- a/framework/bench/grpc/cpp/run_local.sh
++++ b/framework/bench/grpc/cpp/run_local.sh
+@@ -61,7 +61,7 @@ for run in $(seq 1 "${RUNS}"); do
+         mkdir -p "${cell_dir}"
+         log "cell=${cell_id} run=${run}: start target B then source A"
+ 
+-        setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -76,7 +76,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
++        setsid taskset -c 0-7 "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/dotnet/run_local.sh b/framework/bench/grpc/dotnet/run_local.sh
+index 4874eb88a9..a1bf2e8534 100755
+--- a/framework/bench/grpc/dotnet/run_local.sh
++++ b/framework/bench/grpc/dotnet/run_local.sh
+@@ -62,7 +62,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -80,7 +80,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/java/run_local.sh b/framework/bench/grpc/java/run_local.sh
+index e9ab239086..11621d900b 100755
+--- a/framework/bench/grpc/java/run_local.sh
++++ b/framework/bench/grpc/java/run_local.sh
+@@ -70,7 +70,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -88,7 +88,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/bench/grpc/node/run_local.sh b/framework/bench/grpc/node/run_local.sh
+index a04f4b1708..172a2ce554 100644
+--- a/framework/bench/grpc/node/run_local.sh
++++ b/framework/bench/grpc/node/run_local.sh
+@@ -68,7 +68,7 @@ for run in $(seq 1 "${RUNS}"); do
+         target_stats_file="${cell_dir}/target-stats.json"
+         echo "[bench] cell=${cell_id} run=${run} starting target B then source A" >&2
+ 
+-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
++        setsid taskset -c 8-15 "${target_command[@]}" >"${target_log}" 2>&1 &
+         b_pid=$!
+         wait_for_stats "${target_stats_url}" 0
+ 
+@@ -94,7 +94,7 @@ for run in $(seq 1 "${RUNS}"); do
+         if [[ -n "${target_command_endpoint}" ]]; then
+           source_args+=(--target-command-endpoint "${target_command_endpoint}")
+         fi
+-        setsid node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
++        setsid taskset -c 0-7 node client/main.js "${source_args[@]}" >"${source_log}" 2>&1 &
+         a_pid=$!
+         wait_for_stats "${source_stats_url}" 1
+ 
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/call.hpp b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/call.hpp
+index 405ea42275..ae054446f7 100644
+--- a/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/call.hpp
++++ b/framework/languages/cpp/framework/include/zlink/framework/contracts/channels/call.hpp
+@@ -5,6 +5,7 @@
+ #include <zlink/framework/contracts/dispatch/request_task.hpp>
+ #include <zlink/framework/contracts/codecs/serializer.hpp>
+ 
++#include <zlink/framework/detail/cfloor_measurement.hpp>
+ #include <chrono>
+ #include <atomic>
+ #include <cstdint>
+@@ -179,6 +180,9 @@ class channel_request_call_t
+     }
+ 
+     template <typename TReply> request_task_t<TReply> async () { return start<TReply> (); }
++    // Temporary V2 terminal: retain call construction, return native stages directly.
++    zlink::request_submission_t cfloor_async () { return detail::cfloor::binding_request (); }
++
+ 
+     template <typename TReply> TReply submit ()
+     {
+@@ -235,6 +239,9 @@ class channel_request_call_t
+     static result_t<TReply> decode (serializer_registry_t *serializers,
+                                     const encoded_payload_t &reply)
+     {
++        if (detail::cfloor::variant == 1 && detail::cfloor::enabled.load(std::memory_order_relaxed))
++            return result_t<TReply>::success (TReply{});
++
+         if (serializers == nullptr) {
+             return result_t<TReply>::failure (framework_error_kind_t::protocol_error,
+                                               "channel request has no serializer registry");
+diff --git a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+index 9abb5f987c..1357068a5d 100644
+--- a/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
++++ b/framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+ 
+ #include "runtime/backend/raw_route_port.hpp"
++#include <zlink/framework/detail/cfloor_measurement.hpp>
+ #include "runtime/backend/raw_binding_adapter.hpp"
+ 
+ #include <zlink/Contracts/Messaging/operation_contracts.hpp>
+@@ -380,6 +381,21 @@ void raw_route_port_t::request_impl (
+             }
+             if (!admission && _request_receive_source)
+                 admission = _request_receive_source (target_routing_id);
++            // Capture only the phase's prepared application frame. The timed loop
++            // subsequently calls this binding operation directly on the same socket.
++            if (cfloor::capture.load(std::memory_order_relaxed)) {
++                size_t bytes = 0;
++                for (const auto &part : parts) bytes += part.size();
++                if (bytes >= 1024) {
++                    std::vector<zlink::message_t> prepared;
++                    for (const auto &part : parts) prepared.push_back(materialize_binding_part(part));
++                    const auto target = zlink::routing_id_t::from(target_routing_id.data(), target_routing_id.size());
++                    std::fprintf(stderr, "cfloor capture parts=%zu bytes=%zu\n", prepared.size(), bytes);
++                    cfloor::binding_request = cfloor::native_request_t{_socket, target, std::move(prepared), timeout};
++                    cfloor::capture.store(false, std::memory_order_release);
++                }
++            }
++
+             auto operation = std::move (_socket->request (zlink::routing_id_t::from (
+                                           target_routing_id.data (), target_routing_id.size ())))
+                                .message (materialize_binding_part (std::move (parts[0])));
+diff --git a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+index b3242f59ff..ebe2f7856a 100644
+--- a/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
++++ b/framework/languages/cpp/framework/src/runtime/channels/channel_runtime.cpp
+@@ -1739,6 +1739,10 @@ void route_client_t::submit_request_reply_message_erased (
+   std::map<std::string, std::string> metadata,
+   detail::request_receiver_t<encoded_payload_t> receiver)
+ {
++    if (detail::cfloor::variant == 1 && detail::cfloor::enabled.load(std::memory_order_relaxed)) {
++        detail::cfloor::deliver_binding_reply (std::move (receiver));
++        return;
++    }
+     const auto request_started = std::chrono::steady_clock::now ();
+     // Retain the runtime through the physical reply conversion.
+     const auto state = state_ref;
+diff --git a/framework/languages/cpp/framework/include/zlink/framework/detail/cfloor_measurement.hpp b/framework/languages/cpp/framework/include/zlink/framework/detail/cfloor_measurement.hpp
+new file mode 100644
+index 0000000000..76b6a4a32a
+--- /dev/null
++++ b/framework/languages/cpp/framework/include/zlink/framework/detail/cfloor_measurement.hpp
+@@ -0,0 +1,55 @@
++#pragma once
++// Temporary caller-floor experiment. No production contract is preserved.
++#include <zlink.hpp>
++#include <zlink/framework/contracts/codecs/serializer.hpp>
++#include <zlink/framework/contracts/dispatch/request_task.hpp>
++#include <cstdlib>
++#include <cstdio>
++#include <atomic>
++#include <coroutine>
++#include <functional>
++namespace zlink::framework::detail::cfloor {
++inline const int variant = [] { const char *v = std::getenv("ZLINK_CFLOOR_VARIANT"); return v ? std::atoi(v) : 0; }();
++inline std::atomic<bool> enabled{false};
++inline std::atomic<bool> capture{false};
++inline std::function<zlink::request_submission_t ()> binding_request;
++struct native_request_t {
++ zlink::router_socket_t *socket;
++ zlink::routing_id_t target;
++ std::vector<zlink::message_t> prepared;
++ std::chrono::milliseconds timeout;
++ zlink::request_submission_t operator()() {
++  auto operation = socket->request(target).message(zlink::message_t(prepared.front()));
++  for (std::size_t index=1; index<prepared.size(); ++index)
++   operation = std::move(operation).message(zlink::message_t(prepared[index]));
++  return std::move(operation).timeout(timeout).async();
++ }
++};
++struct detached_t {
++ struct promise_type {
++  detached_t get_return_object() noexcept { return {}; }
++  std::suspend_never initial_suspend() noexcept { return {}; }
++  std::suspend_never final_suspend() noexcept { return {}; }
++  void return_void() noexcept {}
++  void unhandled_exception() noexcept { std::terminate(); }
++  task_scheduler_t zlink_continuation_scheduler() const { return {}; }
++ };
++};
++inline detached_t deliver_binding_reply(request_receiver_t<encoded_payload_t> receiver) {
++ try {
++  auto submission = binding_request();
++  if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
++   co_await std::move(submission.admitted);
++  else if (submission.result != ZLINK_SUBMIT_OK)
++   throw std::runtime_error("cfloor binding submission failed");
++  receiver.admitted->complete(result_t<void>::success());
++  auto parts = co_await std::move(submission.reply);
++  if (parts.empty()) throw std::runtime_error("cfloor empty native reply");
++  receiver.complete(result_t<encoded_payload_t>::success(encoded_payload_t{}));
++ } catch (...) {
++  auto failure = current_exception_result<encoded_payload_t>();
++  receiver.admitted->complete(result_access_t::failure<void>(failure.exception()));
++  receiver.complete(failure);
++ }
++}
++}

@@ -1,0 +1,1827 @@
+diff --git a/bindings/cpp/include/zlink/Contracts/Messaging/operation_contracts.hpp b/bindings/cpp/include/zlink/Contracts/Messaging/operation_contracts.hpp
+--- a/bindings/cpp/include/zlink/Contracts/Messaging/operation_contracts.hpp
++++ b/bindings/cpp/include/zlink/Contracts/Messaging/operation_contracts.hpp
+@@ -363,6 +363,10 @@
+     request_operation_t (request_operation_t &&) noexcept;
+     request_operation_t &operator= (request_operation_t &&) noexcept;
+ 
++    // Measurement-only: reserve bounds before the body factory runs.
++    request_submit_operation_t deferred (
++      std::vector<uint64_t> bounds_,
++      std::function<std::vector<message_t> ()> body_) &&;
+     request_submit_operation_t message (message_t &part_) &&;
+     request_submit_operation_t message (message_t &&part_) &&;
+ 
+diff --git a/bindings/cpp/src/Runtime/Messaging/completion_owner.cpp b/bindings/cpp/src/Runtime/Messaging/completion_owner.cpp
+--- a/bindings/cpp/src/Runtime/Messaging/completion_owner.cpp
++++ b/bindings/cpp/src/Runtime/Messaging/completion_owner.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include <cerrno>
+ #include <exception>
++#include <pthread.h>
+ 
+ namespace zlink::detail
+ {
+@@ -328,7 +329,8 @@
+     async_operation_state_t<void> *admitted_result = nullptr;
+     {
+         std::lock_guard<std::mutex> lock (_mutex);
+-        admitted_operation = std::move (_request_operation);
++        if (!_request_operation->staged_body)
++            admitted_operation = std::move (_request_operation);
+         admitted_result = _request_admitted_result;
+         _request_waiting_writable = false;
+     }
+@@ -559,6 +561,67 @@
+     return _settled;
+ }
+ 
++bool completion_entry_t::has_staged_body ()
++{
++    std::lock_guard<std::mutex> lock (_mutex);
++    return _request_operation && bool (_request_operation->staged_body);
++}
++
++std::unique_ptr<operation_state_t> completion_entry_t::take_staged_body ()
++{
++    std::lock_guard<std::mutex> lock (_mutex);
++    if (_published && !_request_waiting_writable && _request_operation
++        && _request_operation->staged_body && _request_operation->staged_identity.sequence)
++        return std::move (_request_operation);
++    return {};
++}
++
++void completion_entry_t::build_staged_body (std::unique_ptr<operation_state_t> operation)
++{
++    try {
++        operation->message.parts = operation->staged_body ();
++        if (submit_message_parts (operation->message.parts,
++              [&] (zlink_msg_t *parts, size_t count) {
++                  return zlink_proto_request_publish (
++                    operation->raw.socket, operation->staged_identity, parts, count);
++              }) != 0 && zlink_errno () != ECANCELED)
++            throw std::runtime_error ("staged publish failed");
++    }
++    catch (...) {
++        if (zlink_proto_request_fail (operation->raw.socket, operation->staged_identity) != 0
++            && zlink_errno () != ECANCELED)
++            terminate (zlink_errno ());
++    }
++    release_state (std::move (operation));
++}
++
++void completion_owner_t::body_worker_loop ()
++{
++    pthread_setname_np (pthread_self (), "cstage-body");
++    for (;;) {
++        std::shared_ptr<completion_entry_t> entry;
++        std::unique_ptr<operation_state_t> operation;
++        {
++            std::unique_lock<std::mutex> lock (_mutex);
++            _send_registered.wait (lock, [&] {
++                void *const context = zlink_proto_request_next_body (_socket);
++                if (context) {
++                    if (_inline_entry && _inline_entry->context () == context)
++                        entry = _inline_entry;
++                    else {
++                        const auto it = _entries.find (context);
++                        if (it != _entries.end ()) entry = it->second;
++                    }
++                    if (entry) operation = entry->take_staged_body ();
++                }
++                return operation || _shutdown;
++            });
++            if (!operation) return;
++        }
++        entry->build_staged_body (std::move (operation));
++    }
++}
++
+ completion_owner_t::completion_owner_t (void *socket_) :
+     _socket (socket_), _entries (&_entry_map_pool), _early_send_completions (&_entry_map_pool)
+ {
+@@ -592,7 +655,17 @@
+             throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+         insert_entry_locked (entry_);
+     }
+-    return entry_->start_request ();
++    if (entry_->has_staged_body ()) {
++        std::lock_guard<std::mutex> lock (_mutex);
++        if (!_body_worker.joinable ())
++            _body_worker = std::thread ([this] { body_worker_loop (); });
++    }
++    const bool admitted = entry_->start_request ();
++    if (admitted) {
++        std::lock_guard<std::mutex> lock (_mutex);
++        _send_registered.notify_all ();
++    }
++    return admitted;
+ }
+ 
+ void completion_owner_t::register_blocking_entry (const std::shared_ptr<completion_entry_t> &entry_)
+@@ -697,6 +770,10 @@
+                 }
+                 if (entry->retry ())
+                     unregister_entry (entry->context ());
++            }
++            if (!retries.empty ()) {
++                std::lock_guard<std::mutex> lock (_mutex);
++                _send_registered.notify_all ();
+             }
+             retries.clear ();
+             if (inline_target_ && !inline_target_->settled ()) {
+@@ -795,6 +872,10 @@
+         return;
+     _shutdown = true;
+     _send_registered.notify_all ();
++    lock.unlock ();
++    if (_body_worker.joinable ())
++        _body_worker.join ();
++    lock.lock ();
+     std::shared_ptr<completion_entry_t> inline_entry = std::move (_inline_entry);
+     auto entries = std::move (_entries);
+     _entries.clear ();
+diff --git a/bindings/cpp/src/Runtime/Messaging/completion_owner.hpp b/bindings/cpp/src/Runtime/Messaging/completion_owner.hpp
+--- a/bindings/cpp/src/Runtime/Messaging/completion_owner.hpp
++++ b/bindings/cpp/src/Runtime/Messaging/completion_owner.hpp
+@@ -16,6 +16,7 @@
+ #include <mutex>
+ #include <unordered_map>
+ #include <vector>
++#include <thread>
+ 
+ namespace zlink::detail
+ {
+@@ -55,6 +56,9 @@
+     // operation. SEND uses the operation state it owns; REQUEST uses the entry.
+     void *context () const noexcept { return _context; }
+     bool start_request ();
++    bool has_staged_body ();
++    std::unique_ptr<operation_state_t> take_staged_body ();
++    void build_staged_body (std::unique_ptr<operation_state_t>);
+     void publish (uint64_t completion_id_) noexcept;
+     void fail_submit () noexcept;
+     capture_result_t capture (zlink_completion_t &completion_) noexcept;
+@@ -112,6 +116,8 @@
+     void shutdown (int terminal_errno_ = ESHUTDOWN) noexcept;
+ 
+   private:
++    void body_worker_loop ();
++    std::thread _body_worker;
+     void insert_entry_locked (const std::shared_ptr<completion_entry_t> &entry_);
+     size_t drain_impl (completion_entry_t *inline_target_);
+ 
+diff --git a/bindings/cpp/src/Runtime/Messaging/operation_state.hpp b/bindings/cpp/src/Runtime/Messaging/operation_state.hpp
+--- a/bindings/cpp/src/Runtime/Messaging/operation_state.hpp
++++ b/bindings/cpp/src/Runtime/Messaging/operation_state.hpp
+@@ -3,6 +3,8 @@
+ #define ZLINK_CPP_RUNTIME_MESSAGING_OPERATION_STATE_HPP_INCLUDED
+ 
+ #include <chrono>
++#include <functional>
++#include "../../../../../core/src/api/socket/staged_request_prototype.hpp"
+ #include <cstdint>
+ #include <memory>
+ #include <optional>
+@@ -102,6 +104,9 @@
+         void reset () noexcept { token.reset (); }
+     };
+ 
++    std::vector<uint64_t> staged_bounds;
++    std::function<std::vector<message_t> ()> staged_body;
++    zlink_staged_request_t staged_identity;
+     message_parts_t message;
+     raw_command_t raw;
+     reply_command_t reply;
+@@ -308,6 +313,9 @@
+ // trigger malloc/free per call.
+ inline void reset_for_reuse (operation_state_t &state_) noexcept
+ {
++    state_.staged_bounds.clear ();
++    state_.staged_body = {};
++    state_.staged_identity = {};
+     state_.kind = operation_kind_t::none;
+     state_.message.reset ();
+     state_.raw.reset ();
+diff --git a/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp b/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp
+--- a/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp
++++ b/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp
+@@ -169,7 +169,12 @@
+     };
+ 
+     int raw_result = -1;
+-    if (state_.message.single_part.has_value ()
++    if (state_.staged_body) {
++        raw_result = zlink_proto_request_reserve (
++          state_.raw.socket, target, state_.staged_bounds.data (),
++          state_.staged_bounds.size (), timeout, user_context_, completion_id_out_,
++          &state_.staged_identity);
++    } else if (state_.message.single_part.has_value ()
+         || state_.message.single_part_source) {
+         message_t &part = send_single_part (state_);
+         raw_result = submit_borrowed_message_part (part, submit_record);
+@@ -184,6 +189,9 @@
+             restore_sources ();
+             throw submit_error_t (submit_result_t::internal_error, EPROTO);
+         }
++        // After admission the queue slots own the bounds.
++        if (state_.staged_body)
++            state_.staged_bounds.clear ();
+         return true;
+     }
+ 
+diff --git a/bindings/cpp/src/Runtime/Messaging/request_reply.cpp b/bindings/cpp/src/Runtime/Messaging/request_reply.cpp
+--- a/bindings/cpp/src/Runtime/Messaging/request_reply.cpp
++++ b/bindings/cpp/src/Runtime/Messaging/request_reply.cpp
+@@ -59,6 +59,16 @@
+ request_operation_t::request_operation_t (request_operation_t &&) noexcept = default;
+ request_operation_t &request_operation_t::operator= (request_operation_t &&) noexcept = default;
+ 
++request_submit_operation_t request_operation_t::deferred (
++  std::vector<uint64_t> bounds_, std::function<std::vector<message_t> ()> body_) &&
++{
++    if (bounds_.empty () || !body_)
++        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
++    state ().staged_bounds = std::move (bounds_);
++    state ().staged_body = std::move (body_);
++    return request_submit_operation_t (release_state_ptr ());
++}
++
+ request_submit_operation_t request_operation_t::message (message_t &part_) &&
+ {
+     state ().message.single_part_source = &part_;
+@@ -75,7 +85,9 @@
+ std::vector<message_t> request_submit_operation_t::submit () &&
+ {
+     auto &operation = state ();
+-    if (!detail::has_send_parts (operation))
++    if (operation.staged_body)
++        throw submit_error_t (submit_result_t::not_supported, ENOTSUP);
++    if (!detail::has_send_parts (operation) && !operation.staged_body)
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+     const auto runtime = detail::share_runtime_state (operation.raw);
+     if (!runtime)
+@@ -102,7 +114,7 @@
+ request_submission_t request_submit_operation_t::async () &&
+ {
+     auto &operation = state ();
+-    if (!detail::has_send_parts (operation))
++    if (!detail::has_send_parts (operation) && !operation.staged_body)
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+     const auto runtime = detail::share_runtime_state (operation.raw);
+     if (!runtime)
+diff --git a/bindings/cpp/src/Runtime/Sockets/socket.cpp b/bindings/cpp/src/Runtime/Sockets/socket.cpp
+--- a/bindings/cpp/src/Runtime/Sockets/socket.cpp
++++ b/bindings/cpp/src/Runtime/Sockets/socket.cpp
+@@ -52,6 +52,8 @@
+ 
+ socket_t::~socket_t ()
+ {
++    if (_runtime)
++        _runtime->completion->shutdown ();
+     if (_socket)
+         (void) _socket->close ();
+     if (_runtime)
+diff --git a/bindings/cpp/tests/prototype/staged_request.cpp b/bindings/cpp/tests/prototype/staged_request.cpp
+new file mode 100644
+--- /dev/null
++++ b/bindings/cpp/tests/prototype/staged_request.cpp
+@@ -0,0 +1,199 @@
++#include <zlink.hpp>
++#include <Runtime/Sockets/socket_access.hpp>
++#include <Runtime/Core/routing_id_access.hpp>
++#include <Runtime/Native/message_access.hpp>
++#include "../../../../core/src/api/socket/staged_request_prototype.hpp"
++#include <algorithm>
++#include <cassert>
++#include <chrono>
++#include <coroutine>
++#include <future>
++#include <iostream>
++#include <mutex>
++#include <thread>
++#include <vector>
++#include <unistd.h>
++using namespace std::chrono_literals;
++using parts_t = std::vector<zlink::message_t>;
++template<class T> struct task {
++ struct promise_type {
++  std::promise<T> p;
++  task get_return_object(){return {p.get_future()};}
++  std::suspend_never initial_suspend()noexcept{return {};}
++  std::suspend_never final_suspend()noexcept{return {};}
++  void return_value(T v){p.set_value(std::move(v));}
++  void unhandled_exception(){p.set_exception(std::current_exception());}
++ };
++ std::future<T> f;
++ bool ready(){return f.wait_for(0ms)==std::future_status::ready;}
++};
++task<parts_t> reply(zlink::async_result_t<parts_t> r){co_return co_await std::move(r);}
++task<bool> admitted(zlink::async_result_t<void> r){co_await std::move(r);co_return true;}
++struct pair_t {
++ zlink::context_t ctx;
++ zlink::router_socket_t source{ctx}, target{ctx};
++ zlink::routing_id_t rid=zlink::routing_id_t::from("target");
++ static inline int serial=0;
++ static zlink::context_t make_context(int io){
++  if(io<0)return zlink::context_t();
++  return zlink::context_t(zlink::io_thread_count_t::value(io));
++ }
++ pair_t(uint64_t hwm=0,int io=-1):ctx(make_context(io)){
++  source.options().linger(0ms);target.options().linger(0ms);
++  source.options().send_timeout(2s);target.options().recv_timeout(2s);
++  if(hwm){source.options().send_hwm(zlink::byte_count_t::bytes(hwm));target.options().recv_hwm(zlink::byte_count_t::bytes(hwm));}
++  source.set_routing_id(zlink::routing_id_t::from("source"));target.set_routing_id(rid);
++  const auto endpoint="inproc://stage-"+std::to_string(getpid())+"-"+std::to_string(++serial);
++  target.bind(endpoint);source.connect(endpoint);
++  auto m=zlink::message_t::from("prime");source.send(rid).message(m).submit();
++  zlink::received_t r;assert(target.recv(r)==0);
++ }
++ void *raw(){return zlink::detail::socket_access_t::native_handle(source);}
++ auto native_rid(){return zlink::detail::routing_id_native(rid);}
++};
++void native_order(){
++ pair_t p;
++ uint64_t bound=4096;zlink_completion_id_t id1=0,id2=0;zlink_staged_request_t a,b;
++ assert(zlink_proto_request_reserve(p.raw(),p.native_rid(),&bound,1,30000,(void*)1,&id1,&a)==ZLINK_SUBMIT_OK);
++ assert(zlink_proto_request_reserve(p.raw(),p.native_rid(),&bound,1,30000,(void*)2,&id2,&b)==ZLINK_SUBMIT_OK);
++ uint64_t q0=0,c0=0,q1=0,c1=0;
++ assert(zlink_proto_request_charges(p.raw(),b,&q0,&c0)==0);
++ assert(c0==bound+sizeof(zlink_msg_t));
++ auto m2=zlink::message_t::from("second");
++ assert(zlink_proto_request_publish(p.raw(),b,zlink::detail::native_handle(m2),1)==0);
++ assert(zlink_proto_request_charges(p.raw(),b,&q1,&c1)==0);
++ assert(c1==6+sizeof(zlink_msg_t));assert(q0-q1==bound-6);
++ std::cout<<"reserved_correlation_bytes="<<c0<<" actual_correlation_bytes="<<c1<<" returned_queue_bytes="<<(q0-q1)<<"\n";
++ zlink::received_t r;assert(p.target.recv(r,zlink::recv_flags_t::dontwait)!=0);
++ auto m1=zlink::message_t::from("first");
++ assert(zlink_proto_request_publish(p.raw(),a,zlink::detail::native_handle(m1),1)==0);
++ for(auto expected:{"first","second"}){
++  zlink::received_t got;assert(p.target.recv(got)==0);assert(got.first_part().to_string()==expected);
++  auto m=zlink::message_t::from("ok");got.reply().message(m).submit();
++ }
++ std::vector<zlink_completion_id_t> identities;
++ int completions=0;const auto end=std::chrono::steady_clock::now()+2s;
++ while(completions<2 && std::chrono::steady_clock::now()<end){
++  zlink_completion_t c{};c.struct_size=sizeof(c);
++  if(zlink_completion_recv(p.raw(),&c,ZLINK_RECV_FLAGS_DONTWAIT)==ZLINK_RECV_OK){
++   assert(c.kind==ZLINK_COMPLETION_REQUEST && c.request_result==ZLINK_REQUEST_OK);
++   assert((c.completion_id==id1 && c.user_context==(void*)1) || (c.completion_id==id2 && c.user_context==(void*)2));
++   identities.push_back(c.completion_id);++completions;zlink_completion_close(&c);
++  }else std::this_thread::sleep_for(1ms);
++ }
++ assert(completions==2);std::sort(identities.begin(),identities.end());std::vector<zlink_completion_id_t> expected_ids{id1,id2};std::sort(expected_ids.begin(),expected_ids.end());assert(identities==expected_ids);
++ std::cout<<"native_reverse_publish_fifo=2/2 completion_identity_reused=2/2\n";
++}
++void writable_and_failure(){
++ pair_t p(1024);zlink::poller_t poller;
++ poller.add(p.source,zlink::poll_event_flag_t::pollcompletion,1);
++ std::promise<void> release;auto gate=release.get_future().share();
++ std::vector<int> builds,received;std::mutex mutex;
++ std::vector<task<parts_t>> replies;std::vector<task<bool>> admissions;
++ int pressure=0,immediate=0;
++ for(int i=0;i<32;++i){
++  auto sub=p.source.request(p.rid).deferred({16,1024},[&,i]{
++   gate.wait();{std::lock_guard lock(mutex);builds.push_back(i);}
++   parts_t parts;parts.push_back(zlink::message_t::from(std::to_string(i)));parts.push_back(zlink::message_t::from("payload"));return parts;
++  }).timeout(5s).async();
++  if(sub.result==ZLINK_SUBMIT_BACKPRESSURED)++pressure;
++  else {assert(sub.result==ZLINK_SUBMIT_OK);++immediate;}
++  admissions.push_back(admitted(std::move(sub.admitted)));
++  replies.push_back(reply(std::move(sub.reply)));
++ }
++ assert(pressure>0 && immediate>0);release.set_value();
++ zlink::poll_event_t events[2]{};auto end=std::chrono::steady_clock::now()+10s;
++ while(std::chrono::steady_clock::now()<end){
++  poller.wait(events,2,1ms);
++  for(;;){zlink::received_t r;if(p.target.recv(r,zlink::recv_flags_t::dontwait)!=0)break;
++   assert(r.parts().size()==2 && r.parts()[1].to_string()=="payload");received.push_back(std::stoi(r.parts()[0].to_string()));auto m=zlink::message_t::from("ok");r.reply().message(m).submit();}
++  if(std::all_of(replies.begin(),replies.end(),[](auto& t){return t.ready();}))break;
++ }
++ assert(received.size()==32);
++ {std::lock_guard lock(mutex);assert(builds==received);}
++ for(auto &a:admissions){assert(a.ready() && a.f.get());}
++ for(auto &r:replies){assert(r.ready());auto parts=r.f.get();assert(parts.size()==1 && parts[0].to_string()=="ok");}
++ std::cout<<"small_hwm_immediate="<<immediate<<" backpressured_writable_readmitted="<<pressure<<" replies=32 publication_order=32/32\n";
++ // Deliberate builder failure after successful admission.
++ auto failed=p.source.request(p.rid).deferred({201,1027},[]()->parts_t{throw std::runtime_error("deliberate body failure");}).timeout(5s).async();
++ assert(failed.result==ZLINK_SUBMIT_OK);
++ auto a=admitted(std::move(failed.admitted));auto f=reply(std::move(failed.reply));
++ end=std::chrono::steady_clock::now()+2s;
++ while(!f.ready() && std::chrono::steady_clock::now()<end)poller.wait(events,2,10ms);
++ assert(a.ready() && a.f.get() && f.ready());bool error=false;
++ try{f.f.get();}catch(const zlink::request_error_t&){error=true;}assert(error);
++ zlink::received_t none;assert(p.target.recv(none,zlink::recv_flags_t::dontwait)!=0);
++ auto recovered=p.source.request(p.rid).deferred({1024},[]{parts_t x;x.push_back(zlink::message_t::from("recovered"));return x;}).timeout(5s).async();
++ assert(recovered.result==ZLINK_SUBMIT_OK);auto done=reply(std::move(recovered.reply));
++ end=std::chrono::steady_clock::now()+2s;bool sent=false;
++ while(!done.ready() && std::chrono::steady_clock::now()<end){
++  poller.wait(events,2,1ms);zlink::received_t r;
++  if(!sent && p.target.recv(r,zlink::recv_flags_t::dontwait)==0){assert(r.first_part().to_string()=="recovered");auto m=zlink::message_t::from("ok");r.reply().message(m).submit();sent=true;}
++ }
++ assert(done.ready() && done.f.get().size()==1);
++ std::cout<<"builder_failure_admitted_success_reply_error=1 credit_reuse=1\n";
++}
++void bound_violation(){
++ pair_t p(1024);uint64_t bound=4;zlink_completion_id_t id=0;zlink_staged_request_t s;
++ assert(zlink_proto_request_reserve(p.raw(),p.native_rid(),&bound,1,30000,(void*)1,&id,&s)==ZLINK_SUBMIT_OK);
++ auto m=zlink::message_t::from("too-large");
++ assert(zlink_proto_request_publish(p.raw(),s,zlink::detail::native_handle(m),1)!=0);
++ assert(zlink_errno()==EMSGSIZE);
++ assert(zlink_proto_request_fail(p.raw(),s)==0);
++ zlink_completion_t c{};c.struct_size=sizeof(c);auto end=std::chrono::steady_clock::now()+2s;
++ while(zlink_completion_recv(p.raw(),&c,ZLINK_RECV_FLAGS_DONTWAIT)!=ZLINK_RECV_OK){assert(std::chrono::steady_clock::now()<end);std::this_thread::sleep_for(1ms);}
++ assert(c.completion_id==id && c.request_result==ZLINK_REQUEST_INTERNAL_ERROR);zlink_completion_close(&c);
++ zlink::received_t none;assert(p.target.recv(none,zlink::recv_flags_t::dontwait)!=0);
++ std::cout<<"bound_violation_rejected_before_wire=1\n";
++}
++void timeout_during_body(){
++ pair_t p(1024);zlink::poller_t poller;poller.add(p.source,zlink::poll_event_flag_t::pollcompletion,1);
++ std::promise<void> release;auto gate=release.get_future().share();
++ auto sub=p.source.request(p.rid).deferred({1024},[gate]{gate.wait();parts_t x;x.push_back(zlink::message_t::from("late"));return x;}).timeout(50ms).async();
++ assert(sub.result==ZLINK_SUBMIT_OK);auto a=admitted(std::move(sub.admitted));auto f=reply(std::move(sub.reply));
++ zlink::poll_event_t event{};auto end=std::chrono::steady_clock::now()+2s;
++ while(!f.ready() && std::chrono::steady_clock::now()<end)poller.wait(&event,1,10ms);
++ assert(a.ready() && a.f.get() && f.ready());bool timedout=false;
++ try{f.f.get();}catch(const zlink::request_error_t& e){timedout=e.internal_errno()==ETIMEDOUT;}assert(timedout);
++ auto good=p.source.request(p.rid).deferred({1024},[]{parts_t x;x.push_back(zlink::message_t::from("after-timeout"));return x;}).timeout(2s).async();
++ assert(good.result==ZLINK_SUBMIT_OK || good.result==ZLINK_SUBMIT_BACKPRESSURED);
++ auto good_admitted=admitted(std::move(good.admitted));auto done=reply(std::move(good.reply));release.set_value();
++ bool sent=false;end=std::chrono::steady_clock::now()+2s;
++ while(!done.ready() && std::chrono::steady_clock::now()<end){poller.wait(&event,1,1ms);zlink::received_t r;
++  if(!sent && p.target.recv(r,zlink::recv_flags_t::dontwait)==0){assert(r.first_part().to_string()=="after-timeout");auto m=zlink::message_t::from("ok");r.reply().message(m).submit();sent=true;}}
++ assert(good_admitted.ready() && good_admitted.f.get());
++ assert(done.ready() && done.f.get().size()==1);
++ std::cout<<"timeout_while_body_pending=1 credit_reuse=1 late_body_suppressed=1\n";
++}
++int cancelled_budget(){
++ pair_t p(512,0);
++ zlink::poller_t public_owner;public_owner.add(p.source,zlink::poll_event_flag_t::pollcompletion,1);
++ uint64_t bounds[2]={64,64};int accepted=0;zlink_completion_id_t wait_id=0;bool pressure=false;
++ for(int i=0;i<100;++i){
++  zlink_completion_id_t id=0;zlink_staged_request_t stage;
++  auto rc=zlink_proto_request_reserve(p.raw(),p.native_rid(),bounds,2,30000,(void*)1,&id,&stage);
++  if(rc!=ZLINK_SUBMIT_OK)std::cout<<"budget_refused accepted="<<accepted<<" result="<<int(rc)<<" id="<<id<<" errno="<<zlink_errno()<<"\n";
++  if(rc==ZLINK_SUBMIT_BACKPRESSURED){if(!id)return 4;wait_id=id;pressure=true;break;}
++  assert(rc==ZLINK_SUBMIT_OK);++accepted;assert(zlink_proto_request_fail(p.raw(),stage)==0);
++  zlink_completion_t c{};c.struct_size=sizeof(c);
++  assert(zlink_completion_recv(p.raw(),&c,ZLINK_RECV_FLAGS_DONTWAIT)==ZLINK_RECV_OK);
++  assert(c.completion_id==id && c.request_result==ZLINK_REQUEST_INTERNAL_ERROR);zlink_completion_close(&c);
++ }
++ std::cout<<"cancelled_without_reader_reservations="<<accepted<<" backpressured="<<pressure<<"\n";
++ zlink::received_t none;assert(p.target.recv(none,zlink::recv_flags_t::dontwait)!=0);
++ if(!pressure)return 2;
++ zlink_completion_t c{};c.struct_size=sizeof(c);auto end=std::chrono::steady_clock::now()+2s;
++ while(zlink_completion_recv(p.raw(),&c,ZLINK_RECV_FLAGS_DONTWAIT)!=ZLINK_RECV_OK){assert(std::chrono::steady_clock::now()<end);std::this_thread::yield();}
++ assert(c.completion_id==wait_id && c.kind==ZLINK_COMPLETION_WRITABLE);zlink_completion_close(&c);
++ zlink_completion_id_t id=0;zlink_staged_request_t stage;
++ assert(zlink_proto_request_reserve(p.raw(),p.native_rid(),bounds,2,30000,(void*)1,&id,&stage)==ZLINK_SUBMIT_OK);
++ assert(zlink_proto_request_fail(p.raw(),stage)==0);
++ c={};c.struct_size=sizeof(c);assert(zlink_completion_recv(p.raw(),&c,ZLINK_RECV_FLAGS_DONTWAIT)==ZLINK_RECV_OK);
++ assert(c.completion_id==id && c.request_result==ZLINK_REQUEST_INTERNAL_ERROR);zlink_completion_close(&c);
++ std::cout<<"cancelled_metadata_credit_recovered=1\n";
++ return 0;
++}
++int main(int argc,char** argv){std::cout.setf(std::ios::unitbuf);try{
++ if(argc>1 && std::string(argv[1])=="cancel-budget")return cancelled_budget();
++ native_order();writable_and_failure();bound_violation();timeout_during_body();return 0;
++ }catch(const std::exception& e){std::cerr<<"unexpected_test_exception: "<<e.what()<<"\n";return 3;}}
+diff --git a/core/src/api/socket/socket_request_reply_dispatch.cpp b/core/src/api/socket/socket_request_reply_dispatch.cpp
+--- a/core/src/api/socket/socket_request_reply_dispatch.cpp
++++ b/core/src/api/socket/socket_request_reply_dispatch.cpp
+@@ -161,6 +161,7 @@
+     }
+     if (!found_pending)
+         return completion_message_discard_deferred;
++    cancel_socket_staged_body (state_, &pending);
+     pending.correlation.release ();
+ 
+     if (!publish_pull_reply_completion (
+@@ -448,6 +449,7 @@
+         }
+         if (!found)
+             break;
++        cancel_socket_staged_body (state_, &pending);
+         pending.correlation.release ();
+         (void) publish_pending_request_completion (
+           state_, &pending, result_, NULL, 0);
+@@ -548,6 +550,7 @@
+         }
+         if (!found)
+             break;
++        cancel_socket_staged_body (state_, &pending);
+         pending.correlation.release ();
+         // Close discards unresolved and unread pull records; it does not
+         // publish a completion after sealing the socket lifecycle.
+diff --git a/core/src/api/socket/socket_request_reply_internal.cpp b/core/src/api/socket/socket_request_reply_internal.cpp
+--- a/core/src/api/socket/socket_request_reply_internal.cpp
++++ b/core/src/api/socket/socket_request_reply_internal.cpp
+@@ -164,6 +164,14 @@
+     zlink_assert (accounted_bytes_ != 0);
+     _pipe = pipe_;
+     _accounted_bytes = accounted_bytes_;
++}
++
++void request_correlation_lease_t::shrink (uint64_t actual_bytes_)
++{
++    zlink_assert (_pipe && actual_bytes_ > 0 && actual_bytes_ <= _accounted_bytes);
++    if (actual_bytes_ != _accounted_bytes)
++        _pipe->release_request_correlation (_accounted_bytes, actual_bytes_);
++    _accounted_bytes = actual_bytes_;
+ }
+ 
+ void request_correlation_lease_t::release ()
+@@ -423,6 +431,16 @@
+             sizeof (router_reply_alias_buckets));
+ }
+ 
++void cancel_socket_staged_body (
++  const std::shared_ptr<socket_request_reply_state_t> &state_, pending_request_t *pending_)
++{
++    if (!pending_->staged_part_count || !pending_->correlation.pipe ())
++        return;
++    state_->socket->cancel_staged_body (
++      pending_->correlation.pipe (), pending_->staged_slots, pending_->staged_part_count);
++    pending_->staged_part_count = 0;
++}
++
+ void release_pending_request_completion (
+   const std::shared_ptr<socket_request_reply_state_t> &state_,
+   pending_request_t *pending_)
+@@ -535,6 +553,7 @@
+ 
+     pending_request_t pending;
+     if (remove_socket_pending_request (ctx->state, ctx->identity, &pending)) {
++        cancel_socket_staged_body (ctx->state, &pending);
+         pending.correlation.release ();
+ #ifdef ZLINK_BUILD_TESTS
+         invoke_request_reply_timeout_after_remove_hook ();
+@@ -555,6 +574,7 @@
+   pending_request_t *pending_, aggregate_timeout_resolution_t resolution_,
+   uint64_t generation_)
+ {
++    cancel_socket_staged_body (state_, pending_);
+     pending_->correlation.release ();
+     if (resolution_ == aggregate_timeout_timed_out) {
+ #ifdef ZLINK_BUILD_TESTS
+@@ -747,6 +767,7 @@
+ 
+         ++it;
+         for (; it != due.end (); ++it) {
++            cancel_socket_staged_body (state, &*it);
+             it->correlation.release ();
+             it->pull_completion = NULL;
+         }
+@@ -866,6 +887,7 @@
+     if (replaced_task)
+         zlink::request_timeout::cancel (replaced_task);
+     if (removed) {
++        cancel_socket_staged_body (state_, &failed);
+         failed.correlation.release ();
+         (void) publish_pending_request_completion (
+           state_, &failed, ZLINK_REQUEST_INTERNAL_ERROR, NULL, 0);
+diff --git a/core/src/api/socket/socket_request_reply_internal.hpp b/core/src/api/socket/socket_request_reply_internal.hpp
+--- a/core/src/api/socket/socket_request_reply_internal.hpp
++++ b/core/src/api/socket/socket_request_reply_internal.hpp
+@@ -17,6 +17,7 @@
+ #include <utility>
+ 
+ #include "api/socket/request_reply_runtime_core.hpp"
++#include "api/socket/staged_request_prototype.hpp"
+ #include "api/socket/request_reply_frame_buffer_internal.hpp"
+ #include "api/socket/request_timeout_scheduler_internal.hpp"
+ #include "api/socket/socket_api_internal.hpp"
+@@ -120,6 +121,8 @@
+ 
+     void adopt (zlink::pipe_t *pipe_, uint64_t accounted_bytes_);
+     void release ();
++    void shrink (uint64_t actual_bytes_);
++    uint64_t accounted_bytes () const { return _accounted_bytes; }
+     zlink::pipe_t *pipe () const;
+ 
+   private:
+@@ -145,6 +148,8 @@
+     //  its ephemeral arm token without reinterpreting the current socket policy.
+     uint32_t resolved_timeout_ms;
+     zlink::socket_completion::reservation_t *pull_completion;
++    void *staged_slots[staged_prototype::max_parts] = {};
++    size_t staged_part_count = 0;
+     //  Zero until physical admission commits. Armed requests retain only
+     //  their absolute deadline; one socket-owned task covers the aggregate.
+     uint64_t timeout_deadline_ns;
+@@ -612,6 +617,7 @@
+ find_or_create_request_reply_state (const socket_handle_t &handle_);
+ std::shared_ptr<socket_request_reply_state_t>
+ find_request_reply_state (const socket_handle_t &handle_);
++void cancel_socket_staged_body (const std::shared_ptr<socket_request_reply_state_t> &, pending_request_t *);
+ void release_pending_request_completion (
+   const std::shared_ptr<socket_request_reply_state_t> &state_,
+   pending_request_t *pending_);
+diff --git a/core/src/api/socket/socket_request_reply_pending_api.cpp b/core/src/api/socket/socket_request_reply_pending_api.cpp
+--- a/core/src/api/socket/socket_request_reply_pending_api.cpp
++++ b/core/src/api/socket/socket_request_reply_pending_api.cpp
+@@ -264,6 +264,7 @@
+ 
+     reqrep::pending_request_t pending;
+     if (reqrep::remove_socket_pending_request (state_, identity_, &pending)) {
++        reqrep::cancel_socket_staged_body (state_, &pending);
+         pending.correlation.release ();
+         reqrep::release_pending_request_completion (state_, &pending);
+         return true;
+diff --git a/core/src/api/socket/socket_request_reply_submit_api.cpp b/core/src/api/socket/socket_request_reply_submit_api.cpp
+--- a/core/src/api/socket/socket_request_reply_submit_api.cpp
++++ b/core/src/api/socket/socket_request_reply_submit_api.cpp
+@@ -15,9 +15,14 @@
+ #include "api/socket/socket_request_reply_submit_internal.hpp"
+ #include "api/message/request_result_internal.hpp"
+ #include "api/message/submit_result_internal.hpp"
++#include "api/socket/staged_request_prototype.hpp"
+ #include "core/msg.hpp"
+ #include "core/pipe.hpp"
+ #include "utils/routing_id.hpp"
++
++namespace zlink { namespace staged_prototype {
++thread_local capture_t *capture = NULL;
++} }
+ 
+ namespace reqrep = zlink::socket_reqrep_internal;
+ 
+@@ -103,6 +108,11 @@
+         if (!pipe_) {
+             observer->publication_lock.unlock ();
+             errno = EHOSTUNREACH;
++            return false;
++        }
++        if (zlink::staged_prototype::capture && !pipe_->supports_staged_queue ()) {
++            observer->publication_lock.unlock ();
++            errno = ENOTSUP;
+             return false;
+         }
+         if (!pipe_->retain_lifetime_ref ()) {
+@@ -133,6 +143,9 @@
+         }
+         observer->pending = &pending->second;
+         observer->reserved_pipe = pipe_;
++        if (zlink::staged_prototype::capture) {
++            zlink::staged_prototype::capture->pipe = pipe_;
++        }
+         return true;
+     }
+ 
+@@ -151,12 +164,22 @@
+             observer->pending->correlation.adopt (
+               observer->reserved_pipe, observer->accounted_bytes);
+             observer->reservation_committed = true;
++            if (zlink::staged_prototype::capture) {
++                zlink::staged_prototype::capture_t &stage = *zlink::staged_prototype::capture;
++                observer->pending->staged_part_count = stage.count;
++                for (size_t i = 0; i != stage.count; ++i)
++                    observer->pending->staged_slots[i] = stage.slots[i];
++                stage.identity.sequence = observer->identity.request_seq;
++                stage.identity.cookie = observer->identity.cookie;
++            }
+         }
+         return valid_pair;
+     }
+ 
+     zlink::pipe_t *const uncommitted_pipe =
+       observer->reservation_committed ? NULL : observer->reserved_pipe;
++    if (zlink::staged_prototype::capture)
++        zlink::staged_prototype::capture->pipe = NULL;
+     observer->pending = NULL;
+     observer->reserved_pipe = NULL;
+     if (observer->publication_lock.owns_lock ())
+@@ -650,3 +673,121 @@
+             handle, source_rid_, reply_token_, parts_, part_count_);
+       });
+ }
++
++extern "C" zlink_submit_result_t zlink_proto_request_reserve (
++  void *socket_, const zlink_routing_id_t *target_, const uint64_t *bounds_,
++  size_t count_, uint32_t timeout_, void *context_, zlink_completion_id_t *id_,
++  zlink_staged_request_t *stage_)
++{
++    if (!bounds_ || !stage_ || count_ == 0 || count_ > zlink::staged_prototype::max_parts) {
++        errno = EINVAL;
++        return ZLINK_SUBMIT_INVALID_ARGUMENT;
++    }
++    zlink_msg_t parts[zlink::staged_prototype::max_parts];
++    static char placeholder;
++    for (size_t i = 0; i != count_; ++i)
++        reinterpret_cast<zlink::msg_t *> (&parts[i])->init_data (
++          &placeholder, bounds_[i], NULL, NULL);
++    zlink::staged_prototype::capture_t capture;
++    zlink_assert (!zlink::staged_prototype::capture);
++    zlink::staged_prototype::capture = &capture;
++    const zlink_submit_result_t result = zlink_request (
++      socket_, target_, parts, count_, ZLINK_SEND_FLAGS_DONTWAIT,
++      timeout_, context_, id_);
++    zlink::staged_prototype::capture = NULL;
++    *stage_ = capture.identity;
++    const int saved_errno = errno;
++    for (size_t i = 0; i != count_; ++i)
++        (void) zlink_msg_close (&parts[i]);
++    errno = saved_errno;
++    return result;
++}
++
++namespace {
++int finish_staged_request (void *socket_, zlink_staged_request_t stage_,
++                           zlink_msg_t *parts_, size_t count_)
++{
++    socket_handle_t handle = as_socket_handle (socket_);
++    if (!handle.socket)
++        return -1;
++    std::optional<zlink::socket_public_send_scope_t> scope;
++    if (!handle.socket->begin_complete_send_scope (&scope))
++        return -1;
++    auto state = reqrep::find_request_reply_state (handle);
++    if (!state) { errno = ENOENT; return -1; }
++    reqrep::pending_request_identity_t identity;
++    identity.request_seq = stage_.sequence;
++    identity.cookie = stage_.cookie;
++    reqrep::pending_request_t failed;
++    {
++        std::lock_guard<std::mutex> lock (state->mutex);
++        auto it = state->pending_requests.find (stage_.sequence);
++        if (it == state->pending_requests.end ()
++            || !(it->second.identity == identity)) {
++            errno = ECANCELED; return -1;
++        }
++        auto &pending = it->second;
++        if (!pending.staged_part_count || (parts_ && count_ != pending.staged_part_count)) {
++            errno = EINVAL; return -1;
++        }
++        if (parts_ && attach_request_reply_metadata (
++              &parts_[0], zlink::request_reply::request_type, stage_.sequence) != 0)
++            return -1;
++        const uint64_t actual = pending.correlation.pipe ()->publish_staged_record (
++          pending.staged_slots, pending.staged_part_count,
++          reinterpret_cast<zlink::msg_t *> (parts_));
++        if (!actual) return -1;
++        pending.staged_part_count = 0;
++        if (parts_) {
++            pending.correlation.shrink (actual);
++        } else {
++            (void) reqrep::remove_socket_pending_request_locked (
++              state.get (), identity, &failed);
++        }
++    }
++    scope.reset ();
++    if (parts_)
++        return 0;
++    failed.correlation.release ();
++    return reqrep::publish_pending_request_completion (
++      state, &failed, ZLINK_REQUEST_INTERNAL_ERROR, NULL, 0);
++}
++}
++extern "C" int zlink_proto_request_publish (
++  void *socket_, zlink_staged_request_t stage_, zlink_msg_t *parts_, size_t count_)
++{
++    return finish_staged_request (socket_, stage_, parts_, count_);
++}
++extern "C" int zlink_proto_request_fail (void *socket_, zlink_staged_request_t stage_)
++{
++    return finish_staged_request (socket_, stage_, NULL, 0);
++}
++
++extern "C" void *zlink_proto_request_next_body (void *socket_)
++{
++    socket_handle_t handle = as_socket_handle (socket_);
++    if (!handle.socket) return NULL;
++    auto state = reqrep::find_request_reply_state (handle);
++    if (!state) return NULL;
++    std::lock_guard<std::mutex> lock (state->mutex);
++    for (auto it = state->pending_requests.begin (); it != state->pending_requests.end (); ++it)
++        if (it->second.staged_part_count)
++            return it->second.pull_completion->completion.user_context;
++    return NULL;
++}
++
++extern "C" int zlink_proto_request_charges (
++  void *socket_, zlink_staged_request_t identity_, uint64_t *queue_, uint64_t *correlation_)
++{
++    socket_handle_t handle = as_socket_handle (socket_);
++    if (!handle.socket) return -1;
++    auto state = reqrep::find_request_reply_state (handle);
++    if (!state) return -1;
++    std::lock_guard<std::mutex> lock (state->mutex);
++    auto it = state->pending_requests.find (identity_.sequence);
++    if (it == state->pending_requests.end () || it->second.identity.cookie != identity_.cookie)
++        return -1;
++    *queue_ = it->second.correlation.pipe ()->get_snd_queue_accounted_bytes ();
++    *correlation_ = it->second.correlation.accounted_bytes ();
++    return 0;
++}
+diff --git a/core/src/api/socket/staged_request_prototype.hpp b/core/src/api/socket/staged_request_prototype.hpp
+new file mode 100644
+--- /dev/null
++++ b/core/src/api/socket/staged_request_prototype.hpp
+@@ -0,0 +1,31 @@
++/* Measurement-only staged request declarations. */
++#ifndef ZLINK_STAGED_REQUEST_PROTOTYPE_HPP
++#define ZLINK_STAGED_REQUEST_PROTOTYPE_HPP
++#include <zlink.h>
++#include <stddef.h>
++#include <stdint.h>
++struct zlink_staged_request_t { uint64_t sequence = 0; uint64_t cookie = 0; };
++extern "C" {
++zlink_submit_result_t zlink_proto_request_reserve (
++  void *, const zlink_routing_id_t *, const uint64_t *, size_t,
++  uint32_t, void *, zlink_completion_id_t *, zlink_staged_request_t *);
++int zlink_proto_request_publish (
++  void *, zlink_staged_request_t, zlink_msg_t *, size_t);
++int zlink_proto_request_fail (void *, zlink_staged_request_t);
++void *zlink_proto_request_next_body (void *);
++int zlink_proto_request_charges (void *, zlink_staged_request_t, uint64_t *, uint64_t *);
++}
++namespace zlink {
++class pipe_t;
++namespace staged_prototype {
++static const size_t max_parts = 4;
++struct capture_t {
++ pipe_t *pipe = NULL;
++ void *slots[max_parts] = {};
++ size_t count = 0;
++ zlink_staged_request_t identity;
++};
++extern thread_local capture_t *capture;
++}
++}
++#endif
+diff --git a/core/src/libzlink.vers b/core/src/libzlink.vers
+--- a/core/src/libzlink.vers
++++ b/core/src/libzlink.vers
+@@ -1,6 +1,11 @@
+ /* Generated from the formal Core 0.9.0 raw spec: exactly the public C ABI. */
+ {
+   global:
++    zlink_proto_request_reserve;
++    zlink_proto_request_publish;
++    zlink_proto_request_fail;
++    zlink_proto_request_next_body;
++    zlink_proto_request_charges;
+     zlink_atomic_counter_dec;
+     zlink_atomic_counter_destroy;
+     zlink_atomic_counter_inc;
+diff --git a/core/src/runtime/core/pipe.hpp b/core/src/runtime/core/pipe.hpp
+--- a/core/src/runtime/core/pipe.hpp
++++ b/core/src/runtime/core/pipe.hpp
+@@ -279,7 +279,9 @@
+     bool try_reserve_request_correlation (
+       uint64_t accounted_bytes_, uint64_t *release_epoch_out_ = NULL);
+     uint64_t request_correlation_release_epoch () const;
+-    void release_request_correlation (uint64_t accounted_bytes_);
++    void release_request_correlation (uint64_t accounted_bytes_, uint64_t retained_bytes_ = 0);
++    uint64_t publish_staged_record (void **slots_, size_t count_, msg_t *parts_);
++    bool supports_staged_queue () const { return !_conflate; }
+     static uint64_t frame_accounted_bytes (const msg_t *msg_);
+     uint64_t planned_in_hwm () const;
+     uint64_t applied_in_hwm () const;
+@@ -693,6 +695,7 @@
+     bool check_hwm_with_peer_snapshot_unlocked ();
+     void refresh_peer_credit_snapshot_unlocked ();
+     pipe_t *retain_peer_snapshot_unlocked () const;
++    static void account_cancelled_frame (const msg_t &, bool, void *);
+     void account_inbound_frame (const msg_t *msg_,
+                                 bool prefetched_batch_exhausted_);
+     void snapshot_outbound_queue_accounting (const pipe_t *reader_,
+diff --git a/core/src/runtime/core/pipe_receive.cpp b/core/src/runtime/core/pipe_receive.cpp
+--- a/core/src/runtime/core/pipe_receive.cpp
++++ b/core/src/runtime/core/pipe_receive.cpp
+@@ -86,7 +86,7 @@
+     if (unlikely (!_in_active.load (std::memory_order_acquire))) {
+         // Recover from a missed read-activation edge if data is already
+         // visible in the inbound pipe.
+-        if (!_in_pipe->check_read ())
++        if (!_in_pipe->check_read (&account_cancelled_frame, this))
+             return false;
+         _in_active.store (true, std::memory_order_release);
+     }
+@@ -95,7 +95,7 @@
+     // a conflate writer cannot replace the inspected frame before it is read.
+     msg_t delimiter;
+     const ypipe_read_result_t delimiter_result =
+-      _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL);
++      _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL, NULL, &account_cancelled_frame, this);
+     if (delimiter_result == ypipe_read_empty) {
+         _in_active.store (false, std::memory_order_release);
+         return false;
+@@ -122,7 +122,7 @@
+                                  std::memory_order_seq_cst);
+ 
+     normalized_head_probe_t probe = {pipe_head_invalid};
+-    if (!_in_pipe->probe_if_published (&probe_normalized_head, &probe))
++    if (!_in_pipe->probe_if_published (&probe_normalized_head, &probe, &account_cancelled_frame, this))
+         return pipe_head_empty;
+ 
+     _in_active.store (true, std::memory_order_release);
+@@ -210,7 +210,7 @@
+             *admission_consumed_out_ = false;
+     }
+     if (unlikely (!_in_active.load (std::memory_order_acquire))) {
+-        if (!_in_pipe->check_read ())
++        if (!_in_pipe->check_read (&account_cancelled_frame, this))
+             return false;
+         _in_active.store (true, std::memory_order_release);
+     }
+@@ -226,7 +226,7 @@
+                                                  errno};
+             const ypipe_read_result_t read_result =
+               _in_pipe->read_if (msg_, &invoke_pipe_record_admission, &probe,
+-                                 &prefetched_batch_exhausted);
++                                 &prefetched_batch_exhausted, &account_cancelled_frame, this);
+             if (read_result != ypipe_read_consumed) {
+                 if (probe.result != 0 && admission_failed_out_)
+                     *admission_failed_out_ = true;
+@@ -241,13 +241,6 @@
+                 // it atomically with the admission decision, unlike EAGAIN
+                 // capacity rejection, which leaves the frame queued.
+                 const int saved_errno = probe.error_number;
+-                if (_registry_accounting) {
+-                    const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+-                    const uint64_t counted_messages =
+-                      counted_pending_message_ref (*msg_);
+-                    get_ctx ()->_physical_queue_registry.release_committed_frame (
+-                      _in_physical_queue, frame_bytes, counted_messages);
+-                }
+                 account_inbound_frame (msg_, prefetched_batch_exhausted);
+                 if (admission_failed_out_)
+                     *admission_failed_out_ = true;
+@@ -256,17 +249,13 @@
+                 errno = saved_errno;
+                 return true;
+             }
+-        } else if (!_in_pipe->read (msg_, &prefetched_batch_exhausted)) {
++        } else if (!_in_pipe->read (msg_, &prefetched_batch_exhausted, &account_cancelled_frame, this)) {
+             _in_active.store (false, std::memory_order_release);
+             return false;
+         }
+ 
+         //  If this is a credential, ignore it and receive next message.
+         if (unlikely (msg_->is_credential ())) {
+-            if (_registry_accounting)
+-                get_ctx ()->_physical_queue_registry.release_committed_frame (
+-                  _in_physical_queue, frame_accounted_bytes (msg_),
+-                  counted_pending_message_ref (*msg_));
+             account_inbound_frame (msg_, prefetched_batch_exhausted);
+             if (DeferControl)
+                 return true;
+@@ -284,12 +273,6 @@
+         return false;
+     }
+ 
+-    if (_registry_accounting) {
+-        const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+-        const uint64_t counted_messages = counted_pending_message_ref (*msg_);
+-        get_ctx ()->_physical_queue_registry.release_committed_frame (
+-          _in_physical_queue, frame_bytes, counted_messages);
+-    }
+     account_inbound_frame (msg_, prefetched_batch_exhausted);
+ 
+     return true;
+@@ -681,7 +664,7 @@
+     return _request_correlation_release_epoch.load (std::memory_order_acquire);
+ }
+ 
+-void zlink::pipe_t::release_request_correlation (uint64_t accounted_bytes_)
++void zlink::pipe_t::release_request_correlation (uint64_t accounted_bytes_, uint64_t retained_bytes_)
+ {
+     bool schedule_activation = false;
+     uint64_t generation = 0;
+@@ -695,9 +678,11 @@
+             accounted_bytes_);
+         zlink_assert (work_charge <= _request_correlation_work);
+         zlink_assert (_request_correlation_count != 0);
+-        _request_correlation_bytes -= accounted_bytes_;
+-        _request_correlation_work -= work_charge;
+-        --_request_correlation_count;
++        _request_correlation_bytes -= accounted_bytes_ - retained_bytes_;
++        _request_correlation_work -= work_charge - (retained_bytes_
++          ? transport_pair_policy::request_correlation_work_charge (retained_bytes_) : 0);
++        if (!retained_bytes_)
++            --_request_correlation_count;
+         if (_request_correlation_waiting) {
+             // Only a reservation return advances this edge. Snapshotting it
+             // under the same lock as refusal closes the token-registration race.
+@@ -720,9 +705,18 @@
+ }
+ 
+ 
++void zlink::pipe_t::account_cancelled_frame (const msg_t &msg_, bool exhausted_, void *context_)
++{
++    static_cast<pipe_t *> (context_)->account_inbound_frame (&msg_, exhausted_);
++}
++
+ void zlink::pipe_t::account_inbound_frame (
+   const msg_t *msg_, bool prefetched_batch_exhausted_)
+ {
++    if (_registry_accounting)
++        get_ctx ()->_physical_queue_registry.release_committed_frame (
++          _in_physical_queue, frame_accounted_bytes (msg_),
++          counted_pending_message_ref (*msg_));
+     const bool completes_multipart = _in_incomplete_bytes != 0;
+     const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+     _in_incomplete_bytes =
+diff --git a/core/src/runtime/core/pipe_transport.cpp b/core/src/runtime/core/pipe_transport.cpp
+--- a/core/src/runtime/core/pipe_transport.cpp
++++ b/core/src/runtime/core/pipe_transport.cpp
+@@ -259,7 +259,7 @@
+             if (_in_pipe) {
+                 msg_t delimiter;
+                 const ypipe_read_result_t delimiter_result =
+-                  _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL);
++                  _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL, NULL, &account_cancelled_frame, this);
+                 pending_to_read = delimiter_result == ypipe_read_rejected;
+             }
+ 
+diff --git a/core/src/runtime/core/pipe_write.cpp b/core/src/runtime/core/pipe_write.cpp
+--- a/core/src/runtime/core/pipe_write.cpp
++++ b/core/src/runtime/core/pipe_write.cpp
+@@ -17,6 +17,7 @@
+ #include "utils/debug_log.hpp"
+ #include "utils/heap_owner.hpp"
+ #include "core/ypipe.hpp"
++#include "api/socket/staged_request_prototype.hpp"
+ #include "core/ypipe_conflate.hpp"
+ 
+ #ifdef ZLINK_BUILD_TESTS
+@@ -1124,7 +1125,21 @@
+                                                      bool more_)
+ {
+     if (!_conflate) {
+-        _out_pipe->write (msg_, more_);
++        staged_prototype::capture_t *const staged = staged_prototype::capture;
++        unsigned char request_kind = 0;
++        uint64_t request_sequence = 0;
++        const bool record_start = staged && msg_.get_request_reply_metadata (
++          &request_kind, &request_sequence);
++        if (staged && (record_start || staged->pipe == this)) {
++            if (record_start) {
++                staged->pipe = this;
++                staged->count = 0;
++            }
++            zlink_assert (staged->count < staged_prototype::max_parts);
++            staged->slots[staged->count++] = _out_pipe->stage_write (msg_, more_);
++            zlink_assert (staged->slots[staged->count - 1]);
++        } else
++            _out_pipe->write (msg_, more_);
+         return;
+     }
+ 
+@@ -1480,3 +1495,56 @@
+         _published_outbound_provisional_bytes.store (
+           _out_incomplete_bytes, std::memory_order_release);
+ }
++
++// Called only in the socket's existing complete-send lifecycle turn.
++uint64_t zlink::pipe_t::publish_staged_record (
++  void **slots_, size_t count_, msg_t *parts_)
++{
++    if (!_out_pipe || _state != active) {
++        errno = EHOSTUNREACH;
++        return 0;
++    }
++    uint64_t reserved = 0, actual = 0;
++    for (size_t i = 0; i != count_; ++i) {
++        msg_t *old = _out_pipe->stage_value (slots_[i]);
++        zlink_assert (old);
++        reserved += frame_accounted_bytes (old);
++        if (parts_) {
++            if (parts_[i].size () > old->size ()) {
++                errno = EMSGSIZE;
++                return 0;
++            }
++            actual += frame_accounted_bytes (&parts_[i]);
++        }
++    }
++    for (size_t i = 0; i != count_; ++i) {
++        msg_t *old = _out_pipe->stage_value (slots_[i]);
++        const unsigned char more = old->flags () & msg_t::more;
++        if (parts_) {
++            parts_[i].reset_flags (msg_t::more);
++            parts_[i].set_flags (more);
++            old->move (parts_[i]);
++        } else {
++            old->close ();
++            old->init ();
++            old->set_flags (more);
++        }
++        _out_pipe->stage_finish (slots_[i], !parts_);
++    }
++    const uint64_t retained = parts_ ? actual : count_ * sizeof (msg_t);
++    const uint64_t difference = reserved - retained;
++    if (difference) {
++        if (_registry_accounting)
++            get_ctx ()->_physical_queue_registry.release_committed_frame (
++              _out_physical_queue, difference, 0);
++        publish_outbound_ledger_unlocked (
++          _msgs_written.load (),
++          _bytes_written.load () - difference);
++        publish_outbound_accounting_unlocked (false);
++        send_activate_write_deferred (this, _out_generation,
++          _peers_msgs_read.load (), _peers_bytes_read.load ());
++    }
++    _out_complete_record_pending = true;
++    flush_unlocked ();
++    return parts_ ? actual : reserved;
++}
+diff --git a/core/src/runtime/core/ypipe.hpp b/core/src/runtime/core/ypipe.hpp
+--- a/core/src/runtime/core/ypipe.hpp
++++ b/core/src/runtime/core/ypipe.hpp
+@@ -5,10 +5,16 @@
+ 
+ #include "utils/atomic_ptr.hpp"
+ #include "core/yqueue.hpp"
++#include "core/msg.hpp"
+ #include "core/ypipe_base.hpp"
+ 
+ namespace zlink
+ {
++template <typename U> inline bool prototype_record_end (const U &) { return true; }
++inline bool prototype_record_end (const msg_t &msg_)
++{
++    return (msg_.flags () & msg_t::more) == 0;
++}
+ //  Lock-free queue implementation.
+ //  Only a single thread can read from the pipe at any specific moment.
+ //  Only a single thread can write to the pipe at any specific moment.
+@@ -19,6 +25,11 @@
+ template <typename T, int N> class ypipe_t ZLINK_FINAL : public ypipe_base_t<T>
+ {
+   public:
++    typedef typename ypipe_base_t<T>::cancelled_fn cancelled_fn;
++    struct entry_t {
++        T value;
++        unsigned char state; // 0: ready, 1: body pending, 2: cancelled.
++    };
+     //  Initialises the pipe.
+     ypipe_t ()
+     {
+@@ -27,7 +38,8 @@
+ 
+         //  Let all the pointers to point to the terminator.
+         //  (unless pipe is dead, in which case c is set to NULL).
+-        _r = _w = _f = &_queue.back ();
++        _r = _f = &_queue.back ();
++        _w = _queue.back_cursor ();
+         _c.set (&_queue.back ());
+     }
+ 
+@@ -46,13 +58,30 @@
+     //  flushed down the stream.
+     void write (const T &value_, bool incomplete_)
+     {
+-        //  Place the value to the queue, add new terminator element.
+-        _queue.back () = value_;
++        (void) write_entry (value_, incomplete_, 0);
++    }
++
++    void *stage_write (const T &value_, bool incomplete_)
++    {
++        return write_entry (value_, incomplete_, 1);
++    }
++    T *stage_value (void *slot_)
++    {
++        return &static_cast<entry_t *> (slot_)->value;
++    }
++    void stage_finish (void *slot_, bool cancel_)
++    {
++        static_cast<entry_t *> (slot_)->state = cancel_ ? 2 : 0;
++    }
++    entry_t *write_entry (const T &value_, bool incomplete_, unsigned char state_)
++    {
++        entry_t *const slot = &_queue.back ();
++        slot->value = value_;
++        slot->state = state_;
+         _queue.push ();
+-
+-        //  Move the "flush up to here" pointer.
+         if (!incomplete_)
+             _f = &_queue.back ();
++        return slot;
+     }
+ 
+ #ifdef ZLINK_HAVE_OPENVMS
+@@ -66,7 +95,7 @@
+         if (_f == &_queue.back ())
+             return false;
+         _queue.unpush ();
+-        *value_ = _queue.back ();
++        *value_ = _queue.back ().value;
+         return true;
+     }
+ 
+@@ -76,29 +105,50 @@
+     bool flush ()
+     {
+         //  If there are no un-flushed items, do nothing.
+-        if (_w == _f)
++        auto target = _w;
++        for (auto p = _w; p.value () != _f; p.advance ()) {
++            if (p.value ()->state == 1)
++                break;
++            if (prototype_record_end (p.value ()->value)) {
++                target = p;
++                target.advance ();
++            }
++        }
++        if (_w.value () == target.value ())
+             return true;
+ 
+         //  Try to set 'c' to 'f'.
+-        if (_c.cas (_w, _f) != _w) {
++        if (_c.cas (_w.value (), target.value ()) != _w.value ()) {
+             //  Compare-and-swap was unsuccessful because 'c' is NULL.
+             //  This means that the reader is asleep. Therefore we don't
+             //  care about thread-safeness and update c in non-atomic
+             //  manner. We'll return false to let the caller know
+             //  that reader is sleeping.
+-            _c.set (_f);
+-            _w = _f;
++            _c.set (target.value ());
++            _w = target;
+             return false;
+         }
+ 
+         //  Reader is alive. Nothing special to do now. Just move
+         //  the 'first un-flushed item' pointer to 'f'.
+-        _w = _f;
++        _w = target;
+         return true;
+     }
+ 
+     //  Check whether item is available for reading.
+-    bool check_read ()
++    bool check_read (cancelled_fn cancelled_ = NULL, void *cancel_context_ = NULL)
++    {
++        while (check_read_raw ()) {
++            if (_queue.front ().state != 2 || !cancelled_)
++                return true;
++            T value;
++            value = _queue.front ().value;
++            _queue.pop ();
++            cancelled_ (value, &_queue.front () == _r, cancel_context_);
++        }
++        return false;
++    }
++    bool check_read_raw ()
+     {
+         //  Was the value prefetched already? If so, return.
+         if (&_queue.front () != _r && _r)
+@@ -123,18 +173,19 @@
+ 
+     //  Reads an item from the pipe. Returns false if there is no value.
+     //  available.
+-    bool read (T *value_, bool *prefetched_batch_exhausted_ = NULL)
++    bool read (T *value_, bool *prefetched_batch_exhausted_ = NULL,
++               cancelled_fn cancelled_ = NULL, void *cancel_context_ = NULL)
+     {
+         if (prefetched_batch_exhausted_)
+             *prefetched_batch_exhausted_ = false;
+ 
+         //  Try to prefetch a value.
+-        if (!check_read ())
++        if (!check_read (cancelled_, cancel_context_))
+             return false;
+ 
+         //  There was at least one value prefetched.
+         //  Return it to the caller.
+-        *value_ = _queue.front ();
++        *value_ = _queue.front ().value;
+         _queue.pop ();
+         if (prefetched_batch_exhausted_)
+             *prefetched_batch_exhausted_ = &_queue.front () == _r;
+@@ -142,34 +193,48 @@
+     }
+ 
+     bool probe_if_published (void (*fn_) (const T &, void *),
+-                             void *userdata_)
++                             void *userdata_, cancelled_fn cancelled_ = NULL,
++                             void *cancel_context_ = NULL)
+     {
+         if (&_queue.front () == _r || !_r) {
+             //  A NULL->NULL CAS is an atomic read on every atomic_ptr_t
+             //  backend. Unlike check_read(), it never replaces the current
+             //  front with NULL and therefore cannot put the reader to sleep.
+-            T *const published = _c.cas (NULL, NULL);
++            entry_t *const published = _c.cas (NULL, NULL);
+             if (!published || published == &_queue.front ())
+                 return false;
+             _r = published;
+         }
+ 
+-        (*fn_) (_queue.front (), userdata_);
++        while (_queue.front ().state == 2 && cancelled_) {
++            T value;
++            value = _queue.front ().value;
++            _queue.pop ();
++            cancelled_ (value, &_queue.front () == _r, cancel_context_);
++            if (&_queue.front () == _r || !_r) {
++                entry_t *const published = _c.cas (NULL, NULL);
++                if (!published || published == &_queue.front ())
++                    return false;
++                _r = published;
++            }
++        }
++        (*fn_) (_queue.front ().value, userdata_);
+         return true;
+     }
+ 
+     ypipe_read_result_t
+     read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_,
+-             bool *prefetched_batch_exhausted_ = NULL)
++             bool *prefetched_batch_exhausted_ = NULL,
++               cancelled_fn cancelled_ = NULL, void *cancel_context_ = NULL)
+     {
+         if (prefetched_batch_exhausted_)
+             *prefetched_batch_exhausted_ = false;
+-        if (!check_read ())
++        if (!check_read (cancelled_, cancel_context_))
+             return ypipe_read_empty;
+-        if (!(*fn_) (_queue.front (), userdata_))
++        if (!(*fn_) (_queue.front ().value, userdata_))
+             return ypipe_read_rejected;
+ 
+-        *value_ = _queue.front ();
++        *value_ = _queue.front ().value;
+         _queue.pop ();
+         if (prefetched_batch_exhausted_)
+             *prefetched_batch_exhausted_ = &_queue.front () == _r;
+@@ -181,24 +246,24 @@
+     //  Front of the queue points to the first prefetched item, back of
+     //  the pipe points to last un-flushed item. Front is used only by
+     //  reader thread, while back is used only by writer thread.
+-    yqueue_t<T, N> _queue;
++    yqueue_t<entry_t, N> _queue;
+ 
+     //  Points to the first un-flushed item. This variable is used
+     //  exclusively by writer thread.
+-    T *_w;
++    typename yqueue_t<entry_t, N>::cursor_t _w;
+ 
+     //  Points to the first un-prefetched item. This variable is used
+     //  exclusively by reader thread.
+-    T *_r;
++    entry_t *_r;
+ 
+     //  Points to the first item to be flushed in the future.
+-    T *_f;
++    entry_t *_f;
+ 
+     //  The single point of contention between writer and reader thread.
+     //  Points past the last flushed item. If it is NULL,
+     //  reader is asleep. This pointer should be always accessed using
+     //  atomic operations.
+-    atomic_ptr_t<T> _c;
++    atomic_ptr_t<entry_t> _c;
+ 
+     ZLINK_NON_COPYABLE_NOR_MOVABLE (ypipe_t)
+ };
+diff --git a/core/src/runtime/core/ypipe_base.hpp b/core/src/runtime/core/ypipe_base.hpp
+--- a/core/src/runtime/core/ypipe_base.hpp
++++ b/core/src/runtime/core/ypipe_base.hpp
+@@ -31,6 +31,7 @@
+ template <typename T> class ypipe_base_t
+ {
+   public:
++    typedef void (*cancelled_fn) (const T &, bool, void *);
+     virtual ~ypipe_base_t () ZLINK_DEFAULT;
+     virtual void write (const T &value_, bool incomplete_) = 0;
+     virtual void write_with_replacement_accounting (const T &value_,
+@@ -54,20 +55,26 @@
+             discarded_->complete_messages = 0;
+         }
+     }
++    // Prototype handles identify slots in this queue, not another work queue.
++    virtual void *stage_write (const T &, bool) { return NULL; }
++    virtual T *stage_value (void *) { return NULL; }
++    virtual void stage_finish (void *, bool) {}
+     virtual bool unwrite (T *value_) = 0;
+     virtual bool flush () = 0;
+-    virtual bool check_read () = 0;
++    virtual bool check_read (cancelled_fn = NULL, void * = NULL) = 0;
+     virtual bool read (T *value_,
+-                       bool *prefetched_batch_exhausted_ = NULL) = 0;
++                       bool *prefetched_batch_exhausted_ = NULL,
++                       cancelled_fn = NULL, void * = NULL) = 0;
+     //  Inspect an item that is already visible to the reader without
+     //  publishing the ypipe sleep marker. Implementations may extend the
+     //  reader's prefetched range only when the writer has already published
+     //  one; an empty probe must leave the reader awake.
+     virtual bool probe_if_published (void (*fn_) (const T &, void *),
+-                                     void *userdata_) = 0;
++                                     void *userdata_, cancelled_fn = NULL, void * = NULL) = 0;
+     virtual ypipe_read_result_t
+     read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_,
+-             bool *prefetched_batch_exhausted_ = NULL) = 0;
++             bool *prefetched_batch_exhausted_ = NULL,
++                       cancelled_fn = NULL, void * = NULL) = 0;
+ };
+ }
+ 
+diff --git a/core/src/runtime/core/ypipe_conflate.hpp b/core/src/runtime/core/ypipe_conflate.hpp
+--- a/core/src/runtime/core/ypipe_conflate.hpp
++++ b/core/src/runtime/core/ypipe_conflate.hpp
+@@ -16,6 +16,7 @@
+ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T>
+ {
+   public:
++    typedef typename ypipe_base_t<T>::cancelled_fn cancelled_fn;
+     ypipe_conflate_t () {}
+ 
+     //  Following function (write) deliberately copies uninitialised data
+@@ -67,20 +68,20 @@
+     bool flush () { return dbuffer.flush (); }
+ 
+     //  Check whether item is available for reading.
+-    bool check_read ()
++    bool check_read (cancelled_fn = NULL, void * = NULL)
+     {
+         return dbuffer.check_read ();
+     }
+ 
+     //  Reads an item from the pipe. Returns false if there is no value.
+     //  available.
+-    bool read (T *value_, bool *prefetched_batch_exhausted_ = NULL)
++    bool read (T *value_, bool *prefetched_batch_exhausted_ = NULL, cancelled_fn = NULL, void * = NULL)
+     {
+         return dbuffer.read (value_, prefetched_batch_exhausted_);
+     }
+ 
+     bool probe_if_published (void (*fn_) (const T &, void *),
+-                             void *userdata_)
++                             void *userdata_, cancelled_fn = NULL, void * = NULL)
+     {
+         //  dbuffer inspects an already-published front without publishing
+         //  the reader sleep marker.
+@@ -89,7 +90,7 @@
+ 
+     ypipe_read_result_t
+     read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_,
+-             bool *prefetched_batch_exhausted_ = NULL)
++             bool *prefetched_batch_exhausted_ = NULL, cancelled_fn = NULL, void * = NULL)
+     {
+         return dbuffer.read_if (value_, fn_, userdata_,
+                                 prefetched_batch_exhausted_);
+diff --git a/core/src/runtime/core/yqueue.hpp b/core/src/runtime/core/yqueue.hpp
+--- a/core/src/runtime/core/yqueue.hpp
++++ b/core/src/runtime/core/yqueue.hpp
+@@ -36,7 +36,28 @@
+ template <typename T, int N> class yqueue_t
+ #endif
+ {
++    // Existing chunk links also navigate the writer's publication frontier.
++    struct chunk_t
++    {
++        T values[N];
++        chunk_t *prev;
++        chunk_t *next;
++    };
+   public:
++    struct cursor_t
++    {
++        chunk_t *chunk;
++        int position;
++        T *value () const { return &chunk->values[position]; }
++        void advance ()
++        {
++            if (++position == N) {
++                chunk = chunk->next;
++                position = 0;
++            }
++        }
++    };
++    cursor_t back_cursor () const { return {_back_chunk, _back_pos}; }
+     //  Create the queue.
+     inline yqueue_t ()
+     {
+@@ -145,14 +166,6 @@
+     }
+ 
+   private:
+-    //  Individual memory chunk to hold N elements.
+-    struct chunk_t
+-    {
+-        T values[N];
+-        chunk_t *prev;
+-        chunk_t *next;
+-    };
+-
+     static inline chunk_t *allocate_chunk ()
+     {
+ #if defined HAVE_POSIX_MEMALIGN
+diff --git a/core/src/runtime/sockets/common/socket_base.hpp b/core/src/runtime/sockets/common/socket_base.hpp
+--- a/core/src/runtime/sockets/common/socket_base.hpp
++++ b/core/src/runtime/sockets/common/socket_base.hpp
+@@ -473,6 +473,7 @@
+       std::optional<socket_public_send_scope_t> *scope_out_);
+     bool begin_public_api_scope (
+       std::optional<socket_public_api_scope_t> *scope_out_);
++    void cancel_staged_body (pipe_t *, void **, size_t);
+     bool begin_complete_send_scope (
+       std::optional<socket_public_send_scope_t> *scope_out_);
+     int rollback ();
+diff --git a/core/src/runtime/sockets/common/socket_base_msg.cpp b/core/src/runtime/sockets/common/socket_base_msg.cpp
+--- a/core/src/runtime/sockets/common/socket_base_msg.cpp
++++ b/core/src/runtime/sockets/common/socket_base_msg.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include "sockets/common/socket_base.hpp"
+ #include "core/ctx.hpp"
++#include "core/pipe.hpp"
+ #include "core/ctx_physical_queue_registry.hpp"
+ #include "sockets/common/socket_submit_retry_fault_injection.hpp"
+ #include "utils/err.hpp"
+@@ -1060,3 +1061,11 @@
+     if (unlikely (msg_->flags () & msg_t::routing_id))
+         zlink_assert (options.recv_routing_id);
+ }
++
++void zlink::socket_base_t::cancel_staged_body (pipe_t *pipe_, void **slots_, size_t count_)
++{
++    auto &owner = lifecycle_coordinator ();
++    socket_public_api_lock_scope_t turn (
++      owner, !owner.public_api_sync_owned_by_current_thread ());
++    (void) pipe_->publish_staged_record (slots_, count_, NULL);
++}
+diff --git a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+--- a/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
++++ b/framework/bench/grpc/cpp/client/bench_cpp_client.cpp
+@@ -8,6 +8,7 @@
+ #include <nlohmann/json.hpp>
+ #include <filesystem>
+ #include <csignal>
++#include <pthread.h>
+ #include <condition_variable>
+ #include <cxxabi.h>
+ 
+@@ -24,6 +25,7 @@
+ #include <deque>
+ #include <functional>
+ #include <limits>
++#include <cstdlib>
+ #include <map>
+ #include <memory>
+ #include <stdexcept>
+@@ -441,8 +443,10 @@
+     int request_window () const override { return _window; }
+ 
+     zlink_raw_driver_t (const options_t &options, int window, bool command_path) :
+-        _options (options), _window (window), _command_path (command_path)
+-    {
++        _options (options), _window (window), _command_path (command_path),
++        _request_rate (request_rate_from_environment ())
++    {
++        _staged = std::getenv ("ZLINK_CPP_BENCH_STAGED") != nullptr;
+         _socket = std::make_unique<zlink::router_socket_t> (_context);
+         const std::string client_rid =
+           (command_path ? "zlink-cpp-bench-command-client-" : "zlink-cpp-bench-request-client-")
+@@ -518,12 +522,44 @@
+           std::min<int64_t> (remaining, std::max<int64_t> (1, max_wait_ms)));
+     }
+ 
++    static uint64_t request_rate_from_environment ()
++    {
++        const char *value = std::getenv ("ZLINK_CPP_BENCH_REQUEST_RATE");
++        if (!value || !*value)
++            return 0;
++        char *end = nullptr;
++        const unsigned long long rate = std::strtoull (value, &end, 10);
++        if (end == value || *end != '\0' || rate == 0)
++            throw std::invalid_argument ("ZLINK_CPP_BENCH_REQUEST_RATE must be a positive integer");
++        return static_cast<uint64_t> (rate);
++    }
++
++    std::chrono::milliseconds poll_timeout_with_schedule (clock_t_::time_point now,
++                                                           clock_t_::time_point deadline,
++                                                           int64_t max_wait_ms)
++    {
++        auto timeout = poll_timeout_until (now, deadline, max_wait_ms);
++        const auto scheduled = _ready.next_scheduled ();
++        if (scheduled == clock_t_::time_point::max ())
++            return timeout;
++        const auto left = scheduled - now;
++        if (left <= clock_t_::duration::zero ())
++            return std::chrono::milliseconds (0);
++        // Poller timeout is millisecond-granular. Spin the outer driver loop for
++        // sub-millisecond pacing intervals while still pumping completions.
++        if (left < std::chrono::milliseconds (1))
++            return std::chrono::milliseconds (0);
++        const auto scheduled_ms = std::chrono::duration_cast<std::chrono::milliseconds> (left);
++        return std::min (timeout, std::max (std::chrono::milliseconds (1), scheduled_ms));
++    }
++
+     void run_unbounded (clock_t_::time_point deadline,
+                         size_t payload_size,
+                         phase_t phase,
+                         counters_t &counters,
+                         latency_sampler_t *latency)
+     {
++        pthread_setname_np (pthread_self (), "cstage-caller");
+         _deadline = deadline;
+         _phase = phase;
+         _payload_size = payload_size;
+@@ -550,7 +586,8 @@
+             const std::chrono::milliseconds wait =
+               resumed != 0
+                 ? std::chrono::milliseconds (0)
+-                : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
++              : poll_timeout_with_schedule (now, now < deadline ? deadline : hard_stop,
++                                            poll_max_wait_ms);
+             _poller.wait (events.data (), events.size (), wait);
+         }
+ 
+@@ -566,6 +603,7 @@
+                     latency_sampler_t *latency,
+                     int slot_count)
+     {
++        pthread_setname_np (pthread_self (), "cstage-caller");
+         _deadline = deadline;
+         _phase = phase;
+         _payload_size = payload_size;
+@@ -596,7 +634,8 @@
+             const std::chrono::milliseconds wait =
+               resumed != 0
+                 ? std::chrono::milliseconds (0)
+-                : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
++              : poll_timeout_with_schedule (now, now < deadline ? deadline : hard_stop,
++                                            poll_max_wait_ms);
+             _poller.wait (events.data (), events.size (), wait);
+         }
+ 
+@@ -625,21 +664,39 @@
+ 
+     zlink::send_operation_t send_operation () { return _socket->send (_target); }
+ 
++    zlink::request_submission_t submit_request (size_t size, phase_t phase, uint64_t seq)
++    {
++        if (_staged) {
++            const size_t body_size = std::max (size, k_header_size);
++            size_t varint_bytes = 1;
++            for (size_t v = body_size; v >= 128; v >>= 7)
++                ++varint_bytes;
++            return request_operation ().deferred (
++              {std::strlen (request_envelope ()), body_size + 1 + varint_bytes},
++              [this, size, phase, seq] {
++                  auto parts = make_parts (size, phase, seq);
++                  std::vector<zlink::message_t> result;
++                  result.reserve (2);
++                  result.push_back (std::move (parts.first));
++                  result.push_back (std::move (parts.second));
++                  return result;
++              }).timeout (std::chrono::milliseconds (_options.request_timeout_ms)).async ();
++        }
++        auto parts = make_parts (size, phase, seq);
++        return request_operation ().message (parts.first).message (parts.second)
++          .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).async ();
++    }
++
+     task_t request_slot ()
+     {
+         co_await _ready.schedule ();
+         while (clock_t_::now () < _deadline) {
+             const uint64_t seq = _seq++;
+-            auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+             try {
+                 zlink::request_submission_t submission =
+-                  request_operation ()
+-                    .message (parts.first)
+-                    .message (parts.second)
+-                    .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
+-                    .async ();
++                  submit_request (_payload_size, _phase, seq);
+                 if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                     co_await std::move (submission.admitted);
+                 else if (submission.result != ZLINK_SUBMIT_OK)
+@@ -674,19 +731,25 @@
+     {
+         co_await _ready.schedule ();
+         size_t submitted_since_progress = 0;
++        const auto interval = _request_rate == 0
++                               ? clock_t_::duration::zero ()
++                               : std::chrono::duration_cast<clock_t_::duration> (
++                                   std::chrono::seconds (1)) / static_cast<int64_t> (_request_rate);
++        auto next_submission = clock_t_::now ();
+         while (clock_t_::now () < _deadline) {
++            if (_request_rate != 0 && _phase != phase_warmup) {
++                const auto now = clock_t_::now ();
++                if (now < next_submission)
++                    co_await _ready.schedule_at (next_submission);
++                next_submission = std::max (next_submission + interval, clock_t_::now ());
++            }
+             const uint64_t seq = _seq++;
+-            auto parts = make_parts (_payload_size, _phase, seq);
+             _counters->enter ();
+             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+             bool yield_after_error = false;
+             try {
+                 zlink::request_submission_t submission =
+-                  request_operation ()
+-                    .message (parts.first)
+-                    .message (parts.second)
+-                    .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
+-                    .async ();
++                  submit_request (_payload_size, _phase, seq);
+                 const bool backpressured = submission.result == ZLINK_SUBMIT_BACKPRESSURED;
+                 if (submission.result != ZLINK_SUBMIT_OK && !backpressured)
+                     throw std::logic_error ("unexpected request submit result");
+@@ -786,6 +849,8 @@
+     counters_t *_counters = nullptr;
+     latency_sampler_t *_latency = nullptr;
+     uint64_t _seq = 0;
++    uint64_t _request_rate = 0;
++    bool _staged = false;
+ };
+ 
+ 
+diff --git a/framework/bench/grpc/cpp/common/bench_async.hpp b/framework/bench/grpc/cpp/common/bench_async.hpp
+--- a/framework/bench/grpc/cpp/common/bench_async.hpp
++++ b/framework/bench/grpc/cpp/common/bench_async.hpp
+@@ -29,6 +29,7 @@
+ #include <mutex>
+ #include <utility>
+ #include <vector>
++#include <algorithm>
+ 
+ namespace zlink_cpp_bench
+ {
+@@ -117,7 +118,36 @@
+         ready_queue_t &_queue;
+     };
+ 
++    class schedule_at_awaiter_t
++    {
++      public:
++        schedule_at_awaiter_t (ready_queue_t &queue,
++                               std::chrono::steady_clock::time_point when) noexcept :
++            _queue (queue), _when (when)
++        {}
++        bool await_ready () const noexcept { return false; }
++        template <typename TPromise>
++        void await_suspend (std::coroutine_handle<TPromise> continuation)
++        {
++            if constexpr (requires (TPromise & promise) {
++                              promise.zlink_bind_continuation_scheduler (_queue);
++                          }) {
++                continuation.promise ().zlink_bind_continuation_scheduler (_queue);
++            }
++            _queue._timed.emplace_back (_when, continuation);
++        }
++        void await_resume () const noexcept {}
++
++      private:
++        ready_queue_t &_queue;
++        std::chrono::steady_clock::time_point _when;
++    };
++
+     schedule_awaiter_t schedule () noexcept { return schedule_awaiter_t (*this); }
++    schedule_at_awaiter_t schedule_at (std::chrono::steady_clock::time_point when) noexcept
++    {
++        return schedule_at_awaiter_t (*this, when);
++    }
+ 
+     void enqueue (std::coroutine_handle<> handle) { _ready.push_back (handle); }
+ 
+@@ -135,6 +165,15 @@
+     // one slot cannot starve the other 99.
+     size_t run_ready_round ()
+     {
++        const auto now = std::chrono::steady_clock::now ();
++        for (auto it = _timed.begin (); it != _timed.end ();) {
++            if (it->first <= now) {
++                _ready.push_back (it->second);
++                it = _timed.erase (it);
++            } else {
++                ++it;
++            }
++        }
+         const size_t local_round = _ready.size ();
+         _remote_batch.clear ();
+         {
+@@ -159,6 +198,14 @@
+         return ran;
+     }
+ 
++    std::chrono::steady_clock::time_point next_scheduled () const noexcept
++    {
++        auto next = std::chrono::steady_clock::time_point::max ();
++        for (const auto &item : _timed)
++            next = std::min (next, item.first);
++        return next;
++    }
++
+     bool idle ()
+     {
+         if (!_ready.empty ())
+@@ -171,6 +218,7 @@
+     std::shared_ptr<remote_state_t> _remote;
+     std::deque<std::coroutine_handle<>> _ready;
+     std::vector<std::function<void ()>> _remote_batch;
++    std::vector<std::pair<std::chrono::steady_clock::time_point, std::coroutine_handle<>>> _timed;
+ };
+ 
+ // A fire-and-track coroutine. The bench never blocks on one of these; the

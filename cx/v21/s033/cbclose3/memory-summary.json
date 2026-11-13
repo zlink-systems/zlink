@@ -1,0 +1,17 @@
+{
+  "admission-memory.log": {
+    "min_kB": 14574328,
+    "min_GiB": 13.899162292480469,
+    "samples": 2
+  },
+  "races-memory.log": {
+    "min_kB": 17177116,
+    "min_GiB": 16.38137435913086,
+    "samples": 33
+  },
+  "full-binding-memory.log": {
+    "min_kB": 25080164,
+    "min_GiB": 23.91830825805664,
+    "samples": 47
+  }
+}

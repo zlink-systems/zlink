@@ -1,0 +1,2340 @@
+diff --git a/bindings/cpp/CMakeLists.txt b/bindings/cpp/CMakeLists.txt
+index 306ca3c5d3..e546143784 100644
+--- a/bindings/cpp/CMakeLists.txt
++++ b/bindings/cpp/CMakeLists.txt
+@@ -548,6 +548,14 @@ if(ZLINK_CPP_BUILD_TESTS)
+   )
+ 
+   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++    add_cpp_contract_test(test_cpp_contract_submit_close_admission
++      "tests/contract/test_cpp_contract_submit_close_admission.cpp")
++    target_include_directories(test_cpp_contract_submit_close_admission PRIVATE
++      ${CMAKE_CURRENT_LIST_DIR}/src)
++    target_link_options(test_cpp_contract_submit_close_admission PRIVATE
++      "LINKER:--wrap=zlink_send" "LINKER:--wrap=zlink_request"
++      "LINKER:--wrap=zlink_reply" "LINKER:--wrap=zlink_publish"
++      "LINKER:--wrap=zlink_close" "LINKER:--wrap=zlink_completion_recv")
+     foreach(test_name IN ITEMS
+         test_cpp_contract_writable_token_delivery
+         test_cpp_contract_completion_drain_order)
+@@ -588,6 +596,14 @@ if(ZLINK_CPP_BUILD_TESTS)
+     configure_cpp_binding_runtime(test_cpp_send_close_stress)
+   endif()
+ 
++  add_cpp_binding_executable(test_cpp_submit_close_race
++    tests/stress/test_cpp_submit_close_race.cpp)
++  if(ZLINK_CPP_REGISTER_CTEST)
++    add_test(NAME test_cpp_submit_close_race COMMAND test_cpp_submit_close_race)
++    set_tests_properties(test_cpp_submit_close_race PROPERTIES LABELS "stress" TIMEOUT 300)
++    configure_cpp_binding_runtime(test_cpp_submit_close_race)
++  endif()
++
+   add_executable(
+     test_cpp_contract_common_header_version
+     tests/contract/test_cpp_contract_common_header_version.cpp
+diff --git a/bindings/cpp/include/zlink/Contracts/Messaging/received.hpp b/bindings/cpp/include/zlink/Contracts/Messaging/received.hpp
+index 52a4f62649..6567306e0f 100644
+--- a/bindings/cpp/include/zlink/Contracts/Messaging/received.hpp
++++ b/bindings/cpp/include/zlink/Contracts/Messaging/received.hpp
+@@ -28,11 +28,9 @@ class reply_token_t final
+     reply_token_t (const reply_token_t &) = default;
+     reply_token_t &operator= (const reply_token_t &) = default;
+ 
+-    friend bool operator== (const reply_token_t &left_,
+-                            const reply_token_t &right_) noexcept
++    friend bool operator== (const reply_token_t &left_, const reply_token_t &right_) noexcept
+     {
+-        return left_._owner.get () == right_._owner.get ()
+-               && left_._value == right_._value;
++        return left_._owner.get () == right_._owner.get () && left_._value == right_._value;
+     }
+ 
+   private:
+@@ -48,8 +46,7 @@ class reply_token_t final
+     friend struct reply_token_hash_t;
+ };
+ 
+-inline bool operator!= (const reply_token_t &left_,
+-                        const reply_token_t &right_) noexcept
++inline bool operator!= (const reply_token_t &left_, const reply_token_t &right_) noexcept
+ {
+     return !(left_ == right_);
+ }
+@@ -58,11 +55,9 @@ struct reply_token_hash_t
+ {
+     std::size_t operator() (const reply_token_t &token_) const noexcept
+     {
+-        const std::size_t owner_hash =
+-          std::hash<const void *> {} (token_._owner.get ());
+-        const std::size_t value_hash = std::hash<uint64_t> {} (token_._value);
+-        return owner_hash ^ (value_hash + 0x9e3779b9u + (owner_hash << 6)
+-                             + (owner_hash >> 2));
++        const std::size_t owner_hash = std::hash<const void *>{}(token_._owner.get ());
++        const std::size_t value_hash = std::hash<uint64_t>{}(token_._value);
++        return owner_hash ^ (value_hash + 0x9e3779b9u + (owner_hash << 6) + (owner_hash >> 2));
+     }
+ };
+ 
+@@ -80,10 +75,7 @@ class received_t
+ 
+     const std::optional<routing_id_t> &routing_id () const noexcept { return _routing_id; }
+ 
+-    const std::optional<reply_token_t> &reply_token () const noexcept
+-    {
+-        return _reply_token;
+-    }
++    const std::optional<reply_token_t> &reply_token () const noexcept { return _reply_token; }
+ 
+     /// Opaque nonzero route generation of the ROUTER route that delivered this
+     /// record; compare it only for equality with routes_snapshot() rows. 0 when
+@@ -93,10 +85,7 @@ class received_t
+     const std::vector<message_t> &parts () const;
+     std::vector<message_t> &parts ();
+ 
+-    bool is_single_part () const noexcept
+-    {
+-        return _parts.is_single_part ();
+-    }
++    bool is_single_part () const noexcept { return _parts.is_single_part (); }
+     message_t &first_part ();
+     message_t single_part_or_throw ();
+     /// Send context (routing_id) is encapsulated. Returns an
+@@ -137,7 +126,6 @@ class received_t
+     detail::lazy_message_parts_t _parts;
+     // Send/reply context captured from the receiving socket. The runtime tag
+     // keeps completion ownership and reply-token validation socket-local.
+-    std::uintptr_t _send_context_handle = 0;
+     send_context_kind_t _send_context_kind = send_context_kind_t::none;
+     std::weak_ptr<detail::socket_runtime_state_t> _send_context_runtime;
+ };
+diff --git a/bindings/cpp/include/zlink/Contracts/Sockets/socket_contracts.hpp b/bindings/cpp/include/zlink/Contracts/Sockets/socket_contracts.hpp
+index 841e178530..df9067668f 100644
+--- a/bindings/cpp/include/zlink/Contracts/Sockets/socket_contracts.hpp
++++ b/bindings/cpp/include/zlink/Contracts/Sockets/socket_contracts.hpp
+@@ -106,8 +106,8 @@ class socket_t
+     [[nodiscard]] int
+     receive (received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_);
+ 
+-    [[nodiscard]] int receive_impl (
+-      received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_);
++    [[nodiscard]] int
++    receive_impl (received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_);
+ 
+     [[nodiscard]] int publish (const std::string &topic_id_,
+                                message_t &part_,
+@@ -161,7 +161,9 @@ class socket_t
+   private:
+     friend struct detail::socket_access_t;
+ 
+-    std::unique_ptr<detail::socket_handle_t> _socket;
++    int close_native () noexcept;
++
++    std::shared_ptr<detail::socket_handle_t> _socket;
+     std::shared_ptr<detail::socket_runtime_state_t> _runtime;
+     std::unique_ptr<detail::recv_envelope_t> _receive_envelope;
+     socket_type _type;
+diff --git a/bindings/cpp/src/Runtime/Messaging/completion_owner.cpp b/bindings/cpp/src/Runtime/Messaging/completion_owner.cpp
+index f1541c171b..df24ee3800 100644
+--- a/bindings/cpp/src/Runtime/Messaging/completion_owner.cpp
++++ b/bindings/cpp/src/Runtime/Messaging/completion_owner.cpp
+@@ -280,8 +280,12 @@ bool completion_entry_t::submit_request_attempt (bool initial_, bool *admitted_o
+ {
+     {
+         std::lock_guard<std::mutex> lock (_mutex);
+-        if (_settled)
++        if (_settled) {
++            // Close can settle a registered entry before its first attempt.
++            // That initial submit must report TERMINATED, not BACKPRESSURED.
++            require_submit_open (!initial_);
+             return true;
++        }
+         _published = false;
+         _completion_id = 0;
+     }
+@@ -559,8 +563,10 @@ bool completion_entry_t::settled () noexcept
+     return _settled;
+ }
+ 
+-completion_owner_t::completion_owner_t (void *socket_) :
+-    _socket (socket_), _entries (&_entry_map_pool), _early_send_completions (&_entry_map_pool)
++completion_owner_t::completion_owner_t (std::shared_ptr<socket_handle_t> socket_) :
++    _socket (std::move (socket_)),
++    _entries (&_entry_map_pool),
++    _early_send_completions (&_entry_map_pool)
+ {
+ }
+ 
+@@ -586,8 +592,7 @@ bool completion_owner_t::start_async_request (const std::shared_ptr<completion_e
+ {
+     {
+         std::lock_guard<std::mutex> lock (_mutex);
+-        if (_shutdown)
+-            throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
++        require_submit_open (!_shutdown);
+         if (!_public_owner)
+             throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+         insert_entry_locked (entry_);
+@@ -598,8 +603,7 @@ bool completion_owner_t::start_async_request (const std::shared_ptr<completion_e
+ void completion_owner_t::register_blocking_entry (const std::shared_ptr<completion_entry_t> &entry_)
+ {
+     std::lock_guard<std::mutex> lock (_mutex);
+-    if (_shutdown)
+-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
++    require_submit_open (!_shutdown);
+     insert_entry_locked (entry_);
+ }
+ 
+@@ -609,8 +613,7 @@ void completion_owner_t::register_send_entry (const std::shared_ptr<completion_e
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+ 
+     std::unique_lock<std::mutex> lock (_mutex);
+-    if (_shutdown)
+-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
++    require_submit_open (!_shutdown);
+     if (!_public_owner)
+         throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+     insert_entry_locked (entry_);
+@@ -669,24 +672,28 @@ size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
+ {
+     size_t processed = 0;
+     std::vector<std::shared_ptr<completion_entry_t>> retries;
+-    {
+-        std::lock_guard<std::mutex> lock (_mutex);
+-        if (_shutdown)
+-            return processed;
+-    }
+     bool blocking_receive = inline_target_ != nullptr;
+     for (;;) {
++        std::optional<socket_call_t> call;
+         {
+             std::lock_guard<std::mutex> lock (_mutex);
+             if (_shutdown)
+                 return processed;
++            try {
++                call.emplace (_socket);
++            }
++            catch (const submit_error_t &) {
++                return processed;
++            }
+         }
+         zlink_completion_t completion{};
+         completion.struct_size = sizeof (completion);
+         const zlink_recv_result_t rc = zlink_completion_recv (
+-          _socket, &completion,
++          call->handle (), &completion,
+           static_cast<zlink_recv_flags_t> (blocking_receive ? ZLINK_RECV_FLAGS_NONE
+                                                             : ZLINK_RECV_FLAGS_DONTWAIT));
++        const int receive_errno = zlink_errno ();
++        call.reset ();
+         blocking_receive = false;
+         if (rc == ZLINK_RECV_NO_DATA) {
+             for (const auto &entry : retries) {
+@@ -706,7 +713,7 @@ size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
+             break;
+         }
+         if (rc != ZLINK_RECV_OK) {
+-            const int error = zlink_errno ();
++            const int error = receive_errno;
+             for (const auto &entry : retries) {
+                 entry->terminate (error);
+                 unregister_entry (entry->context ());
+@@ -788,6 +795,25 @@ void completion_owner_t::release_public (const void *poller_owner_) noexcept
+     }
+ }
+ 
++int completion_owner_t::close_native_socket () noexcept
++{
++    // Native cleanup may reenter close on its owning thread. Do not try to
++    // acquire a non-recursive mutex already owned by that thread.
++    if (_socket->close_in_progress ()) {
++        errno = EBUSY;
++        return ZLINK_CLOSE_BUSY;
++    }
++    // Completion admission shares this existing lock so a rejected Core close
++    // cannot expose a transient closing state to a receiver. A concurrent
++    // close stays fail-fast while that owner is in use.
++    std::unique_lock<std::mutex> lock (_mutex, std::try_to_lock);
++    if (!lock.owns_lock ()) {
++        errno = EBUSY;
++        return ZLINK_CLOSE_BUSY;
++    }
++    return _socket->close ();
++}
++
+ void completion_owner_t::shutdown (int terminal_errno_) noexcept
+ {
+     std::unique_lock<std::mutex> lock (_mutex);
+diff --git a/bindings/cpp/src/Runtime/Messaging/completion_owner.hpp b/bindings/cpp/src/Runtime/Messaging/completion_owner.hpp
+index bc4e38a268..b5cacfb9a2 100644
+--- a/bindings/cpp/src/Runtime/Messaging/completion_owner.hpp
++++ b/bindings/cpp/src/Runtime/Messaging/completion_owner.hpp
+@@ -21,29 +21,37 @@ namespace zlink::detail
+ {
+ 
+ struct operation_state_t;
++class socket_handle_t;
+ 
+ class completion_entry_t : public std::enable_shared_from_this<completion_entry_t>
+ {
+   public:
+-    enum class kind_t { send_retry, request };
+-    enum class capture_result_t { pending, terminal, retry };
++    enum class kind_t
++    {
++        send_retry,
++        request
++    };
++    enum class capture_result_t
++    {
++        pending,
++        terminal,
++        retry
++    };
+ 
+     // Built only after Core rejected the first DONTWAIT attempt: the entry
+     // adopts the packet, the submit context Core recorded with the wait token,
+     // and that token itself. An admitted send never reaches this constructor.
+     completion_entry_t (async_operation_state_t<void> *send_result_,
+                         std::unique_ptr<operation_state_t> send_operation_,
+-                        void *submit_context_, uint64_t wait_token_);
++                        void *submit_context_,
++                        uint64_t wait_token_);
++    explicit completion_entry_t (async_operation_state_t<std::vector<message_t>> *request_result_,
++                                 async_operation_state_t<void> *request_admitted_result_ = nullptr);
+     explicit completion_entry_t (
+-      async_operation_state_t<std::vector<message_t>> *request_result_,
+-      async_operation_state_t<void> *request_admitted_result_ = nullptr);
+-    explicit completion_entry_t (
+-      const std::shared_ptr<async_operation_state_t<std::vector<message_t>>> &
+-        request_result_);
+-    completion_entry_t (
+-      async_operation_state_t<std::vector<message_t>> *request_result_,
+-      async_operation_state_t<void> *request_admitted_result_,
+-      std::unique_ptr<operation_state_t> request_operation_);
++      const std::shared_ptr<async_operation_state_t<std::vector<message_t>>> &request_result_);
++    completion_entry_t (async_operation_state_t<std::vector<message_t>> *request_result_,
++                        async_operation_state_t<void> *request_admitted_result_,
++                        std::unique_ptr<operation_state_t> request_operation_);
+     ~completion_entry_t ();
+ 
+     completion_entry_t (const completion_entry_t &) = delete;
+@@ -94,7 +102,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
+ class completion_owner_t
+ {
+   public:
+-    explicit completion_owner_t (void *socket_);
++    explicit completion_owner_t (std::shared_ptr<socket_handle_t> socket_);
+     ~completion_owner_t ();
+ 
+     completion_owner_t (const completion_owner_t &) = delete;
+@@ -110,12 +118,14 @@ class completion_owner_t
+     void transfer_to_public (const void *poller_owner_);
+     void release_public (const void *poller_owner_) noexcept;
+     void shutdown (int terminal_errno_ = ESHUTDOWN) noexcept;
++    int close_native_socket () noexcept;
++    const std::shared_ptr<socket_handle_t> &socket_handle () const noexcept { return _socket; }
+ 
+   private:
+     void insert_entry_locked (const std::shared_ptr<completion_entry_t> &entry_);
+     size_t drain_impl (completion_entry_t *inline_target_);
+ 
+-    void *_socket;
++    std::shared_ptr<socket_handle_t> _socket;
+     std::mutex _mutex;
+     std::mutex _inline_drain_mutex;
+     // Entry identities are never pooled: Core may still carry one as callback
+diff --git a/bindings/cpp/src/Runtime/Messaging/operation_state.hpp b/bindings/cpp/src/Runtime/Messaging/operation_state.hpp
+index a3d3b4c75a..0d7e8855fc 100644
+--- a/bindings/cpp/src/Runtime/Messaging/operation_state.hpp
++++ b/bindings/cpp/src/Runtime/Messaging/operation_state.hpp
+@@ -80,14 +80,12 @@ struct operation_state_t
+ 
+     struct raw_command_t
+     {
+-        void *socket = nullptr;
+         std::weak_ptr<socket_runtime_state_t> runtime;
+         std::string topic;
+         routing_target_t target;
+ 
+         void reset () noexcept
+         {
+-            socket = nullptr;
+             runtime.reset ();
+             topic.clear ();
+             target.reset ();
+@@ -109,23 +107,29 @@ struct operation_state_t
+     std::chrono::milliseconds timeout{};
+ };
+ 
+-// Lifetime ownership of the callback state belongs to socket_t. An operation
+-// state only needs to be able to tell whether that owner is still alive, so it
+-// carries one weak token plus the raw view. The token is bound once per
+-// (pooled state, socket) pair instead of once per call.
++// Builders retain a weak reference to the single runtime and native lifecycle
++// owner. Native entry must take a socket_call_t reservation from this owner.
+ inline void bind_runtime_state (operation_state_t::raw_command_t &raw_,
+                                 const std::shared_ptr<socket_runtime_state_t> &state_)
+ {
+     raw_.runtime = state_;
+ }
+ 
+-// Synchronous terminals: the submitting statement cannot outlive the socket_t
+-// that owns the callback state, so no strong reference is taken. Returns
+-// nullptr when the owning socket is already gone.
+-inline std::shared_ptr<socket_runtime_state_t> share_runtime_state (
+-  const operation_state_t::raw_command_t &raw_)
++// Completion setup needs a strong runtime reference, independently of the
++// shorter native-call reservation used at each submit attempt.
++inline std::shared_ptr<socket_runtime_state_t>
++share_runtime_state (const operation_state_t::raw_command_t &raw_)
+ {
+-    return raw_.runtime.lock ();
++    auto runtime = raw_.runtime.lock ();
++    require_submit_open (runtime && runtime->completion->socket_handle ()->accepting_submits ());
++    return runtime;
++}
++
++inline std::shared_ptr<socket_handle_t>
++share_socket_handle (const operation_state_t::raw_command_t &raw_) noexcept
++{
++    const auto runtime = raw_.runtime.lock ();
++    return runtime ? runtime->completion->socket_handle () : nullptr;
+ }
+ 
+ inline void cache_first_rid_native (operation_state_t::routing_target_t &target_,
+@@ -136,8 +140,8 @@ inline void cache_first_rid_native (operation_state_t::routing_target_t &target_
+     target_.first_rid.reset ();
+ }
+ 
+-inline const zlink_routing_id_t *target_first_rid_native (
+-  const operation_state_t::routing_target_t &target_) noexcept
++inline const zlink_routing_id_t *
++target_first_rid_native (const operation_state_t::routing_target_t &target_) noexcept
+ {
+     if (target_.has_first_rid_native_cache)
+         return &target_.first_rid_native_cache;
+@@ -171,9 +175,7 @@ inline message_t &send_single_part (operation_state_t &state_) noexcept
+ //  Appends one part that the state does not own to the multipart sequence and
+ //  remembers @p source_ as the object a failed submit must give it back to.
+ //  Passing nullptr marks the part as rvalue-owned (consumed on submit).
+-inline void append_send_part_from (operation_state_t &state_,
+-                                   message_t &part_,
+-                                   message_t *source_)
++inline void append_send_part_from (operation_state_t &state_, message_t &part_, message_t *source_)
+ {
+     state_.message.parts.push_back (std::move (part_));
+     state_.message.part_sources.push_back (source_);
+@@ -274,10 +276,8 @@ inline void restore_send_parts_to_sources (operation_state_t &state_,
+ // attempt; multipart builders already keep their parts in the operation state.
+ inline void own_async_send_parts (operation_state_t &state_)
+ {
+-    if (state_.message.single_part_source
+-        && !state_.message.single_part.has_value ()) {
+-        state_.message.single_part.emplace (
+-          std::move (*state_.message.single_part_source));
++    if (state_.message.single_part_source && !state_.message.single_part.has_value ()) {
++        state_.message.single_part.emplace (std::move (*state_.message.single_part_source));
+     }
+ }
+ 
+@@ -345,8 +345,8 @@ inline void release_state (std::unique_ptr<operation_state_t> state_ptr_) noexce
+     pool.push_back (std::move (state_ptr_));
+ }
+ 
+-inline void pooled_operation_state_policy_t::destroy (
+-  std::unique_ptr<operation_state_t> state_ptr_) noexcept
++inline void
++pooled_operation_state_policy_t::destroy (std::unique_ptr<operation_state_t> state_ptr_) noexcept
+ {
+     release_state (std::move (state_ptr_));
+ }
+diff --git a/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp b/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp
+index 0a3c9a5c39..e0cc655754 100644
+--- a/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp
++++ b/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp
+@@ -36,12 +36,14 @@ inline bool submit_raw_send_state (operation_state_t &state_,
+             restore_single_send_part_to_source (state_);
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+     };
+-    if (!state_.raw.socket)
+-        throw_invalid_argument ();
+-    if (!share_runtime_state (state_.raw)) {
++    std::optional<socket_call_t> call;
++    try {
++        call.emplace (share_socket_handle (state_.raw));
++    }
++    catch (...) {
+         if (restore_sources_on_failure_)
+             restore_async_send_sources (state_);
+-        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
++        throw;
+     }
+     const zlink_routing_id_t *first_rid = target_first_rid_native (state_.raw.target);
+ 
+@@ -57,17 +59,17 @@ inline bool submit_raw_send_state (operation_state_t &state_,
+               switch (state_.kind) {
+                   case operation_kind_t::raw_send:
+                       return zlink_send (
+-                        state_.raw.socket, parts_, part_count_,
++                        call->handle (), parts_, part_count_,
+                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                         user_context_, completion_id_out_);
+                   case operation_kind_t::raw_routed_send:
+                       return zlink_send_rid (
+-                        state_.raw.socket, first_rid, parts_, part_count_,
++                        call->handle (), first_rid, parts_, part_count_,
+                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                         user_context_, completion_id_out_);
+                   case operation_kind_t::raw_publish:
+                       return zlink_publish (
+-                        state_.raw.socket, state_.raw.topic.c_str (), parts_, part_count_,
++                        call->handle (), state_.raw.topic.c_str (), parts_, part_count_,
+                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)));
+                   default:
+                       return ZLINK_SUBMIT_INVALID_ARGUMENT;
+@@ -96,17 +98,17 @@ inline bool submit_raw_send_state (operation_state_t &state_,
+           switch (state_.kind) {
+               case operation_kind_t::raw_send:
+                   return zlink_send (
+-                    state_.raw.socket, native_parts_, part_count_,
++                    call->handle (), native_parts_, part_count_,
+                     static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                     user_context_, completion_id_out_);
+               case operation_kind_t::raw_routed_send:
+                   return zlink_send_rid (
+-                    state_.raw.socket, first_rid, native_parts_, part_count_,
++                    call->handle (), first_rid, native_parts_, part_count_,
+                     static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                     user_context_, completion_id_out_);
+               case operation_kind_t::raw_publish:
+                   return zlink_publish (
+-                    state_.raw.socket, state_.raw.topic.c_str (), native_parts_, part_count_,
++                    call->handle (), state_.raw.topic.c_str (), native_parts_, part_count_,
+                     static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)));
+               default:
+                   return ZLINK_SUBMIT_INVALID_ARGUMENT;
+@@ -125,10 +127,10 @@ inline bool submit_raw_send_state (operation_state_t &state_,
+     return true;
+ }
+ 
+-inline bool submit_raw_request_state (
+-  operation_state_t &state_, void *user_context_,
+-  zlink_completion_id_t *completion_id_out_,
+-  bool restore_sources_on_failure_ = true)
++inline bool submit_raw_request_state (operation_state_t &state_,
++                                      void *user_context_,
++                                      zlink_completion_id_t *completion_id_out_,
++                                      bool restore_sources_on_failure_ = true)
+ {
+     const auto restore_sources = [&] () noexcept {
+         if (restore_sources_on_failure_)
+@@ -139,38 +141,36 @@ inline bool submit_raw_request_state (
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+     };
+ 
+-    if (!state_.raw.socket
+-        || (state_.kind != operation_kind_t::raw_request
+-            && state_.kind != operation_kind_t::raw_routed_request)
++    if ((state_.kind != operation_kind_t::raw_request
++         && state_.kind != operation_kind_t::raw_routed_request)
+         || !completion_id_out_)
+         throw_invalid_argument ();
+-    if (!share_runtime_state (state_.raw)) {
++    std::optional<socket_call_t> call;
++    try {
++        call.emplace (share_socket_handle (state_.raw));
++    }
++    catch (...) {
+         restore_sources ();
+-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
++        throw;
+     }
+ 
+-    const zlink_routing_id_t *const target =
+-      state_.kind == operation_kind_t::raw_routed_request
+-        ? target_first_rid_native (state_.raw.target)
+-        : nullptr;
++    const zlink_routing_id_t *const target = state_.kind == operation_kind_t::raw_routed_request
++                                               ? target_first_rid_native (state_.raw.target)
++                                               : nullptr;
+     if (state_.kind == operation_kind_t::raw_routed_request && !target)
+         throw_invalid_argument ();
+ 
+     const uint32_t timeout =
+-      state_.timeout > std::chrono::milliseconds::zero ()
+-        ? native_timeout_ms (state_.timeout)
+-        : 0u;
++      state_.timeout > std::chrono::milliseconds::zero () ? native_timeout_ms (state_.timeout) : 0u;
+     *completion_id_out_ = 0;
+     auto submit_record = [&] (zlink_msg_t *parts_, size_t part_count_) {
+-        return zlink_request (
+-          state_.raw.socket, target, parts_, part_count_,
+-          static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+-          timeout, user_context_, completion_id_out_);
++        return zlink_request (call->handle (), target, parts_, part_count_,
++                              static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
++                              timeout, user_context_, completion_id_out_);
+     };
+ 
+     int raw_result = -1;
+-    if (state_.message.single_part.has_value ()
+-        || state_.message.single_part_source) {
++    if (state_.message.single_part.has_value () || state_.message.single_part_source) {
+         message_t &part = send_single_part (state_);
+         raw_result = submit_borrowed_message_part (part, submit_record);
+     } else {
+@@ -187,8 +187,7 @@ inline bool submit_raw_request_state (
+         return true;
+     }
+ 
+-    if (state_.flags == send_flags_t::dontwait
+-        && result == submit_result_t::backpressured
++    if (state_.flags == send_flags_t::dontwait && result == submit_result_t::backpressured
+         && submit_errno == EAGAIN && *completion_id_out_ != 0)
+         return false;
+ 
+diff --git a/bindings/cpp/src/Runtime/Messaging/received.cpp b/bindings/cpp/src/Runtime/Messaging/received.cpp
+index 309ba032ff..76cf7b63ad 100644
+--- a/bindings/cpp/src/Runtime/Messaging/received.cpp
++++ b/bindings/cpp/src/Runtime/Messaging/received.cpp
+@@ -179,9 +179,7 @@ send_operation_t received_t::send ()
+         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_routed_send;
+-    state_ptr->raw.socket = detail::received_access_t::send_handle (*this);
+-    detail::bind_runtime_state (state_ptr->raw,
+-                                detail::received_access_t::runtime (*this));
++    detail::bind_runtime_state (state_ptr->raw, detail::received_access_t::runtime (*this));
+     detail::cache_first_rid_native (state_ptr->raw.target, *_routing_id);
+     return send_operation_t (std::move (state_ptr));
+ }
+@@ -192,9 +190,7 @@ reply_operation_t received_t::reply ()
+         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_reply;
+-    state_ptr->raw.socket = detail::received_access_t::send_handle (*this);
+-    detail::bind_runtime_state (state_ptr->raw,
+-                                detail::received_access_t::runtime (*this));
++    detail::bind_runtime_state (state_ptr->raw, detail::received_access_t::runtime (*this));
+     state_ptr->raw.target.first_rid = *_routing_id;
+     state_ptr->reply.token = *_reply_token;
+     return reply_operation_t (std::move (state_ptr));
+diff --git a/bindings/cpp/src/Runtime/Messaging/received_access.hpp b/bindings/cpp/src/Runtime/Messaging/received_access.hpp
+index 8ae3322085..b8598c75ad 100644
+--- a/bindings/cpp/src/Runtime/Messaging/received_access.hpp
++++ b/bindings/cpp/src/Runtime/Messaging/received_access.hpp
+@@ -20,8 +20,8 @@ struct received_access_t
+         return received_._parts;
+     }
+ 
+-    static reply_token_t make_reply_token (
+-      const std::shared_ptr<const void> &owner_, uint64_t value_)
++    static reply_token_t make_reply_token (const std::shared_ptr<const void> &owner_,
++                                           uint64_t value_)
+     {
+         return reply_token_t (owner_, value_);
+     }
+@@ -32,24 +32,23 @@ struct received_access_t
+         return token_._owner.get () == owner_.get ();
+     }
+ 
+-    static uint64_t token_value (const reply_token_t &token_) noexcept
+-    {
+-        return token_._value;
+-    }
++    static uint64_t token_value (const reply_token_t &token_) noexcept { return token_._value; }
+ 
+-    static void commit_receive_metadata (
+-      received_t &received_, routing_id_t source_rid_, bool has_reply_token_,
+-      uint64_t reply_token_value_, const std::shared_ptr<const void> &reply_owner_,
+-      uint64_t route_generation_)
++    static void commit_receive_metadata (received_t &received_,
++                                         routing_id_t source_rid_,
++                                         bool has_reply_token_,
++                                         uint64_t reply_token_value_,
++                                         const std::shared_ptr<const void> &reply_owner_,
++                                         uint64_t route_generation_)
+     {
+         received_._route_generation = route_generation_;
+         received_._routing_id = zlink::detail::routing_id_empty (source_rid_)
+                                   ? std::nullopt
+                                   : std::optional<routing_id_t> (std::move (source_rid_));
+-        received_._reply_token = has_reply_token_
+-                                   ? std::optional<reply_token_t> (
+-                                       make_reply_token (reply_owner_, reply_token_value_))
+-                                   : std::nullopt;
++        received_._reply_token =
++          has_reply_token_
++            ? std::optional<reply_token_t> (make_reply_token (reply_owner_, reply_token_value_))
++            : std::nullopt;
+     }
+ 
+     static void assign (received_t &received_,
+@@ -66,7 +65,8 @@ struct received_access_t
+ 
+     static void assign (received_t &received_,
+                         std::optional<routing_id_t> routing_id_,
+-                        std::optional<reply_token_t> reply_token_, message_t part_)
++                        std::optional<reply_token_t> reply_token_,
++                        message_t part_)
+     {
+         received_._routing_id = std::move (routing_id_);
+         received_._reply_token = std::move (reply_token_);
+@@ -79,32 +79,28 @@ struct received_access_t
+                             std::optional<reply_token_t> reply_token_,
+                             std::vector<message_t> parts_)
+     {
+-        return received_t (std::move (routing_id_), std::move (reply_token_),
+-                           std::move (parts_));
++        return received_t (std::move (routing_id_), std::move (reply_token_), std::move (parts_));
+     }
+ 
+     static received_t make (std::optional<routing_id_t> routing_id_,
+-                            std::optional<reply_token_t> reply_token_, message_t part_)
++                            std::optional<reply_token_t> reply_token_,
++                            message_t part_)
+     {
+-        return received_t (std::move (routing_id_), std::move (reply_token_),
+-                           std::move (part_));
++        return received_t (std::move (routing_id_), std::move (reply_token_), std::move (part_));
+     }
+ 
+-    static void set_socket_rid_send_context (
+-      received_t &received_, void *handle_,
+-      const std::shared_ptr<socket_runtime_state_t> &runtime_)
++    static void
++    set_socket_rid_send_context (received_t &received_,
++                                 const std::shared_ptr<socket_runtime_state_t> &runtime_)
+     {
+-        received_._send_context_handle = reinterpret_cast<std::uintptr_t> (handle_);
+         received_._send_context_kind = received_t::send_context_kind_t::socket_rid;
+         received_._send_context_runtime = runtime_;
+     }
+ 
+     static bool has_send_context (const received_t &received_) noexcept
+     {
+-        return received_._send_context_handle != 0
+-               && received_._send_context_kind == received_t::send_context_kind_t::socket_rid
+-               && received_._routing_id.has_value ()
+-               && !received_._send_context_runtime.expired ();
++        return received_._send_context_kind == received_t::send_context_kind_t::socket_rid
++               && received_._routing_id.has_value ();
+     }
+ 
+     static bool has_reply_context (const received_t &received_) noexcept
+@@ -112,11 +108,6 @@ struct received_access_t
+         return has_send_context (received_) && received_._reply_token.has_value ();
+     }
+ 
+-    static void *send_handle (const received_t &received_) noexcept
+-    {
+-        return reinterpret_cast<void *> (received_._send_context_handle);
+-    }
+-
+     static std::shared_ptr<socket_runtime_state_t> runtime (const received_t &received_)
+     {
+         return received_._send_context_runtime.lock ();
+@@ -125,7 +116,6 @@ struct received_access_t
+   private:
+     static void clear_context (received_t &received_) noexcept
+     {
+-        received_._send_context_handle = 0;
+         received_._send_context_kind = received_t::send_context_kind_t::none;
+         received_._send_context_runtime.reset ();
+     }
+diff --git a/bindings/cpp/src/Runtime/Messaging/reply_operations.cpp b/bindings/cpp/src/Runtime/Messaging/reply_operations.cpp
+index 33e770f5b7..ad2031d754 100644
+--- a/bindings/cpp/src/Runtime/Messaging/reply_operations.cpp
++++ b/bindings/cpp/src/Runtime/Messaging/reply_operations.cpp
+@@ -15,23 +15,26 @@ namespace
+ 
+ void submit_raw_reply (detail::operation_state_t &state_)
+ {
+-    if (!state_.raw.socket || !state_.raw.target.first_rid
+-        || !state_.reply.token.has_value ())
++    if (!state_.raw.target.first_rid || !state_.reply.token.has_value ())
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+-    const auto runtime = detail::share_runtime_state (state_.raw);
+-    if (!runtime)
+-        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+-    if (!detail::received_access_t::token_owner_matches (
+-          *state_.reply.token, runtime->reply_owner))
++    const auto runtime = state_.raw.runtime.lock ();
++    std::optional<detail::socket_call_t> call;
++    try {
++        call.emplace (runtime ? runtime->completion->socket_handle () : nullptr);
++    }
++    catch (...) {
++        detail::restore_async_send_sources (state_);
++        throw;
++    }
++    if (!detail::received_access_t::token_owner_matches (*state_.reply.token, runtime->reply_owner))
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+ 
+     const zlink_routing_id_t first_rid =
+       zlink::detail::routing_id_native_value (*state_.raw.target.first_rid);
+-    const zlink_reply_token_t token = detail::received_access_t::token_value (
+-      *state_.reply.token);
++    const zlink_reply_token_t token = detail::received_access_t::token_value (*state_.reply.token);
+     const int rc = detail::submit_message_parts (
+       state_.message.parts, [&] (zlink_msg_t *parts_, size_t part_count_) {
+-          return zlink_reply (state_.raw.socket, &first_rid, token, parts_, part_count_);
++          return zlink_reply (call->handle (), &first_rid, token, parts_, part_count_);
+       });
+     if (rc == -1) {
+         detail::restore_send_parts_to_sources (state_, state_.message.parts);
+diff --git a/bindings/cpp/src/Runtime/Messaging/request_reply.cpp b/bindings/cpp/src/Runtime/Messaging/request_reply.cpp
+index ab9f887c5d..5a2de3979e 100644
+--- a/bindings/cpp/src/Runtime/Messaging/request_reply.cpp
++++ b/bindings/cpp/src/Runtime/Messaging/request_reply.cpp
+@@ -15,8 +15,7 @@ namespace
+ 
+ struct request_completion_bundle_t
+ {
+-    explicit request_completion_bundle_t (
+-      std::unique_ptr<detail::operation_state_t> operation_) :
++    explicit request_completion_bundle_t (std::unique_ptr<detail::operation_state_t> operation_) :
+         admitted (), reply (), entry (&reply, &admitted, std::move (operation_))
+     {
+     }
+@@ -78,16 +77,13 @@ std::vector<message_t> request_submit_operation_t::submit () &&
+     if (!detail::has_send_parts (operation))
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+     const auto runtime = detail::share_runtime_state (operation.raw);
+-    if (!runtime)
+-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+ 
+     auto entry = std::make_shared<detail::completion_entry_t> (nullptr);
+     runtime->completion->register_blocking_entry (entry);
+     try {
+         operation.flags = send_flags_t::none;
+         zlink_completion_id_t completion_id = 0;
+-        (void) detail::submit_raw_request_state (
+-          operation, entry.get (), &completion_id);
++        (void) detail::submit_raw_request_state (operation, entry.get (), &completion_id);
+         entry->publish (completion_id);
+     }
+     catch (...) {
+@@ -105,20 +101,16 @@ request_submission_t request_submit_operation_t::async () &&
+     if (!detail::has_send_parts (operation))
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+     const auto runtime = detail::share_runtime_state (operation.raw);
+-    if (!runtime)
+-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+ 
+     operation.flags = send_flags_t::dontwait;
+     auto operation_state = release_state_ptr ();
+     std::shared_ptr<request_completion_bundle_t> bundle;
+     std::shared_ptr<detail::completion_entry_t> entry;
+     try {
+-        bundle = std::make_shared<request_completion_bundle_t> (
+-          std::move (operation_state));
++        bundle = std::make_shared<request_completion_bundle_t> (std::move (operation_state));
+         bundle->admitted.bind_lifetime (bundle);
+         bundle->reply.bind_lifetime (bundle);
+-        entry = std::shared_ptr<detail::completion_entry_t> (
+-          bundle, &bundle->entry);
++        entry = std::shared_ptr<detail::completion_entry_t> (bundle, &bundle->entry);
+     }
+     catch (...) {
+         if (operation_state) {
+@@ -129,14 +121,11 @@ request_submission_t request_submit_operation_t::async () &&
+     }
+     try {
+         const bool admitted = runtime->completion->start_async_request (entry);
+-        detail::async_result_state_t<void> *const admitted_result =
+-          &bundle->admitted;
+-        detail::async_result_state_t<std::vector<message_t>> *const reply_result =
+-          &bundle->reply;
++        detail::async_result_state_t<void> *const admitted_result = &bundle->admitted;
++        detail::async_result_state_t<std::vector<message_t>> *const reply_result = &bundle->reply;
+         return {admitted ? ZLINK_SUBMIT_OK : ZLINK_SUBMIT_BACKPRESSURED,
+                 detail::async_result_access_t::make<void> (
+-                  std::shared_ptr<detail::async_result_state_t<void>> (
+-                    bundle, admitted_result)),
++                  std::shared_ptr<detail::async_result_state_t<void>> (bundle, admitted_result)),
+                 detail::async_result_access_t::make<std::vector<message_t>> (
+                   std::shared_ptr<detail::async_result_state_t<std::vector<message_t>>> (
+                     std::move (bundle), reply_result))};
+diff --git a/bindings/cpp/src/Runtime/Messaging/send_operations.cpp b/bindings/cpp/src/Runtime/Messaging/send_operations.cpp
+index 69be1c3ab5..05455d4b73 100644
+--- a/bindings/cpp/src/Runtime/Messaging/send_operations.cpp
++++ b/bindings/cpp/src/Runtime/Messaging/send_operations.cpp
+@@ -15,11 +15,10 @@ namespace
+ 
+ struct send_completion_bundle_t
+ {
+-    send_completion_bundle_t (
+-      std::unique_ptr<detail::operation_state_t> operation_,
+-      void *submit_context_, uint64_t wait_token_) :
+-        result (),
+-        entry (&result, std::move (operation_), submit_context_, wait_token_)
++    send_completion_bundle_t (std::unique_ptr<detail::operation_state_t> operation_,
++                              void *submit_context_,
++                              uint64_t wait_token_) :
++        result (), entry (&result, std::move (operation_), submit_context_, wait_token_)
+     {
+     }
+ 
+@@ -27,22 +26,25 @@ struct send_completion_bundle_t
+     detail::completion_entry_t entry;
+ };
+ 
+-send_submission_t submit_send_awaitable (
+-  std::unique_ptr<detail::operation_state_t> state_)
++send_submission_t submit_send_awaitable (std::unique_ptr<detail::operation_state_t> state_)
+ {
+-    if (!state_ || (state_->kind != detail::operation_kind_t::raw_send
+-                    && state_->kind != detail::operation_kind_t::raw_routed_send)) {
++    if (!state_
++        || (state_->kind != detail::operation_kind_t::raw_send
++            && state_->kind != detail::operation_kind_t::raw_routed_send)) {
+         if (state_) {
+             detail::restore_async_send_sources (*state_);
+             detail::release_state (std::move (state_));
+         }
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+     }
+-    const auto runtime = detail::share_runtime_state (state_->raw);
+-    if (!runtime) {
++    std::shared_ptr<detail::socket_runtime_state_t> runtime;
++    try {
++        runtime = detail::share_runtime_state (state_->raw);
++    }
++    catch (...) {
+         detail::restore_async_send_sources (*state_);
+         detail::release_state (std::move (state_));
+-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
++        throw;
+     }
+ 
+     // Most DONTWAIT sends are admitted immediately. Make that one attempt here,
+@@ -58,8 +60,7 @@ send_submission_t submit_send_awaitable (
+     bool admitted = false;
+     int submit_errno = 0;
+     try {
+-        admitted = detail::submit_raw_send_state (*state_, submit_context,
+-                                                  &wait_token, false);
++        admitted = detail::submit_raw_send_state (*state_, submit_context, &wait_token, false);
+         submit_errno = zlink_errno ();
+     }
+     catch (...) {
+@@ -78,9 +79,8 @@ send_submission_t submit_send_awaitable (
+         // async() owns every source object once the packet is admitted.
+         detail::detach_async_send_sources (*state_);
+         detail::release_state (std::move (state_));
+-        return {ZLINK_SUBMIT_OK,
+-                detail::async_result_access_t::make<void> (
+-                  std::make_shared<detail::immediate_send_result_t> ())};
++        return {ZLINK_SUBMIT_OK, detail::async_result_access_t::make<void> (
++                                   std::make_shared<detail::immediate_send_result_t> ())};
+     }
+ 
+     // Rejected. Only now does the operation need a completion identity, an
+@@ -88,14 +88,11 @@ send_submission_t submit_send_awaitable (
+     std::shared_ptr<send_completion_bundle_t> bundle;
+     std::shared_ptr<detail::completion_entry_t> entry;
+     try {
+-        bundle = std::make_shared<send_completion_bundle_t> (
+-          std::move (state_), submit_context, wait_token);
++        bundle = std::make_shared<send_completion_bundle_t> (std::move (state_), submit_context,
++                                                             wait_token);
+         bundle->result.bind_lifetime (bundle);
+-        bundle->result.set_detach_handler ([entry = &bundle->entry] {
+-            entry->abandon_send ();
+-        });
+-        entry = std::shared_ptr<detail::completion_entry_t> (
+-          bundle, &bundle->entry);
++        bundle->result.set_detach_handler ([entry = &bundle->entry] { entry->abandon_send (); });
++        entry = std::shared_ptr<detail::completion_entry_t> (bundle, &bundle->entry);
+     }
+     catch (...) {
+         // The wait token is live but no entry will ever claim it. Release a
+@@ -118,8 +115,7 @@ send_submission_t submit_send_awaitable (
+     detail::async_result_state_t<void> *const result = &bundle->result;
+     return {ZLINK_SUBMIT_BACKPRESSURED,
+             detail::async_result_access_t::make<void> (
+-              std::shared_ptr<detail::async_result_state_t<void>> (
+-                std::move (bundle), result))};
++              std::shared_ptr<detail::async_result_state_t<void>> (std::move (bundle), result))};
+ }
+ 
+ } // namespace
+@@ -178,10 +174,10 @@ send_submission_t send_submit_operation_t::async () &&
+ }
+ 
+ publish_submit_operation_t::~publish_submit_operation_t () = default;
+-publish_submit_operation_t::publish_submit_operation_t (
+-  publish_submit_operation_t &&) noexcept = default;
+-publish_submit_operation_t &publish_submit_operation_t::operator= (
+-  publish_submit_operation_t &&) noexcept = default;
++publish_submit_operation_t::publish_submit_operation_t (publish_submit_operation_t &&) noexcept =
++  default;
++publish_submit_operation_t &
++publish_submit_operation_t::operator= (publish_submit_operation_t &&) noexcept = default;
+ 
+ publish_submit_operation_t &&publish_submit_operation_t::message (message_t &part_) &&
+ {
+diff --git a/bindings/cpp/src/Runtime/Native/native_send.hpp b/bindings/cpp/src/Runtime/Native/native_send.hpp
+deleted file mode 100644
+index 434ebd8681..0000000000
+--- a/bindings/cpp/src/Runtime/Native/native_send.hpp
++++ /dev/null
+@@ -1,56 +0,0 @@
+-/* SPDX-License-Identifier: MPL-2.0 */
+-#ifndef ZLINK_CPP_RUNTIME_NATIVE_SEND_HPP_INCLUDED
+-#define ZLINK_CPP_RUNTIME_NATIVE_SEND_HPP_INCLUDED
+-
+-#include "native_message_parts.hpp"
+-
+-#include <zlink/Contracts/Errors/errors.hpp>
+-#include <zlink/Contracts/Sockets/results.hpp>
+-
+-#include <utility>
+-#include <vector>
+-
+-namespace zlink
+-{
+-namespace detail
+-{
+-
+-template <typename NativeSubmit>
+-inline submit_result_t submit_received_parts_restore (std::vector<message_t> &parts_,
+-                                                      NativeSubmit submit_)
+-{
+-    return static_cast<submit_result_t> (
+-      detail::submit_message_parts (parts_, std::move (submit_)));
+-}
+-
+-template <typename NativeSubmit>
+-inline bool submit_received_send_parts (std::vector<message_t> &send_parts_,
+-                                        send_flags_t flags_,
+-                                        NativeSubmit submit_)
+-{
+-    const submit_result_t result =
+-      detail::submit_received_parts_restore (send_parts_, std::move (submit_));
+-    if (result == submit_result_t::ok)
+-        return true;
+-
+-    if (flags_ == send_flags_t::dontwait && result == submit_result_t::backpressured)
+-        return false;
+-    throw submit_error_t (result, zlink_errno ());
+-}
+-
+-template <typename NativeSubmit>
+-inline void submit_received_reply_parts (std::vector<message_t> &reply_parts_,
+-                                         send_flags_t flags_,
+-                                         NativeSubmit submit_)
+-{
+-    detail::throw_if_reply_flags_unsupported (flags_);
+-    const submit_result_t result =
+-      detail::submit_received_parts_restore (reply_parts_, std::move (submit_));
+-    if (result != submit_result_t::ok)
+-        throw submit_error_t (result, zlink_errno ());
+-}
+-
+-} // namespace detail
+-} // namespace zlink
+-
+-#endif
+diff --git a/bindings/cpp/src/Runtime/Native/socket_handle.hpp b/bindings/cpp/src/Runtime/Native/socket_handle.hpp
+index d50c090836..1787248ffa 100644
+--- a/bindings/cpp/src/Runtime/Native/socket_handle.hpp
++++ b/bindings/cpp/src/Runtime/Native/socket_handle.hpp
+@@ -3,98 +3,98 @@
+ #define ZLINK_CPP_RUNTIME_NATIVE_SOCKET_HANDLE_HPP_INCLUDED
+ 
+ #include <zlink/Contracts/Core/routing_id.hpp>
++#include <zlink/Contracts/Errors/errors.hpp>
+ 
+ #include <atomic>
++#include <cstdint>
++#include <memory>
++#include <utility>
+ 
+ namespace zlink
+ {
+-
+ namespace detail
+ {
+ class socket_handle_t;
+ inline void *native_handle (socket_handle_t &socket_) noexcept;
+ inline const void *native_handle (const socket_handle_t &socket_) noexcept;
+ 
++inline void require_submit_open (bool open_)
++{
++    if (!open_)
++        throw submit_error_t (submit_result_t::terminated, ESHUTDOWN);
++}
++
+ class socket_handle_t
+ {
+   public:
+-    socket_handle_t () noexcept : _socket (nullptr), _open (false), _own (false) {}
++    socket_handle_t () noexcept : _socket (nullptr), _state (closed), _own (false) {}
+ 
+     explicit socket_handle_t (void *socket_, bool own_ = true) noexcept :
+-        _socket (socket_), _open (socket_ != nullptr), _own (own_)
++        _socket (socket_), _state (socket_ ? 0 : closed), _own (own_)
+     {
+     }
+ 
+     ~socket_handle_t () { (void) close (); }
++    socket_handle_t (const socket_handle_t &) = delete;
++    socket_handle_t &operator= (const socket_handle_t &) = delete;
+ 
+-    socket_handle_t (socket_handle_t &&other) noexcept :
+-        _socket (other._socket),
+-        _open (other._open.load (std::memory_order_acquire)),
+-        _own (other._own)
+-    {
+-        other._socket = nullptr;
+-        other._open.store (false, std::memory_order_release);
+-        other._own = false;
+-    }
++    bool valid () const noexcept { return (_state.load (std::memory_order_acquire) & closed) == 0; }
+ 
+-    socket_handle_t &operator= (socket_handle_t &&other) noexcept
++    bool accepting_submits () const noexcept
+     {
+-        if (this == &other)
+-            return *this;
+-
+-        (void) close ();
+-        _socket = other._socket;
+-        _open.store (other._open.load (std::memory_order_acquire),
+-                     std::memory_order_release);
+-        _own = other._own;
+-        other._socket = nullptr;
+-        other._open.store (false, std::memory_order_release);
+-        other._own = false;
+-        return *this;
++        return is_open_for_submit (_state.load (std::memory_order_acquire));
+     }
+ 
+-    socket_handle_t (const socket_handle_t &) = delete;
+-    socket_handle_t &operator= (const socket_handle_t &) = delete;
+-
+-    bool valid () const noexcept
++    bool close_in_progress () const noexcept
+     {
+-        return _socket != nullptr && _open.load (std::memory_order_acquire);
++        return (_state.load (std::memory_order_acquire) & closing) != 0;
+     }
+ 
+-    [[nodiscard]] int close () noexcept
++    bool reserve () noexcept
+     {
+-        if (!_socket || !_open.load (std::memory_order_acquire))
+-            return 0;
+-
+-        if (!_own) {
+-            _open.store (false, std::memory_order_release);
+-            return 0;
++        auto state = _state.load (std::memory_order_acquire);
++        for (;;) {
++            if (!is_open_for_submit (state))
++                return false;
++            if (_state.compare_exchange_weak (state, state + 1, std::memory_order_acq_rel,
++                                              std::memory_order_acquire))
++                return true;
+         }
+-
+-        const int rc = zlink_close (_socket);
+-        if (rc == 0 || rc == ZLINK_CLOSE_SHUTDOWN)
+-            _open.store (false, std::memory_order_release);
+-        return rc;
+     }
+ 
+-  protected:
+-    void *handle () noexcept { return _socket; }
+-    const void *handle () const noexcept { return _socket; }
++    void release () noexcept { _state.fetch_sub (1, std::memory_order_release); }
+ 
+-    void reset_handle (void *socket_, bool own_) noexcept
++    [[nodiscard]] int close () noexcept
+     {
+-        _socket = socket_;
+-        _open.store (socket_ != nullptr, std::memory_order_release);
+-        _own = own_;
++        uint64_t expected = 0;
++        if (!_state.compare_exchange_strong (expected, closing, std::memory_order_acq_rel,
++                                             std::memory_order_acquire)) {
++            if (expected & closed)
++                return 0;
++            errno = EBUSY;
++            return ZLINK_CLOSE_BUSY;
++        }
++        const int rc = _own ? zlink_close (_socket) : 0;
++        _state.store (rc == 0 || rc == ZLINK_CLOSE_SHUTDOWN ? closed : 0,
++                      std::memory_order_release);
++        return rc;
+     }
+ 
+   private:
+     friend void *native_handle (socket_handle_t &socket_) noexcept;
+     friend const void *native_handle (const socket_handle_t &socket_) noexcept;
+ 
+-    void *_socket;
+-    std::atomic<bool> _open;
+-    bool _own;
++    static constexpr uint64_t closing = uint64_t{1} << 63;
++    static constexpr uint64_t closed = uint64_t{1} << 62;
++    static bool is_open_for_submit (uint64_t state_) noexcept
++    {
++        return (state_ & (closing | closed)) == 0;
++    }
++    void *const _socket;
++    // The low bits count native calls; close can claim only an idle owner.
++    // One CAS orders reservation against close without serializing records.
++    std::atomic<uint64_t> _state;
++    const bool _own;
+ };
+ 
+ inline void *native_handle (socket_handle_t &socket_) noexcept
+@@ -107,8 +107,26 @@ inline const void *native_handle (const socket_handle_t &socket_) noexcept
+     return socket_._socket;
+ }
+ 
+-} // namespace detail
++// A reservation owns the handle object as well as its native lifetime. It is
++// released after argument preparation, the native call and result capture.
++class socket_call_t
++{
++  public:
++    explicit socket_call_t (std::shared_ptr<socket_handle_t> socket_) :
++        _socket (std::move (socket_))
++    {
++        require_submit_open (_socket && _socket->reserve ());
++    }
++    ~socket_call_t () { _socket->release (); }
++    socket_call_t (const socket_call_t &) = delete;
++    socket_call_t &operator= (const socket_call_t &) = delete;
+ 
+-} // namespace zlink
++    void *handle () const noexcept { return native_handle (*_socket); }
+ 
++  private:
++    std::shared_ptr<socket_handle_t> _socket;
++};
++
++} // namespace detail
++} // namespace zlink
+ #endif
+diff --git a/bindings/cpp/src/Runtime/Sockets/dealer.cpp b/bindings/cpp/src/Runtime/Sockets/dealer.cpp
+index 16e128a20e..02a04114a7 100644
+--- a/bindings/cpp/src/Runtime/Sockets/dealer.cpp
++++ b/bindings/cpp/src/Runtime/Sockets/dealer.cpp
+@@ -21,7 +21,6 @@ send_operation_t dealer_socket_t::send ()
+ {
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_send;
+-    state_ptr->raw.socket = detail::native_handle (*this);
+     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (*this));
+     return send_operation_t (std::move (state_ptr));
+ }
+@@ -30,7 +29,6 @@ request_operation_t dealer_socket_t::request ()
+ {
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_request;
+-    state_ptr->raw.socket = detail::native_handle (*this);
+     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (*this));
+     return request_operation_t (std::move (state_ptr));
+ }
+diff --git a/bindings/cpp/src/Runtime/Sockets/pair.cpp b/bindings/cpp/src/Runtime/Sockets/pair.cpp
+index f943ccfec3..b703d055c5 100644
+--- a/bindings/cpp/src/Runtime/Sockets/pair.cpp
++++ b/bindings/cpp/src/Runtime/Sockets/pair.cpp
+@@ -18,7 +18,6 @@ send_operation_t pair_socket_t::send ()
+ {
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_send;
+-    state_ptr->raw.socket = detail::native_handle (*this);
+     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (*this));
+     return send_operation_t (std::move (state_ptr));
+ }
+diff --git a/bindings/cpp/src/Runtime/Sockets/pubsub.cpp b/bindings/cpp/src/Runtime/Sockets/pubsub.cpp
+index 0f8cf243c1..1f9484ae44 100644
+--- a/bindings/cpp/src/Runtime/Sockets/pubsub.cpp
++++ b/bindings/cpp/src/Runtime/Sockets/pubsub.cpp
+@@ -18,18 +18,12 @@ namespace
+ // only in socket type, not in how a publish operation is set up, so the
+ // sequence lives here once instead of being repeated per socket class.
+ //
+-// The callback state is supplied as a callable, not as an already-evaluated
+-// reference: callback_state() allocates lazily, so the observable step order of
+-// the pre-dedup code (topic validation first, then socket handle, then callback
+-// state, then topic assignment) must be preserved exactly.
+-std::unique_ptr<detail::operation_state_t>
+-make_publish_state (socket_t &socket_,
+-                    const std::string &topic_id_)
++std::unique_ptr<detail::operation_state_t> make_publish_state (socket_t &socket_,
++                                                               const std::string &topic_id_)
+ {
+     detail::validate_no_embedded_null (topic_id_, "topic");
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_publish;
+-    state_ptr->raw.socket = detail::native_handle (socket_);
+     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (socket_));
+     state_ptr->raw.topic = topic_id_;
+     return state_ptr;
+diff --git a/bindings/cpp/src/Runtime/Sockets/router.cpp b/bindings/cpp/src/Runtime/Sockets/router.cpp
+index 11440b9e00..aebe2f0302 100644
+--- a/bindings/cpp/src/Runtime/Sockets/router.cpp
++++ b/bindings/cpp/src/Runtime/Sockets/router.cpp
+@@ -23,7 +23,6 @@ send_operation_t router_socket_t::send (const routing_id_t &target_rid_)
+ {
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_routed_send;
+-    state_ptr->raw.socket = detail::native_handle (*this);
+     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (*this));
+     detail::cache_first_rid_native (state_ptr->raw.target, target_rid_);
+     return send_operation_t (std::move (state_ptr));
+@@ -38,9 +37,8 @@ int router_socket_t::recv (received_t &out_, recv_flags_t flags_)
+     // sequence already stored on `out_`) is enough to reconstruct the native
+     // call lazily at submit time, so no per-receive closures are built here.
+     if (out_.routing_id ().has_value ()) {
+-        void *router_handle_ = detail::native_handle (*this);
+-        detail::received_access_t::set_socket_rid_send_context (
+-          out_, router_handle_, detail::runtime_state (*this));
++        detail::received_access_t::set_socket_rid_send_context (out_,
++                                                                detail::runtime_state (*this));
+     }
+     return 0;
+ }
+@@ -75,9 +73,9 @@ std::vector<router_route_t> router_socket_t::routes_snapshot ()
+         std::vector<router_route_t> routes;
+         routes.reserve (count);
+         for (size_t index = 0; index < count; ++index)
+-            routes.push_back (router_route_t{
+-              routing_id_t::from (native[index].rid.data, native[index].rid.size),
+-              native[index].route_generation});
++            routes.push_back (
++              router_route_t{routing_id_t::from (native[index].rid.data, native[index].rid.size),
++                             native[index].route_generation});
+         return routes;
+     }
+ }
+@@ -86,7 +84,6 @@ request_operation_t router_socket_t::request (const routing_id_t &routing_id_)
+ {
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_routed_request;
+-    state_ptr->raw.socket = detail::native_handle (*this);
+     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (*this));
+     // HOT PATH: routed request submission needs the native routing id only.
+     // Keep the same cached representation as routed send instead of copying
+@@ -100,10 +97,8 @@ reply_operation_t router_socket_t::reply (const routing_id_t &routing_id_,
+ {
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_reply;
+-    state_ptr->raw.socket = detail::native_handle (*this);
+     const auto runtime = detail::runtime_state (*this);
+-    if (!detail::received_access_t::token_owner_matches (
+-          reply_token_, runtime->reply_owner))
++    if (!detail::received_access_t::token_owner_matches (reply_token_, runtime->reply_owner))
+         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+     detail::bind_runtime_state (state_ptr->raw, runtime);
+     state_ptr->raw.target.first_rid = routing_id_;
+diff --git a/bindings/cpp/src/Runtime/Sockets/socket.cpp b/bindings/cpp/src/Runtime/Sockets/socket.cpp
+index 80b3e724fd..11c7d422ec 100644
+--- a/bindings/cpp/src/Runtime/Sockets/socket.cpp
++++ b/bindings/cpp/src/Runtime/Sockets/socket.cpp
+@@ -6,7 +6,6 @@
+ #include <Runtime/Native/native_message_parts.hpp>
+ #include <Runtime/Native/native_options.hpp>
+ #include <Runtime/Native/native_receive.hpp>
+-#include <Runtime/Native/native_send.hpp>
+ #include <Runtime/Native/socket_handle.hpp>
+ #include <Runtime/Core/context_access.hpp>
+ #include <Runtime/Options/option_ids.hpp>
+@@ -36,8 +35,7 @@ const void *socket_access_t::native_handle (const socket_t &socket_) noexcept
+     return socket_._socket ? detail::native_handle (*socket_._socket) : nullptr;
+ }
+ 
+-std::shared_ptr<socket_runtime_state_t> socket_access_t::runtime_state (
+-  socket_t &socket_) noexcept
++std::shared_ptr<socket_runtime_state_t> socket_access_t::runtime_state (socket_t &socket_) noexcept
+ {
+     return socket_._runtime;
+ }
+@@ -53,7 +51,7 @@ routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
+ socket_t::~socket_t ()
+ {
+     if (_socket)
+-        (void) _socket->close ();
++        (void) close_native ();
+     if (_runtime)
+         _runtime->completion->shutdown ();
+ }
+@@ -65,7 +63,7 @@ socket_t &socket_t::operator= (socket_t &&other_) noexcept
+     if (this == &other_)
+         return *this;
+     if (_socket) {
+-        const int rc = _socket->close ();
++        const int rc = close_native ();
+         if (rc != 0 && _socket->valid ())
+             return *this;
+     }
+@@ -83,18 +81,24 @@ bool socket_t::valid () const noexcept
+     return _socket && _socket->valid ();
+ }
+ 
++int socket_t::close_native () noexcept
++{
++    return _runtime ? _runtime->completion->close_native_socket () : _socket->close ();
++}
++
+ void socket_t::close ()
+ {
+-    if (!_socket || !_socket->valid ())
++    if (!_socket)
+         return;
+-    const int rc = _socket->close ();
++    const int rc = close_native ();
++    const int close_errno = rc != 0 ? zlink_errno () : 0;
+     // Core can reject a concurrent close with EBUSY while the socket remains
+     // live. Preserve the completion owner and all retained retry packets in
+     // that case; only a terminal native close may settle them.
+-    if (!_socket->valid () && _runtime)
++    if ((rc == 0 || rc == ZLINK_CLOSE_SHUTDOWN) && _runtime)
+         _runtime->completion->shutdown (ESHUTDOWN);
+     if (rc != 0)
+-        throw close_error_t (static_cast<close_result_t> (rc), zlink_errno ());
++        throw close_error_t (static_cast<close_result_t> (rc), close_errno);
+ }
+ 
+ void socket_t::bind (const std::string &endpoint_)
+@@ -214,9 +218,8 @@ std::vector<connection_attempt_t> socket_t::connection_attempts_snapshot ()
+         size_t count = 0;
+         size_t bytes = 0;
+         const auto rc = zlink_socket_connection_attempts_snapshot (
+-          detail::native_handle (*this), native.empty () ? nullptr : native.data (),
+-          native.size (), &count, endpoints.empty () ? nullptr : endpoints.data (),
+-          endpoints.size (), &bytes);
++          detail::native_handle (*this), native.empty () ? nullptr : native.data (), native.size (),
++          &count, endpoints.empty () ? nullptr : endpoints.data (), endpoints.size (), &bytes);
+         const int native_errno = zlink_errno ();
+         if (rc == ZLINK_CONFIG_BUFFER_TOO_SMALL) {
+             if (count <= native.size () && bytes <= endpoints.size ())
+@@ -236,8 +239,7 @@ std::vector<connection_attempt_t> socket_t::connection_attempts_snapshot ()
+         attempts.reserve (count);
+         for (size_t index = 0; index < count; ++index) {
+             const auto &row = native[index];
+-            if (row.intent_id == 0 || row.revision == 0
+-                || row.endpoint_offset >= bytes
++            if (row.intent_id == 0 || row.revision == 0 || row.endpoint_offset >= bytes
+                 || row.endpoint_length >= bytes - row.endpoint_offset
+                 || endpoints[row.endpoint_offset + row.endpoint_length] != '\0')
+                 connection_snapshot_protocol_violation ();
+@@ -278,57 +280,57 @@ void socket_t::set_tls_client (const std::string &ca_cert_,
+ 
+ void socket_t::set_receive_flow_state (receive_flow_state_t state_)
+ {
+-    detail::throw_if_failed<config_error_t> (static_cast<config_result_t> (
+-      zlink_socket_set_receive_flow_state (detail::native_handle (*this),
+-                                           static_cast<zlink_receive_flow_state_t> (state_))));
++    detail::throw_if_failed<config_error_t> (
++      static_cast<config_result_t> (zlink_socket_set_receive_flow_state (
++        detail::native_handle (*this), static_cast<zlink_receive_flow_state_t> (state_))));
+ }
+ 
+ socket_t::socket_t () noexcept :
+-    _socket (std::make_unique<detail::socket_handle_t> ()),
+-    _runtime (),
+-    _type (socket_type::pair)
++    _socket (std::make_shared<detail::socket_handle_t> ()), _runtime (), _type (socket_type::pair)
+ {
+ }
+ 
+ socket_t::socket_t (context_t &ctx_, socket_type type_) :
+-    _socket (std::make_unique<detail::socket_handle_t> (
++    _socket (std::make_shared<detail::socket_handle_t> (
+       zlink_socket (detail::native_handle (ctx_), static_cast<zlink_socket_type_t> (type_)), true)),
+     _runtime (),
+     _type (type_)
+ {
+     if (_socket->valid ())
+-        _runtime = std::make_shared<detail::socket_runtime_state_t> (
+-          detail::native_handle (*_socket));
++        _runtime = std::make_shared<detail::socket_runtime_state_t> (_socket);
+ }
+ 
+ int socket_t::send (message_t &part_, send_flags_t flags_)
+ {
++    detail::socket_call_t call (_socket);
+     return detail::submit_borrowed_message_part (
+       part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
+-          return zlink_send (detail::native_handle (*this), parts_, part_count_,
+-                             static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
+-                             nullptr, nullptr);
++          return zlink_send (call.handle (), parts_, part_count_,
++                             static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), nullptr,
++                             nullptr);
+       });
+ }
+ 
+ int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
+ {
++    detail::socket_call_t call (_socket);
+     return detail::submit_message_parts (
+       parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+-          return zlink_send (detail::native_handle (*this), native_parts_, part_count_,
+-                             static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
+-                             nullptr, nullptr);
++          return zlink_send (call.handle (), native_parts_, part_count_,
++                             static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), nullptr,
++                             nullptr);
+       });
+ }
+ 
+ int socket_t::send (const routing_id_t &target_rid_, message_t &part_, send_flags_t flags_)
+ {
++    detail::socket_call_t call (_socket);
+     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
+     return detail::submit_borrowed_message_part (
+       part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
+-          return zlink_send_rid (
+-            detail::native_handle (*this), &target_rid, parts_, part_count_,
+-            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), nullptr, nullptr);
++          return zlink_send_rid (call.handle (), &target_rid, parts_, part_count_,
++                                 static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
++                                 nullptr, nullptr);
+       });
+ }
+ 
+@@ -336,12 +338,13 @@ int socket_t::send (const routing_id_t &target_rid_,
+                     std::vector<message_t> &parts_,
+                     send_flags_t flags_)
+ {
++    detail::socket_call_t call (_socket);
+     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
+     return detail::submit_message_parts (
+       parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+-          return zlink_send_rid (
+-            detail::native_handle (*this), &target_rid, native_parts_, part_count_,
+-            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), nullptr, nullptr);
++          return zlink_send_rid (call.handle (), &target_rid, native_parts_, part_count_,
++                                 static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
++                                 nullptr, nullptr);
+       });
+ }
+ 
+@@ -355,8 +358,9 @@ int socket_t::receive (received_t &received_, recv_flags_t flags_, bool attach_r
+     return receive_impl (received_, flags_, attach_routed_send_context_);
+ }
+ 
+-int socket_t::receive_impl (
+-  received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_)
++int socket_t::receive_impl (received_t &received_,
++                            recv_flags_t flags_,
++                            bool attach_routed_send_context_)
+ {
+     if (!_receive_envelope)
+         _receive_envelope = std::make_unique<detail::recv_envelope_t> ();
+@@ -368,8 +372,8 @@ int socket_t::receive_impl (
+     const bool use_router_recv = _type == socket_type::router;
+     int rc = -1;
+     try {
+-        rc = detail::recv_whole_envelope (
+-          detail::native_handle (*this), flags_, envelope, use_router_recv);
++        rc = detail::recv_whole_envelope (detail::native_handle (*this), flags_, envelope,
++                                          use_router_recv);
+     }
+     catch (...) {
+         // A failed binding-side allocation must not leave earlier multipart
+@@ -390,23 +394,21 @@ int socket_t::receive_impl (
+     const uint64_t route_generation =
+       use_router_recv ? zlink_router_recv_route_generation (detail::native_handle (*this)) : 0;
+     detail::received_access_t::commit_receive_metadata (
+-      received_, std::move (envelope.source_rid), envelope.has_reply_token,
+-      envelope.reply_token, _runtime ? _runtime->reply_owner : nullptr, route_generation);
++      received_, std::move (envelope.source_rid), envelope.has_reply_token, envelope.reply_token,
++      _runtime ? _runtime->reply_owner : nullptr, route_generation);
+     if (attach_routed_send_context_ && received_.routing_id ().has_value ())
+-        detail::received_access_t::set_socket_rid_send_context (received_,
+-                                                                detail::native_handle (*this),
+-                                                                _runtime);
++        detail::received_access_t::set_socket_rid_send_context (received_, _runtime);
+     return 0;
+ }
+ 
+ int socket_t::publish (const std::string &topic_id_, message_t &part_, send_flags_t flags_)
+ {
++    detail::socket_call_t call (_socket);
+     detail::validate_no_embedded_null (topic_id_, "topic");
+     return detail::submit_borrowed_message_part (
+       part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
+-          return zlink_publish (detail::native_handle (*this), topic_id_.c_str (), parts_,
+-                                part_count_, static_cast<zlink_send_flags_t> (
+-                                               static_cast<int> (flags_)));
++          return zlink_publish (call.handle (), topic_id_.c_str (), parts_, part_count_,
++                                static_cast<zlink_send_flags_t> (static_cast<int> (flags_)));
+       });
+ }
+ 
+@@ -414,12 +416,12 @@ int socket_t::publish (const std::string &topic_id_,
+                        std::vector<message_t> &parts_,
+                        send_flags_t flags_)
+ {
++    detail::socket_call_t call (_socket);
+     detail::validate_no_embedded_null (topic_id_, "topic");
+     return detail::submit_message_parts (
+       parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+-          return zlink_publish (detail::native_handle (*this), topic_id_.c_str (), native_parts_,
+-                                part_count_, static_cast<zlink_send_flags_t> (
+-                                               static_cast<int> (flags_)));
++          return zlink_publish (call.handle (), topic_id_.c_str (), native_parts_, part_count_,
++                                static_cast<zlink_send_flags_t> (static_cast<int> (flags_)));
+       });
+ }
+ 
+@@ -431,15 +433,14 @@ int socket_t::subscribe (topic_message_t &message_, recv_flags_t flags_)
+         return ZLINK_RECV_OK;
+     }
+     return detail::read_subscription_message (
+-      message_,
+-      [&] (const zlink_routing_id_t **source_rid_out_, char *topic_out_, size_t topic_capacity_,
+-           size_t *topic_size_out_, zlink_msg_t *parts_out_, size_t parts_capacity_,
+-           size_t *part_count_out_) {
+-           return static_cast<int> (zlink_subscribe (
+-             detail::native_handle (*this), source_rid_out_, topic_out_,
+-             topic_capacity_, topic_size_out_, parts_out_, parts_capacity_, part_count_out_,
+-             static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
+-       });
++      message_, [&] (const zlink_routing_id_t **source_rid_out_, char *topic_out_,
++                     size_t topic_capacity_, size_t *topic_size_out_, zlink_msg_t *parts_out_,
++                     size_t parts_capacity_, size_t *part_count_out_) {
++          return static_cast<int> (zlink_subscribe (
++            detail::native_handle (*this), source_rid_out_, topic_out_, topic_capacity_,
++            topic_size_out_, parts_out_, parts_capacity_, part_count_out_,
++            static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
++      });
+ }
+ 
+ int socket_t::subscribe_part (std::optional<routing_id_t> &source_rid_out_,
+@@ -458,8 +459,8 @@ int socket_t::subscribe_part (std::optional<routing_id_t> &source_rid_out_,
+         _receive_envelope->stage_subscription (message);
+     }
+ 
+-    _receive_envelope->take_subscription_part (
+-      source_rid_out_, topic_out_, part_out_, has_more_out_);
++    _receive_envelope->take_subscription_part (source_rid_out_, topic_out_, part_out_,
++                                               has_more_out_);
+     return 0;
+ }
+ 
+@@ -468,9 +469,9 @@ int socket_t::subscription_event (subscription_event_t &event_, recv_flags_t fla
+     const zlink_routing_id_t *source_rid = nullptr;
+     zlink_msg_t native_part;
+     size_t part_count = 0;
+-    const int rc = zlink_recv (
+-      detail::native_handle (*this), &source_rid, &native_part, 1u, &part_count,
+-      static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
++    const int rc =
++      zlink_recv (detail::native_handle (*this), &source_rid, &native_part, 1u, &part_count,
++                  static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
+     if (rc != ZLINK_RECV_OK)
+         return rc;
+     if (part_count != 1u) {
+@@ -480,8 +481,7 @@ int socket_t::subscription_event (subscription_event_t &event_, recv_flags_t fla
+         return -1;
+     }
+ 
+-    const unsigned char *data =
+-      static_cast<const unsigned char *> (zlink_msg_data (&native_part));
++    const unsigned char *data = static_cast<const unsigned char *> (zlink_msg_data (&native_part));
+     const size_t size = zlink_msg_size (&native_part);
+ 
+     event_.routing_id = std::nullopt;
+diff --git a/bindings/cpp/src/Runtime/Sockets/socket_runtime_state.hpp b/bindings/cpp/src/Runtime/Sockets/socket_runtime_state.hpp
+index 387ff5dea3..40d96a07a7 100644
+--- a/bindings/cpp/src/Runtime/Sockets/socket_runtime_state.hpp
++++ b/bindings/cpp/src/Runtime/Sockets/socket_runtime_state.hpp
+@@ -4,15 +4,18 @@
+ 
+ #include <Runtime/Messaging/completion_owner.hpp>
+ 
++#include <Runtime/Native/socket_handle.hpp>
++
+ #include <memory>
++#include <utility>
+ 
+ namespace zlink::detail
+ {
+ 
+ struct socket_runtime_state_t : public std::enable_shared_from_this<socket_runtime_state_t>
+ {
+-    explicit socket_runtime_state_t (void *socket_) :
+-        completion (std::make_shared<completion_owner_t> (socket_))
++    explicit socket_runtime_state_t (std::shared_ptr<socket_handle_t> socket_) :
++        completion (std::make_shared<completion_owner_t> (std::move (socket_)))
+     {
+     }
+ 
+diff --git a/bindings/cpp/src/Runtime/Sockets/stream.cpp b/bindings/cpp/src/Runtime/Sockets/stream.cpp
+index 920a8b6487..a04d382bf0 100644
+--- a/bindings/cpp/src/Runtime/Sockets/stream.cpp
++++ b/bindings/cpp/src/Runtime/Sockets/stream.cpp
+@@ -22,7 +22,6 @@ send_operation_t stream_socket_t::send (const routing_id_t &target_rid_)
+ {
+     auto state_ptr = detail::acquire_state ();
+     state_ptr->kind = detail::operation_kind_t::raw_routed_send;
+-    state_ptr->raw.socket = detail::native_handle (*this);
+     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (*this));
+     state_ptr->raw.target.first_rid = target_rid_;
+     return send_operation_t (std::move (state_ptr));
+@@ -94,8 +93,8 @@ void stream_packet_t::close () noexcept
+ bool stream_socket_t::recv_packet (stream_packet_t &out_, recv_flags_t flags_)
+ {
+     bool expected = false;
+-    if (!out_._receiving.compare_exchange_strong (
+-          expected, true, std::memory_order_acq_rel, std::memory_order_acquire))
++    if (!out_._receiving.compare_exchange_strong (expected, true, std::memory_order_acq_rel,
++                                                  std::memory_order_acquire))
+         throw recv_error_t (recv_result_t::invalid_state, EBUSY);
+ 
+     struct receive_claim_t
+@@ -110,8 +109,7 @@ bool stream_socket_t::recv_packet (stream_packet_t &out_, recv_flags_t flags_)
+     const zlink_routing_id_t *source_rid = nullptr;
+     const recv_result_t result = static_cast<recv_result_t> (zlink_stream_recv_packet (
+       detail::native_handle (*this), &source_rid, detail::native_handle (header),
+-      detail::native_handle (body),
+-      static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
++      detail::native_handle (body), static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
+     if (result == recv_result_t::no_data)
+         return false;
+     if (result != recv_result_t::ok)
+diff --git a/bindings/cpp/tests/contract/test_cpp_contract_submit_close_admission.cpp b/bindings/cpp/tests/contract/test_cpp_contract_submit_close_admission.cpp
+new file mode 100644
+index 0000000000..d04aee0f9f
+--- /dev/null
++++ b/bindings/cpp/tests/contract/test_cpp_contract_submit_close_admission.cpp
+@@ -0,0 +1,465 @@
++/* SPDX-License-Identifier: MPL-2.0 */
++
++#include "support.hpp"
++#include <Runtime/Sockets/socket_access.hpp>
++
++#include <array>
++#include <atomic>
++#include <condition_variable>
++#include <functional>
++#include <mutex>
++#include <optional>
++#include <thread>
++#include <type_traits>
++
++namespace
++{
++static_assert (std::atomic<uint64_t>::is_always_lock_free);
++
++struct hook_t
++{
++    void *socket = nullptr;
++    bool close = false;
++    bool completion = false;
++    bool fail_close = false;
++    std::function<void ()> on_close;
++    std::mutex mutex;
++    std::condition_variable changed;
++    int entered = 0;
++    bool released = false;
++
++    void enter ()
++    {
++        std::unique_lock lock (mutex);
++        ++entered;
++        changed.notify_all ();
++        changed.wait (lock, [&] { return released; });
++    }
++    void wait (int count_)
++    {
++        std::unique_lock lock (mutex);
++        assert (
++          changed.wait_for (lock, std::chrono::seconds (5), [&] { return entered == count_; }));
++    }
++    void release ()
++    {
++        std::lock_guard lock (mutex);
++        released = true;
++        changed.notify_all ();
++    }
++};
++hook_t *active = nullptr;
++std::atomic<int> native_submits{0};
++
++void before_submit (void *socket_)
++{
++    ++native_submits;
++    if (active && socket_ == active->socket && !active->close && !active->completion)
++        active->enter ();
++}
++
++struct fixture_t
++{
++    zlink::context_t context;
++    zlink::router_socket_t server{context};
++    zlink::dealer_socket_t client{context};
++    zlink::pub_socket_t publisher{context};
++    zlink::poller_t poller;
++    std::array<zlink::received_t, 2> received;
++    std::vector<zlink::request_submission_t> requests;
++
++    fixture_t ()
++    {
++        client.options ().send_timeout (std::chrono::seconds (5));
++        server.options ().recv_timeout (std::chrono::seconds (5));
++        const auto endpoint = zlink_cpp_contract::unique_inproc ("submit-admission");
++        server.bind (endpoint);
++        client.connect (endpoint);
++        poller.add (client, zlink::poll_event_flag_t::pollcompletion, 1);
++        for (auto &result : received) {
++            auto message = zlink_cpp_contract::make_message ("request");
++            requests.push_back (client.request ().message (message).async ());
++            assert (server.recv (result) == 0);
++        }
++    }
++
++    zlink::socket_t &socket (int kind_)
++    {
++        return kind_ == 2   ? static_cast<zlink::socket_t &> (server)
++               : kind_ == 3 ? static_cast<zlink::socket_t &> (publisher)
++                            : static_cast<zlink::socket_t &> (client);
++    }
++
++    void submit (int kind_, zlink::message_t &message_, int index_ = 0)
++    {
++        switch (kind_) {
++            case 0:
++                client.send ().message (message_).submit ();
++                break;
++            case 1: {
++                auto submission = client.request ().message (message_).async ();
++                assert (submission.result == ZLINK_SUBMIT_OK);
++                break;
++            }
++            case 2:
++                received[index_].reply ().message (message_).submit ();
++                break;
++            case 3:
++                assert (publisher.publish ("topic").message (message_).submit ());
++                break;
++        }
++    }
++};
++
++void terminated (fixture_t &fixture_, int kind_)
++{
++    auto message = zlink_cpp_contract::make_message ("rejected");
++    const int before = native_submits.load ();
++    try {
++        fixture_.submit (kind_, message);
++        assert (false);
++    }
++    catch (const zlink::submit_error_t &error) {
++        assert (error.result () == zlink::submit_result_t::terminated);
++        assert (error.internal_errno () == ESHUTDOWN);
++    }
++    assert (native_submits.load () == before);
++    assert (message.valid () && message.to_string () == "rejected");
++}
++
++void reserved_calls_are_concurrent (int kind_)
++{
++    fixture_t fixture;
++    auto &socket = fixture.socket (kind_);
++    hook_t hook;
++    hook.socket = zlink::detail::native_handle (socket);
++    active = &hook;
++    std::array<std::thread, 2> threads;
++    for (int i = 0; i != 2; ++i) {
++        threads[i] = std::thread ([&, i] {
++            auto message = zlink_cpp_contract::make_message ("accepted");
++            fixture.submit (kind_, message, i);
++            assert (!message.valid ());
++        });
++    }
++    // Both native entries must reach the hook before either is released.
++    hook.wait (2);
++    try {
++        socket.close ();
++        assert (false);
++    }
++    catch (const zlink::close_error_t &error) {
++        assert (error.result () == zlink::close_result_t::busy);
++        assert (error.internal_errno () == EBUSY);
++    }
++    assert (socket.valid ());
++    hook.release ();
++    for (auto &thread : threads)
++        thread.join ();
++    active = nullptr;
++    socket.close ();
++    terminated (fixture, kind_);
++}
++
++void closing_rejects_without_native_access (int kind_)
++{
++    fixture_t fixture;
++    auto &socket = fixture.socket (kind_);
++    hook_t hook;
++    hook.socket = zlink::detail::native_handle (socket);
++    hook.close = true;
++    active = &hook;
++    std::thread closer ([&] { socket.close (); });
++    hook.wait (1);
++    try {
++        socket.close ();
++        assert (false);
++    }
++    catch (const zlink::close_error_t &error) {
++        assert (error.result () == zlink::close_result_t::busy);
++        assert (error.internal_errno () == EBUSY);
++    }
++    std::promise<void> started;
++    auto ready = started.get_future ();
++    std::thread submitter ([&] {
++        started.set_value ();
++        terminated (fixture, kind_);
++    });
++    ready.wait ();
++    hook.release ();
++    closer.join ();
++    submitter.join ();
++    active = nullptr;
++    terminated (fixture, kind_);
++}
++
++void rejected_native_close_keeps_owner_open ()
++{
++    fixture_t fixture;
++    hook_t hook;
++    hook.socket = zlink::detail::native_handle (fixture.client);
++    hook.close = true;
++    hook.fail_close = true;
++    active = &hook;
++    try {
++        fixture.client.close ();
++        assert (false);
++    }
++    catch (const zlink::close_error_t &error) {
++        assert (error.result () == zlink::close_result_t::busy);
++    }
++    active = nullptr;
++    auto message = zlink_cpp_contract::make_message ("still-open");
++    fixture.submit (0, message);
++    auto reply = zlink_cpp_contract::make_message ("reply-after-busy");
++    fixture.received[0].reply ().message (reply).submit ();
++    zlink::poll_event_t event{};
++    assert (fixture.poller.wait (&event, 1, std::chrono::seconds (5)) == 1);
++    auto completed = std::move (fixture.requests[0].reply).operator co_await ();
++    assert (completed.await_ready ());
++    assert (completed.await_resume ()[0].to_string () == "reply-after-busy");
++    fixture.client.close ();
++}
++
++void native_close_reentrancy_rejects_submits ()
++{
++    fixture_t fixture;
++    hook_t hook;
++    hook.socket = zlink::detail::native_handle (fixture.client);
++    hook.close = true;
++    hook.released = true;
++    bool called = false;
++    hook.on_close = [&] {
++        called = true;
++        try {
++            fixture.client.close ();
++            assert (false);
++        }
++        catch (const zlink::close_error_t &error) {
++            assert (error.result () == zlink::close_result_t::busy);
++            assert (error.internal_errno () == EBUSY);
++        }
++        terminated (fixture, 0);
++        terminated (fixture, 1);
++    };
++    active = &hook;
++    fixture.client.close ();
++    active = nullptr;
++    assert (called);
++}
++
++void completion_receive_holds_reservation ()
++{
++    fixture_t fixture;
++    assert (fixture.poller.remove (fixture.client));
++    hook_t hook;
++    hook.socket = zlink::detail::native_handle (fixture.client);
++    hook.completion = true;
++    active = &hook;
++    std::thread requester ([&] {
++        auto message = zlink_cpp_contract::make_message ("blocking");
++        auto parts = fixture.client.request ().message (message).submit ();
++        assert (parts.size () == 1 && parts[0].to_string () == "reply");
++    });
++    hook.wait (1);
++    try {
++        fixture.client.close ();
++        assert (false);
++    }
++    catch (const zlink::close_error_t &error) {
++        assert (error.result () == zlink::close_result_t::busy);
++        assert (error.internal_errno () == EBUSY);
++    }
++    zlink::received_t received;
++    assert (fixture.server.recv (received) == 0);
++    auto reply = zlink_cpp_contract::make_message ("reply");
++    received.reply ().message (reply).submit ();
++    hook.release ();
++    requester.join ();
++    active = nullptr;
++    fixture.client.close ();
++}
++
++void preparation_failure_releases_reservation ()
++{
++    for (int kind = 0; kind != 4; ++kind) {
++        fixture_t fixture;
++        auto invalid = zlink_cpp_contract::make_message ("invalid");
++        invalid.close ();
++        const int before = native_submits.load ();
++        try {
++            fixture.submit (kind, invalid);
++            assert (false);
++        }
++        catch (const zlink::binding_error_t &error) {
++            assert (error.internal_errno () == EINVAL);
++        }
++        assert (native_submits.load () == before);
++        fixture.socket (kind).close ();
++    }
++    fixture_t fixture;
++    auto message = zlink_cpp_contract::make_message ("timeout-overflow");
++    const int before = native_submits.load ();
++    try {
++        auto submission = fixture.client.request ()
++                            .message (message)
++                            .timeout (std::chrono::milliseconds (uint64_t{1} << 40))
++                            .async ();
++        assert (false);
++    }
++    catch (const zlink::config_error_t &error) {
++        assert (error.result () == zlink::config_result_t::invalid_argument);
++    }
++    assert (native_submits.load () == before && message.valid ());
++    fixture.client.close ();
++}
++
++void received_after_owner_destruction (bool reply_)
++{
++    zlink::received_t received;
++    {
++        fixture_t fixture;
++        received = std::move (fixture.received[0]);
++    }
++    auto message = zlink_cpp_contract::make_message ("expired-context");
++    const int before = native_submits.load ();
++    try {
++        if (reply_)
++            received.reply ().message (message).submit ();
++        else
++            received.send ().message (message).submit ();
++        assert (false);
++    }
++    catch (const zlink::submit_error_t &error) {
++        assert (error.result () == zlink::submit_result_t::terminated);
++        assert (error.internal_errno () == ESHUTDOWN);
++    }
++    assert (native_submits.load () == before && message.valid ());
++    assert (message.to_string () == "expired-context");
++}
++
++template <typename Factory> void expired_builder_rejects_without_native_access (Factory factory_)
++{
++    auto message = zlink_cpp_contract::make_message ("expired");
++    using operation_t = decltype (factory_ (std::declval<fixture_t &> (), message));
++    std::optional<operation_t> operation;
++    {
++        fixture_t fixture;
++        operation.emplace (factory_ (fixture, message));
++    }
++    const int before = native_submits.load ();
++    try {
++        if constexpr (std::is_same_v<operation_t, zlink::request_submit_operation_t>) {
++            auto submission = std::move (*operation).async ();
++        } else {
++            std::move (*operation).submit ();
++        }
++        assert (false);
++    }
++    catch (const zlink::submit_error_t &error) {
++        assert (error.result () == zlink::submit_result_t::terminated);
++        assert (error.internal_errno () == ESHUTDOWN);
++    }
++    assert (native_submits.load () == before && message.valid ());
++    assert (message.to_string () == "expired");
++}
++} // namespace
++
++extern "C" zlink_submit_result_t __real_zlink_send (
++  void *, zlink_msg_t *, size_t, zlink_send_flags_t, void *, zlink_completion_id_t *);
++extern "C" zlink_submit_result_t __wrap_zlink_send (void *socket_,
++                                                    zlink_msg_t *parts_,
++                                                    size_t count_,
++                                                    zlink_send_flags_t flags_,
++                                                    void *context_,
++                                                    zlink_completion_id_t *id_)
++{
++    before_submit (socket_);
++    return __real_zlink_send (socket_, parts_, count_, flags_, context_, id_);
++}
++extern "C" zlink_submit_result_t __real_zlink_request (void *,
++                                                       const zlink_routing_id_t *,
++                                                       zlink_msg_t *,
++                                                       size_t,
++                                                       zlink_send_flags_t,
++                                                       uint32_t,
++                                                       void *,
++                                                       zlink_completion_id_t *);
++extern "C" zlink_submit_result_t __wrap_zlink_request (void *socket_,
++                                                       const zlink_routing_id_t *rid_,
++                                                       zlink_msg_t *parts_,
++                                                       size_t count_,
++                                                       zlink_send_flags_t flags_,
++                                                       uint32_t timeout_,
++                                                       void *context_,
++                                                       zlink_completion_id_t *id_)
++{
++    before_submit (socket_);
++    return __real_zlink_request (socket_, rid_, parts_, count_, flags_, timeout_, context_, id_);
++}
++extern "C" zlink_submit_result_t
++__real_zlink_reply (void *, const zlink_routing_id_t *, zlink_reply_token_t, zlink_msg_t *, size_t);
++extern "C" zlink_submit_result_t __wrap_zlink_reply (void *socket_,
++                                                     const zlink_routing_id_t *rid_,
++                                                     zlink_reply_token_t token_,
++                                                     zlink_msg_t *parts_,
++                                                     size_t count_)
++{
++    before_submit (socket_);
++    return __real_zlink_reply (socket_, rid_, token_, parts_, count_);
++}
++extern "C" zlink_submit_result_t
++__real_zlink_publish (void *, const char *, zlink_msg_t *, size_t, zlink_send_flags_t);
++extern "C" zlink_submit_result_t __wrap_zlink_publish (
++  void *socket_, const char *topic_, zlink_msg_t *parts_, size_t count_, zlink_send_flags_t flags_)
++{
++    before_submit (socket_);
++    return __real_zlink_publish (socket_, topic_, parts_, count_, flags_);
++}
++extern "C" zlink_close_result_t __real_zlink_close (void *);
++extern "C" zlink_close_result_t __wrap_zlink_close (void *socket_)
++{
++    if (active && socket_ == active->socket && active->close) {
++        if (active->fail_close) {
++            errno = EBUSY;
++            return ZLINK_CLOSE_BUSY;
++        }
++        active->enter ();
++        if (active->on_close)
++            active->on_close ();
++    }
++    return __real_zlink_close (socket_);
++}
++
++extern "C" zlink_recv_result_t
++__real_zlink_completion_recv (void *, zlink_completion_t *, zlink_recv_flags_t);
++extern "C" zlink_recv_result_t __wrap_zlink_completion_recv (void *socket_,
++                                                             zlink_completion_t *completion_,
++                                                             zlink_recv_flags_t flags_)
++{
++    if (active && socket_ == active->socket && active->completion)
++        active->enter ();
++    return __real_zlink_completion_recv (socket_, completion_, flags_);
++}
++
++int main ()
++{
++    for (int kind = 0; kind != 4; ++kind) {
++        reserved_calls_are_concurrent (kind);
++        closing_rejects_without_native_access (kind);
++    }
++    native_close_reentrancy_rejects_submits ();
++    completion_receive_holds_reservation ();
++    preparation_failure_releases_reservation ();
++    rejected_native_close_keeps_owner_open ();
++    received_after_owner_destruction (false);
++    received_after_owner_destruction (true);
++    expired_builder_rejects_without_native_access (
++      [] (auto &f, auto &m) { return f.client.send ().message (m); });
++    expired_builder_rejects_without_native_access (
++      [] (auto &f, auto &m) { return f.client.request ().message (m); });
++    expired_builder_rejects_without_native_access (
++      [] (auto &f, auto &m) { return f.received[0].reply ().message (m); });
++    expired_builder_rejects_without_native_access (
++      [] (auto &f, auto &m) { return f.publisher.publish ("topic").message (m); });
++}
+diff --git a/bindings/cpp/tests/stress/test_cpp_submit_close_race.cpp b/bindings/cpp/tests/stress/test_cpp_submit_close_race.cpp
+new file mode 100644
+index 0000000000..d893ceb413
+--- /dev/null
++++ b/bindings/cpp/tests/stress/test_cpp_submit_close_race.cpp
+@@ -0,0 +1,157 @@
++/* SPDX-License-Identifier: MPL-2.0 */
++
++#include "../contract/support.hpp"
++
++#include <array>
++#include <barrier>
++#include <iostream>
++#include <map>
++#include <thread>
++#include <type_traits>
++
++namespace
++{
++constexpr int workers = 4;
++struct counts_t
++{
++    int ok = 0;
++    int terminated = 0;
++    int close_ok = 0;
++    int close_busy = 0;
++    int ownership_failures = 0;
++    std::map<std::pair<int, int>, int> errors;
++};
++
++// Build before releasing close. The builder must not use its cached handle
++// when close wins between construction and native admission.
++template <typename Factory>
++void race (zlink::socket_t &socket_, Factory factory_, counts_t &counts_)
++{
++    std::barrier start (workers + 1);
++    std::array<int, workers> results{};
++    std::array<int, workers> errors{};
++    std::array<bool, workers> ownership{};
++    std::array<std::thread, workers> threads;
++    for (int i = 0; i != workers; ++i) {
++        threads[i] = std::thread ([&, i] {
++            auto message = zlink_cpp_contract::make_message ("race");
++            auto operation = factory_ (message);
++            start.arrive_and_wait ();
++            try {
++                if constexpr (std::is_same_v<decltype (operation),
++                                             zlink::request_submit_operation_t>) {
++                    auto submitted = std::move (operation).async ();
++                    results[i] = static_cast<int> (submitted.result);
++                } else {
++                    std::move (operation).submit ();
++                }
++                ownership[i] = results[i] == 0 ? !message.valid () : message.valid ();
++            }
++            catch (const zlink::submit_error_t &error) {
++                results[i] = static_cast<int> (error.result ());
++                errors[i] = error.internal_errno ();
++                ownership[i] = message.valid ();
++            }
++            catch (const zlink::binding_error_t &error) {
++                results[i] = -1;
++                errors[i] = error.internal_errno ();
++            }
++        });
++    }
++    start.arrive_and_wait ();
++    try {
++        socket_.close ();
++        ++counts_.close_ok;
++    }
++    catch (const zlink::close_error_t &error) {
++        assert (error.result () == zlink::close_result_t::busy);
++        assert (error.internal_errno () == EBUSY);
++        ++counts_.close_busy;
++    }
++    for (auto &thread : threads)
++        thread.join ();
++    socket_.close ();
++    for (int i = 0; i != workers; ++i) {
++        if (results[i] == 0)
++            ++counts_.ok;
++        else if (results[i] == static_cast<int> (zlink::submit_result_t::terminated)
++                 && errors[i] == ESHUTDOWN)
++            ++counts_.terminated;
++        else
++            ++counts_.errors[{results[i], errors[i]}];
++        if (!ownership[i])
++            ++counts_.ownership_failures;
++    }
++}
++
++void round (const std::string &kind_, counts_t &counts_)
++{
++    zlink::context_t context;
++    if (kind_ == "publish") {
++        zlink::pub_socket_t publisher (context);
++        race (
++          publisher, [&] (auto &message) { return publisher.publish ("topic").message (message); },
++          counts_);
++        return;
++    }
++    zlink::router_socket_t server (context);
++    zlink::dealer_socket_t client (context);
++    server.options ().recv_timeout (std::chrono::seconds (5));
++    client.options ().send_timeout (std::chrono::seconds (5));
++    const auto endpoint = zlink_cpp_contract::unique_inproc ("submit-close-race");
++    server.bind (endpoint);
++    client.connect (endpoint);
++    auto probe = zlink_cpp_contract::make_message ("ready");
++    client.send ().message (probe).submit ();
++    zlink::received_t ready;
++    assert (server.recv (ready) == 0);
++    if (kind_ == "send") {
++        race (client, [&] (auto &message) { return client.send ().message (message); }, counts_);
++    } else if (kind_ == "request") {
++        zlink::poller_t poller;
++        poller.add (client, zlink::poll_event_flag_t::pollcompletion, 1);
++        race (client, [&] (auto &message) { return client.request ().message (message); }, counts_);
++    } else {
++        zlink::poller_t poller;
++        poller.add (client, zlink::poll_event_flag_t::pollcompletion, 1);
++        std::array<zlink::received_t, workers> received;
++        std::vector<zlink::request_submission_t> requests;
++        for (int i = 0; i != workers; ++i) {
++            auto message = zlink_cpp_contract::make_message ("request");
++            requests.push_back (client.request ().message (message).async ());
++            assert (server.recv (received[i]) == 0);
++        }
++        std::atomic<int> next{0};
++        race (
++          server,
++          [&] (auto &message) { return received[next.fetch_add (1)].reply ().message (message); },
++          counts_);
++    }
++}
++} // namespace
++
++int main (int argc_, char **argv_)
++{
++    std::cout << std::unitbuf;
++    const std::string kind = argc_ > 1 ? argv_[1] : "all";
++    const int repetitions = argc_ > 2 ? std::stoi (argv_[2]) : 1000;
++    int unexpected = 0;
++    for (const std::string path : {"send", "request", "reply", "publish"}) {
++        if (kind != "all" && kind != path)
++            continue;
++        counts_t counts;
++        for (int i = 0; i != repetitions; ++i)
++            round (path, counts);
++        std::cout << path << " repetitions=" << repetitions << " ok=" << counts.ok
++                  << " terminated=" << counts.terminated << " close_ok=" << counts.close_ok
++                  << " close_busy=" << counts.close_busy
++                  << " ownership_failures=" << counts.ownership_failures << '\n';
++        for (const auto &[error, count] : counts.errors) {
++            std::cout << "unexpected result=" << error.first << " errno=" << error.second
++                      << " count=" << count << '\n';
++            unexpected += count;
++        }
++        unexpected += counts.ownership_failures;
++    }
++    return unexpected == 0 ? 0 : 1;
++}

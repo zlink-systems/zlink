@@ -1,0 +1,20 @@
+diff --git a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+index ac8e08d333..8c3a561bc4 100644
+--- a/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
++++ b/framework/languages/cpp/framework/src/runtime/dispatch/offload_executor.cpp
+@@ -187,14 +187,7 @@ void offload_executor_t::reserve_workers_locked (bool grow,
+                                                  worker_t *current)
+ {
+     std::size_t demand = std::min (_max_worker_count, _roles.size ());
+-    for (const auto &entry : _queue) {
+-        if (demand == _max_worker_count)
+-            break;
+-        const auto source = std::get_if<std::shared_ptr<drain_source_t>> (&entry.work);
+-        // An exhausted entry still needs one selection to release its captures.
+-        const auto count = source ? std::max<std::size_t> (1, (*source)->pending ()) : 1;
+-        demand += std::min (count, _max_worker_count - demand);
+-    }
++    demand += std::min (_queue.size (), _max_worker_count - demand);
+     std::size_t available = 0, reserved = 0;
+     for (const auto &worker : _workers) {
+         if (worker->phase == worker_phase_t::reserved) {

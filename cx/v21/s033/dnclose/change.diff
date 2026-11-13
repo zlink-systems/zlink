@@ -1,0 +1,2018 @@
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Eventing/Poller.cs b/bindings/dotnet/src/Zlink/Runtime/Eventing/Poller.cs
+index 86c613c895..bb7b657aac 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Eventing/Poller.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Eventing/Poller.cs
+@@ -33,7 +33,8 @@ internal sealed class Poller : NativeOwner, IPoller
+     {
+         EnsureNotDisposed();
+         var concreteSocket = SocketInterop.RequireSocket(socket, nameof(socket));
+-        var socketHandle = concreteSocket.Handle;
++        using var call = concreteSocket.Reserve();
++        var socketHandle = call.Handle;
+         EnumValidation.EnsurePollEvents(events, nameof(events));
+ 
+         var ownsCompletion = (events & PollEventFlags.PollCompletion) != 0;
+@@ -66,7 +67,8 @@ internal sealed class Poller : NativeOwner, IPoller
+             SlotToUserData(slot), (short)events);
+         ZlinkException.ThrowConfigIfError(rc);
+         RegisterItem(new PollItem(PollItemKind.Monitor, null, concreteMonitor.Handle,
+-            0, null, events, slot, null, false) { Monitor = concreteMonitor });
++            0, null, events, slot, null, false)
++        { Monitor = concreteMonitor });
+     }
+ 
+     public void AddFd(int fd, PollEventFlags events, nuint slot)
+@@ -100,8 +102,8 @@ internal sealed class Poller : NativeOwner, IPoller
+     public void Modify(IZlinkSocket socket, PollEventFlags events)
+     {
+         EnsureNotDisposed();
+-        var socketHandle = SocketInterop.RequirePollableHandle(socket,
+-            nameof(socket));
++        using var call = SocketInterop.RequireSocket(socket, nameof(socket)).Reserve();
++        var socketHandle = call.Handle;
+         EnumValidation.EnsurePollEvents(events, nameof(events));
+ 
+         var index = FindSocket(socketHandle);
+@@ -474,7 +476,7 @@ internal sealed class Poller : NativeOwner, IPoller
+     {
+         foreach (var item in _items)
+             if (item.OwnsCompletion)
+-                item.CompletionOwner!.FailPublicWaitTerminated();
++                item.CompletionOwner!.FailLifecycle();
+     }
+ 
+     private void EnsureNotDisposed()
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Eventing/ZlinkPoll.Core.cs b/bindings/dotnet/src/Zlink/Runtime/Eventing/ZlinkPoll.Core.cs
+index 96b41261e8..8d5dad8c00 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Eventing/ZlinkPoll.Core.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Eventing/ZlinkPoll.Core.cs
+@@ -1,6 +1,8 @@
+ // SPDX-License-Identifier: MPL-2.0
+ 
++using System.Buffers;
+ using Systems.Zlink.Runtime.Native;
++using Systems.Zlink.Runtime.Sockets.Internal;
+ 
+ namespace Systems.Zlink;
+ 
+@@ -57,51 +59,63 @@ public static partial class ZlinkPoll
+         if (count <= 0)
+             return 0;
+ 
+-        long boundedTimeoutMs = Math.Max(0, timeoutMs);
+-        if (OperatingSystem.IsWindows())
++        var calls = ArrayPool<SocketHandle.Call>.Shared.Rent(count);
++        var reserved = 0;
++        try
+         {
+-            var items = EnsureWindowsCapacity(count);
++            for (; reserved < count; reserved++)
++                calls[reserved] = SocketInterop.RequireSocket(sockets[reserved],
++                    nameof(sockets)).Reserve();
++            long boundedTimeoutMs = Math.Max(0, timeoutMs);
++            if (OperatingSystem.IsWindows())
++            {
++                var items = EnsureWindowsCapacity(count);
++                for (var i = 0; i < count; i++)
++                {
++                    items[i].Socket = calls[i].Handle;
++                    items[i].Fd = 0;
++                    items[i].Events = (short)(events == null
++                        ? PollEventFlags.PollIn
++                        : events[i]);
++                    items[i].Revents = 0;
++                }
++
++                var rc = NativeMethods.zlink_poll(items, count, boundedTimeoutMs,
++                    out var windowsErrorOut);
++                if (rc < 0)
++                    throw ZlinkException.CreateConfigException((ConfigResult)windowsErrorOut);
++                if (writeRevents)
++                    for (var i = 0; i < count; i++)
++                        revents[i] = (PollEventFlags)items[i].Revents;
++                return rc;
++            }
++
++            var unixItems = EnsureUnixCapacity(count);
+             for (var i = 0; i < count; i++)
+             {
+-                items[i].Socket = SocketInterop
+-                    .RequireSocket(sockets[i], nameof(sockets)).Handle;
+-                items[i].Fd = 0;
+-                items[i].Events = (short)(events == null
++                unixItems[i].Socket = calls[i].Handle;
++                unixItems[i].Fd = 0;
++                unixItems[i].Events = (short)(events == null
+                     ? PollEventFlags.PollIn
+                     : events[i]);
+-                items[i].Revents = 0;
++                unixItems[i].Revents = 0;
+             }
+ 
+-            var rc = NativeMethods.zlink_poll(items, count, boundedTimeoutMs,
+-                out var windowsErrorOut);
+-            if (rc < 0)
+-                throw ZlinkException.CreateConfigException((ConfigResult)windowsErrorOut);
++            var unixRc = NativeMethods.zlink_poll(unixItems, count,
++                boundedTimeoutMs, out var errorOut);
++            if (unixRc < 0)
++                throw ZlinkException.CreateConfigException((ConfigResult)errorOut);
+             if (writeRevents)
+                 for (var i = 0; i < count; i++)
+-                    revents[i] = (PollEventFlags)items[i].Revents;
+-            return rc;
++                    revents[i] = (PollEventFlags)unixItems[i].Revents;
++            return unixRc;
+         }
+-
+-        var unixItems = EnsureUnixCapacity(count);
+-        for (var i = 0; i < count; i++)
++        finally
+         {
+-            unixItems[i].Socket = SocketInterop
+-                .RequireSocket(sockets[i], nameof(sockets)).Handle;
+-            unixItems[i].Fd = 0;
+-            unixItems[i].Events = (short)(events == null
+-                ? PollEventFlags.PollIn
+-                : events[i]);
+-            unixItems[i].Revents = 0;
++            for (var i = reserved - 1; i >= 0; i--)
++                calls[i].Dispose();
++            ArrayPool<SocketHandle.Call>.Shared.Return(calls, clearArray: true);
+         }
+-
+-        var unixRc = NativeMethods.zlink_poll(unixItems, count,
+-            boundedTimeoutMs, out var errorOut);
+-        if (unixRc < 0)
+-            throw ZlinkException.CreateConfigException((ConfigResult)errorOut);
+-        if (writeRevents)
+-            for (var i = 0; i < count; i++)
+-                revents[i] = (PollEventFlags)unixItems[i].Revents;
+-        return unixRc;
+     }
+ 
+     private static int PollMonitorsCore(
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Messaging/CompletionOwner.cs b/bindings/dotnet/src/Zlink/Runtime/Messaging/CompletionOwner.cs
+index 8f737bf7a4..ad8ae16ada 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Messaging/CompletionOwner.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Messaging/CompletionOwner.cs
+@@ -2,6 +2,7 @@
+ 
+ using System.Runtime.InteropServices;
+ using Systems.Zlink.Runtime.Native;
++using Systems.Zlink.Runtime.Sockets.Internal;
+ 
+ namespace Systems.Zlink;
+ 
+@@ -12,7 +13,7 @@ namespace Systems.Zlink;
+ internal sealed class CompletionOwner
+ {
+     private const int DontWait = 1;
+-    private readonly IntPtr _handle;
++    private readonly SocketHandle _handle;
+     private readonly SocketType _socketType;
+     private readonly object _sync = new();
+     private readonly object _inlineDrainSync = new();
+@@ -20,10 +21,9 @@ internal sealed class CompletionOwner
+     private List<CompletionEntry>? _retries;
+ 
+     private object? _publicOwner;
+-    private bool _closing;
+     private long _nextContext;
+ 
+-    internal CompletionOwner(IntPtr handle, SocketType socketType)
++    internal CompletionOwner(SocketHandle handle, SocketType socketType)
+     {
+         _handle = handle;
+         _socketType = socketType;
+@@ -34,7 +34,6 @@ internal sealed class CompletionOwner
+     {
+         ValidateSend(parts);
+         cancellationToken.ThrowIfCancellationRequested();
+-        EnsureOpenForSubmit();
+ 
+         // The entry is registered before the submit so that a WRITABLE record
+         // pulled by the drain before this call returns finds it. Capture joins
+@@ -44,9 +43,9 @@ internal sealed class CompletionOwner
+         var context = IntPtr.Zero;
+         if (hasPublicOwner || cancellationToken.CanBeCanceled)
+         {
+-            context = NextContext();
+             entry = new SendCompletionEntry(this, target, cancellationToken);
+-            Register(entry, context);
++            Register(entry);
++            context = entry.Context;
+         }
+         try
+         {
+@@ -110,7 +109,6 @@ internal sealed class CompletionOwner
+ 
+     internal void Send(RoutingId? target, IReadOnlyList<Message> parts)
+     {
+-        EnsureOpenForSubmit();
+         ValidateSend(parts);
+         var attempt = SubmitSend(target, parts, 0, IntPtr.Zero);
+         if (attempt.Failure is not null)
+@@ -125,7 +123,6 @@ internal sealed class CompletionOwner
+     {
+         RequestReplySupport.EnsureParts(parts, nameof(parts));
+         cancellationToken.ThrowIfCancellationRequested();
+-        EnsureOpenForSubmit();
+         EnsurePublicOwner();
+ 
+         var entry = new RequestCompletionEntry(this, target, timeoutMs,
+@@ -185,7 +182,6 @@ internal sealed class CompletionOwner
+         IReadOnlyList<Message> parts, uint timeoutMs)
+     {
+         RequestReplySupport.EnsureParts(parts, nameof(parts));
+-        EnsureOpenForSubmit();
+         var entry = new RequestCompletionEntry(this, target, timeoutMs,
+             CancellationToken.None);
+         try
+@@ -220,7 +216,6 @@ internal sealed class CompletionOwner
+     internal void Reply(RoutingId target, ReplyToken replyToken,
+         IReadOnlyList<Message> parts)
+     {
+-        EnsureOpenForSubmit();
+         var submitter = new ReplyMessageSubmitter
+         {
+             Handle = _handle,
+@@ -234,31 +229,32 @@ internal sealed class CompletionOwner
+     // the stack. The submitter never escapes SubmitPreservingOnFailure.
+     private struct ReplyMessageSubmitter : INativeMessageSubmitter<ReplyMessageSubmitter>
+     {
+-        internal IntPtr Handle;
++        internal SocketHandle Handle;
+         internal ZlinkRoutingId Target;
+         internal ulong ReplyToken;
+ 
+         public static int Submit(ref ReplyMessageSubmitter self,
+-            Span<ZlinkMsg> parts) =>
+-            NativeMethods.zlink_reply(self.Handle, ref self.Target,
++            Span<ZlinkMsg> parts)
++        {
++            using var call = self.Handle.Reserve(submit: true);
++            return NativeMethods.zlink_reply(call.Handle, ref self.Target,
+                 self.ReplyToken, ref parts[0], (nuint)parts.Length);
++        }
+     }
+ 
+     internal bool TransferToPublic(object pollerOwner)
+     {
+         lock (_inlineDrainSync)
+-        lock (_sync)
+-        {
+-            if (_closing)
+-                throw new ZlinkConfigException(ConfigResult.InvalidState);
+-            if (_publicOwner is not null
+-                && !ReferenceEquals(_publicOwner, pollerOwner))
+-                throw new ZlinkConfigException(
+-                    ConfigResult.InvalidState, (int)ErrorCode.EBusy);
+-            if (ReferenceEquals(_publicOwner, pollerOwner))
+-                return false;
+-            _publicOwner = pollerOwner;
+-        }
++            lock (_sync)
++            {
++                if (_publicOwner is not null
++                    && !ReferenceEquals(_publicOwner, pollerOwner))
++                    throw new ZlinkConfigException(
++                        ConfigResult.InvalidState, (int)ErrorCode.EBusy);
++                if (ReferenceEquals(_publicOwner, pollerOwner))
++                    return false;
++                _publicOwner = pollerOwner;
++            }
+         return true;
+     }
+ 
+@@ -276,13 +272,10 @@ internal sealed class CompletionOwner
+         // Submissions register their entry before the native call and Capture
+         // joins a pre-return completion inside that entry, so the drain needs
+         // no lock shared with the submitters.
+-        lock (_sync)
+-            if (_closing)
+-                return default;
+         return DrainCore();
+     }
+ 
+-    internal void FailPublicWaitTerminated()
++    internal void FailLifecycle()
+     {
+         CompletionEntry[] entries;
+         lock (_sync)
+@@ -291,6 +284,15 @@ internal sealed class CompletionOwner
+             entry.FailLifecycle();
+     }
+ 
++    private int ReceiveCompletion(ref ZlinkCompletion completion, int flags)
++    {
++        if (!_handle.TryReserve(out var call))
++            return (int)RecvResult.Terminated;
++        using (call)
++            return NativeMethods.zlink_completion_recv(call.Handle,
++                ref completion, flags);
++    }
++
+     private CompletionDrainResult DrainCore()
+     {
+         var processed = 0;
+@@ -300,8 +302,13 @@ internal sealed class CompletionOwner
+             ZlinkCompletion completion = default;
+             completion.StructSize = checked(
+                 (uint)Marshal.SizeOf<ZlinkCompletion>());
+-            var rc = NativeMethods.zlink_completion_recv(_handle,
+-                ref completion, DontWait);
++            var rc = ReceiveCompletion(ref completion, DontWait);
++            if ((RecvResult)rc == RecvResult.Terminated)
++            {
++                FailDrainWaits(RecvResult.Terminated);
++                _retries?.Clear();
++                return new CompletionDrainResult(processed, requests);
++            }
+             if ((RecvResult)rc == RecvResult.NoData)
+             {
+                 // Core's part contract requires draining to NO_DATA before
+@@ -350,21 +357,6 @@ internal sealed class CompletionOwner
+         return completion.Kind == CompletionKind.Request;
+     }
+ 
+-    // Core close is fail-fast: it returns EBUSY while another call is in
+-    // flight, so the binding neither waits for submitters nor retries. The
+-    // caller settles the remaining entries only after Core accepted the close.
+-    internal void CompleteClose()
+-    {
+-        CompletionEntry[] entries;
+-        lock (_sync)
+-        {
+-            _closing = true;
+-            entries = _entries.Values.ToArray();
+-        }
+-        foreach (var entry in entries)
+-            entry.FailLifecycle();
+-    }
+-
+     private void ValidateSend(IReadOnlyList<Message> parts)
+     {
+         RequestReplySupport.EnsureParts(parts, nameof(parts));
+@@ -376,16 +368,13 @@ internal sealed class CompletionOwner
+     // Core treats user_context as an opaque value. The registry roots entries;
+     // monotonically increasing socket-local identities never reuse a GCHandle
+     // address and require no managed/native handle-table round trip.
+-    private IntPtr NextContext() =>
+-        checked((IntPtr)Interlocked.Increment(ref _nextContext));
++    // Called only under _sync, together with insertion into _entries.
++    private IntPtr NextContext() => checked((IntPtr)(++_nextContext));
+ 
+     private void Register(CompletionEntry entry, IntPtr context = default)
+     {
+         lock (_sync)
+         {
+-            if (_closing)
+-                throw new ZlinkSubmitException(SubmitResult.Terminated,
+-                    (int)ErrorCode.EShutdown);
+             if (context == IntPtr.Zero)
+                 context = NextContext();
+             entry.Context = context;
+@@ -403,13 +392,6 @@ internal sealed class CompletionOwner
+         }
+     }
+ 
+-    private void EnsureOpenForSubmit()
+-    {
+-        if (Volatile.Read(ref _closing))
+-            throw new ZlinkSubmitException(SubmitResult.Terminated,
+-                (int)ErrorCode.EShutdown);
+-    }
+-
+     private bool HasPublicOwner()
+     {
+         lock (_sync)
+@@ -419,7 +401,11 @@ internal sealed class CompletionOwner
+     private void EnsurePublicOwner()
+     {
+         if (!HasPublicOwner())
++        {
++            // Preserve TERMINATED precedence without a second lifecycle test.
++            using var call = _handle.Reserve(submit: true);
+             throw new ZlinkSubmitException(SubmitResult.InvalidState);
++        }
+     }
+ 
+     private void Remove(CompletionEntry entry, IntPtr context)
+@@ -458,7 +444,8 @@ internal sealed class CompletionOwner
+ 
+     private unsafe struct SendMessageSubmitter : INativeMessageSubmitter<SendMessageSubmitter>
+     {
+-        internal IntPtr Handle, Context;
++        internal SocketHandle Handle;
++        internal IntPtr Context;
+         internal ZlinkRoutingId Target;
+         internal bool Routed;
+         internal bool TrackCompletion;
+@@ -468,14 +455,15 @@ internal sealed class CompletionOwner
+         public static int Submit(ref SendMessageSubmitter self,
+             Span<ZlinkMsg> parts)
+         {
++            using var call = self.Handle.Reserve(submit: true);
+             fixed (ulong* id = &self.CompletionId)
+             {
+                 var idOut = self.TrackCompletion ? id : null;
+                 return self.Routed
+-                    ? NativeMethods.zlink_send_rid(self.Handle,
++                    ? NativeMethods.zlink_send_rid(call.Handle,
+                         ref self.Target, ref parts[0], (nuint)parts.Length,
+                         self.Flags, self.Context, idOut)
+-                    : NativeMethods.zlink_send(self.Handle,
++                    : NativeMethods.zlink_send(call.Handle,
+                         ref parts[0], (nuint)parts.Length, self.Flags,
+                         self.Context, idOut);
+             }
+@@ -508,7 +496,8 @@ internal sealed class CompletionOwner
+ 
+     private unsafe struct RequestMessageSubmitter : INativeMessageSubmitter<RequestMessageSubmitter>
+     {
+-        internal IntPtr Handle, Context;
++        internal SocketHandle Handle;
++        internal IntPtr Context;
+         internal ZlinkRoutingId Target;
+         internal bool Routed;
+         internal int Flags;
+@@ -518,9 +507,10 @@ internal sealed class CompletionOwner
+         public static int Submit(ref RequestMessageSubmitter self,
+             Span<ZlinkMsg> parts)
+         {
++            using var call = self.Handle.Reserve(submit: true);
+             fixed (ZlinkRoutingId* target = &self.Target)
+             fixed (ulong* id = &self.CompletionId)
+-                return NativeMethods.zlink_request(self.Handle,
++                return NativeMethods.zlink_request(call.Handle,
+                     self.Routed ? target : null, ref parts[0], (nuint)parts.Length,
+                     self.Flags, self.TimeoutMs, self.Context, id);
+         }
+@@ -539,15 +529,15 @@ internal sealed class CompletionOwner
+ 
+     private static ZlinkSubmitException CreateWritableFailure(
+         ZlinkCompletion completion) => completion.SendResult switch
+-    {
+-        ZlinkSendCompleteResult.NotFound =>
+-            new ZlinkSubmitException(SubmitResult.NotFound,
+-                completion.SendTerminalErrno),
+-        ZlinkSendCompleteResult.NotConnected =>
+-            new ZlinkSubmitException(SubmitResult.NotConnected,
+-                completion.SendTerminalErrno),
+-        _ => CreateProtocolFailure()
+-    };
++        {
++            ZlinkSendCompleteResult.NotFound =>
++                new ZlinkSubmitException(SubmitResult.NotFound,
++                    completion.SendTerminalErrno),
++            ZlinkSendCompleteResult.NotConnected =>
++                new ZlinkSubmitException(SubmitResult.NotConnected,
++                    completion.SendTerminalErrno),
++            _ => CreateProtocolFailure()
++        };
+ 
+     private void DrainInline(RequestCompletionEntry entry)
+     {
+@@ -560,13 +550,14 @@ internal sealed class CompletionOwner
+                 ZlinkCompletion completion = default;
+                 completion.StructSize = checked(
+                     (uint)Marshal.SizeOf<ZlinkCompletion>());
+-                var rc = NativeMethods.zlink_completion_recv(_handle,
+-                    ref completion, 0);
++                var rc = ReceiveCompletion(ref completion, 0);
+                 if ((RecvResult)rc == RecvResult.NoData)
+                     continue;
+                 if ((RecvResult)rc != RecvResult.Ok)
+                 {
+                     FailDrainWaits((RecvResult)rc);
++                    if ((RecvResult)rc == RecvResult.Terminated)
++                        return;
+                     throw ZlinkException.CreateRecvException((RecvResult)rc);
+                 }
+                 try
+@@ -587,8 +578,6 @@ internal sealed class CompletionOwner
+         CompletionEntry[] entries;
+         lock (_sync)
+         {
+-            if (result == RecvResult.Terminated)
+-                _closing = true;
+             entries = _entries.Values.ToArray();
+         }
+ 
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Native/Zlink.Core.cs b/bindings/dotnet/src/Zlink/Runtime/Native/Zlink.Core.cs
+index 99f163ec05..be814901e1 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Native/Zlink.Core.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Native/Zlink.Core.cs
+@@ -41,8 +41,11 @@ public static partial class Zlink
+             ? null
+             : SocketInterop.RequireSocket(capture, nameof(capture));
+ 
+-        var rc = NativeMethods.zlink_proxy(frontendSocket.Handle,
+-            backendSocket.Handle, captureSocket?.Handle ?? IntPtr.Zero);
++        using var frontendCall = frontendSocket.Reserve();
++        using var backendCall = backendSocket.Reserve();
++        using var captureCall = captureSocket?.Reserve();
++        var rc = NativeMethods.zlink_proxy(frontendCall.Handle,
++            backendCall.Handle, captureCall?.Handle ?? IntPtr.Zero);
+         if (rc != 0)
+             throw ZlinkException.CreateConfigException((ConfigResult)rc);
+     }
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketBase.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketBase.cs
+index b2ca64c5bc..6ef21ddf53 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketBase.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketBase.cs
+@@ -21,7 +21,7 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
+         Options = new CommonSocketOptions(this);
+     }
+ 
+-    internal IntPtr Handle => Kernel.Handle;
++    internal SocketHandle.Call Reserve() => Kernel.Reserve();
+     internal SocketKernel Kernel { get; }
+ 
+     public CommonSocketOptions Options { get; }
+@@ -56,7 +56,8 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
+         if (keyPath == null)
+             throw new ArgumentNullException(nameof(keyPath));
+ 
+-        var rc = NativeMethods.zlink_set_tls_server(Handle, certPath, keyPath,
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_set_tls_server(call.Handle, certPath, keyPath,
+             requireClientCert ? 1 : 0);
+         if (rc != 0)
+             throw ZlinkException.CreateConfigException((ConfigResult)rc);
+@@ -70,7 +71,8 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
+         if (hostname == null)
+             throw new ArgumentNullException(nameof(hostname));
+ 
+-        var rc = NativeMethods.zlink_set_tls_client(Handle, caCertPath, hostname,
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_set_tls_client(call.Handle, caCertPath, hostname,
+             trustSystem ? 1 : 0);
+         if (rc != 0)
+             throw ZlinkException.CreateConfigException((ConfigResult)rc);
+@@ -78,7 +80,8 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
+ 
+     public void SetReceiveFlowState(ReceiveFlowState state)
+     {
+-        var rc = NativeMethods.zlink_socket_set_receive_flow_state(Handle,
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_socket_set_receive_flow_state(call.Handle,
+             (int)state);
+         ZlinkException.ThrowConfigIfError(rc);
+     }
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketCallbacks.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketCallbacks.cs
+index e4a532d21d..b68a8f6b25 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketCallbacks.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketCallbacks.cs
+@@ -15,17 +15,6 @@ internal static class SocketInterop
+         return concrete;
+     }
+ 
+-    internal static IntPtr RequirePollableHandle(IZlinkSocket socket,
+-        string paramName)
+-    {
+-        if (socket == null)
+-            throw new ArgumentNullException(paramName);
+-        if (socket is not SocketBase concrete)
+-            throw new ArgumentException(
+-                "socket must be a concrete zlink socket instance", paramName);
+-        return concrete.Handle;
+-    }
+-
+     internal static DealerSocket RequireDealerSocket(IDealerSocket socket,
+         string paramName)
+     {
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketHandle.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketHandle.cs
+index 285f2a1c7b..d02d6bdc75 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketHandle.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketHandle.cs
+@@ -1,19 +1,27 @@
+ // SPDX-License-Identifier: MPL-2.0
+ 
++using System.Runtime.CompilerServices;
+ using Systems.Zlink.Runtime.Native;
+ 
+ namespace Systems.Zlink.Runtime.Sockets.Internal;
+ 
+ internal sealed class SocketHandle : IDisposable
+ {
+-    private IntPtr _handle;
++    private const long Closing = long.MinValue;
++    private const long Closed = 1L << 62;
++    private readonly IntPtr _handle;
++    // A reservation must root the object that owns finalization as well.
++    private readonly SocketKernel _lifetimeOwner;
++    // Low bits count native calls. Only an idle owner can accept close.
++    private long _state;
+     private Context? _context;
+ 
+-    public SocketHandle(Context context, SocketType type)
++    public SocketHandle(SocketKernel lifetimeOwner, Context context, SocketType type)
+     {
+         if (context == null)
+             throw new ArgumentNullException(nameof(context));
+ 
++        _lifetimeOwner = lifetimeOwner;
+         _context = context;
+         _handle = NativeMethods.zlink_socket(context.Handle, (int)type);
+         if (_handle == IntPtr.Zero)
+@@ -27,31 +35,94 @@ internal sealed class SocketHandle : IDisposable
+     public void Dispose()
+     {
+         var context = _context;
+-        if (_handle == IntPtr.Zero)
++        var state = Interlocked.CompareExchange(ref _state, Closing, 0);
++        if (state != 0)
+         {
+-            _context = null;
+-            GC.KeepAlive(context);
+-            return;
++            if ((state & Closed) != 0)
++                return;
++            throw new ZlinkCloseException(CloseResult.Busy, (int)ErrorCode.EBusy);
+         }
+ 
++        var result = CloseResult.InternalError;
+         try
+         {
+-            var rc = NativeMethods.zlink_close(_handle);
+-            if (rc != 0)
+-                throw ZlinkException.CreateCloseException((CloseResult)rc);
+-            _handle = IntPtr.Zero;
+-            _context = null;
++            result = (CloseResult)NativeMethods.zlink_close(_handle);
++            if (result != CloseResult.Ok)
++                throw ZlinkException.CreateCloseException(result);
+         }
+         finally
+         {
++            // Publish Core's outcome before reservations resume. A rejected
++            // close leaves the handle usable; an accepted close never does.
++            if (result is CloseResult.Ok or CloseResult.Shutdown)
++            {
++                _context = null;
++                Volatile.Write(ref _state, Closed);
++            }
++            else
++                Volatile.Write(ref _state, 0);
+             GC.KeepAlive(context);
+         }
+     }
+ 
+-    public IntPtr DangerousGetHandle()
++    internal bool TryReserve(out Call call)
+     {
+-        if (_handle == IntPtr.Zero)
+-            throw new ObjectDisposedException(nameof(SocketHandle));
+-        return _handle;
++        var spin = new SpinWait();
++        var state = Volatile.Read(ref _state);
++        while (true)
++        {
++            if ((state & Closed) != 0)
++            {
++                call = default;
++                return false;
++            }
++            if ((state & Closing) != 0)
++            {
++                // Closing may still return BUSY. Observe its published result
++                // before deciding whether this call is terminated.
++                spin.SpinOnce();
++                state = Volatile.Read(ref _state);
++                continue;
++            }
++            var observed = Interlocked.CompareExchange(ref _state,
++                state + 1, state);
++            if (observed == state)
++            {
++                call = new Call(this);
++                return true;
++            }
++            state = observed;
++        }
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    internal Call Reserve(bool submit = false)
++    {
++        if (TryReserve(out var call))
++            return call;
++        if (submit)
++            throw new ZlinkSubmitException(SubmitResult.Terminated,
++                (int)ErrorCode.EShutdown);
++        throw new ObjectDisposedException(nameof(SocketHandle));
++    }
++
++    internal readonly struct Call : IDisposable
++    {
++        private readonly SocketHandle _owner;
++
++        internal Call(SocketHandle owner)
++        {
++            _owner = owner;
++        }
++
++        internal IntPtr Handle => _owner._handle;
++
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++        public void Dispose()
++        {
++            Interlocked.Decrement(ref _owner._state);
++            // Keep the finalizing owner alive through the last native use.
++            GC.KeepAlive(_owner._lifetimeOwner);
++        }
+     }
+ }
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Connection.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Connection.cs
+index a2424656ad..55c8bfbdc0 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Connection.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Connection.cs
+@@ -11,7 +11,8 @@ internal sealed partial class SocketKernel : IDisposable
+     {
+         BoundaryValidation.ValidateFixedUtf8(address, nameof(address));
+ 
+-        var rc = NativeMethods.zlink_bind(Handle, address);
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_bind(call.Handle, address);
+         if (rc != 0)
+             throw ZlinkException.CreateBindException((BindResult)rc);
+     }
+@@ -20,7 +21,8 @@ internal sealed partial class SocketKernel : IDisposable
+     {
+         BoundaryValidation.ValidateFixedUtf8(address, nameof(address));
+ 
+-        var rc = NativeMethods.zlink_connect(Handle, address);
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_connect(call.Handle, address);
+         if (rc != 0)
+             throw ZlinkException.CreateConnectException((ConnectResult)rc);
+     }
+@@ -29,7 +31,8 @@ internal sealed partial class SocketKernel : IDisposable
+     {
+         BoundaryValidation.ValidateFixedUtf8(address, nameof(address));
+ 
+-        var rc = NativeMethods.zlink_unbind(Handle, address);
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_unbind(call.Handle, address);
+         if (rc != 0)
+             throw ZlinkException.CreateConnectException((ConnectResult)rc);
+     }
+@@ -38,7 +41,8 @@ internal sealed partial class SocketKernel : IDisposable
+     {
+         BoundaryValidation.ValidateFixedUtf8(address, nameof(address));
+ 
+-        var rc = NativeMethods.zlink_disconnect(Handle, address);
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_disconnect(call.Handle, address);
+         if (rc != 0)
+             throw ZlinkException.CreateConnectException((ConnectResult)rc);
+     }
+@@ -46,7 +50,8 @@ internal sealed partial class SocketKernel : IDisposable
+     public void DisconnectRid(RoutingId peerRid)
+     {
+         var nativeRid = peerRid.ToNative();
+-        var rc = NativeMethods.zlink_disconnect_rid(Handle, ref nativeRid);
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_disconnect_rid(call.Handle, ref nativeRid);
+         ZlinkException.ThrowConnectIfError(rc);
+     }
+ 
+@@ -54,13 +59,14 @@ internal sealed partial class SocketKernel : IDisposable
+     {
+         // Core ROUTER §10.1: BUFFER_TOO_SMALL reports the required row count
+         // and keeps POLLROUTE readiness, so retry with that capacity.
++        using var call = Reserve();
+         var rows = new ZlinkRouterRoute[InitialSnapshotRowCapacity];
+         while (true)
+         {
+             int rc;
+             nuint count;
+             fixed (ZlinkRouterRoute* routes = rows)
+-                rc = NativeMethods.zlink_router_routes_snapshot(Handle, routes,
++                rc = NativeMethods.zlink_router_routes_snapshot(call.Handle, routes,
+                     (nuint)rows.Length, out count);
+             if ((ConfigResult)rc == ConfigResult.BufferTooSmall
+                 && count > (nuint)rows.Length)
+@@ -82,6 +88,7 @@ internal sealed partial class SocketKernel : IDisposable
+ 
+     public unsafe IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot()
+     {
++        using var call = Reserve();
+         var rows = new ZlinkConnectionAttempt[InitialSnapshotRowCapacity];
+         var endpointBytes = new byte[InitialConnectionEndpointBytesCapacity];
+         while (true)
+@@ -92,7 +99,7 @@ internal sealed partial class SocketKernel : IDisposable
+             fixed (ZlinkConnectionAttempt* attempts = rows)
+             fixed (byte* endpoints = endpointBytes)
+                 rc = NativeMethods.zlink_socket_connection_attempts_snapshot(
+-                    Handle, attempts, (nuint)rows.Length, out count,
++                    call.Handle, attempts, (nuint)rows.Length, out count,
+                     endpoints, (nuint)endpointBytes.Length, out bytesUsed);
+             // Core reports both required capacities without consuming readiness.
+             // Only the final successful call supplies a coherent row/arena pair.
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Lifecycle.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Lifecycle.cs
+index 2680116610..b50b36174c 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Lifecycle.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Lifecycle.cs
+@@ -35,13 +35,19 @@ internal sealed partial class SocketKernel : IDisposable
+         {
+             _handle.Dispose();
+         }
++        catch (ZlinkCloseException exception) when (
++            exception.Result == ZlinkCloseException.ErrorCode.Shutdown)
++        {
++            _completion?.FailLifecycle();
++            throw;
++        }
+         catch
+         {
+             if (finalizing)
+-                _completion?.CompleteClose();
++                _completion?.FailLifecycle();
+             throw;
+         }
+-        _completion?.CompleteClose();
++        _completion?.FailLifecycle();
+         if (!finalizing)
+             GC.SuppressFinalize(this);
+     }
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.MultipartSubmit.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.MultipartSubmit.cs
+index 8a35d8a0be..c527af9f76 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.MultipartSubmit.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.MultipartSubmit.cs
+@@ -84,21 +84,24 @@ internal sealed partial class SocketKernel
+                 ? PublishTopicEncoding.GetNullTerminatedUtf8(topic!)
+                 : null;
+             int rc;
+-            if (kind == MultipartSubmitKind.Publish)
+-                fixed (byte* topicPtr = publishTopicUtf8)
+-                {
+-                    rc = NativeMethods.zlink_publish_utf8(Handle,
+-                        topicPtr, ref nativeParts[0], (nuint)built, flags);
+-                }
+-            else
+-                rc = kind switch
+-                {
+-                    MultipartSubmitKind.Send => NativeMethods.zlink_send(
+-                        Handle, ref nativeParts[0], (nuint)built, flags),
+-                    MultipartSubmitKind.TargetedSend => NativeMethods.zlink_send_rid(
+-                        Handle, ref routingId, ref nativeParts[0], (nuint)built, flags),
+-                    _ => throw new InvalidOperationException()
+-                };
++            using (var call = _handle.Reserve(submit: true))
++            {
++                if (kind == MultipartSubmitKind.Publish)
++                    fixed (byte* topicPtr = publishTopicUtf8)
++                    {
++                        rc = NativeMethods.zlink_publish_utf8(call.Handle,
++                            topicPtr, ref nativeParts[0], (nuint)built, flags);
++                    }
++                else
++                    rc = kind switch
++                    {
++                        MultipartSubmitKind.Send => NativeMethods.zlink_send(
++                            call.Handle, ref nativeParts[0], (nuint)built, flags),
++                        MultipartSubmitKind.TargetedSend => NativeMethods.zlink_send_rid(
++                            call.Handle, ref routingId, ref nativeParts[0], (nuint)built, flags),
++                        _ => throw new InvalidOperationException()
++                    };
++            }
+ 
+             // Every returned Core result consumes the entire native record.
+             consumed = built;
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Options.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Options.cs
+index d94612e355..427317fab4 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Options.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Options.cs
+@@ -88,7 +88,8 @@ internal sealed partial class SocketKernel : IDisposable
+             Events = (uint)events,
+             MonitorHwmBytes = monitorHwmBytes
+         };
+-        var handle = NativeMethods.zlink_socket_monitor_open(Handle, in options);
++        using var call = Reserve();
++        var handle = NativeMethods.zlink_socket_monitor_open(call.Handle, in options);
+         if (handle == IntPtr.Zero)
+             throw ZlinkException.CreateConfigException(
+                 NativeMethods.GetLastPInvokeError());
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveCore.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveCore.cs
+index efef1886ff..ff5d06ea45 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveCore.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveCore.cs
+@@ -32,6 +32,7 @@ internal sealed partial class SocketKernel
+         out Message? singlePart, out MultipartMessageCollection? parts,
+         bool allowNoData)
+     {
++        using var call = Reserve();
+         var nativeParts = ArrayPool<ZlinkMsg>.Shared.Rent(
+             NativeMessageParts.StackPartLimit);
+         var receivedParts = Array.Empty<Message>();
+@@ -57,25 +58,25 @@ internal sealed partial class SocketKernel
+                     if ((flags & DontWaitFlag) != 0)
+                     {
+                         fixed (byte* topicId = topicBuffer)
+-                            rc = NativeMethods.zlink_subscribe_dont_wait(Handle,
++                            rc = NativeMethods.zlink_subscribe_dont_wait(call.Handle,
+                                 out sourceRoutingId, topicId,
+                                 (nuint)topicBuffer!.Length, out nativeTopicLength,
+                                 ref nativeParts[0], (nuint)nativeParts.Length,
+                                 out count, flags);
+                     }
+                     else
+-                        rc = NativeMethods.zlink_subscribe(Handle,
++                        rc = NativeMethods.zlink_subscribe(call.Handle,
+                             out sourceRoutingId, topicBuffer!,
+                             (nuint)topicBuffer!.Length, out nativeTopicLength,
+                             ref nativeParts[0], (nuint)nativeParts.Length,
+                             out count, flags);
+                 }
+                 else if (captureRoutingId && _policy.UsesRouterRoutedReceiveEnvelope)
+-                    rc = NativeMethods.zlink_router_recv(Handle,
++                    rc = NativeMethods.zlink_router_recv(call.Handle,
+                         out sourceRoutingId, out replyToken, ref nativeParts[0],
+                         (nuint)nativeParts.Length, out count, flags);
+                 else
+-                    rc = NativeMethods.zlink_recv(Handle, out sourceRoutingId,
++                    rc = NativeMethods.zlink_recv(call.Handle, out sourceRoutingId,
+                         ref nativeParts[0], (nuint)nativeParts.Length, out count,
+                         flags);
+ 
+@@ -116,7 +117,7 @@ internal sealed partial class SocketKernel
+                 if (subscription == null && captureRoutingId
+                     && _policy.UsesRouterRoutedReceiveEnvelope)
+                     routeGeneration =
+-                        NativeMethods.zlink_router_recv_route_generation(Handle);
++                        NativeMethods.zlink_router_recv_route_generation(call.Handle);
+                 // Basic receive deliberately avoids allocating or copying RID metadata.
+                 if (captureRoutingId || subscription != null)
+                     routingId = RoutingIdSnapshot.FromPointer(sourceRoutingId);
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveSubscription.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveSubscription.cs
+index 358440129d..c591ef4475 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveSubscription.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveSubscription.cs
+@@ -62,6 +62,7 @@ internal sealed partial class SocketKernel : IDisposable
+     private bool ReceiveSubscriptionEventInto(SubscriptionEvent result,
+         int flags)
+     {
++        using var call = Reserve();
+         var topicBuffer = ArrayPool<byte>.Shared.Rent(InitialTopicBufferSize);
+         try
+         {
+@@ -71,7 +72,7 @@ internal sealed partial class SocketKernel : IDisposable
+             nuint topicLength;
+             while (true)
+             {
+-                rc = NativeMethods.zlink_xpub_recv(Handle,
++                rc = NativeMethods.zlink_xpub_recv(call.Handle,
+                     out sourceRoutingId, out subscribedInt, topicBuffer,
+                     (nuint)topicBuffer.Length, out topicLength, flags);
+                 if (rc == 0)
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Send.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Send.cs
+index b349be9c36..040b3edcc8 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Send.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Send.cs
+@@ -289,7 +289,8 @@ internal sealed partial class SocketKernel : IDisposable
+         BoundaryValidation.ValidateTopicOrFilterUtf8(topicOrPattern,
+             nameof(topicOrPattern));
+ 
+-        var rc = NativeMethods.zlink_set_subscription(Handle, topicOrPattern);
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_set_subscription(call.Handle, topicOrPattern);
+         ZlinkException.ThrowConfigIfError(rc);
+     }
+ 
+@@ -300,7 +301,8 @@ internal sealed partial class SocketKernel : IDisposable
+         BoundaryValidation.ValidateTopicOrFilterUtf8(topicOrPattern,
+             nameof(topicOrPattern));
+ 
+-        var rc = NativeMethods.zlink_unset_subscription(Handle, topicOrPattern);
++        using var call = Reserve();
++        var rc = NativeMethods.zlink_unset_subscription(call.Handle, topicOrPattern);
+         ZlinkException.ThrowConfigIfError(rc);
+     }
+ }
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.SendCore.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.SendCore.cs
+index e7bb1d0863..f8744b9086 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.SendCore.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.SendCore.cs
+@@ -10,7 +10,7 @@ internal sealed partial class SocketKernel
+     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+     private void SendSingleCore(Message message, int flags)
+     {
+-        var submitter = new SendSingleSubmitter(Handle, flags);
++        var submitter = new SendSingleSubmitter(_handle, flags);
+         var rc = SinglePartSubmit.Submit(message, ref submitter);
+         if (rc != 0)
+             throw ZlinkException.CreateSubmitException((SubmitResult)rc);
+@@ -19,14 +19,14 @@ internal sealed partial class SocketKernel
+     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+     private SendResult SendSingleResultCore(Message message, int flags)
+     {
+-        var submitter = new SendSingleSubmitter(Handle, flags);
++        var submitter = new SendSingleSubmitter(_handle, flags);
+         return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
+     }
+ 
+     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+     private SendResult SendSingleNoWaitResultCore(Message message)
+     {
+-        var submitter = new SendSingleNoWaitSubmitter(Handle);
++        var submitter = new SendSingleNoWaitSubmitter(_handle);
+         return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
+     }
+ 
+@@ -42,7 +42,7 @@ internal sealed partial class SocketKernel
+     {
+         fixed (byte* topicPtr = topicUtf8)
+         {
+-            var submitter = new PublishSingleSubmitter(Handle, topicPtr, flags);
++            var submitter = new PublishSingleSubmitter(_handle, topicPtr, flags);
+             var rc = SinglePartSubmit.Submit(message, ref submitter);
+             if (rc != 0)
+                 throw ZlinkException.CreateSubmitException((SubmitResult)rc);
+@@ -60,7 +60,7 @@ internal sealed partial class SocketKernel
+     {
+         fixed (byte* topicPtr = topicUtf8)
+         {
+-            var submitter = new PublishSingleSubmitter(Handle, topicPtr,
++            var submitter = new PublishSingleSubmitter(_handle, topicPtr,
+                 DontWaitFlag);
+             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
+         }
+@@ -77,7 +77,7 @@ internal sealed partial class SocketKernel
+     {
+         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
+         {
+-            var submitter = new TargetedSendSingleSubmitter(Handle, routingIdPtr,
++            var submitter = new TargetedSendSingleSubmitter(_handle, routingIdPtr,
+                 flags);
+             var rc = SinglePartSubmit.Submit(message, ref submitter);
+             if (rc != 0)
+@@ -91,7 +91,7 @@ internal sealed partial class SocketKernel
+     {
+         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
+         {
+-            var submitter = new TargetedSendSingleSubmitter(Handle, routingIdPtr,
++            var submitter = new TargetedSendSingleSubmitter(_handle, routingIdPtr,
+                 flags);
+             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
+         }
+@@ -102,7 +102,7 @@ internal sealed partial class SocketKernel
+     {
+         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
+         {
+-            var submitter = new TargetedSendSingleNoWaitSubmitter(Handle,
++            var submitter = new TargetedSendSingleNoWaitSubmitter(_handle,
+                 routingIdPtr);
+             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
+         }
+@@ -123,10 +123,10 @@ internal sealed partial class SocketKernel
+     private unsafe readonly struct SendSingleSubmitter
+         : INativeSinglePartSubmitter<SendSingleSubmitter>
+     {
+-        private readonly IntPtr _handle;
++        private readonly SocketHandle _handle;
+         private readonly int _flags;
+ 
+-        internal SendSingleSubmitter(IntPtr handle, int flags)
++        internal SendSingleSubmitter(SocketHandle handle, int flags)
+         {
+             _handle = handle;
+             _flags = flags;
+@@ -136,7 +136,8 @@ internal sealed partial class SocketKernel
+         public static int Submit(ref SendSingleSubmitter submitter,
+             ref ZlinkMsg nativePart)
+         {
+-            return NativeMethods.zlink_send(submitter._handle,
++            using var call = submitter._handle.Reserve(submit: true);
++            return NativeMethods.zlink_send(call.Handle,
+                 ref nativePart, 1, submitter._flags);
+         }
+     }
+@@ -144,9 +145,9 @@ internal sealed partial class SocketKernel
+     private unsafe readonly struct SendSingleNoWaitSubmitter
+         : INativeSinglePartSubmitter<SendSingleNoWaitSubmitter>
+     {
+-        private readonly IntPtr _handle;
++        private readonly SocketHandle _handle;
+ 
+-        internal SendSingleNoWaitSubmitter(IntPtr handle)
++        internal SendSingleNoWaitSubmitter(SocketHandle handle)
+         {
+             _handle = handle;
+         }
+@@ -155,8 +156,9 @@ internal sealed partial class SocketKernel
+         public static int Submit(ref SendSingleNoWaitSubmitter submitter,
+             ref ZlinkMsg nativePart)
+         {
++            using var call = submitter._handle.Reserve(submit: true);
+             // DONT_WAIT-only critical variant: contractually non-blocking.
+-            return NativeMethods.zlink_send_nowait(submitter._handle,
++            return NativeMethods.zlink_send_nowait(call.Handle,
+                 ref nativePart, 1, DontWaitFlag);
+         }
+     }
+@@ -164,11 +166,11 @@ internal sealed partial class SocketKernel
+     private unsafe readonly struct PublishSingleSubmitter
+         : INativeSinglePartSubmitter<PublishSingleSubmitter>
+     {
+-        private readonly IntPtr _handle;
++        private readonly SocketHandle _handle;
+         private readonly byte* _topicPtr;
+         private readonly int _flags;
+ 
+-        internal PublishSingleSubmitter(IntPtr handle, byte* topicPtr,
++        internal PublishSingleSubmitter(SocketHandle handle, byte* topicPtr,
+             int flags)
+         {
+             _handle = handle;
+@@ -180,7 +182,8 @@ internal sealed partial class SocketKernel
+         public static int Submit(ref PublishSingleSubmitter submitter,
+             ref ZlinkMsg nativePart)
+         {
+-            return NativeMethods.zlink_publish_utf8(submitter._handle,
++            using var call = submitter._handle.Reserve(submit: true);
++            return NativeMethods.zlink_publish_utf8(call.Handle,
+                 submitter._topicPtr, ref nativePart, 1, submitter._flags);
+         }
+     }
+@@ -188,11 +191,11 @@ internal sealed partial class SocketKernel
+     private unsafe readonly struct TargetedSendSingleSubmitter
+         : INativeSinglePartSubmitter<TargetedSendSingleSubmitter>
+     {
+-        private readonly IntPtr _handle;
++        private readonly SocketHandle _handle;
+         private readonly ZlinkRoutingId* _routingId;
+         private readonly int _flags;
+ 
+-        internal TargetedSendSingleSubmitter(IntPtr handle,
++        internal TargetedSendSingleSubmitter(SocketHandle handle,
+             ZlinkRoutingId* routingId, int flags)
+         {
+             _handle = handle;
+@@ -204,10 +207,11 @@ internal sealed partial class SocketKernel
+         public static int Submit(ref TargetedSendSingleSubmitter submitter,
+             ref ZlinkMsg nativePart)
+         {
++            using var call = submitter._handle.Reserve(submit: true);
+             return (submitter._flags & DontWaitFlag) != 0
+-                ? NativeMethods.zlink_send_rid_nowait(submitter._handle,
++                ? NativeMethods.zlink_send_rid_nowait(call.Handle,
+                     ref *submitter._routingId, ref nativePart, 1, submitter._flags)
+-                : NativeMethods.zlink_send_rid(submitter._handle,
++                : NativeMethods.zlink_send_rid(call.Handle,
+                     ref *submitter._routingId, ref nativePart, 1,
+                     submitter._flags);
+         }
+@@ -216,10 +220,10 @@ internal sealed partial class SocketKernel
+     private unsafe readonly struct TargetedSendSingleNoWaitSubmitter
+         : INativeSinglePartSubmitter<TargetedSendSingleNoWaitSubmitter>
+     {
+-        private readonly IntPtr _handle;
++        private readonly SocketHandle _handle;
+         private readonly ZlinkRoutingId* _routingId;
+ 
+-        internal TargetedSendSingleNoWaitSubmitter(IntPtr handle,
++        internal TargetedSendSingleNoWaitSubmitter(SocketHandle handle,
+             ZlinkRoutingId* routingId)
+         {
+             _handle = handle;
+@@ -230,7 +234,8 @@ internal sealed partial class SocketKernel
+         public static int Submit(ref TargetedSendSingleNoWaitSubmitter submitter,
+             ref ZlinkMsg nativePart)
+         {
+-            return NativeMethods.zlink_send_rid_nowait(submitter._handle,
++            using var call = submitter._handle.Reserve(submit: true);
++            return NativeMethods.zlink_send_rid_nowait(call.Handle,
+                 ref *submitter._routingId, ref nativePart, 1, DontWaitFlag);
+         }
+     }
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Stream.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Stream.cs
+index 17abc0a9b2..5130169133 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Stream.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.Stream.cs
+@@ -17,6 +17,7 @@ internal sealed partial class SocketKernel
+         var bodyInitialized = false;
+         try
+         {
++            using var call = Reserve();
+             var rc = NativeMethods.zlink_msg_init(ref header);
+             if (rc != 0)
+                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
+@@ -27,7 +28,7 @@ internal sealed partial class SocketKernel
+                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
+             bodyInitialized = true;
+ 
+-            rc = NativeMethods.zlink_stream_recv_packet(Handle,
++            rc = NativeMethods.zlink_stream_recv_packet(call.Handle,
+                 out var sourceRoutingId, ref header, ref body, (int)flags);
+             if ((RecvResult)rc == RecvResult.NoData
+                 && (flags & RecvFlags.DontWait) != 0)
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.cs
+index 0e6c718530..b9702d8471 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.cs
+@@ -16,13 +16,13 @@ internal sealed partial class SocketKernel : IDisposable
+ 
+     public SocketKernel(Context context, SocketType type)
+     {
+-        _handle = new SocketHandle(context, type);
++        _handle = new SocketHandle(this, context, type);
+         _options = new SocketOptionAccessor(_handle);
+         _policy = new SocketTypePolicy(type);
+         _completion = CreateCompletionOwner(type);
+     }
+ 
+-    public IntPtr Handle => _handle.DangerousGetHandle();
++    internal SocketHandle.Call Reserve() => _handle.Reserve();
+     public SocketType Type => _policy.SocketType;
+     /// <summary>The socket-local pull-completion owner.</summary>
+     internal CompletionOwner Completion
+@@ -44,7 +44,7 @@ internal sealed partial class SocketKernel : IDisposable
+     {
+         return type is SocketType.Pair or SocketType.Dealer
+             or SocketType.Router or SocketType.Stream
+-            ? new CompletionOwner(Handle, type)
++            ? new CompletionOwner(_handle, type)
+             : null;
+     }
+ 
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketOptionAccessor.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketOptionAccessor.cs
+index 557aa809a1..22686944a0 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketOptionAccessor.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SocketOptionAccessor.cs
+@@ -41,9 +41,10 @@ internal sealed class SocketOptionAccessor
+ 
+     public unsafe void SetBytes(SocketOption option, ReadOnlySpan<byte> value)
+     {
+-        var handle = _handle.DangerousGetHandle();
+         if (option == SocketOption.RoutingId)
+         {
++            using var call = _handle.Reserve();
++            var handle = call.Handle;
+             int rc;
+             fixed (byte* ptr = value)
+             {
+@@ -120,9 +121,10 @@ internal sealed class SocketOptionAccessor
+ 
+     public byte[] GetBytes(SocketOption option, int initialSize = 256)
+     {
+-        var handle = _handle.DangerousGetHandle();
+         if (option == SocketOption.RoutingId)
+         {
++            using var call = _handle.Reserve();
++            var handle = call.Handle;
+             var rc = NativeMethods.zlink_get_routing_id(handle, out var routingId);
+             ZlinkException.ThrowConfigIfError(rc);
+             return NativeHelpers.ReadRoutingId(ref routingId);
+@@ -181,22 +183,10 @@ internal sealed class SocketOptionAccessor
+         return Encoding.UTF8.GetString(bytes, 0, len);
+     }
+ 
+-    public static SocketType ReadSocketType(IntPtr handle)
+-    {
+-        unsafe
+-        {
+-            var value = 0;
+-            var size = (nuint)sizeof(int);
+-            var rc = NativeMethods.zlink_get_option(handle, (int)SocketOption.Type,
+-                new IntPtr(&value), ref size);
+-            ZlinkException.ThrowConfigIfError(rc);
+-            return (SocketType)value;
+-        }
+-    }
+-
+     private int SetCore(SocketOption option, IntPtr value, nuint length)
+     {
+-        var handle = _handle.DangerousGetHandle();
++        using var call = _handle.Reserve();
++        var handle = call.Handle;
+         var code = (int)option;
+         if ((code & 0xFF00) == 0x3100)
+             return NativeMethods.zlink_set_router_option(handle, code, value,
+@@ -218,7 +208,8 @@ internal sealed class SocketOptionAccessor
+ 
+     private int GetCore(SocketOption option, IntPtr value, ref nuint length)
+     {
+-        var handle = _handle.DangerousGetHandle();
++        using var call = _handle.Reserve();
++        var handle = call.Handle;
+         var code = (int)option;
+         if ((code & 0xFF00) == 0x3100)
+             return NativeMethods.zlink_get_router_option(handle, code, value,
+diff --git a/bindings/dotnet/src/Zlink/Runtime/Sockets/SubscriberSocketBase.cs b/bindings/dotnet/src/Zlink/Runtime/Sockets/SubscriberSocketBase.cs
+index 65e0fd4779..12655014d7 100644
+--- a/bindings/dotnet/src/Zlink/Runtime/Sockets/SubscriberSocketBase.cs
++++ b/bindings/dotnet/src/Zlink/Runtime/Sockets/SubscriberSocketBase.cs
+@@ -30,7 +30,8 @@ internal abstract class SubscriberSocketBase : ConnectableSocketBase, ISubscribe
+ 
+     public SubscriptionEntry? SubscriptionAt(int index)
+     {
+-        return SubscriptionIntrospection.At(Handle, index);
++        using var call = Reserve();
++        return SubscriptionIntrospection.At(call.Handle, index);
+     }
+ 
+     public bool Subscribe(TopicMessage result, RecvFlags flags = RecvFlags.None)
+diff --git a/bindings/dotnet/tests/Zlink.Tests/test_optimization_guard.cs b/bindings/dotnet/tests/Zlink.Tests/test_optimization_guard.cs
+index b7fdb067c4..d5bcbeb991 100644
+--- a/bindings/dotnet/tests/Zlink.Tests/test_optimization_guard.cs
++++ b/bindings/dotnet/tests/Zlink.Tests/test_optimization_guard.cs
+@@ -100,7 +100,9 @@ public sealed class test_optimization_guard
+             StringComparison.Ordinal);
+         Assert.Contains("DrainInline(entry);", source,
+             StringComparison.Ordinal);
+-        Assert.Contains("zlink_completion_recv(_handle,", source,
++        Assert.Contains("NativeMethods.zlink_completion_recv(", source,
++            StringComparison.Ordinal);
++        Assert.DoesNotContain("private readonly IntPtr _handle;", source,
+             StringComparison.Ordinal);
+     }
+ 
+diff --git a/bindings/dotnet/tests/Zlink.Tests/test_socket_concurrency.cs b/bindings/dotnet/tests/Zlink.Tests/test_socket_concurrency.cs
+index b3369a8ece..c400918e47 100644
+--- a/bindings/dotnet/tests/Zlink.Tests/test_socket_concurrency.cs
++++ b/bindings/dotnet/tests/Zlink.Tests/test_socket_concurrency.cs
+@@ -193,7 +193,8 @@ public sealed class test_socket_concurrency
+             {
+                 unexpected.Enqueue(exception);
+             }
+-        }) { IsBackground = true };
++        })
++        { IsBackground = true };
+         receiveThread.Start();
+ 
+         Thread[] producers = Enumerable.Range(0, producerCount)
+@@ -244,7 +245,8 @@ public sealed class test_socket_concurrency
+                 {
+                     unexpected.Enqueue(exception);
+                 }
+-            }) { IsBackground = true })
++            })
++            { IsBackground = true })
+             .ToArray();
+ 
+         foreach (Thread producer in producers)
+@@ -267,7 +269,7 @@ public sealed class test_socket_concurrency
+ 
+ 
+     [Fact]
+-    public void single_multipart_and_close_race_exposes_only_core_outcomes()
++    public void single_multipart_and_close_race_exposes_only_success_or_terminated()
+     {
+         if (!CoreTestSupport.IsNativeAvailable())
+             return;
+@@ -291,7 +293,6 @@ public sealed class test_socket_concurrency
+         var unexpected = new ConcurrentQueue<Exception>();
+         var attempted = 0;
+         var succeeded = 0;
+-        var multipartRejected = 0;
+         var shutdown = 0;
+         var closeBusy = 0;
+         var closeAccepted = 0;
+@@ -316,19 +317,7 @@ public sealed class test_socket_concurrency
+                         Interlocked.Increment(ref succeeded);
+                     }
+                     catch (ZlinkSubmitException exception) when (
+-                        exception.Result ==
+-                        ZlinkSubmitException.ErrorCode.InvalidArgument)
+-                    {
+-                        Interlocked.Increment(ref multipartRejected);
+-                    }
+-                    catch (ZlinkSubmitException exception) when (
+-                        exception.Result is ZlinkSubmitException.ErrorCode.Terminated
+-                            or ZlinkSubmitException.ErrorCode.InvalidHandle
+-                            or ZlinkSubmitException.ErrorCode.NotConnected)
+-                    {
+-                        Interlocked.Increment(ref shutdown);
+-                    }
+-                    catch (ObjectDisposedException)
++                        exception.Result == ZlinkSubmitException.ErrorCode.Terminated)
+                     {
+                         Interlocked.Increment(ref shutdown);
+                     }
+@@ -342,7 +331,8 @@ public sealed class test_socket_concurrency
+                         second?.Dispose();
+                     }
+                 }
+-            }) { IsBackground = true })
++            })
++            { IsBackground = true })
+             .ToArray();
+ 
+         var closeThread = new Thread(() =>
+@@ -370,7 +360,8 @@ public sealed class test_socket_concurrency
+                     return;
+                 }
+             }
+-        }) { IsBackground = true };
++        })
++        { IsBackground = true };
+ 
+         foreach (Thread producer in producers)
+             producer.Start();
+@@ -381,12 +372,11 @@ public sealed class test_socket_concurrency
+         Assert.True(closeThread.Join(TimeSpan.FromSeconds(5)));
+ 
+         _output.WriteLine(
+-            $"attempts={totalAttempts} succeeded={succeeded} multipart_rejected={multipartRejected} shutdown={shutdown} close_busy={closeBusy} close_accepted={closeAccepted}");
++            $"attempts={totalAttempts} succeeded={succeeded} shutdown={shutdown} close_busy={closeBusy} close_accepted={closeAccepted}");
+         Assert.Empty(unexpected);
+         Assert.Equal(totalAttempts,
+-            succeeded + multipartRejected + shutdown);
++            succeeded + shutdown);
+         Assert.True(succeeded > 0);
+-        Assert.True(multipartRejected >= 0);
+         Assert.Equal(1, closeAccepted);
+     }
+ 
+diff --git a/bindings/dotnet/tests/Zlink.Tests/test_tokenless_backpressure.cs b/bindings/dotnet/tests/Zlink.Tests/test_tokenless_backpressure.cs
+index c774c89433..2095c1e910 100644
+--- a/bindings/dotnet/tests/Zlink.Tests/test_tokenless_backpressure.cs
++++ b/bindings/dotnet/tests/Zlink.Tests/test_tokenless_backpressure.cs
+@@ -16,12 +16,13 @@ public sealed class test_tokenless_backpressure
+             "tokenless-reservation-limit"));
+ 
+         const int reservationLimit = 65_536;
+-        var pending = new Task<IReadOnlyList<Message>>[reservationLimit];
++        var pending = new RequestSubmission[reservationLimit];
+         for (var i = 0; i < pending.Length; i++)
+         {
+             using Message part = Message.From("reserved");
+-            pending[i] = dealer.Request().Message(part).Async().Reply;
+-            Assert.False(pending[i].IsCompleted);
++            pending[i] = dealer.Request().Message(part).Async();
++            Assert.False(pending[i].Admitted.IsCompleted);
++            Assert.False(pending[i].Reply.IsCompleted);
+         }
+ 
+         try
+@@ -41,10 +42,14 @@ public sealed class test_tokenless_backpressure
+         finally
+         {
+             dealer.Close();
+-            foreach (Task<IReadOnlyList<Message>> task in pending)
++            foreach (RequestSubmission submission in pending)
+             {
++                ZlinkSubmitException admissionError = await Assert.ThrowsAsync<
++                    ZlinkSubmitException>(() => submission.Admitted);
++                Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated,
++                    admissionError.Result);
+                 ZlinkSubmitException error = await Assert.ThrowsAsync<
+-                    ZlinkSubmitException>(() => task);
++                    ZlinkSubmitException>(() => submission.Reply);
+                 Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated,
+                     error.Result);
+             }
+diff --git a/bindings/dotnet/tests/Zlink.Tests/test_writable_token_delivery.cs b/bindings/dotnet/tests/Zlink.Tests/test_writable_token_delivery.cs
+index 2a2f8b2cba..ec3e4ef05c 100644
+--- a/bindings/dotnet/tests/Zlink.Tests/test_writable_token_delivery.cs
++++ b/bindings/dotnet/tests/Zlink.Tests/test_writable_token_delivery.cs
+@@ -127,8 +127,9 @@ public sealed class test_writable_token_delivery
+         Assert.True(CoreTestSupport.IsNativeAvailable());
+         Type ownerType = CompletionOwnerTestAccess.RuntimeType(
+             "Systems.Zlink.CompletionOwner");
+-        object owner = CompletionOwnerTestAccess.Create(ownerType,
+-            IntPtr.Zero, SocketType.Router);
++        using var context = Zlink.CreateContext();
++        using var router = context.CreateRouterSocket();
++        object owner = CompletionOwnerTestAccess.Owner(router);
+         CompletionOwnerTestAccess.Invoke(owner, "TransferToPublic", new object());
+         RoutingId target = CoreTestSupport.RoutingIdUtf8("original-target");
+         Type entryType = ownerType.GetNestedType(request
+@@ -172,6 +173,13 @@ public sealed class test_writable_token_delivery
+         Assert.Equal((ZlinkSubmitException.ErrorCode)expectedResult, error.Result);
+         Assert.Equal(CompletionOwnerTestAccess.Errno(expectedErrno),
+             error.NativeErrno);
++        if (request)
++        {
++            Task admitted = (Task)CompletionOwnerTestAccess.Property(entry, "Admitted");
++            ZlinkSubmitException admissionError = await Assert.ThrowsAsync<ZlinkSubmitException>(
++                () => admitted);
++            Assert.Same(error, admissionError);
++        }
+         Assert.Empty(CompletionOwnerTestAccess.Entries(owner));
+     }
+ }
+diff --git a/bindings/dotnet/tests/Zlink.Tests/test_closed_submit_ownership.cs b/bindings/dotnet/tests/Zlink.Tests/test_closed_submit_ownership.cs
+new file mode 100644
+index 0000000000..a741cc3097
+--- /dev/null
++++ b/bindings/dotnet/tests/Zlink.Tests/test_closed_submit_ownership.cs
+@@ -0,0 +1,99 @@
++using Xunit;
++
++namespace Systems.Zlink.Tests;
++
++public sealed class test_closed_submit_ownership
++{
++    public static IEnumerable<object[]> Cases()
++    {
++        foreach (string kind in new[] { "send", "send-async", "request",
++                     "request-async", "reply", "received-reply", "publish", "try-publish" })
++            foreach (int count in new[] { 1, 2, 9 })
++                yield return new object[] { kind, count };
++    }
++
++    [Theory]
++    [MemberData(nameof(Cases))]
++    public void refused_submit_preserves_every_message(string kind, int count)
++    {
++        Assert.True(CoreTestSupport.IsNativeAvailable());
++        using var context = Zlink.CreateContext();
++        using var dealer = context.CreateDealerSocket();
++        using var router = context.CreateRouterSocket();
++        using var publisher = context.CreatePubSocket();
++        using var received = Received.Create();
++        using var poller = Zlink.CreatePoller();
++        Task<IReadOnlyList<Message>>? pending = null;
++        if (kind is "reply" or "received-reply")
++        {
++            string endpoint = CoreTestSupport.NewEndpoint("inproc", "closed-reply");
++            router.Bind(endpoint);
++            dealer.Connect(endpoint);
++            using (Message handshake = Message.From("ready"))
++                dealer.Send().Message(handshake).Submit();
++            Assert.True(router.Recv(received));
++            poller.Add(dealer, PollEventFlags.PollCompletion, 1);
++            using Message request = Message.From("request");
++            pending = dealer.Request().Message(request)
++                .Timeout(TimeSpan.FromSeconds(30)).Async().Reply;
++            Assert.True(router.Recv(received));
++        }
++
++        ISocket subject = kind is "reply" or "received-reply" ? router
++            : kind is "publish" or "try-publish" ? publisher : dealer;
++        subject.Close();
++        Message[] parts = Enumerable.Range(0, count)
++            .Select(index => Message.From($"part-{index}")).ToArray();
++        try
++        {
++            ZlinkSubmitException error = Assert.Throws<ZlinkSubmitException>(() =>
++            {
++                switch (kind)
++                {
++                    case "send":
++                        dealer.Send().Messages(parts).Submit();
++                        break;
++                    case "send-async":
++                        dealer.Send().Messages(parts).Async();
++                        break;
++                    case "request":
++                        Zlink.MultipartClose(dealer.Request().Messages(parts)
++                            .Timeout(TimeSpan.FromSeconds(3)).Submit());
++                        break;
++                    case "request-async":
++                        dealer.Request().Messages(parts)
++                            .Timeout(TimeSpan.FromSeconds(3)).Async();
++                        break;
++                    case "reply":
++                        router.Reply(received.RoutingId!.Value, received.ReplyToken!)
++                            .Messages(parts).Submit();
++                        break;
++                    case "received-reply":
++                        received.Reply().Messages(parts).Submit();
++                        break;
++                    case "publish":
++                        publisher.Publish("topic").Messages(parts).Submit();
++                        break;
++                    case "try-publish":
++                        TryPublishSubmitOperation operation = publisher.TryPublish("topic")
++                            .Message(parts[0]);
++                        for (var index = 1; index < parts.Length; index++)
++                            operation = operation.Message(parts[index]);
++                        operation.Submit();
++                        break;
++                }
++            });
++            Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated, error.Result);
++            Assert.Equal(CoreTestSupport.Errno("ESHUTDOWN"), error.NativeErrno);
++            for (var index = 0; index < parts.Length; index++)
++                Assert.Equal($"part-{index}", parts[index].GetString());
++        }
++        finally
++        {
++            Zlink.MultipartClose(parts);
++            dealer.Close();
++            if (pending is not null)
++                Assert.Throws<ZlinkRequestException>(() => pending.GetAwaiter().GetResult());
++        }
++    }
++}
+diff --git a/bindings/dotnet/tests/Zlink.Tests/test_socket_handle_reservation.cs b/bindings/dotnet/tests/Zlink.Tests/test_socket_handle_reservation.cs
+new file mode 100644
+index 0000000000..61a29b880f
+--- /dev/null
++++ b/bindings/dotnet/tests/Zlink.Tests/test_socket_handle_reservation.cs
+@@ -0,0 +1,117 @@
++using System.Runtime.InteropServices;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++namespace Systems.Zlink.Tests;
++
++public sealed class test_socket_handle_reservation
++{
++    [Fact]
++    public void reservation_roots_the_finalizing_kernel()
++    {
++        Assert.True(CoreTestSupport.IsNativeAvailable());
++        using var context = Zlink.CreateContext();
++        (object handle, IDisposable call, WeakReference<object> owner) =
++            CreateReservationWithoutSocketRoot(context);
++        try
++        {
++            GC.Collect();
++            GC.WaitForPendingFinalizers();
++            GC.Collect();
++            Assert.True(owner.TryGetTarget(out _));
++        }
++        finally
++        {
++            call.Dispose();
++            CompletionOwnerTestAccess.Invoke(handle, "Dispose");
++        }
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static (object, IDisposable, WeakReference<object>)
++        CreateReservationWithoutSocketRoot(IContext context)
++    {
++        IPairSocket socket = context.CreatePairSocket();
++        object kernel = CompletionOwnerTestAccess.Property(socket, "Kernel");
++        object handle = Handle(socket);
++        return (handle, Reserve(handle), new WeakReference<object>(kernel));
++    }
++
++    [Fact]
++    public async Task reservations_overlap_and_close_is_busy_until_the_last_release()
++    {
++        Assert.True(CoreTestSupport.IsNativeAvailable());
++        using var context = Zlink.CreateContext();
++        using var socket = context.CreatePairSocket();
++        object handle = Handle(socket);
++        IDisposable first = Reserve(handle);
++        IDisposable? second = null;
++        try
++        {
++            second = await Task.Run(() => Reserve(handle))
++                .WaitAsync(TimeSpan.FromSeconds(3));
++            AssertBusy(socket);
++            first.Dispose();
++            first = null!;
++            AssertBusy(socket);
++        }
++        finally
++        {
++            first?.Dispose();
++            second?.Dispose();
++        }
++        // A rejected close cannot disable reservations.
++        Reserve(handle).Dispose();
++        socket.Close();
++        ZlinkSubmitException error = Assert.Throws<ZlinkSubmitException>(
++            () => Reserve(handle));
++        Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated, error.Result);
++    }
++
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public void safe_handle_defers_release_and_cannot_return_close_failure(bool releaseSucceeds)
++    {
++        var handle = new DeferredHandle(releaseSucceeds);
++        bool added = false;
++        handle.DangerousAddRef(ref added);
++        Assert.True(added);
++        handle.Dispose();
++        Assert.Equal(0, handle.ReleaseCount);
++        handle.DangerousRelease();
++        Assert.Equal(1, handle.ReleaseCount);
++        Assert.True(handle.IsClosed);
++        handle.Dispose();
++        Assert.Equal(1, handle.ReleaseCount);
++    }
++
++    private sealed class DeferredHandle(bool releaseSucceeds)
++        : SafeHandle(new IntPtr(1), ownsHandle: true)
++    {
++        internal int ReleaseCount;
++        public override bool IsInvalid => false;
++
++        protected override bool ReleaseHandle()
++        {
++            ReleaseCount++;
++            return releaseSucceeds;
++        }
++    }
++
++    private static object Handle(ISocket socket)
++    {
++        object kernel = CompletionOwnerTestAccess.Property(socket, "Kernel");
++        return CompletionOwnerTestAccess.Field(kernel, "_handle");
++    }
++
++    private static IDisposable Reserve(object handle) =>
++        (IDisposable)CompletionOwnerTestAccess.Invoke(handle, "Reserve", true)!;
++
++    private static void AssertBusy(ISocket socket)
++    {
++        ZlinkCloseException error = Assert.Throws<ZlinkCloseException>(socket.Close);
++        Assert.Equal(ZlinkCloseException.ErrorCode.Busy, error.Result);
++        Assert.Equal(CoreTestSupport.Errno("EBUSY"), error.NativeErrno);
++    }
++}
+diff --git a/bindings/dotnet/tests/Zlink.Tests/test_submit_close_reservation.cs b/bindings/dotnet/tests/Zlink.Tests/test_submit_close_reservation.cs
+new file mode 100644
+index 0000000000..68ad08852f
+--- /dev/null
++++ b/bindings/dotnet/tests/Zlink.Tests/test_submit_close_reservation.cs
+@@ -0,0 +1,287 @@
++using System.Collections.Concurrent;
++using Xunit;
++using Xunit.Abstractions;
++
++namespace Systems.Zlink.Tests;
++
++public sealed class test_submit_close_reservation
++{
++    private const int Repetitions = 1000;
++    private readonly ITestOutputHelper _output;
++
++    public test_submit_close_reservation(ITestOutputHelper output)
++    {
++        _output = output;
++    }
++
++    [Theory]
++    [InlineData("send")]
++    [InlineData("request")]
++    [InlineData("reply")]
++    public void close_between_validation_and_native_submit(string kind)
++    {
++        Assert.True(CoreTestSupport.IsNativeAvailable());
++        using var context = Zlink.CreateContext();
++        using var router = context.CreateRouterSocket();
++        using var dealer = context.CreateDealerSocket();
++        string endpoint = CoreTestSupport.NewEndpoint("inproc", "close-window");
++        router.Bind(endpoint);
++        dealer.Connect(endpoint);
++        using (Message handshake = Message.From("ready"))
++            dealer.Send().Message(handshake).Submit();
++        using var received = Received.Create();
++        Assert.True(router.Recv(received));
++        using var poller = Zlink.CreatePoller();
++        poller.Add(dealer, PollEventFlags.PollCompletion, 1);
++        Task<IReadOnlyList<Message>>? pending = null;
++        if (kind == "reply")
++        {
++            using Message request = Message.From("request");
++            pending = dealer.Request().Message(request)
++                .Timeout(TimeSpan.FromSeconds(30)).Async().Reply;
++            Assert.True(router.Recv(received));
++        }
++        ISocket subject = kind == "reply" ? router : dealer;
++        object owner = CompletionOwnerTestAccess.Owner(subject);
++        bool acceptedClose = false;
++        using Message payload = Message.From("preserved");
++        var parts = new ClosingParts(payload, () =>
++        {
++            try
++            {
++                subject.Close();
++                acceptedClose = true;
++            }
++            catch (ZlinkCloseException error) when (
++                error.Result == ZlinkCloseException.ErrorCode.Busy)
++            {
++            }
++        });
++        Exception? failure = Record.Exception(() =>
++        {
++            switch (kind)
++            {
++                case "send":
++                    CompletionOwnerTestAccess.Invoke(owner, "Send", null, parts);
++                    break;
++                case "request":
++                    pending = ((RequestSubmission)CompletionOwnerTestAccess.Invoke(
++                        owner, "RequestAsync", null, parts, 30_000u,
++                        CancellationToken.None)!).Reply;
++                    break;
++                case "reply":
++                    CompletionOwnerTestAccess.Invoke(owner, "Reply",
++                        received.RoutingId!.Value, received.ReplyToken!, parts);
++                    break;
++            }
++        });
++        _output.WriteLine($"kind={kind} accepted_close={acceptedClose} failure={failure}");
++        subject.Close();
++        dealer.Close();
++        if (pending is not null)
++            Assert.Throws<ZlinkRequestException>(() => pending.GetAwaiter().GetResult());
++        if (acceptedClose)
++        {
++            var error = Assert.IsType<ZlinkSubmitException>(failure);
++            Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated, error.Result);
++            Assert.Equal("preserved", payload.GetString());
++        }
++        else
++            Assert.Null(failure);
++    }
++
++    private sealed class ClosingParts : IReadOnlyList<Message>
++    {
++        private readonly Message _part;
++        private Action? _close;
++
++        internal ClosingParts(Message part, Action close)
++        {
++            _part = part;
++            _close = close;
++        }
++
++        public int Count => 1;
++
++        public Message this[int index]
++        {
++            get
++            {
++                Action? close = _close;
++                _close = null;
++                close?.Invoke();
++                return index == 0 ? _part
++                    : throw new ArgumentOutOfRangeException(nameof(index));
++            }
++        }
++
++        public IEnumerator<Message> GetEnumerator()
++        {
++            yield return this[0];
++        }
++
++        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
++            GetEnumerator();
++    }
++
++    [Theory]
++    [InlineData("send")]
++    [InlineData("request")]
++    [InlineData("reply")]
++    [InlineData("publish")]
++    public void same_handle_submit_races_close(string kind)
++    {
++        Assert.True(CoreTestSupport.IsNativeAvailable());
++        using var context = Zlink.CreateContext();
++        var outcomes = new ConcurrentDictionary<string, int>();
++        var closedOutcomes = new ConcurrentDictionary<string, int>();
++        var closeBusy = 0;
++
++        for (var repetition = 0; repetition < Repetitions; repetition++)
++        {
++            using var router = context.CreateRouterSocket();
++            using var dealer = context.CreateDealerSocket();
++            using var publisher = context.CreatePubSocket();
++            router.Options.Linger = TimeSpan.Zero;
++            dealer.Options.Linger = TimeSpan.Zero;
++            publisher.Options.Linger = TimeSpan.Zero;
++            string endpoint = CoreTestSupport.NewEndpoint("inproc",
++                $"submit-close-{kind}-{repetition}");
++            router.Bind(endpoint);
++            dealer.Connect(endpoint);
++            using (Message handshake = Message.From("ready"))
++                dealer.Send().Message(handshake).Submit();
++            using var received = Received.Create();
++            Assert.True(router.Recv(received));
++            using var poller = Zlink.CreatePoller();
++            poller.Add(dealer, PollEventFlags.PollCompletion, 1);
++
++            Task<IReadOnlyList<Message>>? pending = null;
++            Task? admitted = null;
++            if (kind == "reply")
++            {
++                using Message request = Message.From("request");
++                pending = dealer.Request().Message(request)
++                    .Timeout(TimeSpan.FromSeconds(30)).Async().Reply;
++                Assert.True(router.Recv(received));
++            }
++
++            ISocket subject = kind == "reply" ? router
++                : kind == "publish" ? publisher : dealer;
++            using var start = new Barrier(2);
++            Exception? failure = null;
++            int delay = repetition % 3;
++            var submitter = new Thread(() =>
++            {
++                start.SignalAndWait();
++                if (delay == 0)
++                    Thread.Yield();
++                try
++                {
++                    Submit();
++                }
++                catch (Exception exception)
++                {
++                    failure = exception;
++                }
++            })
++            { IsBackground = true };
++            submitter.Start();
++            start.SignalAndWait();
++            if (delay == 1)
++                Thread.Yield();
++            else if (delay == 2)
++                Thread.SpinWait(100);
++            try
++            {
++                subject.Close();
++            }
++            catch (ZlinkCloseException exception) when (
++                exception.Result == ZlinkCloseException.ErrorCode.Busy)
++            {
++                closeBusy++;
++            }
++            Assert.True(submitter.Join(TimeSpan.FromSeconds(10)));
++            Count(outcomes, failure);
++            subject.Close();
++
++            failure = Record.Exception(Submit);
++            Count(closedOutcomes, failure);
++            dealer.Close();
++            if (pending is not null)
++            {
++                ZlinkRequestException terminated = Assert.Throws<ZlinkRequestException>(
++                    () => pending.GetAwaiter().GetResult());
++                Assert.Equal(ZlinkRequestException.ErrorCode.Terminated,
++                    terminated.Result);
++                if (admitted is { IsCompletedSuccessfully: false })
++                {
++                    ZlinkRequestException admissionError = Assert.Throws<ZlinkRequestException>(
++                        () => admitted.GetAwaiter().GetResult());
++                    Assert.Same(terminated, admissionError);
++                }
++            }
++
++            void Submit()
++            {
++                using Message part = Message.From("payload");
++                switch (kind)
++                {
++                    case "send":
++                        dealer.Send().Message(part).Submit();
++                        break;
++                    case "request":
++                        RequestSubmission submission = dealer.Request().Message(part)
++                            .Timeout(TimeSpan.FromSeconds(30)).Async();
++                        pending = submission.Reply;
++                        admitted = submission.Admitted;
++                        Assert.Equal(SubmitResult.Ok, submission.Result);
++                        break;
++                    case "reply":
++                        received.Reply().Message(part).Submit();
++                        break;
++                    case "publish":
++                        publisher.Publish("topic").Message(part).Submit();
++                        break;
++                    default:
++                        throw new ArgumentOutOfRangeException(nameof(kind));
++                }
++            }
++        }
++
++        _output.WriteLine($"kind={kind} repetitions={Repetitions} close_busy={closeBusy}");
++        Print("race", outcomes);
++        Print("closed", closedOutcomes);
++        Assert.Equal(Repetitions, outcomes.Values.Sum());
++        Assert.All(outcomes.Keys, outcome =>
++            Assert.Contains(outcome, new[] { "success", "TERMINATED" }));
++        Assert.Equal(Repetitions, closedOutcomes.GetValueOrDefault("TERMINATED"));
++    }
++
++    private void Print(string phase, ConcurrentDictionary<string, int> outcomes)
++    {
++        foreach (var pair in outcomes.OrderBy(pair => pair.Key))
++            _output.WriteLine($"phase={phase} outcome={pair.Key} count={pair.Value}");
++    }
++
++    private static void Count(ConcurrentDictionary<string, int> outcomes,
++        Exception? exception)
++    {
++        string outcome = exception switch
++        {
++            null => "success",
++            ZlinkSubmitException submit when submit.Result ==
++                ZlinkSubmitException.ErrorCode.Terminated => "TERMINATED",
++            ZlinkException error when error.NativeErrno ==
++                CoreTestSupport.Errno("EFAULT") => "EFAULT",
++            ZlinkException error when error.NativeErrno ==
++                CoreTestSupport.Errno("ENOENT") => "ENOENT",
++            ZlinkSubmitException submit when submit.Result ==
++                ZlinkSubmitException.ErrorCode.InvalidHandle => "INVALID_HANDLE",
++            ZlinkSubmitException submit when submit.Result ==
++                ZlinkSubmitException.ErrorCode.NotFound => "NOT_FOUND",
++            _ => $"other:{exception.GetType().Name}:{exception.Message}"
++        };
++        outcomes.AddOrUpdate(outcome, 1, (_, count) => count + 1);
++    }
++}
