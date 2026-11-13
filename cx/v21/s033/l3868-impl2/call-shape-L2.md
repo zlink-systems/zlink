@@ -1,6 +1,6 @@
 # C++ L2 (#4352) 호출 대조
 
-작업 경로 `/root/worktree/zlink-v21-s033/l3868-next`, 시작 HEAD `a67753ede4`, L1 기준 `608513f260`. 측정하지 않는다. 아래 행은 L2 커밋의 소스 기준이다. Release 빌드, bench test 9/9, 바이너리 5개의 source/header freshness 검사를 통과했다. `B=framework/bench/grpc/cpp`, `R=framework/languages/cpp/framework/src/runtime`.
+작업 경로 `/root/worktree/zlink-v21-s033/l3868-next`, 시작 HEAD `a67753ede4`, L1 기준 `608513f260`, L2 커밋 `fbdcb16e26`. 측정하지 않는다. 아래 행은 L2 커밋의 소스 기준이다. Release 빌드, bench test 9/9, 바이너리 5개의 source/header freshness 검사를 통과했다. `B=framework/bench/grpc/cpp`, `R=framework/languages/cpp/framework/src/runtime`.
 
 | 경로·작업 | binding file:line | L2 file:line | 동일 여부·복원 기능 |
 |---|---|---|---|
