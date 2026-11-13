@@ -25,7 +25,7 @@
 
 Scratch는 `62e766f88d`의 git archive이며 위치는 `/root/worktree/zlink-v21-s033/c4json-scratch`다. production과 scratch의 J 및 registry entry는 수정 전 [동일 SHA256](raw/codec-baseline-identity.json)이다. [호출 대조](call-shape.md)에서 L3 framing과 L4 default typed JSON을 구분한다.
 
-최종 **v5 네 셀**은 active submit worker가 생성된 뒤 source/target의 모든 live TID에 `perf record -g -e cpu-clock:u -F 499 --call-graph fp`를 연결했다. profile window는 **3.5초**, 전체 process run은 **5.50–8.16초**, 모든 thread는 시작·중간 모두 **CPUs 6-7,14-15 / SCHED_OTHER**다. 모두 `submitted=completed=received`, errors=0이다. [검증 수치·조건](raw/valid-profile-summary.json), 각 run의 `before.json`·`perf-task-map.json`·`*-scheduling.json`에 binary SHA256·freshness·TID를 남겼다. measure.lock을 사용하지 않았다. **처리량·단계 손실·7% 예산은 판정하지 않는다.**
+최종 **v5 네 셀**은 active submit worker가 생성된 뒤 source/target의 모든 live TID에 `perf record -g -e cpu-clock:u -F 499 --call-graph fp`를 연결했다. profile window는 **3.5초**, 최종 snapshot까지 **5.50–8.16초**이며 metadata·최대 1초 cleanup을 포함한 process 수명 상한도 **10.00초**, 모든 thread는 시작·중간 모두 **CPUs 6-7,14-15 / SCHED_OTHER**다. 모두 `submitted=completed=received`, errors=0이다. [검증 수치·조건](raw/valid-profile-summary.json), 각 run의 `before.json`·`perf-task-map.json`·`*-scheduling.json`에 binary SHA256·freshness·TID를 남겼다. measure.lock을 사용하지 않았다. **처리량·단계 손실·7% 예산은 판정하지 않는다.**
 
 | 셀 | 관측한 self sample / call shape | raw |
 |---|---|---|
