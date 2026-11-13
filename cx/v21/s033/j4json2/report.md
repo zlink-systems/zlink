@@ -61,7 +61,7 @@ writer/generator는 per-call이지만 ObjectWriter wrapper 생성이나 per-call
 
 JFR allocation weight는 sampling 추정치이므로 site별 정확한 allocation 수나 message당 B로 나누지 않는다. per-message 값은 고정 횟수 counter이며 String/payload buffer 개수는 library source와 bytecode로 대조한다. counter의 ByteBuffer wrapper 등 control object는 JIT scalar replacement에 따라 달라질 수 있다. B=0에서는 empty String/backing 공유가 있어 일반 N>0의 buffer 개수를 그대로 적용하지 않는다.
 
-[호출 비교](call-shape.md), [profile 설정](raw/profile.jfc), [실행 script](raw/profile-bench.py), [allocation probe](raw/TypedBytesAllocationProbe.java), [production 소스 동일성](raw/production-base-parity.json). 준비 실패·cap에 의해 잘린 자료는 유효 cell과 구분하고 삭제하지 않는다.
+[호출 비교](call-shape.md), [profile 설정](raw/profile.jfc), [실행 script](raw/profile-bench.py), [allocation probe](raw/TypedBytesAllocationProbe.java), [production 소스 동일성](raw/production-base-parity.json), [실제 Jackson 2.17.2 classpath](raw/java-runtime-versions.json). 준비 실패·cap에 의해 잘린 자료는 유효 cell과 구분하고 삭제하지 않는다.
 
 ### Scratch L4 선택 조건
 
@@ -105,9 +105,9 @@ C++의 동적 storage 수는 allocator/container 구현에 의존한다. 이 소
 | 4K heap decode | 26920.0 | 4976.0 | 21944.0 (81.52%) |
 | 4K native decode | 32360.0 | 10480.0 | 21880.0 (67.61%) |
 
-숫자는 [before](raw/allocation-before.csv), [after](raw/allocation-after.csv), [대조](raw/allocation-comparison.json)다. source-level로 제거한 큰 storage는 byte[B] 4개와 String 표현식 2개다. 정확한 실측 감소량에는 String scalar replacement와 ByteBuffer/control object의 JIT 차이도 포함되므로 이론 개수×크기를 관측치로 대신하지 않는다. 결과 byte[]와 decoder 밖 JSON snapshot은 남는다.
+encode counter는 serialize, decode counter는 deserializeBorrowed를 호출한다. public deserialize(ZLinkEncodedPayload)의 defensive snapshot은 앞의 copy 표에서 별도로 셌다. 숫자는 [before](raw/allocation-before.csv), [after](raw/allocation-after.csv), [대조](raw/allocation-comparison.json)다. source-level로 제거한 큰 storage는 byte[B] 4개와 String 표현식 2개다. 정확한 실측 감소량에는 String scalar replacement와 ByteBuffer/control object의 JIT 차이도 포함되므로 이론 개수×크기를 관측치로 대신하지 않는다. 결과 byte[]와 decoder 밖 JSON snapshot은 남는다.
 
-수정 후 JFR은 [send target](raw/after-L4-send-saturation-4096/target.summary.json), [serial target](raw/after-L4-request-serial-1024/target.summary.json), 각 cell의 source summary와 JFR 원문에 보존했다. typed decode allocation stack에서 StringUTF16.compress / String.encode8859_1 / JDK Base64 Encoder·Decoder의 중간 storage가 사라지고 `readCanonicalBytes:383`의 결과 byte[]와 `decodeJson:109`의 JSON snapshot이 남는다. 두 cell 모두 errors=0·수량 일치다. 수정 후 JVM 최대 수명은 send 18.779 s, serial 19.452 s로 20 s 미만이다. throughput 비교는 하지 않았다.
+수정 후 JFR은 [send target](raw/after-L4-send-saturation-4096/target.summary.json), [serial target](raw/after-L4-request-serial-1024/target.summary.json), 각 cell의 source summary와 JFR 원문에 보존했다. typed decode allocation stack에서 StringUTF16.compress / String.encode8859_1 / JDK Base64 Encoder·Decoder의 중간 storage가 사라지고 `readCanonicalBytes:383`의 결과 byte[]와 `decodeJson:109`의 JSON snapshot이 남는다. 두 cell 모두 errors=0·수량 일치다. [전체 유효 profile 검증](raw/all-valid-profile-validation.json). 수정 후 JVM 최대 수명은 send 18.779 s, serial 19.452 s로 20 s 미만이다. throughput 비교는 하지 않았다.
 
 | 검증 | 결과·원문 |
 |---|---|
@@ -128,4 +128,4 @@ C++의 동적 storage 수는 allocator/container 구현에 의존한다. 이 소
 - 리팩토링 점검: 성능·POSDDD·불필요 코드 기준으로 수정 모듈과 호출 경로를 점검. 중복 변환 1건 발견·1건 수정·넘긴 결함 0. 기존 native snapshot/frame copy는 비용으로 기록하고 유지.
 - 남은 실패: 없음. 수정 전 의도한 regression failure와 초기 profile 준비 실패 raw는 최종 실패에 포함하지 않는다.
 - local commit: `80958e1be4a6899ff80f2a06feea54f63b63d5b4` (`perf/4354-java-typed-json`), parent `df42a4df40`. 두 Java 파일만 commit했고 worktree는 clean이다. [기록](raw/local-commit.json). push/PR/GitHub 작업 없음.
-- scratch 정리: 검증 산출물을 보존한 뒤 임시 worktree와 분석 tool을 정리한다. raw는 삭제하지 않는다.
+- scratch 정리 완료: 임시 worktree와 분석 tool을 제거했다. 모든 JFR·counter·source·test XML·원본 package와 before/after JSON module JAR는 raw에 보존했다. 기존 measuring worktree와 build output은 건드리지 않았다.

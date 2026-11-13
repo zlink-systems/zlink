@@ -3,6 +3,11 @@ from pathlib import Path
 base=Path(sys.argv[1]); phases=json.loads((base/'phases.json').read_text())
 active=next(p['epochMs'] for p in phases if p['phase']=='active')
 duration=int(sys.argv[2]) if len(sys.argv)>2 else 4000
+end=json.loads((base/'active-end.json').read_text())
+life=json.loads((base/'lifecycle.json').read_text())
+ap=next(p for p in phases if p['phase']=='active')
+endEpoch=end.get('epochMs', ap['epochMs']+(life['startMonotonicUs']+end['time']*1e6-ap['monotonicUs'])/1000)
+duration=round(endEpoch-active)
 java='/usr/lib/jvm/java-25-openjdk-amd64/bin/java'
 converter='/root/jobs/fx/cx/v21/s033/l2bp/tools/jfr-converter-4.6.jar'
 categories={
@@ -16,6 +21,7 @@ categories={
  'envelope':['ZLinkChannelEnvelope'],
  'thread_schedule':['VirtualThread','Continuation','ForkJoinPool','ForkJoinTask','LockSupport.park','Unsafe.park','Unsafe.unpark','futex','pthread_cond','sched_yield'],
 }
+tag=sys.argv[3] if len(sys.argv)>3 else 'full'
 result={}
 for role in ['source','target']:
  result[role]={}
@@ -23,7 +29,7 @@ for role in ['source','target']:
  count=stats['completed'] if role=='source' else stats['received']
  result[role]['messages']=count
  for kind in ['cpu','alloc','wall']:
-  out=base/f'{role}-{kind}.collapsed'
+  out=base/f'{role}-{kind}-{tag}.collapsed'
   cmd=['taskset','-c','6-7,14-15',java,'-jar',converter,'--'+kind,'--total','--threads','--simple','--lines',
        '--from',str(int(active)),'--to',str(int(active)+duration),'-o','collapsed',str(base/f'{role}.jfr'),str(out)]
   proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
@@ -48,4 +54,4 @@ for role in ['source','target']:
   print('SELF',selfs.most_common(14))
   print('THREADS',threads.most_common(8))
   print('CATEGORIES',dict(costs))
-(base/'summary.json').write_text(json.dumps(result,indent=2))
+(base/f'summary-{tag}.json').write_text(json.dumps(result,indent=2))

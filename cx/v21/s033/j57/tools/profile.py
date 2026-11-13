@@ -93,7 +93,7 @@ def await_ready(url, require=True):
     raise RuntimeError('startup deadline')
 
 def snapshot(label):
-    result = {'time':time.monotonic()-start,'processes':{}}
+    result = {'time':time.monotonic()-start,'epochMs':time.time()*1000,'processes':{}}
     for role, p, _ in procs:
         # timeout has one child (the JVM/Node); inspect that process and all threads.
         children = Path(f'/proc/{p.pid}/task/{p.pid}/children').read_text().split()
@@ -120,6 +120,7 @@ if args.core:
 (out/'fingerprint.json').write_text(json.dumps(fingerprint,indent=2))
 with (P/'progress.md').open('a') as f:
     f.write(f'\n- profile {args.label}: {fingerprint["mainHead"]}, dirty={bool(fingerprint["mainDirty"])}, scratch cffa8009d3, CPU {CPUS}; JAR hash {out}/fingerprint.json. receive/reply와 추가 비용: call-shape.md.\n')
+start=time.monotonic()
 try:
     launch('target', command('target') + ['--endpoint',endpoint,'--metrics-url',target, '--command-endpoint',f'tcp://127.0.0.1:{base+4}'])
     launch('source', command('source') + ['--implementation','zlink-framework-' + args.language,
@@ -148,11 +149,16 @@ try:
                 halfway = True
             if val.get('phase') in ('idle','completed') and trigger_future.done(): break
             time.sleep(.15)
+        target_val=request(target + '/bench/stats')
+        while (target_val.get('allPhaseMessages',0) if phase=='warmup' else target_val.get('received',0)) < val.get('completed',0):
+            if time.monotonic()-start>18:raise RuntimeError('target drain deadline')
+            time.sleep(.03)
+            target_val=request(target + '/bench/stats')
         snapshot(phase + '-end')
         (out / (phase + '-trigger.json')).write_text(json.dumps(trigger_future.result()))
         pool.shutdown()
         (out / (phase + '-source-stats.json')).write_text(json.dumps(val,indent=2))
-        (out / (phase + '-target-stats.json')).write_text(json.dumps(request(target + '/bench/stats'),indent=2))
+        (out / (phase + '-target-stats.json')).write_text(json.dumps(target_val,indent=2))
     print(str(out), flush=True)
 finally:
     for role,p,born in reversed(procs):
@@ -164,5 +170,5 @@ finally:
         try: os.killpg(p.pid,signal.SIGKILL)
         except ProcessLookupError: pass
     (out / 'lifecycle.json').write_text(json.dumps({'elapsed':time.monotonic()-start, 'startMonotonicUs':start*1e6,
-       'processes':[{'role':role,'pid':p.pid,'returncode':p.returncode} for role,p,_ in procs]},indent=2))
+       'processes':[{'role':role,'pid':p.pid,'elapsed':time.monotonic()-born,'returncode':p.returncode} for role,p,_ in procs]},indent=2))
     for f in logs: f.close()

@@ -1,0 +1,8 @@
+perf(dotnet): reduce default typed JSON buffer copies (#4354)
+
+기본 typed JSON의 native part를 pooled UTF-8 writer에서 Message로 복사해
+중간 owned JSON array를 제거한다. byte[] decode는 최종 array에 직접 기록하고
+escaped/segmented 입력 등의 기존 BCL 동작은 유지한다.
+
+padded RFC 4648 Base64와 JSON bytes, DTO, public API 및 service wire는 유지한다.
+관련 Framework tests 321개, connector net8.0/netstandard2.1 build와 .NET format check 통과.

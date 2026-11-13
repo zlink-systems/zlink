@@ -26,7 +26,9 @@ for out in sorted((job/"raw").glob(tag+"-L*-*")):
         stack.append(nodes[index]["callFrame"]["functionName"])
         if index not in parents: break
         index=parents[index]
-      for name in ("encodeBase64","btoa","toJSON","frameworkJsonV1Replacer","stringifyFrameworkJsonV1", "nodeJsonReplacer", "encodeNodeBase64", "parseFrameworkJsonV1","scan", "decodeChannelPayload","encodePayload","(garbage collector)"):
+      for group,names in {"base64_encode_union":{"encodeBase64","encodeNodeBase64","btoa","base64Slice"},"base64_decode_union":{"decodeBase64","decodeNodeBase64","atob","base64Write"}}.items():
+        if any(x in stack for x in names): groups[group]+=1;groups_samples[group]+=1
+      for name in ("encodeBase64","btoa","base64Slice","base64Write","decodeBase64","decodeNodeBase64","atob","prepareNodeJsonBytes","validateFrameworkJsonV1Value","toJSON","frameworkJsonV1Replacer","stringifyFrameworkJsonV1", "nodeJsonReplacer", "encodeNodeBase64", "parseFrameworkJsonV1","scan", "decodeChannelPayload","encodePayload","(garbage collector)"):
         if name in stack: groups[name]+=1;groups_samples[name]+=1
     allocfile=out/f"alloc-{pid}.json"; total_alloc=0; allocown=collections.Counter(); allocgroups=collections.Counter()
     if allocfile.exists():
@@ -36,7 +38,7 @@ for out in sorted((job/"raw").glob(tag+"-L*-*")):
         cf=node["callFrame"]; size=node.get("selfSize",0);total_alloc+=size
         name=cf["functionName"];stack=stack+[name]
         allocown[f'{name} {cf["url"]}:{cf["lineNumber"]+1}']+=size
-        for group in ("encodeBase64","btoa","toJSON","frameworkJsonV1Replacer","stringifyFrameworkJsonV1", "nodeJsonReplacer", "encodeNodeBase64", "parseFrameworkJsonV1", "decodeChannelPayload", "encodePayload"):
+        for group in ("encodeBase64","btoa","base64Slice","base64Write","decodeBase64","decodeNodeBase64","atob","prepareNodeJsonBytes","validateFrameworkJsonV1Value","toJSON","frameworkJsonV1Replacer","stringifyFrameworkJsonV1", "nodeJsonReplacer", "encodeNodeBase64", "parseFrameworkJsonV1", "decodeChannelPayload", "encodePayload"):
           if group in stack: allocgroups[group]+=size
         for child in node.get("children",[]):walk(child,stack)
       if "head" in alloc: walk(alloc["head"],[])
