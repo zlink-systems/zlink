@@ -5027,7 +5027,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ObservedAuthority Authority
     )> RequireDirectSpotPeerAsync(RoutingId targetRid, string spotId, ulong spotGeneration)
     {
-        var peer = RequireDirectPeer(targetRid);
         if (
             spotGeneration == 0
             || !_observedSpotAuthorities.TryGetValue(
@@ -5036,8 +5035,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
             throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
-        if (peer.LifecycleGeneration != authority.TargetNodeGeneration)
-            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
+        var peer = RequireDirectPeer(targetRid, authority.TargetNodeGeneration);
         return (peer, authority);
     }
 
@@ -5213,17 +5211,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         authority = default;
         head = [];
         peer = null!;
-        var selected = RunState(() =>
-        {
-            _peersByRid.TryGetValue(targetNodeRid, out var resolvedPeer);
-            if (!request && (resolvedPeer is null || !resolvedPeer.Admitted))
-                return (Result: SubmitResult.NotConnected, Peer: (Peer?)null);
-            return (Result: SubmitResult.Ok, Peer: resolvedPeer);
-        });
-        if (selected.Result != SubmitResult.Ok)
-            return selected.Result;
-        peer = selected.Peer!;
-
         if (messageFollowRoute is { } messageFollowRouteValue)
         {
             if (
@@ -5250,14 +5237,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return SubmitResult.NotFound;
         }
 
+        if (targetSpotGeneration == 0)
+            return SubmitResult.NotFound;
+        peer = RunState(() =>
+        {
+            _peersByRid.TryGetValue(targetNodeRid, out var resolvedPeer);
+            return resolvedPeer;
+        })!;
         if (
-            targetSpotGeneration == 0
-            || (
-                peer is { Admitted: true }
-                && peer.LifecycleGeneration != authority.TargetNodeGeneration
+            !request
+            && (
+                peer is not { Admitted: true }
+                || peer.LifecycleGeneration != authority.TargetNodeGeneration
             )
         )
-            return SubmitResult.NotFound;
+            return SubmitResult.NotConnected;
         head = ZLinkServiceWireCodec.EncodeSpot(
             request
                 ? ServiceWireConstants.Command.SpotRequest
@@ -5313,15 +5307,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         try
         {
-            var peer = RequireDirectPeer(actorRef.NodeRid);
             if (
                 !_observedActorAuthorities.TryGetValue(
                     new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
                     out var authority
                 )
-                || peer.LifecycleGeneration != authority.TargetNodeGeneration
             )
                 throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
+            var peer = RequireDirectPeer(actorRef.NodeRid, authority.TargetNodeGeneration);
             var operationId = NextStandaloneOperationId();
             var head = ZLinkServiceWireCodec.EncodeActor(
                 ServiceWireConstants.Command.ActorSend,
@@ -5370,24 +5363,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             acceptedSequence = 0;
             if (actorRef.NodeRid != _routingId)
             {
-                var peer = RunState(() =>
-                {
-                    _peersByRid.TryGetValue(actorRef.NodeRid, out var value);
-                    return value;
-                });
-                if (!request && (peer is null || !peer.Admitted))
-                    return SubmitResult.NotConnected;
                 if (
                     !_observedActorAuthorities.TryGetValue(
                         new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
                         out var authority
                     )
-                    || (
-                        peer is { Admitted: true }
-                        && peer.LifecycleGeneration != authority.TargetNodeGeneration
-                    )
                 )
                     return SubmitResult.NotFound;
+                var peer = RunState(() =>
+                {
+                    _peersByRid.TryGetValue(actorRef.NodeRid, out var value);
+                    return value;
+                });
+                if (
+                    !request
+                    && (
+                        peer is not { Admitted: true }
+                        || peer.LifecycleGeneration != authority.TargetNodeGeneration
+                    )
+                )
+                    return SubmitResult.NotConnected;
                 var head = ZLinkServiceWireCodec.EncodeActor(
                     request
                         ? ServiceWireConstants.Command.ActorRequest
