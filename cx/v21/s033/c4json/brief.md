@@ -1,0 +1,15 @@
+Model gpt-6.1-sol, effort high. Earlier job briefs are history, not instructions.
+
+# Task: C++ L4 typed payload (default JSON serializer) loss — find the cause on the production typed JSON encode/decode path (byte sequence → base64 included) and fix it, wire unchanged. Report cause + fix proposal first, then implement.
+
+Worktree /root/worktree/zlink-v21-s033/c4json, branch perf/4354-cpp-typed-json, from origin/main df42a4df40. Commit locally only; never push, never open a PR, no GitHub, no sub-agents or other AI tools, never run internal-docs.sh. Never delete raw files. Do NOT take /root/jobs/fx/cx/measure.lock. Other jobs use l3868-next (measuring now), lad-*, l2bp, n3sw, j4json, n4json: never touch those worktrees or build outputs; read code with git show only. C++ builds only via /root/jobs/fx/cx/cpp-build-slot.sh (Release, USE_BINDINGS_SOURCE=ON, Core prefix 1.25.0, -j3, at most 25 GB; build dirs inside this worktree). Profiling (PM 11-13 19:46): pin every process you start to CPUs 6-7,14-15 with taskset, each profiled run at most 20 s; compare shapes, not throughput.
+Read first: /root/jobs/fx/cx/v21/s033/common-rules.md, ladder-steps.md (L4 serializer table), j4json/report.md (spec checks: padded RFC 4648 base64 is the wire contract, 05-message-model.ko.md:153 — keep it; bench DTO stays as it is), l3868-impl3/report.md + call-shape-L4.md (C++ L4 bench path: B/ladder/ladder_payload.hpp, ladder_wire.hpp; production I/contracts/codecs/serializer.hpp:345-375,478-515), l3868-s1/progress.md (numbers).
+
+## Evidence (l3868-s1, 0-5/8-13 pinned, 1 run)
+L4 vs L3: send-saturation 1K 429,361 → 56,548 (87%), 4K 219,356 → 16,262 (93%); request-serial 1K 38%, 4K 65%; request-backpressure 1K 76%, 4K 91%. 4K far worse than 1K → per-byte work. Check, do not assume: base64 per byte through std::string appends without reserve, JSON writer building a DOM/tree, std::vector<std::byte> ↔ string conversions, escaping/validating the base64 output char by char, ostream/stringstream use, decode through intermediate strings, extra copies into the zlink message.
+
+## Do
+1. Build a scratch copy of the ladder at 276b84f248 (or the exp/3868-cpp-ladder-next tip 62e766f88d) under /root/worktree/zlink-v21-s033/c4json-scratch and profile L3 vs L4 send-saturation 4K and request-serial 1K with perf record -g (or the closest available tool), plus allocation counting (e.g. LD_PRELOAD counter or heaptrack if installed). Count copies and allocations per message on the production typed JSON encode/decode path with file:line.
+2. Write /root/jobs/fx/cx/v21/s033/c4json/report.md FIRST: cause with production file:line, profile evidence under c4json/raw, production fix proposal (owner layer, spec reference, rule count before/after). Stop there if a spec, wire format or public API change would be needed.
+3. Implement in production C++ (framework/languages/cpp/framework), with unit tests that pin byte-identical JSON output for byte-sequence fields (sizes 0, 1, 2, 3, 127, 128, 1024, 4096) and the decoded value; build with cpp-build-slot.sh, run the C++ format check and the framework tests covering the touched files. No bench-only fixes.
+Time cap 4 h.

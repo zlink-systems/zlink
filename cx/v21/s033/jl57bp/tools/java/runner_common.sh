@@ -337,6 +337,8 @@ bench_run_cell() {
   local implementation="$6" pattern="$7" payload="$8" warmup_ms="$9"
   local result_file="${10}" target_file="${11}" reset_url="${12:-}"
   local remaining_drain_ms source_bound_hit drain_state warmup_abandoned
+  python3 /root/jobs/fx/cx/v21/s033/jl57bp/tools/sample-stats.py "${source_url}" "${target_url}" "${result_file%/*}/stats-timeline.jsonl" &
+  local stats_sampler_pid=$!
   trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" "${payload}" warmup "${warmup_ms}"
   wait_for_idle "${source_url}"
   warmup_abandoned="$(curl --silent --show-error --fail --max-time 5 "${source_url}/bench/stats" | python3 -c 'import json,sys; a=json.load(sys.stdin); print(a.get("currentInFlight", a.get("inFlight", 0)))')"
@@ -376,6 +378,8 @@ PY
     echo "cell settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id} (recorded; run continues)" >&2
     return 0
   fi
+  kill "${stats_sampler_pid}" 2>/dev/null || true
+  wait "${stats_sampler_pid}" 2>/dev/null || true
   verify_request_counts "${result_file}"
 }
 

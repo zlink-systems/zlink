@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HERE="/root/worktree/zlink-v21-s033/lad-java-l57p/framework/bench/grpc/java"
-TOOLS_DIR="/root/jobs/fx/cx/v21/s033/lad-java-s3/tools/java"
+HERE="${BENCH_HOME_OVERRIDE:-/root/worktree/zlink-v21-s033/lad-java-l57p/framework/bench/grpc/java}"
+TOOLS_DIR="/root/jobs/fx/cx/v21/s033/jl57bp/tools/java"
 # shellcheck source=../runner_common.sh
 source "${TOOLS_DIR}/runner_common.sh"
 bench_init java "grpc-java,zlink-java,zlink-framework-java" \
@@ -42,6 +42,8 @@ binding_sched_snapshot() {
       [[ -d "$task" ]] || continue
       tid="${task##*/}"
       printf '%s_tid=%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"
+      task_affinity="$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null || true)"
+      printf '%s_task_affinity tid=%s cpus=%s\n' "$label" "$tid" "${task_affinity:-unavailable}" >> "$BINDING_SCHED_FILE"
       policy="$(chrt -p "$tid" 2>&1 || true)"
       printf '%s\n' "$policy" >> "$BINDING_SCHED_FILE"
       if ! grep -q 'current scheduling policy: SCHED_OTHER' <<<"$policy"; then printf 'scheduling_invalid=%s:%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"; fi
@@ -144,7 +146,7 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_file="${cell_dir}/target-stats.json"
         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
 
-        setsid taskset -c "${TARGET_CPUS:-8-13}" "${target_command[@]}" >"${target_log}" 2>&1 &
+        setsid taskset -c "${TARGET_CPUS:-8-13}" chrt -o 0 "${target_command[@]}" >"${target_log}" 2>&1 &
         b_pid=$!
         wait_for_stats "${target_stats_url}" 0
 
@@ -162,7 +164,7 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${target_command_endpoint}" ]]; then
           source_args+=(--target-command-endpoint "${target_command_endpoint}")
         fi
-        setsid taskset -c "${SOURCE_CPUS:-0-5}" "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+        setsid taskset -c "${SOURCE_CPUS:-0-5}" chrt -o 0 "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
         a_pid=$!
         BINDING_SCHED_FILE="${cell_dir}/scheduling.txt"
         BINDING_SOURCE_PID="$a_pid"

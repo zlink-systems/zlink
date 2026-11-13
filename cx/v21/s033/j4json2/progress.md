@@ -1,0 +1,1 @@
+- 구현 전 보고서 작성. source-level bytes field decode: Base64 길이 B의 byte[] 4개 + 결과 byte[] 1개 + String 2개; runtime allocation은 JFR·allocation counter로 별도 검증 예정. raw 원문 보존.

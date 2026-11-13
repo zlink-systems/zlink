@@ -6,3 +6,4 @@ L2bp|L2 backpressure 손실 원인·production 수정(Java·Node)|l2bp
 N3sw|Node L3 service wire 손실 원인·production 수정|n3sw
 J4json|typed JSON base64 encode·decode 복사·할당 줄이기(Java 수정 + 세 언어 대조)|j4json2
 N4json|Node L4 typed JSON 손실 원인·production 수정|n4json
+C4json|C++ L4 typed JSON 손실 원인·production 수정|c4json

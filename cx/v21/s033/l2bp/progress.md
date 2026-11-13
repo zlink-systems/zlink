@@ -26,3 +26,9 @@
 - Java main 최초 회귀 실행은 test 시작 전에 single-use Gradle daemon 종료로 실패했다(`raw/java-regression-before.log`). main 변경 전의 codec과 동일한 scratch 빌드에 새 회귀 test만 복사해 전 상태를 검사한다. production 파일은 아직 수정하지 않았다.
 
 - Node 새 string 경계 test는 전후 모두 4/4 통과(동작은 유지하는 비용 수정). `raw/node-strings-before.log`, `raw/node-strings-after.log`. 최초 codec-after 진단은 formatter의 source mtime이 compile보다 늦어 fresh 판정에서 제외하고, formatted source를 다시 compile한 뒤 확인한다. raw는 보존.
+
+- Java allocation 회귀는 old=256 extra B/header에서 실패, 수정 branch의 ≤96 B/header 상한 통과. 원본 XML `raw/java-regression-before.xml`, `raw/java-regression-after.xml`. 두 언어 전체 format check 통과(`raw/java-format-check.log`, `raw/node-format-check.log`). Java scratch에 production fix만 복사해 bench client/server를 새로 빌드한다.
+
+- Artifact 내용 검사에서 main Node dist가 이전 native parser 후보임을 확인했다. 앞선 185개 통과는 최종 correlation/cache 수정의 검증으로 쓰지 않는다. `--force` 빌드 후 source/compiled signature와 mtime을 검사하고 최종 focused test를 다시 실행한다. scratch도 최종 production source를 복사해 별도로 다시 compile한다.
+
+- Java post-fix L2 profile 직전: main commit ddc13b0615, 테스트 완료한 core JAR(source보다 최신, private stringScratch 확인)을 classpath 첫 항목으로 둔다. fingerprint `raw/java-fixed-core-fingerprint.json`; bench/binding은 최초 fresh scratch 산출물 `raw/java-build-fingerprint.json` 그대로다. receive/reply shape `call-shape.md` 동일. native string 필드별 char[] 대신 reader-local byte scratch, 추가 wait·hop 없음.

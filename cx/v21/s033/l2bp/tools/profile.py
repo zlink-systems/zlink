@@ -33,7 +33,9 @@ if args.language == 'java':
         cmd = [java, '--enable-native-access=ALL-UNNAMED', '-Xms256m', '-Xmx1g']
         if args.profile:
             cmd += [f'-agentpath:{P}/tools/libasyncProfiler.so=start,event=ctimer,interval=1ms,wall=10ms,alloc=256k,jfr,file={out}/{role}.jfr']
-        cmd += ['-cp', str(bench / project / 'build/install' / app / 'lib/*'), main]
+        classpath = str(bench / project / 'build/install' / app / 'lib/*')
+        if env.get('L2BP_JAVA_CORE_JAR'): classpath = env['L2BP_JAVA_CORE_JAR'] + os.pathsep + classpath
+        cmd += ['-cp', classpath, main]
         return cmd
 else:
     env.update(ZLINK_LADDER_L0_SERVER='1', ZLINK_LADDER_L0_CLIENT='1', ZLINK_LADDER_L1_PERMIT='1')

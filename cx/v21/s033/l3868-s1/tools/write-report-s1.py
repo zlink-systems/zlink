@@ -58,11 +58,11 @@ L0는 binding 대비 ≥95%, L1~L4는 이전 단계 대비 손실 ≤7%, L5~L7�
 **근거**
 
 - [binding 기준](/root/jobs/fx/cx/v21/s033/binding-daily/cpp-2026-11-13b.json), [모든 counted·warm 원시 경로](raw/runs.jsonl), [수치·반복 전체 경로](raw/summary.json), [호출 대조](call-shape.md), [실행별 commit/base/hash·수신/응답 대조](progress.md).
-- [빌드 종료 코드](raw/build-success.json), [바이너리 전체 freshness·SHA256](raw/freshness.json), [동일 tree의 source binding/Release 근거](raw/binding-build-source.json). 지정 impl3 configure script를 cpp-build-slot.sh로 실행했다(Release, source binding ON, Core 1.25.0, -j3, ≤25 GiB). 빌드와 freshness가 모두 rc=0인 뒤 측정했다.
+- [빌드 종료 코드](raw/build-success.json), [바이너리 전체 freshness·SHA256](raw/freshness.json), [동일 tree의 source binding/Release 근거](raw/binding-build-source.json), [실제 Core 1.25.0 연결](raw/linkage.json). 지정 impl3 configure script를 cpp-build-slot.sh로 실행했다(Release, source binding ON, Core 1.25.0, -j3, ≤25 GiB). 빌드와 freshness가 모두 rc=0인 뒤 측정했다.
 - [configure](/root/jobs/fx/cx/v21/s033/l3868-impl3/raw/configure-s1-20261113T1856.log), [build](/root/jobs/fx/cx/v21/s033/l3868-impl3/raw/build-s1-20261113T1856.log). 코드 변경이 없어 추가 unit/E2E는 실행하지 않았다.
 - [검증기 정상·거부 시험](raw/validator-check/checks.json): 정상 수락, SCHED_IDLE·잘못된 affinity·mid-active 누락·count 불일치 거부.
 - [무효 실행](raw/invalid-runs.json) {len(invalid)}회는 판정에서 제외하고 원시 파일을 보존했다.
-- 유효 counted {len(counted)}회 모두 errors=0, submitted=completed=received. 각 results.json 옆 scheduling.txt에 source/target 모든 thread의 시작·mid-active chrt 정책과 Cpus_allowed_list를 기록했다. 원시 목록의 scheduling 필드로 연결한다.
+- 유효 counted {len(counted)}회 모두 errors=0, submitted=completed=received. 각 results.json 옆 scheduling.txt에 source/target 모든 thread의 시작·mid-active chrt 정책과 Cpus_allowed_list를 기록했다. 원시 목록의 scheduling 필드로 연결한다. [첫 counted 기록 요약](raw/first-counted-evidence.json).
 - [guard v8 파일·SHA256](raw/guard-evidence.json).
 - 락 보유 시간: {', '.join(holds)}. 각 hold의 before/after.json에 governor와 16 CPU C2/C3 상태를 보존했다. 빌드·집계는 락 밖에서 수행했다.
 - `build-l3868-next` 및 기존·이번 원시 파일을 유지한다. commit·push·GitHub·sub-agent·internal-docs 실행 없음.

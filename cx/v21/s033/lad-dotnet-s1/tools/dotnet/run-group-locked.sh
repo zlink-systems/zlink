@@ -5,6 +5,37 @@ root=/root/worktree/zlink-v21-s033/lad-dotnet
 levels=("$@")
 start=$SECONDS
 record_window(){ { date -u +%FT%TZ; uptime; for cpu in $(seq 0 15); do printf 'cpu%s.governor=' "$cpu"; cat /sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor; done; } > "$1"; }
+has_valid_counted() {
+  local level="$1" pattern="$2" size="$3" impl
+  [[ "$level" == L5_7 ]] && impl=zlink-framework-dotnet || impl=zlink-dotnet
+  python3 - "$job/raw/$level/$pattern-$size/counted" "$impl-$pattern-$size" <<'CHECK'
+import json,pathlib,sys
+base=pathlib.Path(sys.argv[1]); stem=sys.argv[2]
+def within(value,low,high):
+    try:
+        for part in value.split(','):
+            nums=[int(x) for x in part.split('-')]
+            if len(nums) not in (1,2) or not low<=nums[0]<=nums[-1]<=high: return False
+        return True
+    except Exception: return False
+for raw in base.glob('attempt*/run1/'+stem+'/results.json'):
+    sched=raw.with_name('scheduling.txt')
+    if not sched.is_file(): continue
+    try:
+        cell=json.loads(raw.read_text())['cells'][0]; txt=sched.read_text()
+        if cell['errors'] or cell['server_errors'] or cell['target_stats']['errors'] or cell['submitted']!=cell['completed'] or cell['completed']!=cell['target_stats']['received']: continue
+        if 'scheduling_invalid=' in txt or 'affinity_invalid=' in txt: continue
+        ok=True; lines=txt.splitlines()
+        for phase,lo,hi in (('source_start',0,5),('mid_active_source',0,5),('target_start',8,13),('mid_active_target',8,13)):
+            tids=[x for x in lines if x.startswith(phase+'_tid=')]
+            aff=[x.rsplit('cpus=',1)[1] for x in lines if x.startswith(phase+'_affinity ') and 'cpus=' in x]
+            if not tids or len(tids)!=len(aff) or not all(within(x,lo,hi) for x in aff): ok=False; break
+            if not all('current scheduling policy: SCHED_OTHER' in '\n'.join(lines[i:i+3]) for i,x in enumerate(lines) if x.startswith(phase+'_tid=')): ok=False; break
+        if ok: raise SystemExit(0)
+    except Exception: pass
+raise SystemExit(1)
+CHECK
+}
 setgov(){ for cpu in $(seq 0 15); do echo "$1" > /sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor; done; }
 trap 'setgov powersave' EXIT
 setgov performance
@@ -14,6 +45,10 @@ for level in "${levels[@]}"; do
   [[ "$level" == binding || "$level" == L0 || "$level" == L1 || "$level" == L2 || "$level" == L3 || "$level" == L4 || "$level" == L5_7 ]] || { echo "invalid level $level" >&2; exit 2; }
   for pair in 'send-saturation 1024' 'send-saturation 4096' 'request-serial 1024' 'request-serial 4096' 'request-backpressure 1024' 'request-backpressure 4096'; do
     read -r pattern size <<<"$pair"
+    if has_valid_counted "$level" "$pattern" "$size"; then
+      printf -- '- skip existing valid counted result level=%s cell=%s-%s\n' "$level" "$pattern" "$size" >> "$job/progress.md"
+      continue
+    fi
     for stage in warm counted; do
       (( SECONDS - start < 1500 )) || { echo '25-minute stop boundary reached' >&2; exit 124; }
       stamp="dotnet-${level}-${pattern}-${size}-${stage}-$(date -u +%Y%m%dT%H%M%SZ)"

@@ -77,7 +77,9 @@ def threads(tag):
 def phase(name, duration):
     body=dict(runId=label, cellId=label, pattern=pattern, payloadBytes=size,
         phase=name, durationMs=duration, requestWindow=100, submitConcurrency=8)
+    phase_started=time.monotonic()
     event(name+'-start')
+    if name=='active': threads('active-start')
     ack=request(trigger,'/bench/start',body)
     if not ack.get('accepted'): raise RuntimeError(ack)
     mid=False
@@ -86,7 +88,7 @@ def phase(name, duration):
         stats=request(source)
         if stats['phase']=='failed': raise RuntimeError(stats)
         if stats['phase']=='idle': break
-        if not mid and name=='active': threads('active'); mid=True
+        if not mid and name=='active' and time.monotonic()-phase_started>=duration/2000: threads('active'); mid=True
         time.sleep(0.05)
     event(name+'-end')
     return stats

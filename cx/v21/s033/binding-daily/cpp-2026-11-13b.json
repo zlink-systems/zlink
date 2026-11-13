@@ -1,0 +1,65 @@
+{
+  "language": "cpp",
+  "utc_date": "2026-11-13",
+  "measured_utc": "2026-11-13T20:40:20.167865+00:00",
+  "conditions": "C2·C3 off, SCHED_OTHER, source pin 0-5 / target pin 8-13, guard v8",
+  "warmup_seconds": 3,
+  "active_seconds": 5,
+  "discarded_warm_run_per_cell_change": true,
+  "worktree": "/root/worktree/zlink-v21-s033/l3868-next",
+  "commit": "62e766f88dc6d1feefdff76e6132185019db0bb6",
+  "affinity_verified": true,
+  "scheduling_verified": true,
+  "status": "valid",
+  "validity_note": "All source/target threads verified SCHED_OTHER and pinned 0-5 / 8-13 at start and mid-active; discarded warm run per cell change.",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_s": 510542.290953,
+      "raw": "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-send-saturation-1024/counted1-attempt1/run1/zlink-cpp-send-saturation-1024/results.json",
+      "scheduling": [
+        "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-send-saturation-1024/counted1-attempt1/run1/zlink-cpp-send-saturation-1024/scheduling.txt"
+      ],
+      "counted_runs": 1
+    },
+    "send-saturation-4096": {
+      "msg_s": 233376.60996,
+      "raw": "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-send-saturation-4096/counted1-attempt1/run1/zlink-cpp-send-saturation-4096/results.json",
+      "scheduling": [
+        "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-send-saturation-4096/counted1-attempt1/run1/zlink-cpp-send-saturation-4096/scheduling.txt"
+      ],
+      "counted_runs": 1
+    },
+    "request-serial-1024": {
+      "msg_s": 12317.682992,
+      "raw": "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-request-serial-1024/counted1-attempt1/run1/zlink-cpp-request-serial-1024/results.json",
+      "scheduling": [
+        "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-request-serial-1024/counted1-attempt1/run1/zlink-cpp-request-serial-1024/scheduling.txt"
+      ],
+      "counted_runs": 1
+    },
+    "request-serial-4096": {
+      "msg_s": 11343.662447,
+      "raw": "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-request-serial-4096/counted1-attempt1/run1/zlink-cpp-request-serial-4096/results.json",
+      "scheduling": [
+        "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-request-serial-4096/counted1-attempt1/run1/zlink-cpp-request-serial-4096/scheduling.txt"
+      ],
+      "counted_runs": 1
+    },
+    "request-backpressure-1024": {
+      "msg_s": 125546.587086,
+      "raw": "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-request-backpressure-1024/counted1-attempt1/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "scheduling": [
+        "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-request-backpressure-1024/counted1-attempt1/run1/zlink-cpp-request-backpressure-1024/scheduling.txt"
+      ],
+      "counted_runs": 1
+    },
+    "request-backpressure-4096": {
+      "msg_s": 131482.711867,
+      "raw": "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-request-backpressure-4096/counted1-attempt1/run1/zlink-cpp-request-backpressure-4096/results.json",
+      "scheduling": [
+        "/root/jobs/fx/cx/v21/s033/l3868-s1/raw/holds/20261113T203810Z-3952009/binding-request-backpressure-4096/counted1-attempt1/run1/zlink-cpp-request-backpressure-4096/scheduling.txt"
+      ],
+      "counted_runs": 1
+    }
+  }
+}
