@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Bean;
 import systems.zlink.bench.withgrpc.shared.Args;
 import systems.zlink.bench.withgrpc.shared.BenchContract;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
+import systems.zlink.bench.withgrpc.shared.BenchTypedPayload;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
 import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
 import systems.zlink.bench.withgrpc.shared.RawWire;
@@ -26,6 +27,9 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueu
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
+import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 
 import java.nio.ByteBuffer;
 import java.util.OptionalLong;
@@ -53,6 +57,9 @@ public class ZLinkFrameworkBenchServer {
                     null, "BenchPayload", "application/x-protobuf");
     private static final ZLinkServiceM6AWireCodec SERVICE_WIRE =
             new ZLinkServiceM6AWireCodec();
+    private static final ZLinkChannelEnvelope.PreparedNames LADDER_PAYLOAD_NAMES =
+            new ZLinkChannelEnvelope.PreparedNames(
+                    null, "BenchTypedPayload", "application/json");
     // These are handed to the context as @Bean METHODS, not as singletons registered
     // on the bean factory. A registered singleton has an instance but no bean
     // DEFINITION, and the framework's Spring handler factory asks whether each
@@ -133,7 +140,8 @@ public class ZLinkFrameworkBenchServer {
     private static void pumpLadderL0(RouterSocket router, BenchServerMetrics metrics) {
         boolean permitsEnabled = System.getenv("ZLINK_BENCH_LADDER_L1") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L2") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L3") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L3") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L4") != null;
         ZLinkApplicationJobQueue permits = permitsEnabled
                 ? new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
@@ -187,10 +195,15 @@ public class ZLinkFrameworkBenchServer {
         return System.getenv("ZLINK_BENCH_LADDER_L0") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L1") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L2") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L3") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L3") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L4") != null;
     }
 
     private static void handleLadderL0(Received received, BenchServerMetrics metrics) {
+        if (System.getenv("ZLINK_BENCH_LADDER_L4") != null) {
+            handleLadderL4(received, metrics);
+            return;
+        }
         if (System.getenv("ZLINK_BENCH_LADDER_L3") != null) {
             handleLadderL3(received, metrics);
             return;
@@ -254,6 +267,85 @@ public class ZLinkFrameworkBenchServer {
         } finally {
             ZLinkFrameworkMultipartView.closeAll(replyParts);
         }
+    }
+
+    private static void handleLadderL4(Received received, BenchServerMetrics metrics) {
+        var wireParts = received.parts();
+        if (wireParts.size() != 2) {
+            metrics.recordError();
+            return;
+        }
+        long correlation = 0;
+        try {
+            if (received.replyToken().isPresent()) {
+                var serviceHeader = SERVICE_WIRE.decodeChannelRequestHeader(
+                        wireParts.getFirst().toByteArray());
+                if (!BenchContract.CHANNEL_NAME.equals(serviceHeader.channelName())) {
+                    metrics.recordError();
+                    return;
+                }
+                correlation = serviceHeader.correlation();
+            } else if (!BenchContract.CHANNEL_NAME.equals(
+                    SERVICE_WIRE.decodeChannelSendHeader(wireParts.getFirst().toByteArray()))) {
+                metrics.recordError();
+                return;
+            }
+        } catch (RuntimeException invalid) {
+            metrics.recordError();
+            return;
+        }
+        final long replyCorrelation = correlation;
+        try (var parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrameView(
+                wireParts.get(1).dataBuffer())) {
+            if (parts.size() != 2) {
+                metrics.recordError();
+                return;
+            }
+            var header = ZLinkChannelEnvelope.decodeHeader(parts.getFirst().dataBuffer(), false);
+            int expectedKind = received.replyToken().isPresent()
+                    ? ZLinkChannelEnvelope.KIND_REQUEST
+                    : ZLinkChannelEnvelope.KIND_COMMAND;
+            if (header.kind() != expectedKind
+                    || !BenchContract.CHANNEL_NAME.equals(header.channelName())
+                    || !"BenchTypedPayload".equals(header.messageName())
+                    || !"application/json".equals(header.contentType())) {
+                metrics.recordError();
+                return;
+            }
+            BenchTypedPayload payload = ZLinkMessagePayloads.deserialize(
+                    TypedJsonHolder.SERIALIZER,
+                    parts.getLast().dataBuffer(), BenchTypedPayload.class);
+            if (payload.body() == null) {
+                metrics.recordError();
+                return;
+            }
+            var body = java.nio.ByteBuffer.wrap(payload.body());
+            metrics.record(body);
+            if (received.replyToken().isPresent()) {
+                var responseBody = ZLinkPayloadEncoding.encodeMessage(
+                        TypedJsonHolder.SERIALIZER, payload, "application/json");
+                var responseParts = ZLinkChannelEnvelope.encode(
+                        ZLinkChannelEnvelope.reply(header),
+                        responseBody,
+                        CHANNEL_NAMES,
+                        LADDER_PAYLOAD_NAMES,
+                        LADDER_PAYLOAD_NAMES);
+                try (Message framed = ZLinkServiceM6AWireCodec
+                                .encodeFrameworkMultipartMessage(responseParts);
+                        Message serviceHeader = Message.from(
+                                SERVICE_WIRE.encodeReplyHeader(replyCorrelation, 0, 0))) {
+                    received.reply().message(serviceHeader).message(framed).submit();
+                } finally {
+                    ZLinkFrameworkMultipartView.closeAll(responseParts);
+                    responseBody.close();
+                }
+            }
+        }
+    }
+
+    private static final class TypedJsonHolder {
+        private static final ZLinkJsonMessageSerializer SERIALIZER =
+                new ZLinkJsonMessageSerializer();
     }
 
     private static void handleLadderL3(Received received, BenchServerMetrics metrics) {

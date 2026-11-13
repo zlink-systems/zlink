@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+import systems.zlink.bench.withgrpc.shared.BenchTypedPayload;
 import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
@@ -21,6 +22,9 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
+import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.bench.withgrpc.shared.BenchContract;
 
 /** Raw binding client: ROUTER&lt;-&gt;ROUTER with an explicit target routing ID. */
@@ -101,7 +105,7 @@ public final class RawStack implements AutoCloseable {
             public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
                 var operation = router.request(peer);
                 var body = ZLinkFrameworkMultipartView.owned(
-                    RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
+                        RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
                 List<Message> envelope;
                 try {
                     envelope = envelopeFactory.encode(kind, body);
@@ -132,12 +136,21 @@ public final class RawStack implements AutoCloseable {
     }
 
     public RawOperation requestWithServiceWireEnvelope(int kind, EnvelopeFactory envelopeFactory) {
+        return requestWithServiceWireEnvelope(kind, envelopeFactory, false);
+    }
+
+    public RawOperation requestWithTypedJsonServiceWireEnvelope(
+            int kind, EnvelopeFactory envelopeFactory) {
+        return requestWithServiceWireEnvelope(kind, envelopeFactory, true);
+    }
+
+    private RawOperation requestWithServiceWireEnvelope(
+            int kind, EnvelopeFactory envelopeFactory, boolean typedJson) {
         return new RawOperation() {
             @Override
             public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
                 var operation = router.request(peer);
-                var body = ZLinkFrameworkMultipartView.owned(
-                    RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
+                var body = payloadView(payloadSize, runId, phase, sequence, typedJson);
                 List<Message> envelope;
                 try {
                     envelope = envelopeFactory.encode(kind, body);
@@ -156,16 +169,26 @@ public final class RawStack implements AutoCloseable {
                         : java.util.concurrent.CompletableFuture.<Void>completedFuture(null);
                     return new RawSubmission(submission.result(), admitted,
                         submission.reply().toCompletableFuture().thenAccept(parts -> {
-                            if (parts.size() != 2) {
-                                throw new IllegalArgumentException("invalid service reply frame count");
-                            }
-                            var reply = SERVICE_WIRE.decodeReplyHeader(parts.getFirst().dataBuffer());
-                            if (reply.correlation() != correlation || reply.terminalResult() != 0) {
-                                throw new IllegalArgumentException("invalid service reply terminal");
-                            }
-                            try (var decoded = ZLinkServiceM6AWireCodec
-                                    .decodeFrameworkMultipartFrameView(parts.get(1).dataBuffer())) {
-                                validateEnvelope(decoded, runId, phase, payloadSize, sequence);
+                            try {
+                                if (parts.size() != 2) {
+                                    throw new IllegalArgumentException("invalid service reply frame count");
+                                }
+                                var reply = SERVICE_WIRE.decodeReplyHeader(parts.getFirst().dataBuffer());
+                                if (reply.correlation() != correlation || reply.terminalResult() != 0) {
+                                    throw new IllegalArgumentException("invalid service reply terminal");
+                                }
+                                try (var decoded = ZLinkServiceM6AWireCodec
+                                        .decodeFrameworkMultipartFrameView(parts.get(1).dataBuffer())) {
+                                    if (typedJson) {
+                                        validateTypedEnvelope(
+                                                decoded, runId, phase, payloadSize, sequence);
+                                    } else {
+                                        validateEnvelopeParts(
+                                                decoded, runId, phase, payloadSize, sequence);
+                                    }
+                                }
+                            } finally {
+                                ZLinkFrameworkMultipartView.closeAll(parts);
                             }
                         }));
                 } finally {
@@ -184,7 +207,12 @@ public final class RawStack implements AutoCloseable {
     }
 
     public RawSendOperation sendWithServiceWireEnvelope(int kind, EnvelopeFactory envelopeFactory) {
-        return new ServiceWireEnvelopeSendOperation(kind, envelopeFactory);
+        return new ServiceWireEnvelopeSendOperation(kind, envelopeFactory, false);
+    }
+
+    public RawSendOperation sendWithTypedJsonServiceWireEnvelope(
+            int kind, EnvelopeFactory envelopeFactory) {
+        return new ServiceWireEnvelopeSendOperation(kind, envelopeFactory, true);
     }
 
     @FunctionalInterface
@@ -283,16 +311,18 @@ public final class RawStack implements AutoCloseable {
     private final class ServiceWireEnvelopeSendOperation extends RawSendOperation {
         private final int kind;
         private final EnvelopeFactory envelopeFactory;
+        private final boolean typedJson;
 
-        private ServiceWireEnvelopeSendOperation(int kind, EnvelopeFactory envelopeFactory) {
+        private ServiceWireEnvelopeSendOperation(
+                int kind, EnvelopeFactory envelopeFactory, boolean typedJson) {
             this.kind = kind;
             this.envelopeFactory = envelopeFactory;
+            this.typedJson = typedJson;
         }
 
         @Override
         public PreparedSend prepareRaw(int payloadSize, byte phase, long sequence) {
-            var body = ZLinkFrameworkMultipartView.owned(
-                    RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
+            var body = payloadView(payloadSize, runId, phase, sequence, typedJson);
             List<Message> envelope;
             try {
                 envelope = envelopeFactory.encode(kind, body);
@@ -374,23 +404,7 @@ public final class RawStack implements AutoCloseable {
     private static void validateEnvelope(
         List<Message> parts, int runId, byte phase, int payloadSize, long sequence) {
         try {
-            var header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
-                .tryDecodeHeader(parts, false);
-            if (header == null
-                    || header.kind()
-                        != systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_RESPONSE
-                    || !systems.zlink.bench.withgrpc.shared.BenchContract.CHANNEL_NAME
-                        .equals(header.channelName())
-                    || !"BenchPayload".equals(header.messageName())
-                    || !"application/x-protobuf".equals(header.contentType())
-                    || parts.size() != 2) {
-                throw new IllegalStateException("raw request returned an invalid reply envelope");
-            }
-            ByteBuffer body = RawWire.decodeBenchPayloadBody(parts.get(1).dataBuffer());
-            BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(body);
-            if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
-                throw new IllegalStateException("raw reply header mismatch");
-            }
+            validateEnvelopeParts(parts, runId, phase, payloadSize, sequence);
         } finally {
             for (Message part : parts) {
                 part.close();
@@ -398,6 +412,74 @@ public final class RawStack implements AutoCloseable {
         }
     }
 
+    private static void validateEnvelopeParts(
+            List<Message> parts, int runId, byte phase, int payloadSize, long sequence) {
+        var header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                .tryDecodeHeader(parts, false);
+        if (header == null
+                || header.kind()
+                    != systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_RESPONSE
+                || !BenchContract.CHANNEL_NAME.equals(header.channelName())
+                || !"BenchPayload".equals(header.messageName())
+                || !"application/x-protobuf".equals(header.contentType())
+                || parts.size() != 2) {
+            throw new IllegalStateException("raw request returned an invalid reply envelope");
+        }
+        ByteBuffer body = RawWire.decodeBenchPayloadBody(parts.get(1).dataBuffer());
+        BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(body);
+        if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
+            throw new IllegalStateException("raw reply header mismatch");
+        }
+    }
+
+    private static void validateTypedEnvelope(
+            List<Message> parts, int runId, byte phase, int payloadSize, long sequence) {
+        var header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                .tryDecodeHeader(parts, false);
+        if (header == null
+                || header.kind()
+                    != systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_RESPONSE
+                || !BenchContract.CHANNEL_NAME.equals(header.channelName())
+                || !"BenchTypedPayload".equals(header.messageName())
+                || !"application/json".equals(header.contentType())
+                || parts.size() != 2) {
+            throw new IllegalStateException("typed request returned an invalid reply envelope");
+        }
+        validateTyped(parts, runId, phase, payloadSize, sequence);
+    }
+
+    private static ZLinkFrameworkMultipartView payloadView(
+            int payloadSize, int runId, byte phase, long sequence, boolean typedJson) {
+        if (!typedJson) {
+            return ZLinkFrameworkMultipartView.owned(
+                    RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
+        }
+        return ZLinkPayloadEncoding.encodeMessage(
+                TypedJsonHolder.SERIALIZER,
+                new BenchTypedPayload(
+                        BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)),
+                "application/json");
+    }
+
+    private static void validateTyped(
+            List<Message> parts, int runId, byte phase, int payloadSize, long sequence) {
+        if (parts.size() < 2) {
+            throw new IllegalStateException("typed service reply returned too few parts");
+        }
+        var payload = ZLinkMessagePayloads.deserialize(
+                TypedJsonHolder.SERIALIZER,
+                parts.getLast().dataBuffer(),
+                BenchTypedPayload.class);
+        BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(payload.body());
+        if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
+            throw new IllegalStateException("typed JSON reply header mismatch");
+        }
+    }
+
+    private static final class TypedJsonHolder {
+        private static final ZLinkJsonMessageSerializer SERIALIZER =
+                new ZLinkJsonMessageSerializer();
+    }
     @Override
     public void close() {
         completionPoller.close();

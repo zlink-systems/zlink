@@ -35,7 +35,7 @@ public final class FrameworkStack implements AutoCloseable {
             new ZLinkChannelEnvelope.PreparedNames(BenchContract.CHANNEL_NAME, null, null);
     private static final ZLinkChannelEnvelope.PreparedNames MESSAGE_NAMES =
             new ZLinkChannelEnvelope.PreparedNames(
-                    null, "BenchPayload", "application/x-protobuf");
+                    null, ladderMessageName(), ladderContentType());
 
     private final ConfigurableApplicationContext context;
     private final ZLinkRouteClient route;
@@ -133,6 +133,13 @@ public final class FrameworkStack implements AutoCloseable {
         if (ladderBinding == null) {
             throw new IllegalStateException("L0 operation requested outside ladder mode");
         }
+        if (System.getenv("ZLINK_BENCH_LADDER_L4") != null) {
+            return send
+                    ? ladderBinding.sendWithTypedJsonServiceWireEnvelope(
+                            ZLinkChannelEnvelope.KIND_COMMAND, FrameworkStack::envelopeParts)
+                    : ladderBinding.requestWithTypedJsonServiceWireEnvelope(
+                            ZLinkChannelEnvelope.KIND_REQUEST, FrameworkStack::envelopeParts);
+        }
         if (System.getenv("ZLINK_BENCH_LADDER_L3") != null) {
             return send
                     ? ladderBinding.sendWithServiceWireEnvelope(
@@ -157,8 +164,8 @@ public final class FrameworkStack implements AutoCloseable {
                 ZLinkChannelEnvelope.create(
                         kind,
                         BenchContract.CHANNEL_NAME,
-                        "BenchPayload",
-                        "application/x-protobuf",
+                        ladderMessageName(),
+                        ladderContentType(),
                         null,
                         java.util.Map.of(),
                         null);
@@ -192,7 +199,20 @@ public final class FrameworkStack implements AutoCloseable {
         return System.getenv("ZLINK_BENCH_LADDER_L0") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L1") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L2") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L3") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L3") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L4") != null;
+    }
+
+    private static String ladderMessageName() {
+        return System.getenv("ZLINK_BENCH_LADDER_L4") != null
+                ? "BenchTypedPayload"
+                : "BenchPayload";
+    }
+
+    private static String ladderContentType() {
+        return System.getenv("ZLINK_BENCH_LADDER_L4") != null
+                ? "application/json"
+                : "application/x-protobuf";
     }
 
     @EnableZLinkFramework

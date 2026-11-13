@@ -30,6 +30,13 @@ val rawProgressTest by tasks.registering(JavaExec::class) {
 }
 tasks.check { dependsOn(rawProgressTest) }
 
+val ladderTypedPayloadTest by tasks.registering(JavaExec::class) {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.LadderTypedPayloadTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(ladderTypedPayloadTest) }
+
 val activeBoundaryTest by tasks.registering(JavaExec::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("systems.zlink.bench.withgrpc.client.ActiveBoundaryTest")
