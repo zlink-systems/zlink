@@ -24,6 +24,7 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
 import java.nio.ByteBuffer;
@@ -195,10 +196,15 @@ public class ZLinkFrameworkBenchServer {
     private static boolean ladderMode() {
         return System.getenv("ZLINK_BENCH_LADDER_L0") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L1") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L2") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L2") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L3") != null;
     }
 
     private static void handleLadderL0(Received received, BenchServerMetrics metrics) {
+        if (System.getenv("ZLINK_BENCH_LADDER_L3") != null) {
+            handleLadderL3(received, metrics);
+            return;
+        }
         var parts = received.parts();
         if (parts.isEmpty()) {
             metrics.recordError();
@@ -257,6 +263,83 @@ public class ZLinkFrameworkBenchServer {
             received.reply().message(replyParts.get(0)).message(replyParts.get(1)).submit();
         } finally {
             ZLinkFrameworkMultipartView.closeAll(replyParts);
+        }
+    }
+
+    private static void handleLadderL3(Received received, BenchServerMetrics metrics) {
+        var wireParts = received.parts();
+        if (wireParts.size() != 2) {
+            metrics.recordError();
+            return;
+        }
+        var serviceWire = new ZLinkServiceM6AWireCodec();
+        long correlation = 0;
+        try {
+            if (received.replyToken().isPresent()) {
+                var serviceHeader = serviceWire.decodeChannelRequestHeader(
+                        wireParts.getFirst().toByteArray());
+                if (!BenchContract.CHANNEL_NAME.equals(serviceHeader.channelName())) {
+                    metrics.recordError();
+                    return;
+                }
+                correlation = serviceHeader.correlation();
+            } else if (!BenchContract.CHANNEL_NAME.equals(
+                    serviceWire.decodeChannelSendHeader(wireParts.getFirst().toByteArray()))) {
+                metrics.recordError();
+                return;
+            }
+        } catch (RuntimeException invalid) {
+            metrics.recordError();
+            return;
+        }
+        final long replyCorrelation = correlation;
+        try (var parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrameView(
+                wireParts.get(1).dataBuffer())) {
+            if (parts.size() != 2) {
+                metrics.recordError();
+                return;
+            }
+            var header = ZLinkChannelEnvelope.decodeHeader(parts.getFirst().dataBuffer(), false);
+            int expectedKind = received.replyToken().isPresent()
+                    ? ZLinkChannelEnvelope.KIND_REQUEST
+                    : ZLinkChannelEnvelope.KIND_COMMAND;
+            if (header.kind() != expectedKind
+                    || !BenchContract.CHANNEL_NAME.equals(header.channelName())
+                    || !"BenchPayload".equals(header.messageName())
+                    || !"application/x-protobuf".equals(header.contentType())) {
+                metrics.recordError();
+                return;
+            }
+            var body = RawWire.decodeBenchPayloadBody(parts.getLast().dataBuffer());
+            if (body == null) {
+                metrics.recordError();
+                return;
+            }
+            metrics.record(body);
+            if (received.replyToken().isPresent()) {
+                var responseBody = ZLinkFrameworkMultipartView.owned(
+                        RawWire.encodeBenchPayloadMessage(body));
+                java.util.List<Message> responseParts;
+                try {
+                    responseParts = ZLinkChannelEnvelope.encode(
+                            ZLinkChannelEnvelope.reply(header),
+                            responseBody,
+                            CHANNEL_NAMES,
+                            MESSAGE_NAMES,
+                            MESSAGE_NAMES);
+                } catch (RuntimeException | Error failure) {
+                    responseBody.close();
+                    throw failure;
+                }
+                try (Message framed = ZLinkServiceM6AWireCodec.encodeFrameworkMultipartMessage(
+                                responseParts);
+                        Message serviceHeader = Message.from(
+                                serviceWire.encodeReplyHeader(replyCorrelation, 0, 0))) {
+                    received.reply().message(serviceHeader).message(framed).submit();
+                } finally {
+                    ZLinkFrameworkMultipartView.closeAll(responseParts);
+                }
+            }
         }
     }
 
