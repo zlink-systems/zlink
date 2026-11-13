@@ -2,6 +2,8 @@
 
 Node의 일반 data graph에서 bytes를 공용 JSON 정책으로 먼저 변환하여, `Buffer.toJSON`의 버려지는 Array(N)과 wrapper를 만들지 않는다. 수신 bytes schema는 기존 canonical 검증 뒤 Node native decoder를 사용한다. Wire·DTO·codec 선택·공용 finite/64-bit/Date/toJSON 정책은 유지했다.
 
+Node **22.23.3**에서 검증했다. Node 20 runtime은 별도로 실행하지 않았다.
+
 ## 범위와 판정 근거
 
 - 작업 브랜치 `perf/4354-node-typed-json`, 기준 commit `6e48bdf5fbfe7252b029b405f514693a91f2a92d`. 시작 시 clean이었다. 앞 작업의 [보고서](../n4json/report.md)와 [감독 메모](../n4json/SUPERVISOR-NOTE.md)를 먼저 읽었다.
@@ -17,7 +19,7 @@ Node의 일반 data graph에서 bytes를 공용 JSON 정책으로 먼저 변환�
 |---|---|---|---|---|---|
 | 기본 typed JSON 선택 / message-model §5 | `channel-envelope.ts:498-508` | `ZLinkFrameworkJsonPayloadCodec.cs:26-33` | `ZLinkJsonMessageSerializer.java:54-76` | `contracts/codecs/serializer.hpp:345-375` | 기존 Framework codec 선택 유지 |
 | bytes 표현 / message-model `05-message-model.ko.md:153` | 공용 profile `:72-74`, Node adapter `:8-11`; 그 전에 `node:buffer:1154-1161`의 임시 표현 생성 | codec `:26-33` → STJ ByteArrayConverter.Write | mapper `writeValueAsBytes`, serializer `:76` | `json_profile.hpp:258-273,518-519` | 공용 `frameworkJsonV1Value`; Node adapter는 primitive와 data graph 준비만 소유 |
-| canonical bytes 검증과 복원 / message-model §5, payload ownership §5 | 공용 profile `:137-144,386-406` | codec `:10-23` → STJ ByteArrayConverter.Read | `ZLinkFrameworkJsonProfile.java:352-375` | `json_profile.hpp:275-300,805-807` | 기존 공용 validator, Node adapter의 native byte primitive |
+| canonical bytes 검증과 복원 / message-model §5, payload ownership §5 | 공용 profile `:146-153,395-416` | codec `:10-23` → STJ ByteArrayConverter.Read | `ZLinkFrameworkJsonProfile.java:352-375` | `json_profile.hpp:275-300,805-807` | 기존 공용 validator, Node adapter의 native byte primitive |
 
 Java 파일은 `framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/messaging/`와 `zlink-framework-json-internal/src/main/java/systems/zlink/framework/runtime/internal/json/`, C++ profile은 `framework/languages/cpp/common/include/zlink/json_profile.hpp`에 있다. Node 경로는 `framework/languages/node/packages/` 아래다. .NET local 경로는 아래 비교표에 명시했다.
 
@@ -82,7 +84,7 @@ Profiler는 앞 작업의 `--cpu-prof` + Inspector HeapProfiler 16 KiB sampling�
 
 Micro allocation은 process 전체 heap 표본을 호출 수로 나눈 값이다. 최적화/inlining 때문에 codec subtree에서 toJSON/문자열 중간 frame이 생략되는 사례가 있어, 이 표는 subtree 합산을 사용하지 않는다. Module startup overhead도 포함한 근삿값이다. V8 heap sampling은 native/external backing byte 저장소 전체의 회계가 아니며, decoded N-byte 저장소는 전/후 모두 생성한다. [전체 micro 집계](raw/micro-summary.json).
 
-후보의 정책 owner 수: 기존 **1**, (a) **1**, 완전한 (b)를 추가하면 공용 policy와 schema writer **2**다. 최소 (b)는 일반 JSON 의미를 아직 구현하지 않은 비교용 하한이다. Native JSON의 자체 동작을 유지하는 (a)를 선택했다.
+후보의 정책 owner 수: 기존 **1**, (a) **1**, 완전한 (b)를 기존 경로 옆에 추가하면 공용 policy와 schema writer **2**다. 최소 (b)는 일반 JSON 의미를 아직 구현하지 않은 비교용 하한이다. Native JSON의 자체 동작을 유지하는 (a)를 선택했다.
 
 ### L4 source/target CPU
 
@@ -148,4 +150,4 @@ Parser factory를 썼던 중간 후보는 기존 공용 parser 진입점 관찰 
 
 바꾼 파일은 Node adapter, 공용 JSON profile, `test/contract/node-typed-json.test.js` 세 개다. 공식 browser build가 갱신한 Unity 생성물은 전/후/patch를 raw에 보존하고 이 작업 전 값으로 복원했다. Raw·scratch·설치/build output은 요청대로 보존하고, 이 세션이 시작한 검사·profile process의 종료를 확인했다.
 
-로컬 commit: __HASH__. Push/PR/GitHub 작업 없음. 최종 검증한 source SHA와 repository 상태는 [validation-summary.json](raw/validation-summary.json)에 보존한다.
+로컬 commit: 165f12b02f9bad5449aae9d40877005ddc35b696. Push/PR/GitHub 작업 없음. 최종 검증한 source SHA와 repository 상태는 [validation-summary.json](raw/validation-summary.json)에 보존한다.
