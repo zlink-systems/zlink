@@ -25,6 +25,24 @@ attempt=1
 while [[ -e "$stage_root/attempt$attempt" ]]; do attempt=$((attempt+1)); done
 out="$stage_root/attempt$attempt"
 mkdir -p "$out"
+# Confirm guard v8 has applied this hold's C-state isolation before each cell.
+ready=0
+for _ in $(seq 1 60); do
+  ready=1
+  for cpu in 0 8; do for state in 2 3; do
+    [[ "$(cat /sys/devices/system/cpu/cpu${cpu}/cpuidle/state${state}/disable 2>/dev/null || echo unavailable)" == 1 ]] || ready=0
+  done; done
+  if [[ "$ready" == 1 ]]; then
+    sleep 1
+    ready=1
+    for cpu in 0 8; do for state in 2 3; do
+      [[ "$(cat /sys/devices/system/cpu/cpu${cpu}/cpuidle/state${state}/disable 2>/dev/null || echo unavailable)" == 1 ]] || ready=0
+    done; done
+    [[ "$ready" == 1 ]] && break
+  fi
+  sleep 0.25
+done
+[[ "$ready" == 1 ]] || { echo 'quiet guard C2/C3 isolation not stable before run; active phase not started' >&2; exit 1; }
 # Record the exact state and the required parity excerpts before every warm or counted run.
 commit=$(git -C "$ROOT" rev-parse HEAD)
 dirty=clean; [[ -z "$(git -C "$ROOT" status --porcelain)" ]] || dirty=dirty

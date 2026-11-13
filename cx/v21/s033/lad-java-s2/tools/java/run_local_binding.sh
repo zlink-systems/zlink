@@ -71,9 +71,19 @@ binding_wait_for_cpu_split() {
   [[ "$ready" == 1 ]] || { echo 'quiet guard did not narrow source/target CPU affinity to 0-5 / 8-13 before warmup' >&2; return 1; }
 }
 binding_sched_start() {
-  local cpu state val
+  local cpu state val ready
   : > "$BINDING_SCHED_FILE"
   binding_wait_for_cpu_split
+  ready=0
+  for _ in $(seq 1 120); do
+    ready=1
+    for cpu in 0 8; do for state in 2 3; do
+      [[ "$(cat "/sys/devices/system/cpu/cpu${cpu}/cpuidle/state${state}/disable" 2>/dev/null || echo unavailable)" == 1 ]] || ready=0
+    done; done
+    [[ "$ready" == 1 ]] && break
+    sleep 0.25
+  done
+  [[ "$ready" == 1 ]] || { echo 'quiet guard did not disable C2/C3 before measurement' >&2; return 1; }
   printf 'run_start_utc=%s\n' "$(date -u +%FT%TZ)" >> "$BINDING_SCHED_FILE"
   for cpu in 0 8; do for state in 2 3; do
     val="$(cat "/sys/devices/system/cpu/cpu${cpu}/cpuidle/state${state}/disable" 2>/dev/null || echo unavailable)"
