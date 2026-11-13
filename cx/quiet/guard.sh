@@ -19,6 +19,7 @@ resume() {
   for p in "${idled[@]}"; do chrt -a -o -p 0 $p 2>/dev/null; done
   stopped=(); idled=()
   ((cdeep)) && cstates 0
+  [ -f /root/jobs/fx/cx/quiet/isolate-state.json ] && echo "$(date -u +%FT%TZ) $(python3 -I /root/jobs/fx/cx/quiet/isolate.py restore)" >> $LOG
 }
 trap 'resume; exit 0' TERM INT
 # The guard and everything it forks run SCHED_IDLE: it must never preempt a measured thread.
@@ -30,6 +31,8 @@ while :; do
   if [ -n "$h" ]; then
     declare -A mine=(); for p in $(desc $h); do mine[$p]=1; done
     ((cdeep)) || cstates 1
+    # CPU split (PM 17:38): measured tree 0-5 / 8-13, everything else and IRQs 6-7,14-15
+    python3 -I /root/jobs/fx/cx/quiet/isolate.py apply $h 2>>$LOG
     # the measurement itself must run SCHED_OTHER: its waiter was forked by an agent that an
     # earlier hold set SCHED_IDLE, and children inherit that (A/A + Java m1 ran IDLE, 11-13 16:3x)
     for p in $h $(desc $h); do chrt -a -o -p 0 $p 2>/dev/null; done
