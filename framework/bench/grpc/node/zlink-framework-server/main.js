@@ -22,6 +22,8 @@ const l0rServer = l0Server && process.env.ZLINK_LADDER_L0R === '1';
 const l1Permit = l0Server && process.env.ZLINK_LADDER_L1_PERMIT === '1';
 const l2Envelope = l0Server && process.env.ZLINK_LADDER_L2_ENVELOPE === '1';
 const l2rEnvelope = l0Server && process.env.ZLINK_LADDER_L2R_ENVELOPE === '1';
+const l3ServiceWire = l0Server && process.env.ZLINK_LADDER_L3_SERVICE_WIRE === '1';
+const l3rServiceWire = l0Server && process.env.ZLINK_LADDER_L3R_SERVICE_WIRE === '1';
 let applicationJobQueue;
 let ApplicationJobQueue;
 let resolveApplicationJobQueueConfiguration;
@@ -35,6 +37,7 @@ if (l1Permit) {
   applicationJobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
 }
 if (l2Envelope || l2rEnvelope) rawWire.requireProductionChannelEnvelope();
+if (l3ServiceWire || l3rServiceWire) rawWire.requireProductionServiceWire();
 const frameworkWire = process.env.ZLINK_LADDER_L0_FRAMEWORK_CLIENT === '1'
   || process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
 let contract;
@@ -88,6 +91,38 @@ if (l0Server) {
   const IDLE_SPIN_LIMIT = 20000;
   let idleSpins = 0;
 
+  function decodeLadderParts(targetReceived) {
+    return l3ServiceWire
+      ? rawWire.decodeProductionServiceRequest(
+          targetReceived.parts,
+          targetReceived.replyToken !== null
+        )
+      : { correlation: null, parts: targetReceived.parts };
+  }
+
+  function closeLadderParts(decoded) {
+    if (l3ServiceWire) {
+      for (const part of decoded.parts) part.close();
+    }
+  }
+
+  function ladderReplyParts(channelHeader, payload) {
+    return l2Envelope || l3ServiceWire
+      ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
+      : [RESPONSE_ENVELOPE, encodeBenchPayloadMessage(payload)];
+  }
+
+  function submitLadderReply(targetReceived, decoded, payload, channelHeader) {
+    const replyParts = ladderReplyParts(channelHeader, payload);
+    if (l3ServiceWire) {
+      const reply = rawWire.encodeProductionServiceReply(decoded.correlation, replyParts);
+      replyParts[1].close?.();
+      targetReceived.reply().message(reply.header).message(reply.frame).submit();
+      return;
+    }
+    targetReceived.reply().message(replyParts[0]).message(replyParts[1]).submit();
+  }
+
   function frameworkResponseHeader(bytes) {
     const header = JSON.parse(bytes.subarray(1).toString('utf8'));
     header.kind = 2;
@@ -108,28 +143,34 @@ if (l0Server) {
       }
       if (!hasMessage) break;
       handled += 1;
-      const parts = received.parts;
+      let decoded;
       try {
-        const channelHeader = l2Envelope ? rawWire.decodeProductionChannelHeader(parts) : null;
+        decoded = decodeLadderParts(received);
+        const parts = decoded.parts;
+        const channelHeader = l2Envelope || l3ServiceWire
+          ? rawWire.decodeProductionChannelHeader(parts)
+          : null;
         const header = frameworkWire ? parts[0].data() : null;
         const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         if (received.replyToken !== null) {
           echoHandler.handleL0(payload);
-          const reply = l2Envelope
-            ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
-            : [frameworkWire ? frameworkResponseHeader(header) : RESPONSE_ENVELOPE,
-              encodeBenchPayloadMessage(payload)];
-          received.reply()
-            .message(reply[0])
-            .message(reply[1])
-            .submit();
+          if (l3ServiceWire) submitLadderReply(received, decoded, payload, channelHeader);
+          else {
+            const reply = l2Envelope
+              ? ladderReplyParts(channelHeader, payload)
+              : [frameworkWire ? frameworkResponseHeader(header) : RESPONSE_ENVELOPE,
+                encodeBenchPayloadMessage(payload)];
+            received.reply().message(reply[0]).message(reply[1]).submit();
+          }
         } else {
           commandHandler.handleL0(payload);
         }
       } catch (error) {
         metrics.recordError();
         console.error(`ladder L0 handler failed: ${error.message}`);
+      } finally {
+        if (decoded !== undefined) closeLadderParts(decoded);
       }
     }
     return handled;
@@ -150,15 +191,19 @@ if (l0Server) {
       }
       if (!hasMessage) break;
       handled += 1;
+      let decoded;
       try {
-        const parts = commandReceived.parts;
-        if (l2Envelope) rawWire.decodeProductionChannelHeader(parts);
+        decoded = decodeLadderParts(commandReceived);
+        const parts = decoded.parts;
+        if (l2Envelope || l3ServiceWire) rawWire.decodeProductionChannelHeader(parts);
         const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         commandHandler.handleL0(payload);
       } catch (error) {
         metrics.recordError();
         console.error(`ladder L0 command handler failed: ${error.message}`);
+      } finally {
+        if (decoded !== undefined) closeLadderParts(decoded);
       }
     }
     return handled;
@@ -196,35 +241,41 @@ if (l0Server) {
 
   async function pumpRequestsWithPermits() {
     return pumpWithPermits(router, received, (permit) => {
-      const parts = received.parts;
-      const channelHeader = l2Envelope ? rawWire.decodeProductionChannelHeader(parts) : null;
-      const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
-      if (payload === null) throw new Error('invalid benchmark payload');
-      if (received.replyToken !== null) {
-        permit.releaseBeforeHandler();
-        echoHandler.handleL0(payload);
-        const reply = l2Envelope
-          ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
-          : [RESPONSE_ENVELOPE, encodeBenchPayloadMessage(payload)];
-        received.reply()
-          .message(reply[0])
-          .message(reply[1])
-          .submit();
-      } else {
-        permit.releaseBeforeHandler();
-        commandHandler.handleL0(payload);
+      const decoded = decodeLadderParts(received);
+      const parts = decoded.parts;
+      try {
+        const channelHeader = l2Envelope || l3ServiceWire
+          ? rawWire.decodeProductionChannelHeader(parts)
+          : null;
+        const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+        if (payload === null) throw new Error('invalid benchmark payload');
+        if (received.replyToken !== null) {
+          permit.releaseBeforeHandler();
+          echoHandler.handleL0(payload);
+          submitLadderReply(received, decoded, payload, channelHeader);
+        } else {
+          permit.releaseBeforeHandler();
+          commandHandler.handleL0(payload);
+        }
+      } finally {
+        closeLadderParts(decoded);
       }
     }, 'request');
   }
 
   async function pumpCommandsWithPermits() {
     return pumpWithPermits(commandRouter, commandReceived, (permit) => {
-      const parts = commandReceived.parts;
-      if (l2Envelope) rawWire.decodeProductionChannelHeader(parts);
-      const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
-      if (payload === null) throw new Error('invalid benchmark payload');
-      permit.releaseBeforeHandler();
-      commandHandler.handleL0(payload);
+      const decoded = decodeLadderParts(commandReceived);
+      const parts = decoded.parts;
+      try {
+        if (l2Envelope || l3ServiceWire) rawWire.decodeProductionChannelHeader(parts);
+        const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+        if (payload === null) throw new Error('invalid benchmark payload');
+        permit.releaseBeforeHandler();
+        commandHandler.handleL0(payload);
+      } finally {
+        closeLadderParts(decoded);
+      }
     }, 'command');
   }
 

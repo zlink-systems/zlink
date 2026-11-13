@@ -48,6 +48,7 @@ function frameworkEnvelope(kind) {
 }
 
 let productionChannelEnvelope;
+let productionServiceWire;
 
 function requireProductionChannelEnvelope() {
   if (productionChannelEnvelope !== undefined) return productionChannelEnvelope;
@@ -111,6 +112,87 @@ function encodeProductionProtobufChannelReply(requestHeader, payload) {
   return encodeChannelReplyParts(requestHeader, { body: payload }, replyCodecs);
 }
 
+function requireProductionServiceWire() {
+  if (productionServiceWire !== undefined) return productionServiceWire;
+  const root = path.resolve(__dirname, '../../../../languages/node/packages/framework/dist');
+  const serviceWire = require(path.join(root, 'runtime/foundation/service-wire-m6a-codec.js'));
+  const constants = require(path.join(root, 'runtime/foundation/service-wire-constants.generated.js'));
+  const { ZLinkBufferMessage } = require(path.join(root, 'runtime/backend/runtime-message.js'));
+  productionServiceWire = { ...serviceWire, ...constants, ZLinkBufferMessage };
+  return productionServiceWire;
+}
+
+function encodeProductionServiceRequest(request, correlation, parts) {
+  const wire = requireProductionServiceWire();
+  const header = request
+    ? wire.encodeChannelRequestHeader(correlation, 'bench')
+    : wire.encodeChannelSendHeader('bench');
+  const frame = wire.encodeMultipartApplicationPayload(
+    parts.map((part) => Buffer.isBuffer(part) ? part : part.data()),
+    wire.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+    wire.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+  );
+  return { header, frame };
+}
+
+function encodeProductionServiceReply(correlation, parts) {
+  const wire = requireProductionServiceWire();
+  return {
+    header: wire.encodeReplyHeader(correlation),
+    frame: wire.encodeMultipartApplicationPayload(
+      parts.map((part) => Buffer.isBuffer(part) ? part : part.data()),
+      wire.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+      wire.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+    )
+  };
+}
+
+function decodeProductionServiceRequest(parts, request) {
+  const wire = requireProductionServiceWire();
+  if (parts.length !== 2) throw new Error('invalid service-wire application part count');
+  const headerBytes = parts[0].data();
+  const header = wire.decodeHeader(headerBytes);
+  let correlation = null;
+  if (request) {
+    const decoded = wire.decodeChannelRequestHeader(headerBytes, header);
+    if (decoded.channelName !== 'bench') throw new Error('invalid service-wire request channel');
+    correlation = decoded.correlation;
+  } else if (wire.decodeChannelSendHeader(headerBytes, header) !== 'bench') {
+    throw new Error('invalid service-wire command channel');
+  }
+  const frame = wire.decodeMultipartApplicationPayloadView(parts[1].data());
+  const messageParts = wire.decodeMultipartParts(
+    frame.payload,
+    wire.ZLinkBufferMessage.fromOwned,
+    (part) => part.close()
+  );
+  if (messageParts.length !== 2) {
+    for (const part of messageParts) part.close();
+    throw new Error('invalid channel request part count');
+  }
+  return { correlation, parts: messageParts };
+}
+
+function decodeProductionServiceReply(parts, correlation) {
+  const wire = requireProductionServiceWire();
+  if (parts.length !== 2) throw new Error('invalid service-wire reply part count');
+  const header = wire.decodeReplyHeader(parts[0].data());
+  if (header.correlation !== correlation || header.terminalResult !== 0 || header.failureCode !== 0) {
+    throw new Error('invalid service-wire reply header');
+  }
+  const frame = wire.decodeMultipartApplicationPayloadView(parts[1].data());
+  const messageParts = wire.decodeMultipartParts(
+    frame.payload,
+    wire.ZLinkBufferMessage.fromOwned,
+    (part) => part.close()
+  );
+  if (messageParts.length !== 2) {
+    for (const part of messageParts) part.close();
+    throw new Error('invalid channel reply part count');
+  }
+  return messageParts;
+}
+
 // Reuse the same protobuf serializer as the gRPC row; schema loading is setup work.
 const payloadMethod = protoLoader.loadSync(path.join(__dirname, '../../proto/bench.proto'), {
   keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
@@ -139,6 +221,11 @@ module.exports = {
   encodeProductionChannelHeader,
   decodeProductionChannelHeader,
   encodeProductionProtobufChannelReply,
+  requireProductionServiceWire,
+  encodeProductionServiceRequest,
+  encodeProductionServiceReply,
+  decodeProductionServiceRequest,
+  decodeProductionServiceReply,
   ROUTING_IDS,
   encodeBenchPayloadMessage,
   decodeBenchPayloadBody
