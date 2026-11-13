@@ -1,0 +1,38 @@
+{
+  "language": "java",
+  "utc_date": "2026-11-13",
+  "conditions": "C2·C3 off, SCHED_OTHER, CPU split 0-5/8-13 + housekeeping 6-7,14-15, warm run per cell, guard v8",
+  "measured_utc": "2026-11-13T18:53:24.286239+00:00",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_s": 525897.6,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/send-saturation-1024/counted/attempt1/run1/zlink-java-send-saturation-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/send-saturation-1024/counted/attempt1/run1/zlink-java-send-saturation-1024/scheduling.txt"
+    },
+    "send-saturation-4096": {
+      "msg_s": 205254.6,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/send-saturation-4096/counted/attempt1/run1/zlink-java-send-saturation-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/send-saturation-4096/counted/attempt1/run1/zlink-java-send-saturation-4096/scheduling.txt"
+    },
+    "request-serial-1024": {
+      "msg_s": 12963.8,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/request-serial-1024/counted/attempt1/run1/zlink-java-request-serial-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/request-serial-1024/counted/attempt1/run1/zlink-java-request-serial-1024/scheduling.txt"
+    },
+    "request-serial-4096": {
+      "msg_s": 11971.8,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/request-serial-4096/counted/attempt1/run1/zlink-java-request-serial-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/request-serial-4096/counted/attempt1/run1/zlink-java-request-serial-4096/scheduling.txt"
+    },
+    "request-backpressure-1024": {
+      "msg_s": 130125.4,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/request-backpressure-1024/counted/attempt1/run1/zlink-java-request-backpressure-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/request-backpressure-1024/counted/attempt1/run1/zlink-java-request-backpressure-1024/scheduling.txt"
+    },
+    "request-backpressure-4096": {
+      "msg_s": 111235.4,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/request-backpressure-4096/counted/attempt1/run1/zlink-java-request-backpressure-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-java-s1/raw/java/request-backpressure-4096/counted/attempt1/run1/zlink-java-request-backpressure-4096/scheduling.txt"
+    }
+  }
+}
