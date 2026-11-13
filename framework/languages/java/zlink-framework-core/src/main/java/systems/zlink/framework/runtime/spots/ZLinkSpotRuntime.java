@@ -173,7 +173,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             applicationJobQueue;
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final ZLinkSpotHandlerInvoker spotHandlerInvoker;
-    private final ZLinkSpotActorHandlerCatalog actorHandlers;
     private final ZLinkSpotHandlerLoader handlerLoader;
     private final ZLinkSpotActivationFactory activationFactory;
     private final Duration defaultRequestTimeout;
@@ -623,13 +622,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         registration.workers().idleTimeout());
         ZLinkScannedHandlerCatalog scannedHandlers =
                 ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
-        this.actorHandlers =
-                new ZLinkSpotActorHandlerCatalog(
-                        scannedHandlers, serializer, suspendHandlerInvokers);
         this.handlerLoader =
                 new ZLinkSpotHandlerLoader(
                         scannedHandlers,
-                        actorHandlers,
+                        new ZLinkSpotActorHandlerCatalog(serializer, suspendHandlerInvokers),
                         handlerFactory,
                         spotHandlerInvoker.suspendHandlerInvokers());
         ZLinkChannelBackendAdapter channelAdapter =
@@ -5538,8 +5534,18 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private SpotActorPacketHandlerRegistration resolveActorPacketHandler(
             String packetName, Object spotSurface, ZLinkScannedHandlerKind kind) {
-        List<SpotActorPacketHandlerRegistration> handlers = actorHandlers.handlers(packetName);
-        if (handlers == null || handlers.isEmpty()) {
+        Object context =
+                spotSurface instanceof ZLinkSpot<?> spot
+                        ? spot.context()
+                        : spotSurface instanceof ZLinkEntrySpot<?> entrySpot
+                                ? entrySpot.context()
+                                : null;
+        if (!(context instanceof SpotDispatchLine dispatchLine)) {
+            return null;
+        }
+        List<SpotActorPacketHandlerRegistration> handlers =
+                dispatchLine.handlerCatalog().actorPacketHandlers(packetName);
+        if (handlers.isEmpty()) {
             return null;
         }
         Class<?> spotType = spotSurface == null ? null : spotSurface.getClass();
