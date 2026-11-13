@@ -639,7 +639,8 @@ class raw_mesh_node_owner_t
       mesh_request_metric_t request_metric = {},
       std::optional<foundation::operation_registry_t::request_identity_t> request = {},
       std::shared_ptr<task_completion_source_t<void>> admitted = {},
-      physical_receiver_t receiver = {});
+      physical_receiver_t receiver = {},
+      std::uint64_t target_lifecycle_generation = 0);
     std::shared_ptr<task_completion_source_t<void>> start_request_with_header (
       std::span<const std::uint8_t> target_routing_id,
       const std::function<zlink::message_t (std::uint64_t)> &header,
@@ -651,7 +652,8 @@ class raw_mesh_node_owner_t
       mesh_request_metric_t request_metric = {},
       std::optional<foundation::operation_registry_t::request_identity_t> request = {},
       std::shared_ptr<task_completion_source_t<void>> admitted = {},
-      physical_receiver_t receiver = {});
+      physical_receiver_t receiver = {},
+      std::uint64_t target_lifecycle_generation = 0);
     task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
