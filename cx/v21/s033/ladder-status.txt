@@ -2,6 +2,6 @@
 단계 정의 표: ladder-steps.md (네 언어 같은 범위인지 확인용)
 C++ 구현: L0·L1 ✓ · L2(요청+응답) fbdcb16e26 ✓ · L3 dd83e75df4 ✓ · L4(기본 JSON) 276b84f248 ✓ · L5~L7 62e766f88d ✓ — 측정 중(l3868-s1: binding부터)
 .NET 구현: L0~L1 ✓ · L2(요청+응답) 69891f4446 ✓ · L3 e8ee8302b0 ✓ · L4 1bcaebde9e → protobuf 등록이라 기본 JSON으로 수정 중(lad-dotnet-l4j) · L5~L7 2b6da5af64 (수정 뒤 다시 쌓음)
-Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — 측정 중(lad-java-s1: binding부터)
-Node 구현: L0~L1 ✓ · L2(요청+응답) 2bef18aa94 ✓ · L3 20598f57a2 ✓ · L4 ae8a5178b5 ✓ · L5~L7 7d1afa98a9 ✓ — 측정 중(lad-node-s1: binding부터)
+Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — 측정 중(lad-java-s2, 19:30 UTC 기준 1회값): L0÷binding send 0.99·0.97 / serial 1.03·1.00 / bp 1.03·0.97 모두 통과 · L1 손실 send 17%·12%, serial 11%·14%(3회), bp 3%·3% · L2 손실 bp 22%·16% (send·serial은 L2가 L1보다 빠름: L1 1회값 낮음 의심) · L3~L5~L7 측정 대기
+Node 구현: L0~L1 ✓ · L2(요청+응답) 2bef18aa94 ✓ · L3 20598f57a2 ✓ · L4 ae8a5178b5 ✓ · L5~L7 7d1afa98a9 ✓ — 측정 중(lad-node-s1, 19:30 UTC 기준): L0÷binding send 0.86·1.00 / serial 0.92·0.99 / bp 1.01·1.00 · L1 손실 모두 ≤3%(통과) · L2 손실 bp 29%·25%, 나머지 ≤5% · L3 손실(1회) send 31%·35%, serial 16%·14%, bp 19%·19% · L4·L5~L7 측정 대기
 기준: 11-13 binding-rebase는 CPU 분리 미적용으로 무효(Java·.NET 미측정, C++·Node affinity 미기록) — guard v8로 고친 뒤 Java·Node는 각 단계 측정 job 안에서 binding부터 다시 잼

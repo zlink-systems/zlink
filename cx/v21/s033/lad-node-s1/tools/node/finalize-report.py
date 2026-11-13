@@ -34,24 +34,33 @@ def step_series(v,p,s,newhold_prev=None):
     if not q: raise SystemExit(f'missing counted result: {v} {p}-{s}')
     return val(q[0]),[q[0]]
 
+def start_time(path):
+    schedule=(path.parent/'scheduling.txt').read_text()
+    for line in schedule.splitlines():
+        if line.startswith('run_start_utc='): return line.split('=',1)[1]
+    raise SystemExit(f'missing run_start_utc: {path.parent/"scheduling.txt"}')
 def pair_series(prev,new,p,s):
     prev_count=paths(prev,p,s,'counted')
     new_count=paths(new,p,s,'counted')
     if not prev_count or not new_count: raise SystemExit(f'missing pair results {prev}->{new} {p}-{s}')
-    # The latest previous-step count and earliest new-step count share this hold.
+    # Previous step's latest run and new step's first run belong to this hold.
+    prev_base,new_base=prev_count[-1],new_count[0]
+    hold_start=start_time(new_base)
     sets=[]
-    for v,base in ((prev,prev_count[-1]),(new,new_count[0])):
+    for v,base in ((prev,prev_base),(new,new_base)):
         group=[base]
         for phase in ('repeat2','repeat3'):
-            ps=paths(v,p,s,phase)
+            ps=[x for x in paths(v,p,s,phase) if start_time(x)>hold_start]
             if ps: group.extend(ps)
         sets.append(group)
     values=[[val(x) for x in group] for group in sets]
     meds=[statistics.median(x) for x in values]
-    g5=[max(abs(x-m) for x in series)/m for series,m in zip(values,meds)] if len(values[0])==3 else [0,0]
+    repeated=(len(values[0])==3 and len(values[1])==3)
+    asymmetric=(len(values[0])!=len(values[1]) and (len(values[0])>1 or len(values[1])>1))
+    g5=[max(abs(x-m) for x in series)/m for series,m in zip(values,meds)] if repeated else [0,0]
     loss=1-meds[1]/meds[0]
     budget=.21 if new=='L5_7' else .07
-    indeterminate=any(x>.05 for x in g5) if len(values[0])==3 else False
+    indeterminate=asymmetric or (repeated and any(x>.05 for x in g5))
     return loss,budget,indeterminate,sets,meds,g5
 
 rows_a=[]
