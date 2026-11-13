@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.contracts.core.Context;
@@ -89,8 +90,39 @@ public final class RawStack implements AutoCloseable {
         };
     }
 
+    public RawOperation requestWithHeader(Supplier<Message> headerFactory) {
+        return new RawOperation() {
+            @Override
+            public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
+                var operation = router.request(peer);
+                try (Message header = headerFactory.get();
+                     Message body = RawWire.encodeBenchPayloadMessage(
+                         payloadSize, runId, phase, sequence)) {
+                    var submission = operation
+                        .message(header)
+                        .message(body)
+                        .timeout(timeout)
+                        .submit();
+                    var admitted = submission.result() == SubmitResult.BACKPRESSURED
+                        ? submission.admitted().toCompletableFuture()
+                        : java.util.concurrent.CompletableFuture.<Void>completedFuture(
+                            null);
+                    return new RawSubmission(submission.result(),
+                        admitted,
+                        submission.reply().toCompletableFuture().thenAccept(
+                            parts -> validate(parts, runId, phase, payloadSize,
+                                sequence)));
+                }
+            }
+        };
+    }
+
     public RawSendOperation send() {
         return new RawSendOperation();
+    }
+
+    public RawSendOperation sendWithHeader(Supplier<Message> headerFactory) {
+        return new FrameworkEnvelopeSendOperation(headerFactory);
     }
 
     /** A send payload prepared by a logical stream before it enters the socket gate. */
@@ -110,7 +142,7 @@ public final class RawStack implements AutoCloseable {
         }
     }
 
-    public final class RawSendOperation extends RawOperation {
+    public class RawSendOperation extends RawOperation {
         public PreparedSend prepareRaw(int payloadSize, byte phase, long sequence) {
             Message header = Message.from(RawWire.REQUEST_ENVELOPE);
             try {
@@ -147,6 +179,27 @@ public final class RawStack implements AutoCloseable {
         @Override
         public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
             return submitRaw(prepareRaw(payloadSize, phase, sequence));
+        }
+    }
+
+    private final class FrameworkEnvelopeSendOperation extends RawSendOperation {
+        private final Supplier<Message> headerFactory;
+
+        private FrameworkEnvelopeSendOperation(Supplier<Message> headerFactory) {
+            this.headerFactory = headerFactory;
+        }
+
+        @Override
+        public PreparedSend prepareRaw(int payloadSize, byte phase, long sequence) {
+            Message header = headerFactory.get();
+            try {
+                Message body = RawWire.encodeBenchPayloadMessage(
+                        payloadSize, runId, phase, sequence);
+                return new PreparedSend(header, body);
+            } catch (RuntimeException | Error failure) {
+                header.close();
+                throw failure;
+            }
         }
     }
 

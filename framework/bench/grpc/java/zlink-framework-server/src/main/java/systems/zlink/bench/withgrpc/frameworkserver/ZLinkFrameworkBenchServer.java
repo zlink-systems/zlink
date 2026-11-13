@@ -23,6 +23,7 @@ import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
 import java.util.OptionalLong;
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
@@ -120,7 +121,8 @@ public class ZLinkFrameworkBenchServer {
     }
 
     private static void pumpLadderL0(RouterSocket router, BenchServerMetrics metrics) {
-        boolean permitsEnabled = System.getenv("ZLINK_BENCH_LADDER_L1") != null;
+        boolean permitsEnabled = System.getenv("ZLINK_BENCH_LADDER_L1") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L2") != null;
         ZLinkApplicationJobQueue permits = permitsEnabled
                 ? new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
@@ -185,7 +187,8 @@ public class ZLinkFrameworkBenchServer {
 
     private static boolean ladderMode() {
         return System.getenv("ZLINK_BENCH_LADDER_L0") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L1") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L1") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L2") != null;
     }
 
     private static void handleLadderL0(Received received, BenchServerMetrics metrics) {
@@ -193,6 +196,19 @@ public class ZLinkFrameworkBenchServer {
         if (parts.isEmpty()) {
             metrics.recordError();
             return;
+        }
+        if (System.getenv("ZLINK_BENCH_LADDER_L2") != null) {
+            var header = ZLinkChannelEnvelope.decodeHeader(parts.getFirst().dataBuffer(), false);
+            int expectedKind = received.replyToken().isPresent()
+                    ? ZLinkChannelEnvelope.KIND_REQUEST
+                    : ZLinkChannelEnvelope.KIND_COMMAND;
+            if (header.kind() != expectedKind
+                    || !BenchContract.CHANNEL_NAME.equals(header.channelName())
+                    || !"BenchPayload".equals(header.messageName())
+                    || !"application/x-protobuf".equals(header.contentType())) {
+                metrics.recordError();
+                return;
+            }
         }
         var body = RawWire.decodeBenchPayloadBody(parts.getLast().dataBuffer());
         if (body == null) {

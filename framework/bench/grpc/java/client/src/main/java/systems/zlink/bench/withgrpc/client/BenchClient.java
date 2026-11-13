@@ -145,7 +145,9 @@ public final class BenchClient {
         values.put("logicalStreamRuntime", streamImplementation(options));
         values.put("ladderProfile", !ladderMode()
             ? "main benchmark path"
-            : System.getenv("ZLINK_BENCH_LADDER_L1") != null
+            : System.getenv("ZLINK_BENCH_LADDER_L2") != null
+                ? "L2 binding-shaped path with Framework envelope header encode and L1 ingress permit"
+                : System.getenv("ZLINK_BENCH_LADDER_L1") != null
                 ? "L1 binding-shaped RawStack path with Framework ingress permit"
                 : "L0 binding-shaped RawStack path; Framework messaging path bypassed");
         return values;
@@ -153,7 +155,8 @@ public final class BenchClient {
 
     private static boolean ladderMode() {
         return System.getenv("ZLINK_BENCH_LADDER_L0") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L1") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L1") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L2") != null;
     }
 
     private record SourceTransport(BenchOperation operation, AutoCloseable resource)

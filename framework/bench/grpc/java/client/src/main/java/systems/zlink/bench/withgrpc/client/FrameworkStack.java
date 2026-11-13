@@ -16,6 +16,7 @@ import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 
@@ -127,7 +128,27 @@ public final class FrameworkStack implements AutoCloseable {
         if (ladderBinding == null) {
             throw new IllegalStateException("L0 operation requested outside ladder mode");
         }
+        if (System.getenv("ZLINK_BENCH_LADDER_L2") != null) {
+            return send
+                    ? ladderBinding.sendWithHeader(
+                            () -> envelopeHeader(ZLinkChannelEnvelope.KIND_COMMAND))
+                    : ladderBinding.requestWithHeader(
+                            () -> envelopeHeader(ZLinkChannelEnvelope.KIND_REQUEST));
+        }
         return send ? ladderBinding.send() : ladderBinding.request();
+    }
+
+    private static systems.zlink.contracts.messaging.Message envelopeHeader(int kind) {
+        var header =
+                ZLinkChannelEnvelope.create(
+                        kind,
+                        BenchContract.CHANNEL_NAME,
+                        "BenchPayload",
+                        "application/x-protobuf",
+                        null,
+                        java.util.Map.of(),
+                        null);
+        return ZLinkChannelEnvelope.encodeHeader(header);
     }
 
     private BenchPayload payload(int payloadSize, byte phase, long sequence) {
@@ -154,7 +175,8 @@ public final class FrameworkStack implements AutoCloseable {
 
     private static boolean ladderMode() {
         return System.getenv("ZLINK_BENCH_LADDER_L0") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L1") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L1") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L2") != null;
     }
 
     @EnableZLinkFramework
