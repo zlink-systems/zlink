@@ -385,9 +385,15 @@ final class ZLinkSpotHandlerLoaderTest {
         }
     }
 
+    // Scoped to TestSpot: the handler scan of other test suites also finds this class, and an
+    // unscoped second handler for the same packet would collide with ConfiguredActorHandler there.
     private static final class OtherActorHandler {
         @ZLinkSpotActorRequest(packetName = "configured-request")
-        public CompletionStage<Reply> handle(TestActor actor, Request request) {
+        public CompletionStage<Reply> handle(
+                TestSpot spot,
+                TestActor actor,
+                systems.zlink.framework.ZLinkMessageContext context,
+                Request request) {
             return CompletableFuture.completedFuture(new Reply());
         }
     }
