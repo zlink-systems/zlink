@@ -143,6 +143,12 @@ subprojects {
             if (singleWorker) {
                 systemProperty("junit.jupiter.execution.parallel.enabled", "false")
             }
+            // CI logs must show the failure message (expected/actual), not only the
+            // exception type: a rerun replaces the uploaded result XML.
+            testLogging {
+                events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            }
         }
 
         fun registerSourceSetTestTask(taskName: String, sourceSetName: String) {
