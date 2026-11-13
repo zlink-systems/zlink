@@ -259,6 +259,10 @@ function createRawTransport(options) {
     const reply = submission.reply.then((parts) => {
       try {
         if (parts.length === 0) throw new Error('raw request returned no reply parts');
+        if (ladderL2) {
+          const replyHeader = rawWire.decodeProductionChannelHeader(parts);
+          if (replyHeader.kind !== 2) throw new Error('raw reply channel header is not a response');
+        }
         const body = rawWire.decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (body === null) throw new Error('raw reply protobuf body is invalid');
         return body;

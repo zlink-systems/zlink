@@ -110,15 +110,19 @@ if (l0Server) {
       handled += 1;
       const parts = received.parts;
       try {
-        if (l2Envelope) rawWire.decodeProductionChannelHeader(parts);
+        const channelHeader = l2Envelope ? rawWire.decodeProductionChannelHeader(parts) : null;
         const header = frameworkWire ? parts[0].data() : null;
         const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         if (received.replyToken !== null) {
           echoHandler.handleL0(payload);
+          const reply = l2Envelope
+            ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
+            : [frameworkWire ? frameworkResponseHeader(header) : RESPONSE_ENVELOPE,
+              encodeBenchPayloadMessage(payload)];
           received.reply()
-            .message(frameworkWire ? frameworkResponseHeader(header) : RESPONSE_ENVELOPE)
-            .message(encodeBenchPayloadMessage(payload))
+            .message(reply[0])
+            .message(reply[1])
             .submit();
         } else {
           commandHandler.handleL0(payload);
@@ -193,15 +197,18 @@ if (l0Server) {
   async function pumpRequestsWithPermits() {
     return pumpWithPermits(router, received, (permit) => {
       const parts = received.parts;
-      if (l2Envelope) rawWire.decodeProductionChannelHeader(parts);
+      const channelHeader = l2Envelope ? rawWire.decodeProductionChannelHeader(parts) : null;
       const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
       if (payload === null) throw new Error('invalid benchmark payload');
       if (received.replyToken !== null) {
         permit.releaseBeforeHandler();
         echoHandler.handleL0(payload);
+        const reply = l2Envelope
+          ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
+          : [RESPONSE_ENVELOPE, encodeBenchPayloadMessage(payload)];
         received.reply()
-          .message(RESPONSE_ENVELOPE)
-          .message(encodeBenchPayloadMessage(payload))
+          .message(reply[0])
+          .message(reply[1])
           .submit();
       } else {
         permit.releaseBeforeHandler();

@@ -67,6 +67,21 @@ test('production L2 channel header preserves the raw protobuf body path', () => 
   }
 });
 
+test('production L2 reply envelope preserves protobuf body and request correlation', () => {
+  const payload = Buffer.from(bodyHex, 'hex');
+  const requestBytes = raw.encodeProductionChannelHeader(1, 30000);
+  const requestHeader = raw.decodeProductionChannelHeader([{ data: () => requestBytes }]);
+  const replyParts = raw.encodeProductionProtobufChannelReply(requestHeader, payload);
+  const replyHeader = raw.decodeProductionChannelHeader([{ data: () => replyParts[0] }]);
+  assert.equal(replyHeader.kind, 2);
+  assert.equal(replyHeader.channelName, 'bench');
+  assert.equal(replyHeader.messageName, 'BenchPayload');
+  assert.equal(replyHeader.contentType, 'application/x-protobuf');
+  assert.equal(replyHeader.correlationId, requestHeader.correlationId);
+  assert.ok(Buffer.isBuffer(replyParts[1]));
+  assert.deepEqual(raw.decodeBenchPayloadBody(replyParts[1]), payload);
+});
+
 for (const size of [127, 128, 1024, 4096]) {
   test(`raw protobuf wire remains identical for ${size}-byte body`, () => {
     const body = header.createPayloadBytes(size, 0x01020304, header.PHASE_ACTIVE,

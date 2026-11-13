@@ -54,6 +54,7 @@ function requireProductionChannelEnvelope() {
   const root = path.resolve(__dirname, '../../../../languages/node/packages/framework/dist');
   const {
     encodeChannelEnvelopeParts,
+    encodeChannelReplyParts,
     decodeChannelHeader
   } = require(path.join(root, 'runtime/channels/channel-envelope.js'));
   const { ZLinkEncodedPayload } = require(path.join(root, 'contracts/Common/ZLinkEncodedPayload.js'));
@@ -64,7 +65,24 @@ function requireProductionChannelEnvelope() {
       deserialize() { throw new Error('benchmark header codec is encode-only'); }
     }]])
   };
-  productionChannelEnvelope = { encodeChannelEnvelopeParts, decodeChannelHeader, codecs };
+  const replyCodecs = {
+    serializers: new Map([['application/x-protobuf', {
+      serialize(value) {
+        return ZLinkEncodedPayload.fromOwned(
+          payloadMethod.requestSerialize(new BenchPayload(value.body))
+        );
+      },
+      deserialize() { throw new Error('benchmark reply codec is encode-only'); }
+    }]])
+  };
+  productionChannelEnvelope = {
+    encodeChannelEnvelopeParts,
+    encodeChannelReplyParts,
+    decodeChannelHeader,
+    codecs,
+    replyCodecs,
+    ZLinkEncodedPayload
+  };
   return productionChannelEnvelope;
 }
 
@@ -86,6 +104,11 @@ function encodeProductionChannelHeader(kind, timeoutMs) {
 
 function decodeProductionChannelHeader(parts) {
   return requireProductionChannelEnvelope().decodeChannelHeader(parts, false);
+}
+
+function encodeProductionProtobufChannelReply(requestHeader, payload) {
+  const { encodeChannelReplyParts, replyCodecs } = requireProductionChannelEnvelope();
+  return encodeChannelReplyParts(requestHeader, { body: payload }, replyCodecs);
 }
 
 // Reuse the same protobuf serializer as the gRPC row; schema loading is setup work.
@@ -115,6 +138,7 @@ module.exports = {
   requireProductionChannelEnvelope,
   encodeProductionChannelHeader,
   decodeProductionChannelHeader,
+  encodeProductionProtobufChannelReply,
   ROUTING_IDS,
   encodeBenchPayloadMessage,
   decodeBenchPayloadBody
