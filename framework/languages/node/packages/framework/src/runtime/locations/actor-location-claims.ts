@@ -486,30 +486,30 @@ export class ZLinkActorLocationClaims {
     const current = await store.readAuthority(key);
     if (!matchesActorAuthority(current, actorRef, ownerToken)) return;
 
-    const result = await store.compareExchangeAuthority(key, current.storeVersion, {
+    let result = await store.compareExchangeAuthority(key, current.storeVersion, {
       kind: 'delete'
     });
+    if (
+      result.kind === 'conflict' &&
+      result.current.kind === 'snapshot' &&
+      matchesActorAuthority(result.current, actorRef, ownerToken)
+    ) {
+      result = await store.compareExchangeAuthority(key, result.current.storeVersion, {
+        kind: 'delete'
+      });
+    }
     if (
       result.kind === 'deleted' ||
       (result.kind === 'conflict' && result.current.kind === 'missing')
     ) {
       return;
     }
-    if (
-      result.kind === 'conflict' &&
-      result.current.kind === 'snapshot' &&
-      matchesActorAuthority(result.current, actorRef, ownerToken)
-    ) {
-      const retry = await store.compareExchangeAuthority(key, result.current.storeVersion, {
-        kind: 'delete'
-      });
-      if (
-        retry.kind === 'deleted' ||
-        (retry.kind === 'conflict' && retry.current.kind === 'missing')
-      ) {
-        return;
-      }
-    }
+    throw new ZLinkFrameworkException(
+      result.kind === 'conflict'
+        ? classifyMembershipAuthorityFailure(result.current, actorRef)
+        : ZLinkFrameworkErrorKind.InternalFailure,
+      `Actor '${actorId}' authority release was rejected with status ${result.kind}.`
+    );
   }
 }
 

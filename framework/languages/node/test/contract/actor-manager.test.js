@@ -1475,6 +1475,7 @@ test('ZLinkActorManager rejects duplicate create and actor type mismatch', async
   }
   class SpectatorFactory extends PlayerFactory {}
   const manager = createActorManager({
+    nativeActorNode: createMockSpotNode({}),
     actorFactories: new Map([
       ['player', PlayerFactory],
       ['spectator', SpectatorFactory]
@@ -1925,6 +1926,7 @@ test('actor manager fluent getOrCreate uses global id lookup and returns the exa
     }
   }
   const manager = createActorManager({
+    nativeActorNode: createMockSpotNode({}),
     actorFactories: new Map([['player', PlayerFactory]]),
     actorMeshNameProvider: (actorType) => ( actorType === 'player' ? 'play-mesh' : undefined) ,
     actorCreatedNodeRidProvider: () => rid('node-a')
@@ -2003,6 +2005,7 @@ test('actor manager prevents the same global Actor ID from changing type or Mesh
   }
   const remote = { nodeRid: rid('node-b'), actorId: 'shared', generation: 9n };
   const manager = createActorManager({
+    nativeActorNode: createMockSpotNode({}),
     actorFactories: new Map([['player-a', PlayerFactory], ['player-b', PlayerFactory]]),
     actorMeshNameProvider: (actorType) =>
       actorType === 'player-a' ? 'mesh-a' : actorType === 'player-b' ? 'mesh-b' : undefined,
@@ -4047,51 +4050,87 @@ test('DefaultZLinkActorManager shares concurrent destroy completion', async () =
   assert.equal(await manager.findActor('alice'), undefined);
 });
 
-test('DefaultZLinkActorManager retries cleanup without destroying the native actor twice', async () => {
-  let nativeDestroyCalls = 0;
-  let releaseCalls = 0;
-  class PlayerFactory {
-    create(context) {
-      const { actorId } = context;
-      return { actorId, context };
+for (const self of [false, true]) {
+  test(`DefaultZLinkActorManager retries cleanup without destroying the native actor twice (self=${self})`, async (t) => {
+    const {
+      ZLinkSpotSerialExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+    const {
+      ZLinkSpotSerialTurnExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+    const serial = new ZLinkSpotSerialExecutor(
+      new ZLinkSpotSerialTurnExecutor(false),
+      framework.ZLinkUserSpotExecutionMode.PerActor,
+      'entry'
+    );
+    let nativeDestroyCalls = 0;
+    let releaseCalls = 0;
+    const releaseError = new Error('location release failed');
+    class PlayerFactory {
+      create(context) {
+        const { actorId } = context;
+        return { actorId, context };
+      }
     }
-  }
-  const node = createMockSpotNode({
-    createActor(actorId) {
-      return { nodeRid: 'node-a', actorId, generation: 1n };
-    },
-    async destroyActor() {
-      nativeDestroyCalls += 1;
+    const node = createMockSpotNode({
+      createActor(actorId) {
+        return { nodeRid: 'node-a', actorId, generation: 7n };
+      },
+      async destroyActor() {
+        nativeDestroyCalls += 1;
+      }
+    });
+    const options = {
+      actorFactories: new Map([['player', PlayerFactory]]),
+      nativeActorNode: node,
+      terminateActorActivation: (actor, terminal) =>
+        serial.terminateActor(actor.context.actorId, terminal)
+    };
+    const manager = createActorManager(options);
+    const actor = await manager.getOrCreateActor('alice', 'player');
+    const state = manager.getState('alice');
+    const nativeRef = state.nativeActorRef;
+    state.markLocationOwned();
+    options.locationLifecycle = {
+      forgetExecution(owner) {
+        assert.strictEqual(owner, actor);
+      },
+      async releaseActor(_actorType, _actorId, releasedRef) {
+        assert.equal(releasedRef.objectGeneration, 7n);
+        releaseCalls += 1;
+        if (releaseCalls === 1) throw releaseError;
+      }
+    };
+
+    if (self) {
+      const failed = new Promise((resolve) => {
+        const unsubscribe = actorTaskRunner.errorSink.onRuntimeTaskException((event) => {
+          if (event.error === releaseError) resolve(event.error);
+        });
+        t.after(unsubscribe);
+      });
+      await serial.executeActor('alice', () => manager.destroyActor(node, rid('node-a'), actor));
+      assert.equal(await failed, releaseError);
+    } else {
+      await assert.rejects(
+        () => manager.destroyActor(node, rid('node-a'), actor),
+        (error) => error === releaseError
+      );
     }
+    assert.equal(nativeDestroyCalls, 1);
+    assert.equal(releaseCalls, 1);
+    assert.strictEqual(manager.getState('alice'), state);
+    assert.strictEqual(state.nativeActorRef, nativeRef);
+    assert.equal(nativeRef.generation, 7n);
+    assert.equal(actor.context.objectGeneration, 7n);
+    assert.equal((await manager.find('alice')).objectGeneration, 7n);
+
+    await manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor);
+    assert.equal(nativeDestroyCalls, 1);
+    assert.equal(releaseCalls, 2);
+    assert.equal(await manager.findActor('alice'), undefined);
   });
-  const options = {
-    actorFactories: new Map([['player', PlayerFactory]]),
-    nativeActorNode: node
-  };
-  const manager = createActorManager(options);
-  const actor = await manager.getOrCreateActor('alice', 'player');
-  manager.getState('alice').markLocationOwned();
-  options.locationLifecycle = {
-    forgetExecution(owner) {
-      assert.strictEqual(owner, actor);
-    },
-    async releaseActor() {
-      releaseCalls += 1;
-      if (releaseCalls === 1) throw new Error('location release failed');
-    }
-  };
-
-  await assert.rejects(
-    () => manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor),
-    /location release failed/
-  );
-  assert.equal(manager.getState('alice').nativeActorRef, undefined);
-
-  await manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor);
-  assert.equal(nativeDestroyCalls, 1);
-  assert.equal(releaseCalls, 2);
-  assert.equal(await manager.findActor('alice'), undefined);
-});
+}
 
 test('DefaultZLinkActorManager adopts native actor ref before creating routed actor instance', async () => {
   const events = [];
@@ -4204,10 +4243,24 @@ test('DefaultZLinkActorManager runs destroy cleanup for local actors without nat
   });
 
   const actor = await manager.getOrCreateActor('local-alice', 'player');
+  assert.equal(await manager.find('local-alice'), undefined);
+  assert.throws(() => actor.context.objectGeneration, /lifecycle identity is not initialized/);
+  await assert.rejects(
+    () => manager.getOrCreate('local-alice', 'player').inMesh('play').submit(),
+    /lifecycle identity is not initialized/
+  );
   await manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor);
 
   assert.equal(await manager.find('local-alice'), undefined);
   assert.deepEqual(events, ['cleanup:local-alice']);
+});
+
+test('Actor context rejects a missing incarnation instead of inventing generation one', async () => {
+  const manager = createActorManager({
+    actorFactories: new Map([['player', { create: (context) => ({ context }) }]])
+  });
+  const actor = await manager.getOrCreateActor('uninitialized', 'player');
+  assert.throws(() => actor.context.objectGeneration, /lifecycle identity is not initialized/);
 });
 
 test('ZLinkEntrySpotActivation destroyActor does not invoke Entry Spot lifecycle callbacks', async () => {
