@@ -2,7 +2,8 @@ import pathlib,json,collections
 job=pathlib.Path('/root/jobs/fx/cx/v21/s033/n4w')
 groups={'codec':{'stringifyFrameworkJsonV1'},'toJSON':{'toJSON'},'encode':{'encodeNodeBase64','base64Slice'},'quote':{'quote'},'policy':{'policy'},'gc':{'(garbage collector)'}}
 rows=[]
-for d in sorted(job.joinpath('raw').glob('micro-*-counted')):
+for d in sorted(job.joinpath('raw').glob('micro-*')):
+ if not d.is_dir() or d.name.endswith('-warm') or not (d/'candidate-result.json').is_file():continue
  r=json.loads((d/'candidate-result.json').read_text());r['directory']=d.name
  data=json.loads(next(d.glob('*.cpuprofile')).read_text());nodes={n['id']:n for n in data['nodes']};parents={c:n['id'] for n in data['nodes'] for c in n.get('children',[])};counts=collections.Counter()
  for n in data.get('samples',[]):

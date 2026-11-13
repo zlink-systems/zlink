@@ -3,3 +3,4 @@ D57|.NET L5~L7 dispatch 손실 원인·수정(j57 Java와 대조)|d57
 N4w|Node JSON encode 구조: 단일 writer 대 JSON.stringify 규칙 수·비용 비교|n4w
 Ln3pr|#4415 머지 전 A/B: Node L2·L3 main 대 PR 6칸|ln3pr
 Cbind2|C++ HTTP bind 실패 뒤 signal 11 재현·원인·수정|cbind2
+C4dec|C++ typed JSON decode 구조 .NET 대조·수정|c4dec

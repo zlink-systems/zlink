@@ -188,3 +188,31 @@ Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base
 Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "1024", "kind": "before", "phase": "repeat2", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
 
 Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "1024", "kind": "before", "phase": "repeat3", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "1024", "kind": "writer", "phase": "repeat2", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "1024", "kind": "writer", "phase": "repeat3", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "4096", "kind": "before", "phase": "repeat2", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "4096", "kind": "before", "phase": "repeat3", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "4096", "kind": "writer", "phase": "repeat2", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "4096", "kind": "writer", "phase": "repeat3", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "nested", "kind": "before", "phase": "repeat2", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "nested", "kind": "before", "phase": "repeat3", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "nested", "kind": "writer", "phase": "repeat2", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "nested", "kind": "writer", "phase": "repeat3", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "dto", "kind": "before", "phase": "repeat2", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "dto", "kind": "before", "phase": "repeat3", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "dto", "kind": "writer", "phase": "repeat2", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
+
+Micro {"head": "f723033a5a524af5dcfa4c04fc42677596c5f429", "dirty": false, "base": "6350275facc547759c9e143cc2515f3f528c776e", "shape": "dto", "kind": "writer", "phase": "repeat3", "writer_sha256": "c6d8e8b5b14ca6505de88d19c8c0df64dce3955c0079e5d889d9254a2667cac4"}; call-shape.md, Buffer.toJSON + native Base64 + output string, no atomics/copies added.
