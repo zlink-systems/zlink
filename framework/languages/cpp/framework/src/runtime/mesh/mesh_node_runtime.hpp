@@ -333,7 +333,8 @@ class mesh_node_runtime_t
       std::uint64_t authority_owner_generation = 0,
       std::uint64_t owner_lease_generation = 0,
       std::optional<runtime::protocol::actor_message_header_t::bound_session_source_t>
-        bound_session_source = std::nullopt);
+        bound_session_source = std::nullopt,
+      std::uint64_t node_generation = 0);
     zlink::context_t &native_context ();
     host::public_host_runtime_t &native_node ();
     result_t<actor_ref_t>

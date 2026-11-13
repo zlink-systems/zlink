@@ -32,10 +32,22 @@ foundation::operation_registry_t::clock_t::time_point registry_now ()
 struct raw_mesh_node_owner_test_access_t
 {
     static void close_registry (raw_mesh_node_owner_t &owner) { owner._operations->shutdown (); }
-    static void fail_publication (raw_mesh_node_owner_t &owner)
+    static void observe_registration (raw_mesh_node_owner_t &owner, std::atomic_bool &registered)
     {
         owner._operations = std::make_shared<foundation::operation_registry_t> (
-          &foundation::operation_registry_t::clock_t::now, [] { throw std::bad_alloc (); });
+          owner._lane, &foundation::operation_registry_t::clock_t::now, [&owner, &registered] {
+              if (owner._operations->size () != 0)
+                  registered = true;
+          });
+    }
+    static void fail_publication (raw_mesh_node_owner_t &owner, std::atomic_bool &registered)
+    {
+        owner._operations = std::make_shared<foundation::operation_registry_t> (
+          &foundation::operation_registry_t::clock_t::now, [&owner, &registered] {
+              if (owner._operations->size () != 0)
+                  registered = true;
+              throw std::bad_alloc ();
+          });
     }
 
     static void inject_registry_clock (raw_mesh_node_owner_t &owner)
@@ -151,6 +163,7 @@ class submitted_actor_receiver_t : public testing::Test
     std::shared_ptr<fw::detail::mesh_node_runtime_t> runtime;
     std::shared_ptr<fw::actor_client_t> client;
     wire::actor_route_fence_t fence{"actor", 3, {'n'}, 1, 7, 11};
+    std::atomic_bool registered{false};
 
     void SetUp () override
     {
@@ -161,6 +174,8 @@ class submitted_actor_receiver_t : public testing::Test
         state->core_context = std::make_shared<zlink::context_t> ();
         runtime = std::make_shared<fw::detail::mesh_node_runtime_t> (state);
         runtime->start ().result ().value ();
+        rt::mesh::raw_mesh_node_owner_test_access_t::observe_registration (
+          runtime->native_node ().transport (), registered);
         serializers.add<std::string> (
           [] (const std::string &value) { return fw::encoded_payload_t::from_string (value); },
           [] (const fw::encoded_payload_t &value) { return value.to_string (); },
@@ -178,6 +193,7 @@ class submitted_actor_receiver_t : public testing::Test
         auto &raw = runtime->native_node ().transport ();
         auto descriptor = raw.topology ().local_descriptor ();
         descriptor.node_routing_id = fence.target_node_routing_id;
+        descriptor.lifecycle_generation = fence.target_node_generation;
         descriptor.advertised_endpoint = "tcp://127.0.0.1:1";
         EXPECT_EQ (raw.topology ().admit (descriptor, descriptor.node_routing_id,
                                           std::chrono::steady_clock::now (),
@@ -186,7 +202,10 @@ class submitted_actor_receiver_t : public testing::Test
         if (!ready)
             raw.expect_peer (descriptor);
     }
-    void verify (terminal_t terminal, bool registered = true)
+    void verify (terminal_t terminal,
+                 bool expected_registered = true,
+                 std::optional<fw::framework_error_kind_t> expected_terminal = {},
+                 bool expected_bad_alloc = false)
     {
         namespace probe = fw::detail::test_creation_probe;
         const auto deliveries = probe::request_deliveries.load ();
@@ -214,7 +233,7 @@ class submitted_actor_receiver_t : public testing::Test
                          .result ()
                          .value (),
                        1u);
-        } else if (terminal == terminal_t::shutdown) {
+        } else if (terminal == terminal_t::shutdown && expected_registered) {
             ASSERT_FALSE (pending.admitted ().await_ready ());
             runtime->stop ();
         }
@@ -222,13 +241,25 @@ class submitted_actor_receiver_t : public testing::Test
         EXPECT_FALSE (result);
         const auto received = physical.result ();
         EXPECT_FALSE (received);
+        const auto expected_kind =
+          terminal == terminal_t::timed_out  ? fw::framework_error_kind_t::deadline_exceeded
+          : terminal == terminal_t::shutdown ? fw::framework_error_kind_t::shutting_down
+                                             : fw::framework_error_kind_t::internal_failure;
+        if (expected_bad_alloc) {
+            // The publication failure is the original exception, not a Framework error kind.
+            EXPECT_EQ (result.error (), nullptr);
+            EXPECT_THROW (std::rethrow_exception (result.exception ()), std::bad_alloc);
+        } else {
+            EXPECT_EQ (result.error_kind (), expected_terminal.value_or (expected_kind));
+        }
+        EXPECT_EQ (registered.load (), expected_registered);
         runtime->stop ();
         EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
         ASSERT_EQ (published.wait_for (2s), std::future_status::ready);
         EXPECT_EQ (public_results.load (), 1u);
         std::printf ("actor receiver registered=%d captures=%zu values=%zu block=%zu "
                      "callback-owner=%zu deliveries=%zu\n",
-                     registered, probe::request_capture_bytes.load () - capture_bytes,
+                     registered.load (), probe::request_capture_bytes.load () - capture_bytes,
                      probe::request_capture_value_bytes.load () - capture_values,
                      probe::request_block_bytes.load () - block_bytes,
                      probe::request_callback_owner_bytes.load () - owner_bytes,
@@ -239,7 +270,7 @@ class submitted_actor_receiver_t : public testing::Test
 TEST_F (submitted_actor_receiver_t, NativeAdmissionRejectionDeliversOnce)
 {
     peer (true);
-    verify (terminal_t::transport_failed);
+    verify (terminal_t::transport_failed, true, fw::framework_error_kind_t::unavailable);
 }
 
 TEST_F (submitted_actor_receiver_t, TimeoutWhileAdmissionPendingDeliversOnce)
@@ -258,13 +289,15 @@ TEST_F (submitted_actor_receiver_t, PublicationExceptionDeliversPhysicalFailureO
 {
     peer (true);
     rt::mesh::raw_mesh_node_owner_test_access_t::fail_publication (
-      runtime->native_node ().transport ());
-    verify (terminal_t::transport_failed);
+      runtime->native_node ().transport (), registered);
+    verify (terminal_t::transport_failed, true, {}, true);
 }
 
 TEST_F (submitted_actor_receiver_t, RejectionBeforeRegistrationDeliversOnce)
 {
-    verify (terminal_t::route_unavailable, false);
+    rt::mesh::raw_mesh_node_owner_test_access_t::close_registry (
+      runtime->native_node ().transport ());
+    verify (terminal_t::shutdown, false);
 }
 
 // The fake binding retains the same delivered-result callback as raw_route_port_t.
@@ -710,7 +743,7 @@ TEST_F (local_actor_receiver_t, LocalCompletionSinkConstructionFailureDeliversPh
 
 // Each request selects the old cache entry before the serializer runs. Replacing
 // that entry in the serializer gives a deterministic selection/submission boundary.
-TEST_F (local_actor_receiver_t, SubmitNotConnectedInvalidatesOnlyTheUsedFenceAndReresolves)
+TEST_F (local_actor_receiver_t, MissingDescriptorTimeoutPreservesEveryCachedFence)
 {
     for (int changed = -1; changed != 5; ++changed) {
         SCOPED_TRACE (changed);
@@ -738,14 +771,15 @@ TEST_F (local_actor_receiver_t, SubmitNotConnectedInvalidatesOnlyTheUsedFenceAnd
         before_submit = [&, newer] { access::cache (*client, newer); };
         store.reads = 0;
         auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
-                         .timeout (1h)
+                         .timeout (5ms)
                          .async<std::string> ();
-        ASSERT_FALSE (pending.result ());
-        const auto deadline = std::chrono::steady_clock::now () + 2s;
-        while (changed == -1 && store.reads == 0 && std::chrono::steady_clock::now () < deadline)
-            std::this_thread::yield ();
-        EXPECT_EQ (store.reads, changed == -1 ? 1 : 0);
-        EXPECT_EQ (access::cached (*client, "actor"), changed != -1);
+        rt::mesh::raw_mesh_node_owner_test_access_t::end_local (
+          runtime->native_node ().transport (), {}, terminal_t::timed_out);
+        const auto result = pending.result ();
+        ASSERT_FALSE (result);
+        EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+        EXPECT_EQ (store.reads, 0);
+        EXPECT_TRUE (access::cached (*client, "actor"));
         before_submit = {};
     }
 }
