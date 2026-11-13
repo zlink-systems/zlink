@@ -279,7 +279,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (submission && !ZLinkBlockingCalls.isRuntimeExecutionContext()) {
             try {
                 return CompletableFuture.completedFuture(
-                        owner.awaitTurn(() -> ZLinkFlowContext.call(flow, work)));
+                        owner.awaitResult(() -> ZLinkFlowContext.call(flow, work)));
             } catch (RuntimeException | Error failure) {
                 return CompletableFuture.failedStage(failure);
             }

@@ -47,6 +47,43 @@ final class ZLinkStateLaneTest {
     }
 
     @Test
+    void idleResultBoundariesKeepTheirAllocationAndFailureContract() {
+        var lane = new ZLinkStateLane(Runnable::run);
+        java.util.function.Supplier<Object> work = () -> null;
+        long bytes =
+                PerCallAllocation.minWindow(
+                        () -> {
+                            lane.awaitResult(work);
+                            return null;
+                        },
+                        20_000,
+                        50_000);
+        assertTrue(bytes < 20_000, "idle result boundary allocated " + bytes + " bytes");
+        var failure = new IllegalStateException("owner failure");
+        assertSame(
+                failure,
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                lane.awaitResult(
+                                        () -> {
+                                            throw failure;
+                                        })));
+        assertFalse(lane.isOnLane());
+        assertEquals(
+                42,
+                lane.awaitResult(
+                        () -> {
+                            assertSame(lane, ZLinkStateLane.current());
+                            assertThrows(IllegalStateException.class, () -> lane.awaitResult(work));
+                            return 42;
+                        }));
+        assertFalse(lane.isOnLane());
+        lane.closeAsync().toCompletableFuture().join();
+        assertThrows(IllegalStateException.class, () -> lane.awaitResult(work));
+    }
+
+    @Test
     void contendedSynchronousTurnsRunOnTheirWaitingCallersInFifoOrder() throws Exception {
         var executorCalls = new AtomicInteger();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
