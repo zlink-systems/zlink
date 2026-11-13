@@ -164,3 +164,9 @@
 - 2026-11-13T22:35:01Z L5_7 request-backpressure-4096 phase=counted: HEAD=c019495a82c40247f0d3e5d9a16b5c6673b11495 dirty=clean merge_base=494c5f4827db8d86a5dce716b7a8da6e7e9cf970; addon=/root/worktree/zlink-v21-s033/lad-node/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node sha256=ed260e4bb579df207784f76ed5e518d214f4baf1bcf485d9f303b917c23dbe05; framework_artifact=/root/worktree/zlink-v21-s033/lad-node/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js sha256=2eb493e44a2738fe318252cfd07fc0861ecadb6dc335f8104f0d6bcbb3a82f0f. call-shape=call-shape.md#per-message-costs; costs-by-step recorded there; receive binding `zlink-raw-server/main.js:47-53,64-75` vs L0 `zlink-framework-server/main.js:142-155` (DontWait/NoData/batch); reply binding `zlink-raw-server/main.js:77-86` vs L-step `zlink-framework-server/main.js:116-133,168-176` (L0 new body; L2 envelope; L3 service wire; L4 typed codec; L5~L7 operation path).
 
 - result L5_7 request-backpressure-4096 counted=4300.8 msg/s; raw=/root/jobs/fx/cx/v21/s033/lad-node-s2/raw/node/L5_7/request-backpressure-4096/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/results.json; scheduling=/root/jobs/fx/cx/v21/s033/lad-node-s2/raw/node/L5_7/request-backpressure-4096/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/scheduling.txt
+
+## 완료
+
+- 10초 warmup / 5초 active로 6개 셀의 L4와 L5~L7 counted를 각각 1회 완료했다. 12개 run 모두 오류 0, submitted=completed=received 및 thread별 SCHED_OTHER·CPU affinity 검증을 통과했다.
+- 손실 18–24% 셀은 없어서 반복 median run은 필요하지 않았다. 결과와 raw/scheduling 링크는 report.md에 정리했다.
+- 배포 빌드·테스트는 실행하지 않았다. stale Framework dist는 발견되지 않았다.

@@ -154,3 +154,7 @@ BCL Base64.EncodeToUtf8 / DecodeFromUtf8 primitive stack은 남아 있고, JSON 
 규칙 수: owned JSON payload materialization 판정 위치 2→1, byte 표현 판정 위치 1→1, 합계 **3→2**. writer의 임시 storage·written count는 삭제한 중간 JSON array를 대체하며 영구 상태·flag·queue·lock은 추가하지 않았다.
 
 리팩토링 점검: 발견 3건, 수정 2건(JSON owned array, Base64 temporary output), 이월 1건(기존 positional record nullability). gate/lifecycle/transport 제어의 새 판정이나 중복 상태는 없다.
+
+## 7. 로컬 commit
+
+`89152573224b1d50c0bc80c905bc023cb7aae87d` — `perf/4354-dotnet-typed-json`, worktree clean. 변경 파일 5개이며 push·PR·GitHub 접근 없음. [commit log](raw/commit.log), [최종 상태](raw/final-state.json). 마지막 테스트 파일 format check도 통과했다([raw](raw/format-final-test.log)). 모든 원본 trace·실패 탐색 log·raw 산출물을 보존했다.

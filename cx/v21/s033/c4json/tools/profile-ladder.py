@@ -75,11 +75,14 @@ try:
  trigger={'runId':'profile-'+stage,'cellId':f'L{level}-{pattern}-{size}','pattern':pattern,'payloadBytes':size,'phase':'warmup','durationMs':1000,'requestWindow':100,'submitConcurrency':1}
  http(trigger_port,'/bench/start',trigger);wait_idle()
  http(target_stats_port,'/bench/reset',{})
- scheduling('start')
- perf=spawn(['perf','record','-e','cpu-clock:u','-F','499','-g','--call-graph','fp','-o',str(out/'perf.data'),'-p',f'{source.pid},{target.pid}','--','taskset','-c','6-7,14-15','sleep','5.5'],'perf')
- time.sleep(.12)
  trigger.update(phase='active',durationMs=4000)
  http(trigger_port,'/bench/start',trigger)
+ while http(source_stats_port,'/bench/stats')['submitted']==0:time.sleep(.01)
+ scheduling('start')
+ task_map={str(p.pid):[int(t.name) for t in Path(f'/proc/{p.pid}/task').iterdir()] for p in [source,target]}
+ (out/'perf-task-map.json').write_text(json.dumps(task_map,indent=2))
+ tids=','.join(str(tid) for ts in task_map.values() for tid in ts)
+ perf=spawn(['perf','record','-e','cpu-clock:u','-F','499','-g','--call-graph','fp','-o',str(out/'perf.data'),'-t',tids,'--','taskset','-c','6-7,14-15','sleep','3.5'],'perf')
  time.sleep(2)
  scheduling('mid')
  result=wait_idle()
