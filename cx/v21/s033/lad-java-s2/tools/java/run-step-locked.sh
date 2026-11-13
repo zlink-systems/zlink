@@ -60,10 +60,13 @@ assert c['errors']==c['server_errors']==c['target_stats']['errors']==0
 assert c['submitted']==c['completed']==c['target_stats']['received']
 assert 'scheduling_invalid=' not in t
 assert all(f'cpu{cpu}.state{state}.disable_at_run_start=1' in t for cpu in (0,8) for state in (2,3))
+blocks=[part.strip() for part in t.split('\n\n')]
 for phase,expected in (('source_start','0-5'),('mid_active_source','0-5'),('target_start','8-13'),('mid_active_target','8-13')):
- policies=[line for line in t.splitlines() if line.startswith(phase) and 'current scheduling policy:' in line]
- affs=[line.rsplit('cpus=',1)[1] for line in t.splitlines() if line.startswith(phase+'_affinity ') and 'cpus=' in line]
- assert policies and all('current scheduling policy: SCHED_OTHER' in x for x in policies),(phase,policies)
+ block=next((part for part in blocks if part.startswith(phase+'_utc=')), '')
+ policies=[line for line in block.splitlines() if 'current scheduling policy:' in line]
+ tids=[line for line in block.splitlines() if line.startswith(phase+'_tid=')]
+ affs=[line.rsplit('cpus=',1)[1] for line in block.splitlines() if line.startswith(phase+'_affinity ') and 'cpus=' in line]
+ assert policies and len(policies)==len(tids) and all('current scheduling policy: SCHED_OTHER' in x for x in policies),(phase,len(tids),len(policies))
  assert affs and all(x==expected for x in affs),(phase,affs)
 print(c['throughput_per_second'])
 PY

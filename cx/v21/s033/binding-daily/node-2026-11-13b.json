@@ -2,7 +2,7 @@
   "language": "node",
   "utc_date": "2026-11-13",
   "conditions": "C2·C3 off, SCHED_OTHER, CPU pinning source 0-5 / target 8-13 by runner, quiet guard v8; warm run per cell",
-  "measured_utc": "2026-11-13T18:56:00Z",
+  "measured_utc": "2026-11-13T18:54:58Z",
   "cells": {
     "send-saturation-1024": {
       "msg_s": 111497,
