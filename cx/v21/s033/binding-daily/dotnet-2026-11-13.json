@@ -1,0 +1,35 @@
+{
+  "language": "dotnet",
+  "utc_date": "2026-11-13",
+  "conditions": "C2·C3 off, SCHED_OTHER, CPU split 0-5/8-13 + housekeeping 6-7,14-15, warm run per cell, guard v7",
+  "measured_utc": "2026-11-13T18:34:38+00:00",
+  "status": "not_measured",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/dotnet/lock-windows/affinity-check-failed.txt"
+    },
+    "send-saturation-4096": {
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/dotnet/lock-windows/affinity-check-failed.txt"
+    },
+    "request-serial-1024": {
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/dotnet/lock-windows/affinity-check-failed.txt"
+    },
+    "request-serial-4096": {
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/dotnet/lock-windows/affinity-check-failed.txt"
+    },
+    "request-backpressure-1024": {
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/dotnet/lock-windows/affinity-check-failed.txt"
+    },
+    "request-backpressure-4096": {
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/dotnet/lock-windows/affinity-check-failed.txt"
+    }
+  },
+  "affinity_verified": false,
+  "validity_note": "The first warm run was rejected because source/target stayed at 0-7/8-15. A subsequent pre-warm affinity wait timed out; no counted run."
+}

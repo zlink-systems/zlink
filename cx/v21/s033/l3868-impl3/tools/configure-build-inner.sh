@@ -19,5 +19,5 @@ cmake -S framework/bench/grpc/cpp -B build-l3868-next -G Ninja \
 cmake --build build-l3868-next -j3 \
   --target bench_cpp_client bench_cpp_zlink_server bench_cpp_framework_server bench_cpp_grpc_server \
   bench_cpp_raw_wire_test bench_cpp_framework_window_test bench_cpp_framework_completion_test \
-  bench_cpp_submit_threads_test bench_cpp_server_metrics_test bench_cpp_grpc_callback_test bench_cpp_ladder_contract_test \
+  bench_cpp_submit_threads_test bench_cpp_server_metrics_test bench_cpp_grpc_callback_test bench_cpp_ladder_contract_test bench_cpp_ladder_route_contract_test \
   >"$JOB/raw/build-$STAGE.log" 2>&1

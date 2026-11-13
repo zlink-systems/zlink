@@ -28,5 +28,7 @@
       "msg_s": 125560.587017,
       "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/cpp/request-backpressure-4096/counted/attempt1/run1/zlink-cpp-request-backpressure-4096/results.json"
     }
-  }
+  },
+  "affinity_verified": false,
+  "validity_note": "C2/C3 and SCHED_OTHER checks passed; no per-run CPU affinity snapshot was collected, so CPU split 0-5/8-13 is unverified."
 }

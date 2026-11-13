@@ -11,8 +11,10 @@ for line in subprocess.check_output(['ninja', '-C', str(build), '-t', 'deps'], t
         recorded[current] = []
     elif line.startswith('    ') and current:
         recorded[current].append(line.strip())
-for binary in ('bench_cpp_client', 'bench_cpp_zlink_server', 'bench_cpp_framework_server',
-               'bench_cpp_grpc_server', 'bench_cpp_ladder_contract_test'):
+binaries = sorted(path.name for path in build.glob('bench_cpp_*')
+                  if path.is_file() and path.stat().st_mode & 0o111)
+assert len(binaries) >= 11, binaries
+for binary in binaries:
     deps = subprocess.check_output(['ninja', '-C', str(build), '-t', 'inputs', binary], text=True)
     inputs = {(build / line.strip()).resolve() for line in deps.splitlines() if line.strip()}
     commands = subprocess.check_output(['ninja', '-C', str(build), '-t', 'commands', binary], text=True)

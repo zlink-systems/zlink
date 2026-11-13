@@ -1,6 +1,6 @@
 # C++ L4 (#4354) 호출 대조
 
-기준 L3 `dd83e75df4`, 실험 branch `exp/3868-cpp-ladder-next`. 측정 없음.
+기준 L3 `dd83e75df4`, L4 commit `276b84f248`, 실험 branch `exp/3868-cpp-ladder-next`. 측정 없음.
 `B=framework/bench/grpc/cpp`, `R=framework/languages/cpp/framework/src/runtime`,
 `I=framework/languages/cpp/framework/include/zlink/framework`.
 L3 line은 기준 commit, L4 line은 L4 구현 commit 기준이다.

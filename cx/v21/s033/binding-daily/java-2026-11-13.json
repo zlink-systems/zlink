@@ -1,55 +1,35 @@
 {
   "language": "java",
   "utc_date": "2026-11-13",
-  "source": "lad-java-par fresh L0 binding medians, 3 runs per cell",
+  "conditions": "C2·C3 off, SCHED_OTHER, CPU split 0-5/8-13 + housekeeping 6-7,14-15, warm run per cell, guard v7",
+  "measured_utc": "2026-11-13T18:38:34+00:00",
+  "status": "not_measured",
   "cells": {
     "send-saturation-1024": {
-      "msg_per_second": 505353.6,
-      "raw_paths": [
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-send-saturation-1024/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-send-saturation-1024/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-send-saturation-1024/results.json"
-      ]
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/java/send-saturation-1024/warm/attempt1/driver.log"
     },
     "send-saturation-4096": {
-      "msg_per_second": 198901.6,
-      "raw_paths": [
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-send-saturation-4096/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-send-saturation-4096/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-send-saturation-4096/results.json"
-      ]
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/java/send-saturation-1024/warm/attempt1/driver.log"
     },
     "request-serial-1024": {
-      "msg_per_second": 11554.0,
-      "raw_paths": [
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-request-serial-1024/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-request-serial-1024/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-request-serial-1024/results.json"
-      ]
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/java/send-saturation-1024/warm/attempt1/driver.log"
     },
     "request-serial-4096": {
-      "msg_per_second": 11123.4,
-      "raw_paths": [
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-request-serial-4096/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-request-serial-4096/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-request-serial-4096/results.json"
-      ]
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/java/send-saturation-1024/warm/attempt1/driver.log"
     },
     "request-backpressure-1024": {
-      "msg_per_second": 154763.4,
-      "raw_paths": [
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-request-backpressure-1024/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-request-backpressure-1024/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-request-backpressure-1024/results.json"
-      ]
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/java/send-saturation-1024/warm/attempt1/driver.log"
     },
     "request-backpressure-4096": {
-      "msg_per_second": 106317.2,
-      "raw_paths": [
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-request-backpressure-4096/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-request-backpressure-4096/results.json",
-        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-request-backpressure-4096/results.json"
-      ]
+      "msg_s": null,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/java/send-saturation-1024/warm/attempt1/driver.log"
     }
-  }
+  },
+  "affinity_verified": false,
+  "validity_note": "C2/C3 disable and guard readiness were observed, but the guard did not narrow source/target affinity to 0-5/8-13 before warmup. No counted run. The Java artifacts were refreshed and current before this final affinity-wait failure."
 }
