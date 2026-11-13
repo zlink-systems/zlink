@@ -31,6 +31,11 @@ import java.time.Duration;
  */
 public final class FrameworkStack implements AutoCloseable {
     private static final RoutingId SERVER = RoutingId.from(BenchContract.SERVER_ROUTING_ID);
+    private static final ZLinkChannelEnvelope.PreparedNames CHANNEL_NAMES =
+            new ZLinkChannelEnvelope.PreparedNames(BenchContract.CHANNEL_NAME, null, null);
+    private static final ZLinkChannelEnvelope.PreparedNames MESSAGE_NAMES =
+            new ZLinkChannelEnvelope.PreparedNames(
+                    null, "BenchPayload", "application/x-protobuf");
 
     private final ConfigurableApplicationContext context;
     private final ZLinkRouteClient route;
@@ -130,15 +135,16 @@ public final class FrameworkStack implements AutoCloseable {
         }
         if (System.getenv("ZLINK_BENCH_LADDER_L2") != null) {
             return send
-                    ? ladderBinding.sendWithHeader(
-                            () -> envelopeHeader(ZLinkChannelEnvelope.KIND_COMMAND))
-                    : ladderBinding.requestWithHeader(
-                            () -> envelopeHeader(ZLinkChannelEnvelope.KIND_REQUEST));
+                    ? ladderBinding.sendWithEnvelope(
+                            ZLinkChannelEnvelope.KIND_COMMAND, FrameworkStack::envelopeParts)
+                    : ladderBinding.requestWithEnvelope(
+                            ZLinkChannelEnvelope.KIND_REQUEST, FrameworkStack::envelopeParts);
         }
         return send ? ladderBinding.send() : ladderBinding.request();
     }
 
-    private static systems.zlink.contracts.messaging.Message envelopeHeader(int kind) {
+    private static java.util.List<systems.zlink.contracts.messaging.Message> envelopeParts(
+            int kind, systems.zlink.contracts.messaging.Message body) {
         var header =
                 ZLinkChannelEnvelope.create(
                         kind,
@@ -148,7 +154,8 @@ public final class FrameworkStack implements AutoCloseable {
                         null,
                         java.util.Map.of(),
                         null);
-        return ZLinkChannelEnvelope.encodeHeader(header);
+        return ZLinkChannelEnvelope.encode(
+                header, body, CHANNEL_NAMES, MESSAGE_NAMES, MESSAGE_NAMES);
     }
 
     private BenchPayload payload(int payloadSize, byte phase, long sequence) {

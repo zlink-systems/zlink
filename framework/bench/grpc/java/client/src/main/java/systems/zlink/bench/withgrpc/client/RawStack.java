@@ -7,7 +7,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.function.Supplier;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.contracts.core.Context;
@@ -19,6 +18,7 @@ import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 
 /** Raw binding client: ROUTER&lt;-&gt;ROUTER with an explicit target routing ID. */
 public final class RawStack implements AutoCloseable {
@@ -90,17 +90,24 @@ public final class RawStack implements AutoCloseable {
         };
     }
 
-    public RawOperation requestWithHeader(Supplier<Message> headerFactory) {
+    public RawOperation requestWithEnvelope(int kind, EnvelopeFactory envelopeFactory) {
         return new RawOperation() {
             @Override
             public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
                 var operation = router.request(peer);
-                try (Message header = headerFactory.get();
-                     Message body = RawWire.encodeBenchPayloadMessage(
-                         payloadSize, runId, phase, sequence)) {
+                Message body = RawWire.encodeBenchPayloadMessage(
+                    payloadSize, runId, phase, sequence);
+                List<Message> envelope;
+                try {
+                    envelope = envelopeFactory.encode(kind, body);
+                } catch (RuntimeException | Error failure) {
+                    body.close();
+                    throw failure;
+                }
+                try {
                     var submission = operation
-                        .message(header)
-                        .message(body)
+                        .message(envelope.get(0))
+                        .message(envelope.get(1))
                         .timeout(timeout)
                         .submit();
                     var admitted = submission.result() == SubmitResult.BACKPRESSURED
@@ -112,6 +119,8 @@ public final class RawStack implements AutoCloseable {
                         submission.reply().toCompletableFuture().thenAccept(
                             parts -> validate(parts, runId, phase, payloadSize,
                                 sequence)));
+                } finally {
+                    ZLinkFrameworkMultipartView.closeAll(envelope);
                 }
             }
         };
@@ -121,24 +130,39 @@ public final class RawStack implements AutoCloseable {
         return new RawSendOperation();
     }
 
-    public RawSendOperation sendWithHeader(Supplier<Message> headerFactory) {
-        return new FrameworkEnvelopeSendOperation(headerFactory);
+    public RawSendOperation sendWithEnvelope(int kind, EnvelopeFactory envelopeFactory) {
+        return new FrameworkEnvelopeSendOperation(kind, envelopeFactory);
+    }
+
+    @FunctionalInterface
+    public interface EnvelopeFactory {
+        List<Message> encode(int kind, Message body);
     }
 
     /** A send payload prepared by a logical stream before it enters the socket gate. */
     public static final class PreparedSend implements AutoCloseable {
         private final Message header;
         private final Message body;
+        private final List<Message> ownedParts;
 
         private PreparedSend(Message header, Message body) {
+            this(header, body, null);
+        }
+
+        private PreparedSend(Message header, Message body, List<Message> ownedParts) {
             this.header = header;
             this.body = body;
+            this.ownedParts = ownedParts;
         }
 
         @Override
         public void close() {
-            body.close();
-            header.close();
+            if (ownedParts == null) {
+                body.close();
+                header.close();
+            } else {
+                ZLinkFrameworkMultipartView.closeAll(ownedParts);
+            }
         }
     }
 
@@ -183,23 +207,26 @@ public final class RawStack implements AutoCloseable {
     }
 
     private final class FrameworkEnvelopeSendOperation extends RawSendOperation {
-        private final Supplier<Message> headerFactory;
+        private final int kind;
+        private final EnvelopeFactory envelopeFactory;
 
-        private FrameworkEnvelopeSendOperation(Supplier<Message> headerFactory) {
-            this.headerFactory = headerFactory;
+        private FrameworkEnvelopeSendOperation(int kind, EnvelopeFactory envelopeFactory) {
+            this.kind = kind;
+            this.envelopeFactory = envelopeFactory;
         }
 
         @Override
         public PreparedSend prepareRaw(int payloadSize, byte phase, long sequence) {
-            Message header = headerFactory.get();
+            Message body = RawWire.encodeBenchPayloadMessage(
+                    payloadSize, runId, phase, sequence);
+            List<Message> parts;
             try {
-                Message body = RawWire.encodeBenchPayloadMessage(
-                        payloadSize, runId, phase, sequence);
-                return new PreparedSend(header, body);
+                parts = envelopeFactory.encode(kind, body);
             } catch (RuntimeException | Error failure) {
-                header.close();
+                body.close();
                 throw failure;
             }
+            return new PreparedSend(parts.get(0), parts.get(1), parts);
         }
     }
 
