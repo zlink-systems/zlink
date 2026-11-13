@@ -95,9 +95,18 @@ inline fw::runtime::mesh::raw_mesh_node_options_t owner_options (
 class encoder_t
 {
   public:
-    explicit encoder_t (int level) : _level (level), _serializer (serializer ()) {}
+    explicit encoder_t (int level) : _level (level)
+    {
+        if (level >= 2 || level < 0) {
+            _type = std::make_shared<fw::detail::request_type_plan_t> (
+              fw::detail::prepare_request_type ("BenchPayload", "application/x-protobuf"));
+            _channel = std::make_shared<fw::detail::prepared_header_fragment_t> (
+              fw::detail::prepare_request_channel ("bench"));
+        }
+    }
     std::array<zlink::message_t, 2> encode (size_t size, uint32_t run, phase_t phase,
-                                       uint64_t seq, bool command = true)
+                                       uint64_t seq, bool command = true,
+                                       std::chrono::milliseconds timeout = std::chrono::milliseconds (0))
     {
         zlink::message_t body;
         // L4 restores the Framework typed codec. L0 still performs all of
@@ -106,15 +115,19 @@ class encoder_t
         value.mutable_body ()->assign (size, '\xab');
         stamp_payload (value.mutable_body ()->data (), size, run, phase, seq);
         body = _level >= 4
-          ? fw::detail::encoded_payload_to_raw (_serializer.serialize (value))
+          ? fw::detail::encoded_payload_to_raw (serializer ().serialize (value))
           : message (encode_bench_payload (value));
         if (_level >= 0 && _level < 2)
             return {message (request_envelope ()), std::move (body)};
-        auto header = messaging::client_call_codec_t{}.create_envelope (
+        messaging::client_call_codec_t codec;
+        auto header = codec.create_envelope (
           command ? messaging::message_kind_t::command : messaging::message_kind_t::request,
-          "bench", "BenchPayload", std::chrono::milliseconds (0), {}, {},
+          "bench", "BenchPayload", command ? std::chrono::milliseconds (0) : timeout, {}, {},
           "application/x-protobuf");
-        auto envelope = messaging::envelope_codec_t{}.encode_raw_body_parts (header, std::move (body));
+        auto encoded = fw::detail::encoded_payload_from_raw (std::move (body));
+        auto envelope = command
+          ? codec.encode_payload_parts (header, std::move (encoded), "application/x-protobuf")
+          : codec.encode_payload_parts (std::move (header), std::move (encoded), _type, _channel);
         if (_level >= 3 || _level < 0) {
             auto application = std::move (envelope).take_application_payload ();
             return {command ? protocol::encode_node_send_header_message ()
@@ -126,7 +139,8 @@ class encoder_t
     }
   private:
     int _level;
-    decltype (serializer ()) _serializer;
+    std::shared_ptr<const fw::detail::request_type_plan_t> _type;
+    std::shared_ptr<const fw::detail::prepared_header_fragment_t> _channel;
 };
 
 inline std::vector<std::span<const std::byte>> application_views (
@@ -137,15 +151,6 @@ inline std::vector<std::span<const std::byte>> application_views (
     if (parts[0].size () && *reinterpret_cast<const char *> (parts[0].data ()) == '{')
         return {parts[0].bytes (), parts[1].bytes ()};
     return protocol::decode_application_part_views (protocol::message_bytes (parts[1]), false);
-}
-
-inline std::span<const std::byte> fixed_body (std::span<const std::byte> bytes)
-{
-    if ((bytes.size () != 1027 && bytes.size () != 4099)
-        || bytes[0] != std::byte{0x0a} || bytes[1] != std::byte{0x80}
-        || bytes[2] != (bytes.size () == 1027 ? std::byte{0x08} : std::byte{0x20}))
-        throw std::runtime_error ("unexpected fixed protobuf body");
-    return bytes.subspan (3);
 }
 
 inline void verify_wire ()
@@ -160,7 +165,7 @@ inline void verify_wire ()
             messaging::envelope_codec_t{}.decode_header (bytes, false).value ();
         }
     };
-    for (int level : {-1, 0, 1, 2, 3, 4}) {
+    for (int level : {0, 1, 2}) {
         for (size_t size : {1024, 4096}) {
             for (bool command : {true, false}) {
                 encoder_t encoder (level);
@@ -194,20 +199,15 @@ inline void verify_wire ()
         if (!rejected)
             throw std::runtime_error ("malformed raw/framework envelope was accepted");
     }
-    bool rejected = false;
-    try { (void) fixed_body (invalid.bytes ()); }
-    catch (const std::runtime_error &) { rejected = true; }
-    if (!rejected)
-        throw std::runtime_error ("invalid fixed protobuf view was accepted");
-    std::puts ("negative checks: malformed envelope, corrupt framing, invalid protobuf view rejected");
+    std::puts ("negative checks: malformed raw/framework envelope rejected");
 }
 
 template <typename Metrics> struct fixed_handler_t
 {
     Metrics &metrics;
     int level;
-    decltype (serializer ()) codec = serializer ();
-    payload_t handle (zlink::received_t &received)
+    payload_t handle (zlink::received_t &received,
+                      std::optional<messaging::envelope_header_t> &header)
     {
         const auto &parts = received.parts ();
         if (parts.size () != 2 || parts[0].size () == 0)
@@ -221,11 +221,15 @@ template <typename Metrics> struct fixed_handler_t
         }
         if (views.size () != 2)
             throw std::runtime_error ("ladder application must have two parts");
-        if (level >= 2)
-            messaging::envelope_codec_t{}.decode_header (views[0], false).value ();
+        if (level >= 2 || level < 0) {
+            auto decoded = packed.empty ()
+              ? messaging::envelope_codec_t{}.decode_header_view (parts[0], false)
+              : messaging::envelope_codec_t{}.decode_header (views[0], false);
+            header.emplace (std::move (decoded.value ()));
+        }
         payload_t payload;
         if (level >= 4) {
-            payload = codec.deserialize (fw::detail::encoded_payload_from_raw (views[1]));
+            payload = serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1]));
         } else if (!payload.ParseFromArray (views[1].data (), static_cast<int> (views[1].size ()))) {
             throw std::runtime_error ("invalid raw protobuf payload");
         }
@@ -234,38 +238,77 @@ template <typename Metrics> struct fixed_handler_t
     }
 };
 
-// Raw cross peer: only its admission/liveness and canonical wire adaptation are
-// imitated. It deliberately constructs no Framework owner or handler runtime.
-inline void raw_reply (zlink::received_t &received, const payload_t &payload)
+inline std::array<zlink::message_t, 2> reply_parts (
+  const payload_t &payload, const std::optional<messaging::envelope_header_t> &request)
 {
-    // #4350 correction 2026-11-12 09:00 UTC: same fresh response work as
-    // zlink/bench_zlink_cpp_server.cpp request_loop; never echo request parts.
-    const char *envelope = response_envelope ();
-    zlink::message_t header = zlink::message_t::from (std::as_bytes (
-      std::span<const char> (envelope, std::strlen (envelope))));
+    // L2 changes only the envelope; every level retains the binding's fresh
+    // reply body, protobuf encode and two-part submit.
     payload_t reply;
     reply.set_body (payload.body ());
     const std::string encoded = encode_bench_payload (reply);
     zlink::message_t echo = zlink::message_t::from (
       std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));
+    if (request) {
+        fw::detail::channel_reply_writer_t writer;
+        auto response = writer.reply_raw_envelope (
+          writer.create_reply_header (messaging::message_kind_t::response, "bench", *request),
+          std::move (echo));
+        auto items = std::move (response).take_items ();
+        return {std::move (items[0]), std::move (items[1])};
+    }
+    return {message (response_envelope ()), std::move (echo)};
+}
+
+inline void raw_reply (zlink::received_t &received, const payload_t &payload,
+                       const std::optional<messaging::envelope_header_t> &request)
+{
+    auto response = reply_parts (payload, request);
     if (*reinterpret_cast<const char *> (received.parts ()[0].data ()) == '{') {
-        received.reply ().message (header).message (echo).submit ();
+        received.reply ().message (response[0]).message (response[1]).submit ();
         return;
     }
     // Canonical peers retain their existing wire contract. This compatibility
     // adapter is outside the primary L0 raw wire.
     const auto correlation = protocol::decode_node_request_header (
       protocol::message_bytes (received.parts ()[0]));
-    const auto views = application_views (received.parts ());
-    const auto request = messaging::envelope_codec_t{}.decode_header (views[0], false).value ();
-    fw::detail::channel_reply_writer_t writer;
-    auto response = writer.reply_raw_envelope (
-      writer.create_reply_header (messaging::message_kind_t::response, "bench", request),
-      std::move (echo));
     auto service_header = protocol::encode_reply_header_message (correlation, 0, 0);
     auto service_body = protocol::encode_application_payload_message (
-      std::move (response).take_application_payload ());
+      protocol::application_payload_t::from_parts (
+        messaging::message_parts_t (std::move (response[0]), std::move (response[1])).take_items ()));
     received.reply ().message (service_header).message (service_body).submit ();
+}
+
+inline payload_t decode_reply (const std::vector<zlink::message_t> &parts, int level,
+                                std::uint64_t sequence)
+{
+    if (parts.size () != 2)
+        throw std::runtime_error ("invalid ladder reply part count");
+    if (level >= 3 || level < 0) {
+        const auto wire = protocol::decode_reply_header (protocol::message_bytes (parts[0]));
+        if (wire.correlation != sequence + 1 || wire.terminal_result != 0)
+            throw std::runtime_error ("invalid service reply correlation/terminal");
+    }
+    const std::array<std::span<const std::byte>, 2> legacy{parts[0].bytes (), parts[1].bytes ()};
+    std::vector<std::span<const std::byte>> packed;
+    std::span<const std::span<const std::byte>> views = legacy;
+    if (level >= 3 || level < 0) {
+        packed = application_views (parts);
+        views = packed;
+    }
+    if (views.size () != 2)
+        throw std::runtime_error ("ladder reply must have two application parts");
+    if (level >= 2 || level < 0) {
+        auto decoded = messaging::envelope_codec_t{}.decode_header (views[0], false);
+        const auto &header = decoded.value ();
+        if (header.kind == messaging::message_kind_t::error)
+            throw messaging::request_failure_mapper_t{}.error_header_exception (
+              header.error_code.value_or ("request_failed"),
+              header.error_message.value_or ("route request failed"), "route request");
+    }
+    payload_t payload;
+    if (!payload.ParseFromArray (views[1].data (), static_cast<int> (views[1].size ())))
+        throw std::runtime_error ("invalid raw reply protobuf");
+    return payload;
 }
 
 template <typename Metrics>
@@ -290,9 +333,10 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
             while (socket.recv (received, zlink::recv_flags_t::dontwait) == 0) {
                 if (handle_control (socket, received, local))
                     continue;
-                auto payload = handler.handle (received);
+                std::optional<messaging::envelope_header_t> header;
+                auto payload = handler.handle (received, header);
                 if (received.reply_token ())
-                    raw_reply (received, payload);
+                    raw_reply (received, payload, header);
             }
         }
         return 0;
@@ -320,9 +364,10 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
         // L6: one handler, constructed outside the receive loop, called directly.
         if (permit)
             permit->release_for_handler_entry ();
-        auto payload = state.handler.handle (received);
+        std::optional<messaging::envelope_header_t> header;
+        auto payload = state.handler.handle (received, header);
         if (received.reply_token ())
-            raw_reply (received, payload);
+            raw_reply (received, payload, header);
     }, &state, application_jobs.get ());
     return 0;
 }

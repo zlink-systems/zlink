@@ -189,7 +189,17 @@ target_link_libraries(bench_cpp_submit_threads_test PRIVATE zlink::framework_cod
 add_test(NAME bench_cpp_submit_threads COMMAND bench_cpp_submit_threads_test)
 
 if(ZLINK_CPP_ABLATION_LADDER)
-  foreach(target IN ITEMS bench_cpp_framework_server bench_cpp_client bench_cpp_submit_threads_test)
+  add_executable(bench_cpp_ladder_contract_test tests/ladder_contract_test.cpp ${BENCH_PROTO_CC})
+  bench_target(bench_cpp_ladder_contract_test)
+  target_include_directories(bench_cpp_ladder_contract_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+  target_link_libraries(bench_cpp_ladder_contract_test PRIVATE zlink::framework_codec_protobuf)
+  foreach(level RANGE 0 2)
+    add_test(NAME bench_cpp_ladder_L${level} COMMAND bench_cpp_ladder_contract_test)
+    set_tests_properties(bench_cpp_ladder_L${level} PROPERTIES
+      ENVIRONMENT "ZLINK_CPP_LADDER_LEVEL=${level}" TIMEOUT 30)
+  endforeach()
+  foreach(target IN ITEMS bench_cpp_framework_server bench_cpp_client bench_cpp_submit_threads_test
+                          bench_cpp_ladder_contract_test)
     target_include_directories(${target} PRIVATE
       "${BENCH_REPO_ROOT}/framework/languages/cpp/framework/src"
       "${BENCH_REPO_ROOT}/framework/runtime/protocol/generated/cpp")

@@ -115,7 +115,8 @@ class ladder_driver_t final : public driver_t
             submit_raw (*_socket, _target, std::move (stream), seq);
             return;
         }
-        auto parts = _encoders[index]->encode (stream->size, stream->run_id, stream->phase, seq, _command);
+        auto parts = _encoders[index]->encode (stream->size, stream->run_id, stream->phase, seq, _command,
+                                              std::chrono::milliseconds (_options.request_timeout_ms));
         if (_command) {
             auto submission = _socket->send (_target).message (parts[0]).message (parts[1]).async ();
             observe_binding (std::move (submission.admitted),
@@ -131,29 +132,8 @@ class ladder_driver_t final : public driver_t
             observe_binding (std::move (submission.reply),
               [stream, seq, level] (const auto &reply) {
                   try {
-                      if (level >= 0 && level < 3) {
-                          if (reply.size () != 2)
-                              throw std::runtime_error ("invalid raw reply part count");
-                          payload_t payload;
-                          if (!payload.ParseFromArray (reply[1].data (), static_cast<int> (reply[1].size ())))
-                              throw std::runtime_error ("invalid raw reply protobuf");
-                          stream->finish (0, &payload, seq);
-                          return;
-                      }
-                      const auto wire = ladder::protocol::decode_reply_header (
-                        ladder::protocol::message_bytes (reply.at (0)));
-                      if (wire.correlation != seq + 1 || wire.terminal_result != 0)
-                          throw std::runtime_error ("invalid service reply correlation/terminal");
-                      auto views = ladder::application_views (reply);
-                      if (level < 0 || level >= 4) {
-                          payload_t payload;
-                          if (!payload.ParseFromArray (views[1].data (), static_cast<int> (views[1].size ())))
-                              throw std::runtime_error ("invalid raw reply protobuf");
-                          stream->finish (0, &payload, seq);
-                      } else {
-                          const auto body = ladder::fixed_body (views[1]);
-                          stream->finish_bytes (0, body.data (), body.size (), seq);
-                      }
+                      auto payload = ladder::decode_reply (reply, level, seq);
+                      stream->finish (0, &payload, seq);
                   } catch (const std::exception &error) {
                       stream->finish (0, nullptr, seq, &error);
                   }
