@@ -472,6 +472,15 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             byte[] command,
             Duration timeout,
             java.util.concurrent.CompletableFuture<Void> admission) {
+        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout, admission, 0);
+    }
+
+    default CompletionStage<byte[]> requestCanonicalRelocationPrepare(
+            RoutingId targetNodeRid,
+            byte[] command,
+            Duration timeout,
+            java.util.concurrent.CompletableFuture<Void> admission,
+            long targetNodeGeneration) {
         return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout)
                 .whenComplete(
                         (reply, failure) -> {

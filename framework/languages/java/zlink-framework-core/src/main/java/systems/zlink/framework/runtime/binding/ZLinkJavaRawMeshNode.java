@@ -2652,11 +2652,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         long ownerLeaseGeneration =
                 spots.spotAuthorityOwnerLeaseGeneration(
                         targetNodeRid, targetSpotId, targetSpotGeneration);
-        if (peer.isEmpty()
-                || !isReadyPeer(peer.orElseThrow())
-                || targetSpotGeneration <= 0
+        if (targetSpotGeneration <= 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
+            return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+        }
+        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2688,6 +2689,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetSpotGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
@@ -2697,6 +2699,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
+                targetNodeGeneration,
                 metadata,
                 parts,
                 timeout,
@@ -2710,6 +2713,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetSpotGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
@@ -2723,7 +2727,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         long ownerLeaseGeneration =
                 spots.spotAuthorityOwnerLeaseGeneration(
                         targetNodeRid, targetSpotId, targetSpotGeneration);
-        if (targetNodeGeneration(targetNodeRid) == 0
+        if (targetNodeGeneration == 0
                 || targetSpotGeneration <= 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
@@ -2750,7 +2754,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                             targetSpotId,
                                             targetSpotGeneration,
                                             targetNodeRid,
-                                            targetNodeGeneration(targetNodeRid),
+                                            targetNodeGeneration,
                                             authorityOwnerGeneration,
                                             ownerLeaseGeneration))));
             if (flags != 0) {
@@ -2794,7 +2798,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                                             List.of()),
                                                             terminal,
                                                             null,
-                                                            requestAdmission)),
+                                                            requestAdmission),
+                                            targetNodeGeneration),
                             ZLinkBackendReceived::close,
                             completion)
                     .whenComplete(
@@ -3140,10 +3145,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
         long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (peer.isEmpty()
-                || actor.generation() <= 0
-                || authorityOwnerGeneration <= 0
-                || ownerLeaseGeneration <= 0) {
+        if (actor.generation() <= 0 || authorityOwnerGeneration <= 0 || ownerLeaseGeneration <= 0) {
+            return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+        }
+        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -3188,7 +3193,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
         long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (targetNodeGeneration(actor.nodeRid()) == 0
+        if (spots.actorAuthorityNodeGeneration(actor) == 0
                 || actor.generation() <= 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
@@ -3214,7 +3219,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 null,
                                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                                         actor,
-                                        targetNodeGeneration(actor.nodeRid()),
+                                        spots.actorAuthorityNodeGeneration(actor),
                                         authorityOwnerGeneration,
                                         ownerLeaseGeneration),
                                 new ZLinkServiceM6BWireCodec.BoundSessionTail(
@@ -3222,7 +3227,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         sourceBindingGeneration,
                                         sourceSessionSequence)),
                         wire.encodeFrameworkMultipartFrame(parts));
-        return requestApplication(actor.nodeRid(), frames, timeout, null)
+        return requestDurable(
+                        actor.nodeRid(),
+                        () -> frames,
+                        timeout,
+                        messages -> messages.stream().map(Message::toByteArray).toList(),
+                        null,
+                        spots.actorAuthorityNodeGeneration(actor))
                 .thenApply(
                         replyFrames -> {
                             try {
@@ -3750,7 +3761,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
         long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (targetNodeGeneration(actor.nodeRid()) == 0
+        if (spots.actorAuthorityNodeGeneration(actor) == 0
                 || actor.generation() <= 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
@@ -3762,7 +3773,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return requestActor(
                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                         actor,
-                        targetNodeGeneration(actor.nodeRid()),
+                        spots.actorAuthorityNodeGeneration(actor),
                         authorityOwnerGeneration,
                         ownerLeaseGeneration),
                 parts,
@@ -3860,7 +3871,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                                             null,
                                                                             receiver,
                                                                             null,
-                                                                            requestAdmission));
+                                                                            requestAdmission),
+                                                            target.targetNodeGeneration());
                                                 },
                                                 discardReply,
                                                 completion)
@@ -3887,6 +3899,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> bindRemoteStreamSession(
             RoutingId sessionRid,
             ZLinkBackendActorRef actor,
+            long targetNodeGeneration,
             long authorityOwnerGeneration,
             long bindingGeneration,
             boolean active,
@@ -3899,14 +3912,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return requestDurable(
                 actor.nodeRid(),
                 () -> {
-                    Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                            topology == null
-                                    ? Optional.empty()
-                                    : topology.peerFromOwner(actor.nodeRid());
                     long ownerLeaseGeneration =
                             ((ZLinkJavaRawSpotNode) spotNode())
                                     .actorAuthorityOwnerLeaseGeneration(actor);
-                    if (peer.isEmpty() || ownerLeaseGeneration <= 0) {
+                    if (ownerLeaseGeneration <= 0) {
                         return null;
                     }
                     var observed = peerAdmissionExpectations.get(actor.nodeRid());
@@ -3914,7 +3923,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             && observed.ownerId() != null
                             && !sessionFenceCurrent(
                                     actor.nodeRid(),
-                                    peer.orElseThrow().descriptor().lifecycleGeneration(),
+                                    targetNodeGeneration,
                                     observed.ownerId(),
                                     ownerLeaseGeneration)) return null;
                     return List.of(
@@ -3923,9 +3932,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                             correlation,
                                             new ZLinkServiceM6BWireCodec.ActorRouteFence(
                                                     actor,
-                                                    peer.orElseThrow()
-                                                            .descriptor()
-                                                            .lifecycleGeneration(),
+                                                    targetNodeGeneration,
                                                     authorityOwnerGeneration,
                                                     ownerLeaseGeneration),
                                             sessionRid,
@@ -3957,7 +3964,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     }
                     return reply;
                 },
-                null);
+                null,
+                targetNodeGeneration);
     }
 
     @Override
@@ -4067,7 +4075,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     @Override
     public CompletionStage<byte[]> requestCanonicalRelocationPrepare(
             RoutingId targetNodeRid, byte[] command, Duration timeout) {
-        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout, null);
+        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout, null, 0);
     }
 
     @Override
@@ -4075,7 +4083,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             RoutingId targetNodeRid,
             byte[] command,
             Duration timeout,
-            CompletableFuture<Void> admission) {
+            CompletableFuture<Void> admission,
+            long targetNodeGeneration) {
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
         byte[] record = Objects.requireNonNull(command, "command").clone();
         Objects.requireNonNull(timeout, "timeout");
@@ -4138,7 +4147,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 "canonical relocation prepare reply is invalid");
                     return canonicalPrepareReply(parts.getFirst().toByteArray());
                 },
-                admission);
+                admission,
+                targetNodeGeneration);
     }
 
     @Override
@@ -4687,14 +4697,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     Duration remainingTimeout =
                             ZLinkRequestCalls.remainingTimeout(
                                     timeout, startedAt, System::nanoTime);
-                    if (targetNodeGeneration(targetNodeRid) == 0 || localDescriptor == null) {
+                    if (localDescriptor == null) {
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException(
                                         "remote User Spot create target is not connected"));
                     }
-                    if (!intent.reservation().targetNodeRid().equals(targetNodeRid)
-                            || intent.reservation().targetNodeGeneration()
-                                    != targetNodeGeneration(targetNodeRid)) {
+                    if (!intent.reservation().targetNodeRid().equals(targetNodeRid)) {
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException(
                                         "remote User Spot create target is not connected"));
@@ -4749,7 +4757,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                         replyFrames == null
                                                                 ? List.of()
                                                                 : replyFrames);
-                                            }));
+                                            }),
+                            intent.reservation().targetNodeGeneration());
                     return operation.completion();
                 });
     }
@@ -4857,18 +4866,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     Duration remainingTimeout =
                             ZLinkRequestCalls.remainingTimeout(
                                     timeout, startedAt, System::nanoTime);
-                    if (targetNodeGeneration(targetNodeRid) == 0
-                            || localDescriptor == null
+                    if (localDescriptor == null
                             || !intent.target().targetNodeRid().equals(targetNodeRid)) {
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException(
                                         "remote User Spot close target is not connected"));
-                    }
-                    long peerGeneration = targetNodeGeneration(targetNodeRid);
-                    if (intent.target().targetNodeGeneration() != peerGeneration) {
-                        return CompletableFuture.failedFuture(
-                                userSpotCloseTargetMoved(
-                                        intent.target().targetNodeGeneration(), peerGeneration));
                     }
                     long correlation = allocateCorrelation();
                     ZLinkServiceOperationRegistry.Operation<
@@ -4918,7 +4920,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                         replyFrames == null
                                                                 ? List.of()
                                                                 : replyFrames);
-                                            }));
+                                            }),
+                            intent.target().targetNodeGeneration());
                     return operation.completion();
                 });
     }
@@ -9111,6 +9114,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             List<Message> frames,
             CompletableFuture<Void> requestAdmission,
             Function<Duration, CompletionStage<?>> submit) {
+        return admitRequest(
+                target, registry, id, caller, terminal, frames, requestAdmission, submit, 0);
+    }
+
+    private <T> CompletionStage<?> admitRequest(
+            RoutingId target,
+            ZLinkServiceOperationRegistry registry,
+            UUID id,
+            CompletionStage<?> caller,
+            BiConsumer<T, Throwable> terminal,
+            List<Message> frames,
+            CompletableFuture<Void> requestAdmission,
+            Function<Duration, CompletionStage<?>> submit,
+            long targetLifecycleGeneration) {
         if (requestAdmission != null)
             caller.whenComplete(
                     (reply, failure) -> {
@@ -9119,7 +9136,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return ZLinkJavaDurableRequest.attempt(
                 List::of,
                 (ignored, remaining, admission, completed) -> submit.apply(remaining),
-                () -> observePeerRoute(target),
+                () -> observePeerRoute(target, targetLifecycleGeneration),
                 () -> connectionAttemptsFor(target),
                 (changed, ended) -> onPeerStateChanged(target, changed, ended),
                 this::runAdmissionTurn,
@@ -9129,19 +9146,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 requestAdmission,
                 caller,
                 () -> Message.closeAll(frames));
-    }
-
-    private long targetNodeGeneration(RoutingId target) {
-        var peer = topology == null ? null : topology.peerOrNullFromOwner(target);
-        if (peer != null) return peer.descriptor().lifecycleGeneration();
-        var expected = peerAdmissionExpectations.get(target);
-        if (expected != null) return expected.lifecycleGeneration();
-        return peerIntents.values().stream()
-                .filter(intent -> target.equals(intent.expectedRoutingId()))
-                .mapToLong(PeerIntent::expectedLifecycleGeneration)
-                .filter(value -> value != 0)
-                .findFirst()
-                .orElse(0);
     }
 
     private record PeerCloseRequest(long connectionIntentId, String endpoint) {}

@@ -191,6 +191,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     CompletionStage<Void> prepareNativeActorRoute(
             ZLinkBackendActorRef targetActor,
+            long targetNodeGeneration,
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
             Duration timeout) {
@@ -203,7 +204,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         }
         if (actors != null) {
             actors.prepareRelocatedSessionBinding(
-                    targetActor, authorityOwnerGeneration, ownerLeaseGeneration);
+                    targetActor,
+                    authorityOwnerGeneration,
+                    ownerLeaseGeneration,
+                    targetNodeGeneration);
         }
         return stream.relocateBoundActor(
                 sessionRid, ref.actorId(), bindingGeneration(), targetActor, timeout);

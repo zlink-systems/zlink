@@ -2171,7 +2171,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             awaitAdmitted(source);
 
             var actor = new ZLinkBackendActorRef(targetRid, "missing-bound-actor", 1);
-            source.spotNode().rememberActorAuthority(actor, 1, 1);
+            source.spotNode().rememberActorAuthority(actor, 1, 1, target.lifecycleGeneration());
             CompletionStage<List<Message>> request;
             try (Message payload = Message.from("bound-request")) {
                 request =

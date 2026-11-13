@@ -132,7 +132,8 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
             try (var payload = Message.from("request")) {
                 if (actorRequest) {
                     var actor = new ZLinkBackendActorRef(targetRid, "missing-actor", 1);
-                    source.spotNode().rememberActorAuthority(actor, 1, 1);
+                    source.spotNode()
+                            .rememberActorAuthority(actor, 1, 1, target.lifecycleGeneration());
                     request =
                             source.requestActor(
                                             new ZLinkServiceM6BWireCodec.ActorRouteFence(
@@ -150,6 +151,7 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
                                             targetRid,
                                             "missing-spot",
                                             1,
+                                            target.lifecycleGeneration(),
                                             new byte[0],
                                             List.of(payload),
                                             Duration.ofSeconds(5),

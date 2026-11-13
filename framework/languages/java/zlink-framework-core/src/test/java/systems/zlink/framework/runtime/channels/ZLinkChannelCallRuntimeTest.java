@@ -128,6 +128,7 @@ final class ZLinkChannelCallRuntimeTest {
                                 target,
                                 spot,
                                 generation,
+                                targetNodeGeneration,
                                 authority,
                                 lease,
                                 parts,
@@ -176,8 +177,8 @@ final class ZLinkChannelCallRuntimeTest {
                                         .ZLinkServiceOperationRegistry
                                         .<ZLinkBackendReceived>prepareOperation(identity)),
                         calls.requestToSpot(
-                                "missing", target, "spot", 1, 1, 1, List.of(), timeout, identity,
-                                null));
+                                "missing", target, "spot", 1, 0L, 1, 1, List.of(), timeout,
+                                identity, null));
         for (var request : requests) {
             CompletionException failure =
                     assertThrows(

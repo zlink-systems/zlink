@@ -38,7 +38,8 @@ final class ZLinkJavaRawMeshNodeSessionOwnerDescriptorTest {
             try (Message create = Message.from("create")) {
                 actor = actorNode.spotNode().createActor("player", create);
             }
-            ((ZLinkJavaRawSpotNode) sessionNode.spotNode()).rememberActorAuthority(actor, 3, 1);
+            ((ZLinkJavaRawSpotNode) sessionNode.spotNode())
+                    .rememberActorAuthority(actor, 3, 1, actorNode.lifecycleGeneration());
 
             // Session-Actor binding §4: without that descriptor the bind is Unavailable.
             var failure =
@@ -49,6 +50,7 @@ final class ZLinkJavaRawMeshNodeSessionOwnerDescriptorTest {
                                             .bindRemoteStreamSession(
                                                     RoutingId.from("bind-no-descriptor-session"),
                                                     actor,
+                                                    actorNode.lifecycleGeneration(),
                                                     3,
                                                     1,
                                                     true,

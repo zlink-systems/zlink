@@ -94,6 +94,7 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
                 "play.route",
                 RoutingId.from("play-node"),
                 "room-spot",
+                0L,
                 List.of(request),
                 Duration.ofSeconds(1),
                 result);
@@ -145,6 +146,7 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
                 String channelName,
                 RoutingId targetNodeRid,
                 String targetSpotId,
+                long targetNodeGeneration,
                 List<Message> parts,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {

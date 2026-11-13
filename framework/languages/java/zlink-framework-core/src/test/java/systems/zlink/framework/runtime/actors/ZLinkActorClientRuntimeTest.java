@@ -1415,7 +1415,8 @@ final class ZLinkActorClientRuntimeTest {
         public void rememberActorAuthority(
                 ZLinkBackendActorRef actor,
                 long authorityOwnerGeneration,
-                long ownerLeaseGeneration) {
+                long ownerLeaseGeneration,
+                long targetNodeGeneration) {
             knownAuthorityOwnerGeneration = authorityOwnerGeneration;
             knownOwnerLeaseGeneration = ownerLeaseGeneration;
         }
@@ -1424,9 +1425,14 @@ final class ZLinkActorClientRuntimeTest {
         public void observeActorAuthority(
                 ZLinkBackendActorRef actor,
                 long authorityOwnerGeneration,
-                long ownerLeaseGeneration) {
+                long ownerLeaseGeneration,
+                long targetNodeGeneration) {
             if (knownAuthorityOwnerGeneration < authorityOwnerGeneration) {
-                rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+                rememberActorAuthority(
+                        actor,
+                        authorityOwnerGeneration,
+                        ownerLeaseGeneration,
+                        targetNodeGeneration);
             }
         }
 
