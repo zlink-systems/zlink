@@ -57,7 +57,7 @@ for d in sorted((job/'raw'/label).iterdir()):
     if m:
      flush();header=(float(m[1]),int(m[2]));frames=[]
     elif l.startswith('\t'):
-     m=re.match(r'\s+([0-9a-f]+) (.+) \((.+)\)$',l)
+     m=re.match(r'\s+([0-9a-f]+) (.+?) \((.+)\)$',l)
      if not m:continue
      addr=int(m[1],16);name=m[2]
      if name=='[unknown]':

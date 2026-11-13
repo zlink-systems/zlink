@@ -9,12 +9,13 @@ paths = [bench/'Client/bin/Release/net8.0/WithGrpcBench.Client.dll', bench/'ZLin
 for f in paths:
     assert f.exists(), f
     assert f.stat().st_mtime > max(x.stat().st_mtime for x in f.parents[4].rglob('*.cs') if '/obj/' not in str(x) and '/bin/' not in str(x)), f
-manifest = dict(commit='29d9fca82b', scratch_archive=True, production_dirty=bool(subprocess.check_output(['git','status','--porcelain'],text=True).strip()), base=subprocess.check_output(['git','merge-base','HEAD','origin/main'],text=True).strip(), pinned='6-7,14-15', max_process_seconds=20, throughput_verdict=False, artifacts={str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in paths + [paths[0].parent/'Zlink.Framework.dll']})
+manifest = dict(commit='29d9fca82b', scratch_archive=True, production_dirty=bool(subprocess.check_output(['git','status','--porcelain'],text=True).strip()), base=subprocess.check_output(['git','merge-base','HEAD','origin/main'],text=True).strip(), pinned='6-7,14-15', tiered_compilation=False, max_process_seconds=20, throughput_verdict=False, artifacts={str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in paths + [paths[0].parent/'Zlink.Framework.dll']})
 manifest['serializer_sources'] = {str(f.relative_to(scratch)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [scratch/'framework/languages/dotnet/src/Shared/ZLinkJsonSerializerOptions.cs',scratch/'framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkFrameworkJsonPayloadCodec.cs',scratch/'framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkEnvelopeCodec.cs']}
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2))
 with (job/'progress.md').open('a') as f: f.write('\n- 수신/응답 대조: raw blocking Recv→unpack→typed JSON→fresh reply; L57 owner receive→worker→fresh handler scope→fresh typed JSON reply. 추가 기능은 call-shape.md의 L5~L7만.\n- profile '+str(out.relative_to(job))+': '+json.dumps(manifest)+'\n')
 env = os.environ.copy()
 env['DOTNET_PerfMapEnabled']='1'
+env['DOTNET_TieredCompilation']='0'
 env['ZLINK_DOTNET_LADDER_LEVEL']=level
 if level=='L4': env.update(ZLINK_DOTNET_LADDER_CLIENT='raw', ZLINK_DOTNET_RAW_TARGET='framework')
 else:

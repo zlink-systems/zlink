@@ -124,3 +124,5 @@ Ladder `2bef18aa94`의 Node bench/proto를 **git archive**로 `/root/worktree/zl
 변경 파일: `framework/languages/node/packages/framework/src/runtime/channels/channel-envelope.ts`, `framework/languages/node/test/contract/node-envelope-codec-cost.test.js`, `framework/languages/node/test/contract/node-envelope-header-bytes.test.js`.
 
 리팩토링 점검: 비용/중복 검증3건(ID 임시 문자열, per-call Date, prepared field length 인자)를 수정했다. Execution-gate 중복 동기화 발견0. 미수정 차이: Node의 inbound/outbound header copy와 reader/deadline string, .NET L2의 다른 entry/wire 표현. Binding/API 설계로 확대하지 않았다. 남은 test 실패0, 정식 throughput/잔여 손실률 재판정 없음. raw와 scratch는 보존했다. local commit만 수행하며 push·PR·GitHub·sub-agent·internal-docs 사용 없음.
+
+로컬 commit: **7ff6e1ede8**, branch `perf/4352-node-l2-net`, parent `5f3a59bff6`. 최종 worktree clean, 세 source/test 파일이 commit과 일치하며 남은 profile process0이다(`raw/final-verification.json`). Push하지 않았다.

@@ -69,3 +69,5 @@
 - build/검증 fingerprint: final 5f3a59bff64a7044373f9625d2e6041a130c26b4 dirty=True merge-base=df42a4df4098d543be8dc0b84510cf6d961576d8; raw/final-fingerprint.json (source/output fresh, own worktree paths·sha256).
 
 - 최종 검증: 13 files 273 tests 통과, 실패/skip0. format(JS 포함), lint, typecheck, git diff --check 통과. Baseline 최종 allocation budget 실패(7.002>4.25), final 통과(4/136B). Profile 4 runs count 일치/errors0/CPU·policy·20s cap audit 통과. Source envelope17.400→15.149%, target7.225→9.603%; throughput 개선 판정 안 함. 최종 optimized request10.101/487.5B→5.101/271.5B. report.md 완료, raw 보존.
+
+- 완료: local commit 7ff6e1ede8b13aca46cf9843ca7ca77f3b25fad6; parent 5f3a59bff64a7044373f9625d2e6041a130c26b4; branch perf/4352-node-l2-net; clean. Push/PR 없음. source/commit 일치, 남은 profile process0, raw/final-verification.json.

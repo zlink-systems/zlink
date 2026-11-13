@@ -2,7 +2,7 @@
 
 기본 typed JSON의 **Base64 임시 string·중복 UTF-8/escape 순회·문자 append**, decoder의 **문자마다 alphabet 검색·byte vector 반복 확장**을 제거했다. padded RFC 4648, JSON 출력, public API와 bench DTO는 유지한다. 변경 분류는 **B(기존 codec의 불필요한 처리 비용)**다.
 
-수정 전/후 production 출력과 독립 fixture가 **0, 1, 2, 3, 127, 128, 1024, 4096 bytes 모두 byte-identical**이며 decoded value도 같다. 관련 C++ runtime test **7/7**, C++ format과 diff check가 통과했다. 로컬 commit: **COMMIT_PENDING**.
+수정 전/후 production 출력과 독립 fixture가 **0, 1, 2, 3, 127, 128, 1024, 4096 bytes 모두 byte-identical**이며 decoded value도 같다. 관련 C++ runtime test **7/7**, C++ format과 diff check가 통과했다. 로컬 commit: **846aa1d27f50882d075904d91ea47c3ff63c8ed5**.
 
 원인·제안을 먼저 기록한 [구현 전 보고서](raw/report-before-implementation.md)를 보존했다. 아래 J의 수정 전 line은 `df42a4df40`, 수정 후 line은 현재 변경 기준이다. `J=framework/languages/cpp/common/include/zlink/json_profile.hpp`, `I=framework/languages/cpp/framework/include/zlink/framework`.
 
@@ -104,4 +104,4 @@ Copy 계수는 실제 allocation capacity와 code의 byte range를 연결해 계
 
 남은 codec 관련 실패는 없다. parser token 처리와 기존 framing copy의 비용은 남으며 처리량 재측정은 이 보고서의 판정 범위 밖이다. 초기 scratch profile의 고정 HTTP 포트 재사용에 따른 bind/start 실패(뒤따른 source SIGSEGV 포함), admitted send를 receiver drain 전 집계한 snapshot, worker 생성 전 attach한 sample은 최종 v5 판정에서 제외했다. 원래 raw는 모두 보존하며, HTTP start 실패 뒤 cleanup의 근본 원인은 이번 typed JSON 수정 범위에서 조사하지 않았다. [기동 오류](raw/baseline-v2-L3-request-serial-1024/source.log)·[상태](raw/baseline-v2-L3-request-serial-1024/startup-events.json).
 
-로컬 commit만 수행한다. push·PR·GitHub·sub-agent/다른 AI·internal-docs.sh·measure.lock 사용은 없다. Raw와 scratch source는 보존하며, 종료 시 이 worktree의 build dir만 정리한다. 정리 결과: CLEANUP_PENDING.
+로컬 commit만 수행한다. push·PR·GitHub·sub-agent/다른 AI·internal-docs.sh·measure.lock 사용은 없다. Raw와 scratch source는 보존하며, 종료 시 이 worktree의 build dir만 정리한다. 정리 결과: build-c4json-ladder / build-c4json-unit / build-c4json-bulk 3개 삭제 완료; raw·scratch source 유지 ([최종 상태](raw/final-repository-state.json)).

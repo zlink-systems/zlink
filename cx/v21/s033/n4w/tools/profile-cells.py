@@ -111,4 +111,9 @@ for step in ("L4",):
       for h in handles: h.close()
       (output/"lifetime.json").write_text(json.dumps({"wall_seconds":time.monotonic()-started,"exit_codes":{r:p.returncode for r,p in procs},"pids":{r:p.pid for r,p in procs}}))
     print(output.name,"done",flush=True)
+    if failure is None:
+      source=json.loads((output/'active-source-stats.json').read_text())
+      target=json.loads((output/'target-stats.json').read_text())
+      with (job/'progress.md').open('a') as f:
+        f.write(f"\nFirst result {output.name}: source={source}, target={target}; raw={output.relative_to(job)}.\n")
     if failure is not None: sys.exit(1)
