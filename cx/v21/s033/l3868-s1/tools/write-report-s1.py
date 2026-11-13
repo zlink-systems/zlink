@@ -63,6 +63,7 @@ L0는 binding 대비 ≥95%, L1~L4는 이전 단계 대비 손실 ≤7%, L5~L7�
 - [검증기 정상·거부 시험](raw/validator-check/checks.json): 정상 수락, SCHED_IDLE·잘못된 affinity·mid-active 누락·count 불일치 거부.
 - [무효 실행](raw/invalid-runs.json) {len(invalid)}회는 판정에서 제외하고 원시 파일을 보존했다.
 - 유효 counted {len(counted)}회 모두 errors=0, submitted=completed=received. 각 results.json 옆 scheduling.txt에 source/target 모든 thread의 시작·mid-active chrt 정책과 Cpus_allowed_list를 기록했다. 원시 목록의 scheduling 필드로 연결한다.
+- [guard v8 파일·SHA256](raw/guard-evidence.json).
 - 락 보유 시간: {', '.join(holds)}. 각 hold의 before/after.json에 governor와 16 CPU C2/C3 상태를 보존했다. 빌드·집계는 락 밖에서 수행했다.
 - `build-l3868-next` 및 기존·이번 원시 파일을 유지한다. commit·push·GitHub·sub-agent·internal-docs 실행 없음.
 '''

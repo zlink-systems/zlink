@@ -23,10 +23,17 @@ def snapshot():
     return f"HEAD={proc(['git','rev-parse','HEAD'])} dirty={proc(['git','status','--porcelain']) or 'clean'} merge_base={proc(['git','merge-base','HEAD','origin/main'])} artifacts={';'.join(artifacts)}"
 def cost(level):
     common='binding receive{B/zlink/bench_zlink_cpp_server.cpp:41 recv(NONE),54 protobuf parse,56 metrics;84 command recv,97 parse,99 metrics} reply{58 fresh envelope,61-65 fresh body copy/protobuf encode/Message,67 two-part submit}'
-    if level!='binding' and int(level)<=4:
+    if level=='binding' or int(level)<=4:
         common+=' | ladder receive{R/mesh/raw_mesh_node_owner.cpp:530-546 optional permit→recv(NONE)→direct handler;B/ladder/ladder_wire.hpp:253-270 unpack/header parse/payload decode/metrics} reply{B/ladder/ladder_wire.hpp:283-298 fresh body copy/encode/envelope;308/315 two-part submit}'
     elif level=='7': common+=' | L5~L7 receive{B/framework/bench_framework_cpp_server.cpp:91-100 public route→R/mesh/mesh_node_host_service.cpp:2163,2299,3869 owner/mailbox/worker→R/channels/route_handler_invoker.cpp:37 scope} reply{B/framework/bench_framework_cpp_server.cpp:26-29 copy return→R/channels/route_handler_registry.hpp:147 serialize→R/channels/route_packet_dispatcher.cpp:444 response→R/mesh/raw_mesh_node_owner.cpp:2177 submit}'
-    return common+'; costs{binding/L0 blocking recv=1,drain=0,new reply body copy=1,encode=1,metrics=same;L1 permit credits load2/add1/sub1;L2 envelope encode/parse and parts allocation;L3 pack byte writes/retained slices/span vector,no payload copy on target/completion;L4 typed JSON/base64;L5~L7 production owner/worker/scope/registry allocation/atomic;Core/native counts unmeasured}; call-shape.md'
+    n=0 if level=='binding' else int(level)
+    added=[]
+    if n>=1: added.append('L1 permit credits load2/add1/sub1 plus lifetime refcounts')
+    if n>=2: added.append('L2 request/response envelope encode and parse1 each,parts allocation,request correlation fetch_add1')
+    if n>=3: added.append('L3 service pack byte writes/retained slices+refcounts/span vector,target/completion payload byte copy0')
+    if n>=4: added.append('L4 typed JSON/base64 allocation/encode/decode replaces protobuf,extra wait/drain/metrics atomic0')
+    if n==7: added.append('L5~L7 production owner/worker/scope/registry wait/allocation/atomic;counts not instrumented')
+    return common+'; costs{binding/L0 blocking recv1,drain0,source completion poll wait,source fresh header/body Messages+protobuf encode,target protobuf decode+same metrics,reply fresh envelope/body Messages+body copy1+encode1,completion protobuf decode+same counters;added='+(';'.join(added) or 'none')+';Core/native allocation/atomic counts unmeasured}; call-shape.md'
 def validate(result,sched):
     d=json.loads(result.read_text()); c=d['cells'][0]; s=sched.read_text()
     assert not c.get('contaminated') and not c.get('drain_bound_hit') and not c.get('settle_bound_hit'), 'contaminated/drain'
@@ -91,6 +98,7 @@ def environment(path):
 
 try:
     log(f'LOCK acquired hold={W} plan={sys.argv[1]}')
+    assert time.time()<DEADLINE-130, 'time cap: do not begin hold'
     for n in range(16): pathlib.Path(f'/sys/devices/system/cpu/cpu{n}/cpufreq/scaling_governor').write_text('performance')
     for _ in range(240):
         if all(pathlib.Path(f'/sys/devices/system/cpu/cpu{n}/cpuidle/state{s}/disable').read_text().strip()=='1' for n in range(16) for s in [2,3]): break

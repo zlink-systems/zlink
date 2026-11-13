@@ -6,6 +6,8 @@ TOOLS="$JOB/tools/java"
 RAW="$JOB/raw/java"
 STEP="${1:?step required}"
 MODE="${2:-initial}"
+FILTER_PATTERN="${3:-}"
+FILTER_SIZE="${4:-}"
 case "$STEP" in L0|L1|L2|L3|L4|L5_7) ;; *) exit 2;; esac
 case "$MODE" in initial|repeat) ;; *) exit 2;; esac
 cd "$ROOT"
@@ -39,6 +41,7 @@ start=$SECONDS
 mkdir -p "$RAW/lock-windows" "$RAW/run-env"
 for pair in 'send-saturation 1024' 'send-saturation 4096' 'request-serial 1024' 'request-serial 4096' 'request-backpressure 1024' 'request-backpressure 4096'; do
   read -r pattern size <<< "$pair"
+  if [[ -n "$FILTER_PATTERN" && ( "$pattern" != "$FILTER_PATTERN" || "$size" != "$FILTER_SIZE" ) ]]; then continue; fi
   for kind in "${kinds[@]}"; do
     (( SECONDS - start < 1500 )) || { echo '25-minute safety boundary reached; stop this hold' >&2; exit 124; }
     if [[ "$kind" == warm ]]; then stage=warm; else stage=counted; fi

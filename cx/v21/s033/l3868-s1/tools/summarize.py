@@ -16,9 +16,9 @@ for prev,cur in zip(levels,levels[1:]):
         a=bykey.get((prev,p,s)); b=bykey.get((cur,p,s))
         if not a or not b: continue
         loss=1-b['rate']/a['rate']; limit=.05 if cur=='0' else .21 if cur=='7' else .07
-        badg5=any(x['n']>=3 and x['g5']>.05 for x in [a,b])
+        badg5=any(x['n'] not in (1,3) or (x['n']>=3 and x['g5']>.05) for x in [a,b])
         boundary=cur!='0' and ((.19<=loss<=.23) if cur=='7' else (.05<=loss<=.09))
-        status='판정 불가' if badg5 else '통과' if loss<=limit else '실패'
+        status='판정 불가' if badg5 or (boundary and any(x['n']<3 for x in [a,b])) else '통과' if loss<=limit else '실패'
         comparisons.append(dict(previous=prev,current=cur,pattern=p,size=s,loss=loss,budget=limit,status=status,previous_raw=a['raw_paths'],current_raw=b['raw_paths'],g5_previous=a['g5'],g5_current=b['g5'],n_previous=a['n'],n_current=b['n'],boundary=boundary))
         if boundary:
             for lev,x in [(prev,a),(cur,b)]:
