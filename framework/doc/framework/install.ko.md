@@ -105,7 +105,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
 === "Java"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.32.1")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.32.2")
     ```
 
     | 포함 패키지 | 역할 |
@@ -134,8 +134,8 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
 === "Kotlin"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.32.1")
-    implementation("systems.zlink:zlink-framework-kotlin:0.32.1")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.32.2")
+    implementation("systems.zlink:zlink-framework-kotlin:0.32.2")
     ```
 
     | 포함 패키지 | 역할 |
@@ -274,7 +274,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     |---|---|---|
     | `.NET` | `Zlink.Stream.Connector` | nuget.org |
     | C++ | `zlink::stream_e2e_client` — connector에 시나리오 helper를 추가한 타깃 | vcpkg · Conan · source |
-    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.32.1` | Maven Central |
+    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.32.2` | Maven Central |
     | Node.js | `@zlink-systems/stream-connector` | npm |
 
     C++만 전용 타깃을 둔다. `zlink::stream_e2e_client`는 `zlink::stream_connector`에 시나리오
