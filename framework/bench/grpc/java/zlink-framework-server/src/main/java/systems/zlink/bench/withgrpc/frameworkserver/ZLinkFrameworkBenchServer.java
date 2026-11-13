@@ -91,7 +91,11 @@ public class ZLinkFrameworkBenchServer {
             var stats = BenchStatsServer.start(metricsUrl, metrics,
                 "{\"implementation\":\"zlink-framework-java\","
                 + "\"host\":\"zlink-framework-spring-boot-starter\","
-                + "\"codec\":\"zlink-framework-codec-protobuf\","
+                + "\"codec\":\""
+                + (System.getenv("ZLINK_BENCH_LADDER_L5_7") != null
+                        ? "framework-json-v1"
+                        : "zlink-framework-codec-protobuf")
+                + "\","
                 + "\"endpoint\":\"" + endpoint + "\"}");
             try {
                 System.err.println("[framework-server] endpoint=" + endpoint
@@ -441,7 +445,10 @@ public class ZLinkFrameworkBenchServer {
     @Bean
     ZLinkFrameworkConfigurer benchFramework(BenchEndpoint endpoint) {
         return options -> {
-            options.codecs().use(ZLinkProtobufCodec.defaultCodec());
+            boolean ladderL5To7 = System.getenv("ZLINK_BENCH_LADDER_L5_7") != null;
+            if (!ladderL5To7) {
+                options.codecs().use(ZLinkProtobufCodec.defaultCodec());
+            }
             // A send that finds no handler is dropped silently by default, which
             // would reach the client as a throughput of zero with no explanation.
             // G3 counts what the SERVER received, so the server has to say when it
@@ -458,31 +465,33 @@ public class ZLinkFrameworkBenchServer {
             var mesh = options.addRouteMesh(BenchContract.MESH_NAME)
                 .listen(endpoint.value())
                 .setRoutingId(RoutingId.from(BenchContract.SERVER_ROUTING_ID));
-            mesh.addRouteRequestHandler(
-                    BenchEchoHandler.class,
-                    systems.zlink.bench.withgrpc.proto.BenchPayload.class,
-                    systems.zlink.bench.withgrpc.proto.BenchPayload.class)
-                .addRouteSendHandler(
-                    BenchCommandHandler.class,
-                    systems.zlink.bench.withgrpc.proto.BenchPayload.class);
-            if (System.getenv("ZLINK_BENCH_LADDER_L5_7") != null) {
+            if (ladderL5To7) {
                 mesh.addRouteRequestHandler(
                                 BenchTypedEchoHandler.class,
                                 BenchTypedPayload.class,
                                 BenchTypedPayload.class)
                         .addRouteSendHandler(
                                 BenchTypedCommandHandler.class, BenchTypedPayload.class);
+            } else {
+                mesh.addRouteRequestHandler(
+                        BenchEchoHandler.class,
+                        systems.zlink.bench.withgrpc.proto.BenchPayload.class,
+                        systems.zlink.bench.withgrpc.proto.BenchPayload.class)
+                    .addRouteSendHandler(
+                        BenchCommandHandler.class,
+                        systems.zlink.bench.withgrpc.proto.BenchPayload.class);
             }
-            // Kotlin reuses this server and still addresses the channel. Both public
-            // namespaces use the same handlers, codec and metrics.
-            mesh.channelName(BenchContract.CHANNEL_NAME).server()
-                .addRequestHandler(
-                    BenchEchoHandler.class,
-                    systems.zlink.bench.withgrpc.proto.BenchPayload.class,
-                    systems.zlink.bench.withgrpc.proto.BenchPayload.class)
-                .addRouteSendHandler(
-                    BenchCommandHandler.class,
-                    systems.zlink.bench.withgrpc.proto.BenchPayload.class);
+            if (!ladderL5To7) {
+                // Kotlin uses the channel namespace with protobuf BenchPayload handlers.
+                mesh.channelName(BenchContract.CHANNEL_NAME).server()
+                    .addRequestHandler(
+                        BenchEchoHandler.class,
+                        systems.zlink.bench.withgrpc.proto.BenchPayload.class,
+                        systems.zlink.bench.withgrpc.proto.BenchPayload.class)
+                    .addRouteSendHandler(
+                        BenchCommandHandler.class,
+                        systems.zlink.bench.withgrpc.proto.BenchPayload.class);
+            }
         };
     }
 

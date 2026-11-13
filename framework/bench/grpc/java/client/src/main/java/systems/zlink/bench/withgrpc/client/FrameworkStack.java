@@ -265,7 +265,9 @@ public final class FrameworkStack implements AutoCloseable {
         @Bean
         ZLinkFrameworkConfigurer benchClientFramework(PeerEndpoint endpoint) {
             return options -> {
-                options.codecs().use(ZLinkProtobufCodec.defaultCodec());
+                if (!ladderL5To7()) {
+                    options.codecs().use(ZLinkProtobufCodec.defaultCodec());
+                }
                 if (System.getenv("BENCH_FLOW_TRACE") != null) {
                     options.configureDispatch()
                             .messageFlow(
