@@ -13,11 +13,14 @@ stopped=(); idled=(); cdeep=0
 # 1:1 request-serial round trips (~90 us). Disabled on all CPUs while a measurement holds the lock
 # (aa-noise3 11-13: request-serial A/A G5 32%).
 cstates() { local v=$1 f; for f in /sys/devices/system/cpu/cpu*/cpuidle/state[23]/disable; do echo $v > $f 2>/dev/null; done; cdeep=$v; echo "$(date -u +%FT%TZ) deep-cstates-disabled=$v" >> $LOG; }
-desc() { local p=$1; echo $p; for c in $(pgrep -P $p); do desc $c; done; }
+# one ps snapshot per call (the recursive pgrep version made a guard pass take 5+ s)
+desc() { ps -eo pid=,ppid= | awk -v r=$1 '{c[$2]=c[$2]" "$1} END{q[1]=r;n=1;i=1;while(i<=n){p=q[i++];print p;m=split(c[p],a," ");for(k=1;k<=m;k++)q[++n]=a[k]}}'; }
+iso=
 resume() {
   ((${#stopped[@]})) && { kill -CONT "${stopped[@]}" 2>/dev/null; echo "$(date -u +%FT%TZ) resume ${#stopped[@]}" >> $LOG; }
   for p in "${idled[@]}"; do chrt -a -o -p 0 $p 2>/dev/null; done
   stopped=(); idled=()
+  [ -n "$iso" ] && { kill $iso 2>/dev/null; wait $iso 2>/dev/null; iso=; }
   ((cdeep)) && cstates 0
   [ -f /root/jobs/fx/cx/quiet/isolate-state.json ] && echo "$(date -u +%FT%TZ) $(python3 -I /root/jobs/fx/cx/quiet/isolate.py restore)" >> $LOG
 }
@@ -32,7 +35,8 @@ while :; do
     declare -A mine=(); for p in $(desc $h); do mine[$p]=1; done
     ((cdeep)) || cstates 1
     # CPU split (PM 17:38): measured tree 0-5 / 8-13, everything else and IRQs 6-7,14-15
-    python3 -I /root/jobs/fx/cx/quiet/isolate.py apply $h 2>>$LOG
+    # fast re-apply loop (SCHED_OTHER, 0.3 s) for processes the bench starts later
+    if [ -z "$iso" ] || ! kill -0 $iso 2>/dev/null; then /root/jobs/fx/cx/quiet/isolate-loop.sh $h & iso=$!; fi
     # the measurement itself must run SCHED_OTHER: its waiter was forked by an agent that an
     # earlier hold set SCHED_IDLE, and children inherit that (A/A + Java m1 ran IDLE, 11-13 16:3x)
     for p in $h $(desc $h); do chrt -a -o -p 0 $p 2>/dev/null; done
@@ -46,6 +50,7 @@ while :; do
     for root in $(ps -eo pid=,args= | grep -E "$AGENTS" | grep -v grep | awk '{print $1}'); do
       for p in $(desc $root); do
         [ -n "${mine[$p]}" ] && continue
+        [[ " ${idled[*]} " == *" $p "* ]] && continue
         # forked after mine was built: never idle anything under the holder
         a=$p; u=0; while [ -n "$a" ] && [ "$a" -gt 1 ]; do [ "$a" = "$h" ] && { u=1; break; }; a=$(awk '{print $4}' /proc/$a/stat 2>/dev/null); done; ((u)) && continue
         [[ " ${idled[*]} " == *" $p "* ]] && continue

@@ -4,4 +4,4 @@ C++ 구현: L0·L1 ✓ · L2(요청+응답) fbdcb16e26 ✓ · L3 dd83e75df4 ✓ 
 .NET 구현: L0~L1 ✓ · L2 응답 envelope 638211bbd3 → 리뷰 수정 중(lad-dotnet-l2g) · L3 c4bf6449ff · L4 f94b924ebb · L5~L7 a03bf0bfe0 (수정 뒤 다시 쌓음) — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
 Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
 Node 구현: L0~L1 ✓ · L2(요청+응답) 2bef18aa94 ✓ · L3 20598f57a2 ✓ · L4 ae8a5178b5 ✓ · L5~L7 7d1afa98a9 ✓ — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
-기준: binding 새 기준 측정 중(binding-rebase, 네 언어 6칸, warm run 포함) — 끝나면 언어별 L0부터 측정
+기준: 11-13 binding-rebase는 CPU 분리 미적용으로 무효(Java·.NET 미측정, C++·Node affinity 미기록) — guard v8로 고친 뒤 Java·Node는 각 단계 측정 job 안에서 binding부터 다시 잼
