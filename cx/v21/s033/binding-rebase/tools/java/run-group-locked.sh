@@ -1,74 +1,95 @@
 #!/usr/bin/env bash
 set -euo pipefail
+LANG=java
+IMPL=zlink-java
+WARMUP=10
+JOB=/root/jobs/fx/cx/v21/s033/binding-rebase
+TOOLS="$JOB/tools/$LANG"
 ROOT=/root/worktree/zlink-v21-s033/lad-java
-JOB=/root/jobs/fx/cx/v21/s033/lad-java-m1
-RUNNER="$ROOT/framework/bench/grpc/java/run_local.sh"
-PROGRESS="$JOB/tools/progress-before-measurement.sh"
-setgov() { for cpu in $(seq 0 15); do echo "$1" > "/sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor"; done; }
-record() {
-  local path="$1"
-  { date -u +%FT%TZ; uptime; free -b; for cpu in $(seq 0 15); do printf "cpu%s.governor=" "$cpu"; cat "/sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor"; printf "cpu%s.scaling_cur_freq_khz=" "$cpu"; cat "/sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_cur_freq"; done; } > "$path"
-}
+PROGRESS="$JOB/progress.md"
+RAW="$JOB/raw/$LANG"
+mkdir -p "$RAW/lock-windows" "$RAW/run-env"
+START=$SECONDS
+setgov() { for cpu in $(seq 0 15); do echo "$1" > /sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor; done; }
+record_window() { { date -u +%FT%TZ; uptime; for cpu in $(seq 0 15); do printf 'cpu%s.governor=' "$cpu"; cat /sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor; done; } > "$1"; }
 trap 'setgov powersave' EXIT
 setgov performance
-record "$JOB/raw/lock-windows/session3-before.txt"
-export PATH="/root/jobs/fx/cx/v21/s033/r4190m/tools:$PATH"
-export SKIP_BUILD=1 WARMUP_SECONDS=10 DURATION_SECONDS=5 RUNS=1 SOURCE_CPUS=0-7 TARGET_CPUS=8-15
-export IMPLEMENTATIONS=zlink-framework-java PATTERNS=send-saturation,request-serial,request-backpressure PAYLOAD_SIZES=1024,4096
-for level in L0 L1 L2 L3; do
-  unset ZLINK_BENCH_LADDER_L0 ZLINK_BENCH_LADDER_L1 ZLINK_BENCH_LADDER_L2 ZLINK_BENCH_LADDER_L3
-  case "$level" in
-    L0) export ZLINK_BENCH_LADDER_L0=1 ;;
-    L1) export ZLINK_BENCH_LADDER_L1=1 ;;
-    L2) export ZLINK_BENCH_LADDER_L2=1 ;;
-    L3) export ZLINK_BENCH_LADDER_L2=1 ZLINK_BENCH_LADDER_L3=1 ;;
-  esac
-  for cell in sendsat-1K sendsat-4K reqserial-1K reqserial-4K reqbp-1K reqbp-4K; do
-    "$PROGRESS" "$level-$cell" "$level" >/dev/null
-  done
-  export OUTPUT_DIR="$JOB/raw/session3/$level" RUN_STAMP="4351-4353-m1-session3-$level"
-  "$RUNNER" >"$JOB/raw/session3-${level}-driver.log" 2>&1 &
-  runner_pid=$!
-  first_result="$JOB/raw/session3/$level/run1/zlink-framework-java-send-saturation-1024/results.json"
-  first_logged=0
-  while kill -0 "$runner_pid" 2>/dev/null && [[ "$first_logged" == 0 ]]; do
-    if [[ -f "$first_result" ]] && python3 - "$first_result" <<'PY'
-import json, pathlib, sys
-c = json.loads(pathlib.Path(sys.argv[1]).read_text())['cells'][0]
-raise SystemExit(0 if c.get('target_stats') is not None else 1)
-PY
-    then
-      python3 - "$JOB/progress.md" "$first_result" "$level" <<'PY'
-import json, pathlib, sys
-progress, raw, level = sys.argv[1:]
-c = json.loads(pathlib.Path(raw).read_text())['cells'][0]
-with open(progress, 'a') as f:
-    f.write(f"\nFirst result {level} send-saturation-1K: {c['throughput_per_second']} msg/s; errors={c['errors']}; submitted={c['submitted']} completed={c['completed']} received={c['target_stats']['received']}; raw={raw}.\n")
-PY
-      first_logged=1
-    else
-      sleep 0.5
+record_window "$RAW/lock-windows/before.txt"
+IFS='|' read -r -a ARTS <<< '/root/worktree/zlink-v21-s033/lad-java/framework/bench/grpc/java/client/build/install/bench-client/lib/client.jar|/root/worktree/zlink-v21-s033/lad-java/framework/bench/grpc/java/zlink-raw-server/build/install/bench-zlink-raw-server/lib/zlink-raw-server.jar'
+IFS='|' read -r -a SRCS <<< '/root/worktree/zlink-v21-s033/lad-java/framework/bench/grpc/java/client/src|/root/worktree/zlink-v21-s033/lad-java/framework/bench/grpc/java/shared/src|/root/worktree/zlink-v21-s033/lad-java/framework/bench/grpc/java/zlink-raw-server/src'
+previous_signature=''
+snapshot() {
+  local commit dirty base artifacts signature art src newer idx
+  commit=$(git -C "$ROOT" rev-parse HEAD)
+  dirty=clean; [[ -z "$(git -C "$ROOT" status --porcelain)" ]] || dirty=dirty
+  base=$(git -C "$ROOT" merge-base HEAD origin/main)
+  artifacts=''
+  if [[ "$LANG" == node ]]; then
+    artifacts="live-source=$(stat -c '%y' "${ARTS[0]}")#$(sha256sum "${ARTS[0]}" | cut -d' ' -f1);live-raw=$(stat -c '%y' "${ARTS[1]}")#$(sha256sum "${ARTS[1]}" | cut -d' ' -f1);"
+  else
+    for idx in "${!ARTS[@]}"; do
+      art="${ARTS[$idx]}"; src="${SRCS[$idx]}"
+      [[ -f "$art" ]] || { echo "missing artifact: $art" >&2; return 1; }
+      newer=1
+      if [[ -d "$src" ]]; then
+        while IFS= read -r f; do [[ "$art" -nt "$f" ]] || newer=0; done < <(find "$src" -type f \( -name '*.java' -o -name '*.kt' -o -name '*.cs' -o -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.inc' -o -name '*.proto' \))
+      elif [[ -f "$src" ]]; then [[ "$art" -nt "$src" ]] || newer=0; fi
+      [[ "$newer" == 1 ]] || { echo "stale artifact: $art" >&2; return 1; }
+      artifacts+="${art}@$(stat -c '%y' "$art")#$(sha256sum "$art" | cut -d' ' -f1);"
+    done
+  fi
+  signature="$artifacts"
+  if [[ -n "$previous_signature" && "$signature" != "$previous_signature" ]]; then
+    printf '%s artifact_changed_between_runs previous=%s current=%s\n' "$(date -u +%FT%TZ)" "$previous_signature" "$signature" >> "$JOB/progress.md"
+  fi
+  previous_signature="$signature"
+  printf '%s HEAD=%s dirty=%s merge_base=%s artifacts=%s\n' "$(date -u +%FT%TZ)" "$commit" "$dirty" "$base" "$artifacts"
+}
+one_run() {
+  local pattern="$1" size="$2" kind="$3" stage="$4" attempt=1 out result sched rate meta
+  while :; do
+    (( SECONDS - START < 570 )) || { echo 'nine-minute safety boundary reached; stop this hold' >&2; return 124; }
+    out="$RAW/${pattern}-${size}/${stage}"
+    (( attempt == 1 )) || out+="/attempt${attempt}"
+    mkdir -p "$out"
+    meta=$(snapshot)
+    printf -- '- %s %s-%s %s built{%s}; receive{binding=ZLinkRawBenchServer.java:94-109 recv(NONE); L0=ZLinkFrameworkBenchServer.java:126-177 receive/permit} reply{binding=ZLinkRawBenchServer.java:115-127; L0=ZLinkFrameworkBenchServer.java:215-219}; costs{binding path retains one native receive pattern, existing completion, metrics, allocations and copies; no Framework permit}; raw=%s\n' "$LANG" "$pattern" "$size" "$kind" "$meta" "$out" >> "$PROGRESS"
+    RUN_STAMP="4350-binding-${LANG}-${pattern}-${size}-${stage}-$(date -u +%Y%m%dT%H%M%SZ)"
+    "$TOOLS/run-one-binding.sh" "$pattern" "$size" "$out" "$RUN_STAMP" "$WARMUP"
+    result="$out/run1/${IMPL}-${pattern}-${size}/results.json"
+    sched="$out/run1/${IMPL}-${pattern}-${size}/scheduling.txt"
+    [[ -f "$result" && -f "$sched" ]] || { echo "missing result/scheduling: $result $sched" >&2; return 1; }
+    if grep -q '^scheduling_invalid=' "$sched"; then
+      printf '%s invalid_scheduling result=%s scheduling=%s; retry=%s\n' "$(date -u +%FT%TZ)" "$result" "$sched" "$attempt" >> "$PROGRESS"
+      attempt=$((attempt+1)); (( attempt <= 5 )) || return 2; continue
     fi
-  done
-  wait "$runner_pid"
-  for cell in sendsat-1K sendsat-4K reqserial-1K reqserial-4K reqbp-1K reqbp-4K; do
-    case "$cell" in
-      sendsat-1K) name=send-saturation; size=1024 ;;
-      sendsat-4K) name=send-saturation; size=4096 ;;
-      reqserial-1K) name=request-serial; size=1024 ;;
-      reqserial-4K) name=request-serial; size=4096 ;;
-      reqbp-1K) name=request-backpressure; size=1024 ;;
-      reqbp-4K) name=request-backpressure; size=4096 ;;
-    esac
-    path="$JOB/raw/session3/$level/run1/zlink-framework-java-$name-$size/results.json"
-    python3 - "$path" <<'PY'
+    python3 - "$result" "$sched" <<'CHECK'
 import json, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-c = json.loads(p.read_text())['cells'][0]
-if c['errors'] or c['server_errors'] or c['target_stats']['errors'] or c['submitted'] != c['completed'] or c['submitted'] != c['target_stats']['received']:
-    raise SystemExit(f'broken result: {p}')
-PY
+r=pathlib.Path(sys.argv[1]); s=pathlib.Path(sys.argv[2]); c=json.loads(r.read_text())['cells'][0]
+t=s.read_text()
+assert all(c.get(k,0)==0 for k in ('errors','server_errors')) and c['target_stats']['errors']==0
+assert c['submitted']==c['completed']==c['target_stats']['received']
+assert all(f'cpu{cpu}.state{state}.disable_at_run_start=1' in t for cpu in (0,8) for state in (2,3))
+for phase in ('source_start','target_start','mid_active_source','mid_active_target'):
+ assert f'{phase}_current scheduling policy: SCHED_OTHER' in t, f'missing/non-OTHER {phase}: {s}'
+assert 'scheduling_invalid=' not in t
+print(c['throughput_per_second'])
+CHECK
+    rate=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["cells"][0]["throughput_per_second"])' "$result")
+    printf -- '- result %s %s-%s %s msg/s=%s raw=%s scheduling=%s\n' "$LANG" "$pattern" "$size" "$kind" "$rate" "$result" "$sched" >> "$PROGRESS"
+    break
   done
-  record "$JOB/raw/lock-windows/session3-$level-after.txt"
+}
+for pair in 'send-saturation 1024' 'send-saturation 4096' 'request-serial 1024' 'request-serial 4096' 'request-backpressure 1024' 'request-backpressure 4096'; do
+  read -r pattern size <<<"$pair"
+  one_run "$pattern" "$size" warm warm
+  one_run "$pattern" "$size" counted counted
+  rate=$(python3 - "$RAW/$pattern-$size/counted/run1/$IMPL-$pattern-$size/results.json" <<'RATE'
+import json,sys
+print(json.load(open(sys.argv[1]))['cells'][0]['throughput_per_second'])
+RATE
+)
+  rawpath="$RAW/$pattern-$size/counted/run1/$IMPL-$pattern-$size/results.json"
+  printf '%s\n' "  | $LANG | $pattern-$size | $rate | — | [raw]($rawpath) |" >> "$JOB/report.md"
 done
-record "$JOB/raw/lock-windows/session3-after.txt"
+record_window "$RAW/lock-windows/after.txt"
