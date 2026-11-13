@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -8,13 +9,16 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
+import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
+import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscription;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
@@ -31,20 +35,21 @@ final class ZLinkSpotHandlerLoaderTest {
     void configuredActorHandlerIsIndexedAndPreparesSerializerTypes() {
         TrackingSerializer serializer = new TrackingSerializer();
         ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
-        ZLinkSpotActorHandlerCatalog actorHandlers =
-                new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
+        ZLinkSpotActorHandlerCatalog actorHandlers = new ZLinkSpotActorHandlerCatalog(serializer);
         Set<Class<?>> preparedHandlers = new HashSet<>();
         ZLinkSpotHandlerLoader loader =
                 new ZLinkSpotHandlerLoader(
                         scannedHandlers, actorHandlers, trackingActivator(preparedHandlers));
 
-        loader.load(
-                TestSpot.class,
-                List.of(ConfiguredActorHandler.class),
-                (name, period, handlerType, options) -> CompletableFuture.completedFuture(null));
+        var loaded =
+                loader.load(
+                        TestSpot.class,
+                        List.of(ConfiguredActorHandler.class),
+                        (name, period, handlerType, options) ->
+                                CompletableFuture.completedFuture(null));
 
         List<SpotActorPacketHandlerRegistration> registrations =
-                actorHandlers.handlers("configured-request");
+                loaded.actorPacketHandlers().get("configured-request");
         assertEquals(1, registrations.size());
         assertEquals(ZLinkScannedHandlerKind.ACTOR_REQUEST, registrations.get(0).kind());
         assertEquals(TestSpot.class, registrations.get(0).spotType());
@@ -54,12 +59,143 @@ final class ZLinkSpotHandlerLoaderTest {
     }
 
     @Test
+    void duplicateActorHandlerIsIgnoredOnlyWithinTheSameInstance() {
+        var scanned = new ZLinkScannedHandlerCatalog(List.of());
+        var loader =
+                new ZLinkSpotHandlerLoader(
+                        scanned,
+                        new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
+                        type -> null);
+        var first =
+                loader.load(
+                        TestSpot.class,
+                        List.of(ConfiguredActorHandler.class, ConfiguredActorHandler.class),
+                        (name, period, type, options) -> CompletableFuture.completedFuture(null));
+        var second =
+                loader.load(
+                        TestSpot.class,
+                        List.of(OtherActorHandler.class),
+                        (name, period, type, options) -> CompletableFuture.completedFuture(null));
+        assertEquals(1, first.actorPacketHandlers().get("configured-request").size());
+        assertEquals(
+                ConfiguredActorHandler.class,
+                first.actorPacketHandlers().get("configured-request").getFirst().handlerType());
+        assertEquals(
+                OtherActorHandler.class,
+                second.actorPacketHandlers().get("configured-request").getFirst().handlerType());
+        var error =
+                assertThrows(
+                        ZLinkFrameworkException.class,
+                        () ->
+                                loader.load(
+                                        TestSpot.class,
+                                        List.of(
+                                                ConfiguredActorHandler.class,
+                                                OtherActorHandler.class),
+                                        (name, period, type, options) ->
+                                                CompletableFuture.completedFuture(null)));
+        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION, error.kind());
+        assertInstanceOf(ZLinkConfigurationException.class, error.getCause());
+        assertTrue(error.getMessage().contains("duplicate Spot actor packet handler"));
+        assertThrows(
+                UnsupportedOperationException.class, () -> first.actorPacketHandlers().clear());
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> first.actorPacketHandlers().get("configured-request").clear());
+    }
+
+    @Test
+    void scannedActorHandlerUsesEachMatchingSpotRegistrationAndDeduplicatesConfigure()
+            throws Exception {
+        var method =
+                ScopedScannedActorHandler.class.getMethod(
+                        "handle",
+                        TestSpot.class,
+                        TestActor.class,
+                        systems.zlink.framework.ZLinkMessageContext.class,
+                        Request.class);
+        var scanned =
+                new ZLinkScannedHandlerCatalog(
+                        List.of(
+                                new ZLinkScannedHandler(
+                                        ZLinkScannedHandlerSurface.SPOT,
+                                        ZLinkScannedHandlerKind.ACTOR_REQUEST,
+                                        ScopedScannedActorHandler.class,
+                                        method,
+                                        TestSpot.class,
+                                        Request.class,
+                                        Reply.class,
+                                        "configured-request",
+                                        "",
+                                        "",
+                                        null,
+                                        Set.of())));
+        var serializer = new TrackingSerializer();
+        var loader =
+                new ZLinkSpotHandlerLoader(
+                        scanned, new ZLinkSpotActorHandlerCatalog(serializer), type -> null);
+        var first =
+                loader.load(
+                        TestSpot.class,
+                        List.of(ScopedScannedActorHandler.class),
+                        (name, period, type, options) -> CompletableFuture.completedFuture(null));
+        var second =
+                loader.load(
+                        TestSpot.class,
+                        List.of(),
+                        (name, period, type, options) -> CompletableFuture.completedFuture(null));
+        var unrelated =
+                loader.load(
+                        Object.class,
+                        List.of(),
+                        (name, period, type, options) -> CompletableFuture.completedFuture(null));
+        assertEquals(1, first.actorPacketHandlers().get("configured-request").size());
+        assertEquals(
+                ScopedScannedActorHandler.class,
+                second.actorPacketHandlers().get("configured-request").getFirst().handlerType());
+        assertTrue(unrelated.actorPacketHandlers().isEmpty());
+        assertTrue(serializer.preparedTypes.containsAll(Set.of(Request.class, Reply.class)));
+    }
+
+    @Test
+    void scannedActorHandlerWithoutSpotTypeRemainsAvailableAsFallback() throws Exception {
+        var method =
+                ConfiguredActorHandler.class.getMethod("handle", TestActor.class, Request.class);
+        var scanned =
+                new ZLinkScannedHandlerCatalog(
+                        List.of(
+                                new ZLinkScannedHandler(
+                                        ZLinkScannedHandlerSurface.SPOT,
+                                        ZLinkScannedHandlerKind.ACTOR_REQUEST,
+                                        ConfiguredActorHandler.class,
+                                        method,
+                                        Request.class,
+                                        Reply.class,
+                                        "configured-request",
+                                        Set.of())));
+        var loader =
+                new ZLinkSpotHandlerLoader(
+                        scanned,
+                        new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
+                        type -> null);
+        for (Class<?> spotType : List.of(TestSpot.class, Object.class)) {
+            var loaded =
+                    loader.load(
+                            spotType,
+                            List.of(),
+                            (name, period, type, options) ->
+                                    CompletableFuture.completedFuture(null));
+            assertEquals(1, loaded.actorPacketHandlers().get("configured-request").size());
+        }
+    }
+
+    @Test
     void sameTopicAndPacketCannotDeclareDifferentSubscriptionTypes() {
         ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
         ZLinkSpotHandlerLoader loader =
                 new ZLinkSpotHandlerLoader(
                         scannedHandlers,
-                        new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
+                        new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
                         handlerType -> null);
 
         assertThrows(
@@ -78,7 +214,7 @@ final class ZLinkSpotHandlerLoaderTest {
         ZLinkSpotHandlerLoader loader =
                 new ZLinkSpotHandlerLoader(
                         scannedHandlers,
-                        new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
+                        new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
                         handlerType -> null);
 
         ZLinkFrameworkException error =
@@ -104,7 +240,7 @@ final class ZLinkSpotHandlerLoaderTest {
         ZLinkSpotHandlerLoader loader =
                 new ZLinkSpotHandlerLoader(
                         scannedHandlers,
-                        new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
+                        new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
                         handlerType -> null);
 
         ZLinkSpotHandlerCatalog.Registrations registrations =
@@ -135,7 +271,7 @@ final class ZLinkSpotHandlerLoaderTest {
         var loader =
                 new ZLinkSpotHandlerLoader(
                         scanned,
-                        new ZLinkSpotActorHandlerCatalog(scanned, new TrackingSerializer()),
+                        new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
                         type -> null);
         assertThrows(
                 ZLinkFrameworkException.class,
@@ -185,7 +321,7 @@ final class ZLinkSpotHandlerLoaderTest {
         var loader =
                 new ZLinkSpotHandlerLoader(
                         scanned,
-                        new ZLinkSpotActorHandlerCatalog(scanned, new TrackingSerializer()),
+                        new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
                         ignored -> null);
         catalog.closeRegistration(
                 (types, subscriptions) ->
@@ -211,7 +347,7 @@ final class ZLinkSpotHandlerLoaderTest {
         var loader =
                 new ZLinkSpotHandlerLoader(
                         scanned,
-                        new ZLinkSpotActorHandlerCatalog(scanned, new TrackingSerializer()),
+                        new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
                         ignored -> null);
         var catalog = new ZLinkSpotHandlerCatalog("closed");
         catalog.addSubscribe(ConfiguredTopicSubscription.class, "events", "shared-topic");
@@ -245,6 +381,24 @@ final class ZLinkSpotHandlerLoaderTest {
     private static final class ConfiguredActorHandler {
         @ZLinkSpotActorRequest(packetName = "configured-request")
         public CompletionStage<Reply> handle(TestActor actor, Request request) {
+            return CompletableFuture.completedFuture(new Reply());
+        }
+    }
+
+    private static final class OtherActorHandler {
+        @ZLinkSpotActorRequest(packetName = "configured-request")
+        public CompletionStage<Reply> handle(TestActor actor, Request request) {
+            return CompletableFuture.completedFuture(new Reply());
+        }
+    }
+
+    private static final class ScopedScannedActorHandler {
+        @ZLinkSpotActorRequest(packetName = "configured-request")
+        public CompletionStage<Reply> handle(
+                TestSpot spot,
+                TestActor actor,
+                systems.zlink.framework.ZLinkMessageContext context,
+                Request request) {
             return CompletableFuture.completedFuture(new Reply());
         }
     }
