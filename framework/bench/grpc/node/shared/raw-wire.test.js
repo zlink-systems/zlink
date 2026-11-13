@@ -82,6 +82,31 @@ test('production L2 reply envelope preserves protobuf body and request correlati
   assert.deepEqual(raw.decodeBenchPayloadBody(replyParts[1]), payload);
 });
 
+test('L4 uses the production typed JSON channel codec for request and reply', () => {
+  const body = Buffer.from(bodyHex, 'hex');
+  const requestParts = raw.encodeProductionTypedChannelPayload(1, { body }, 30000);
+  const requestHeader = raw.decodeProductionChannelHeader([{ data: () => requestParts[0] }]);
+  const replyParts = raw.encodeProductionTypedChannelReply(requestHeader, { body });
+  try {
+    for (const [parts, kind] of [[requestParts, 1], [replyParts, 2]]) {
+      const decodedHeader = raw.decodeProductionChannelHeader([{ data: () => parts[0] }]);
+      assert.equal(decodedHeader.formatMarker, 0xf2);
+      assert.equal(decodedHeader.kind, kind);
+      assert.equal(decodedHeader.channelName, 'bench');
+      assert.equal(decodedHeader.messageName, 'BenchPayload');
+      assert.equal(decodedHeader.contentType, 'application/json');
+      if (kind === 2) assert.equal(decodedHeader.correlationId, requestHeader.correlationId);
+      const decoded = kind === 2
+        ? raw.decodeProductionTypedReply([{ data: () => parts[0] }, parts[1]])
+        : raw.decodeProductionTypedPayload(parts[1].data(), decodedHeader);
+      assert.deepEqual(decoded, body);
+    }
+  } finally {
+    requestParts[1].close();
+    replyParts[1].close();
+  }
+});
+
 test('production L3 service wire frames preserve channel request and reply parts', () => {
   const body = raw.encodeBenchPayloadMessage(Buffer.from(bodyHex, 'hex'));
   let requestParts;

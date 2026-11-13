@@ -176,6 +176,9 @@ function createRawTransport(options) {
     && options.implementation === 'zlink-framework-node';
   const ladderL3 = process.env.ZLINK_LADDER_L3_CLIENT === '1'
     && options.implementation === 'zlink-framework-node';
+  const ladderL4 = process.env.ZLINK_LADDER_L4_CLIENT === '1'
+    && options.implementation === 'zlink-framework-node';
+  const ladderL3Enabled = ladderL3 || ladderL4;
   if (process.env.ZLINK_LADDER_L2R_CLIENT === '1'
       && options.implementation === 'zlink-framework-node') {
     rawWire.requireProductionChannelEnvelope();
@@ -254,34 +257,42 @@ function createRawTransport(options) {
   };
 
   const submitRequest = (payload) => {
-    const body = rawWire.encodeBenchPayloadMessage(payload);
-    const serviceCorrelation = ladderL3 ? nextServiceCorrelation++ : null;
-    const channelHeader = ladderL2 || ladderL3
+    const typedParts = ladderL4
+      ? rawWire.encodeProductionTypedChannelPayload(1, { body: payload }, options.requestTimeoutMs)
+      : null;
+    const body = typedParts === null ? rawWire.encodeBenchPayloadMessage(payload) : typedParts[1];
+    const serviceCorrelation = ladderL3Enabled ? nextServiceCorrelation++ : null;
+    const channelHeader = typedParts !== null
+      ? typedParts[0]
+      : ladderL2 || ladderL3
       ? rawWire.encodeProductionChannelHeader(1, options.requestTimeoutMs)
       : frameworkWire ? rawWire.frameworkEnvelope(1) : rawWire.REQUEST_ENVELOPE;
-    const serviceRequest = ladderL3
+    const serviceRequest = ladderL3Enabled
       ? rawWire.encodeProductionServiceRequest(true, serviceCorrelation, [channelHeader, body])
       : null;
     const operation = requestSocket.socket.request(requestSocket.peer);
-    if (ladderL3) operation.message(serviceRequest.header).message(serviceRequest.frame);
+    if (ladderL3Enabled) operation.message(serviceRequest.header).message(serviceRequest.frame);
     else operation.message(channelHeader).message(body);
     const submission = operation.timeout(options.requestTimeoutMs).submit();
+    if (typedParts !== null) body.close();
     const reply = submission.reply.then((parts) => {
       let responseParts;
       try {
-        responseParts = ladderL3
+        responseParts = ladderL3Enabled
           ? rawWire.decodeProductionServiceReply(parts, serviceCorrelation)
           : parts;
         if (responseParts.length !== 2) throw new Error('raw request returned an invalid reply part count');
-        if (ladderL2 || ladderL3) {
+        if (!ladderL4 && (ladderL2 || ladderL3)) {
           const replyHeader = rawWire.decodeProductionChannelHeader(responseParts);
           if (replyHeader.kind !== 2) throw new Error('raw reply channel header is not a response');
         }
-        const body = rawWire.decodeBenchPayloadBody(responseParts[responseParts.length - 1].data());
+        const body = ladderL4
+          ? rawWire.decodeProductionTypedReply(responseParts)
+          : rawWire.decodeBenchPayloadBody(responseParts[responseParts.length - 1].data());
         if (body === null) throw new Error('raw reply protobuf body is invalid');
         return body;
       } finally {
-        if (ladderL3 && responseParts !== undefined) {
+        if (ladderL3Enabled && responseParts !== undefined) {
           for (const part of responseParts) part.close();
         }
         for (const part of parts) part.close();
@@ -292,17 +303,24 @@ function createRawTransport(options) {
 
   const submitSend = (stream, payload) => {
     const socket = sendSockets[stream % sendSockets.length];
-    const body = rawWire.encodeBenchPayloadMessage(payload);
-    const channelHeader = ladderL2 || ladderL3
+    const typedParts = ladderL4
+      ? rawWire.encodeProductionTypedChannelPayload(3, { body: payload })
+      : null;
+    const body = typedParts === null ? rawWire.encodeBenchPayloadMessage(payload) : typedParts[1];
+    const channelHeader = typedParts !== null
+      ? typedParts[0]
+      : ladderL2 || ladderL3
       ? rawWire.encodeProductionChannelHeader(3)
       : commandEnvelope;
-    if (ladderL3) {
+    if (ladderL3Enabled) {
       const serviceRequest = rawWire.encodeProductionServiceRequest(false, 0n, [channelHeader, body]);
+      if (typedParts !== null) body.close();
       return socket.socket.send(socket.peer)
         .message(serviceRequest.header)
         .message(serviceRequest.frame)
         .submit();
     }
+    if (typedParts !== null) body.close();
     return socket.socket.send(socket.peer).message(channelHeader).message(body).submit();
   };
 

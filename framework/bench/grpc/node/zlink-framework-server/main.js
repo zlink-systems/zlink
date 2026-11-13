@@ -24,6 +24,8 @@ const l2Envelope = l0Server && process.env.ZLINK_LADDER_L2_ENVELOPE === '1';
 const l2rEnvelope = l0Server && process.env.ZLINK_LADDER_L2R_ENVELOPE === '1';
 const l3ServiceWire = l0Server && process.env.ZLINK_LADDER_L3_SERVICE_WIRE === '1';
 const l3rServiceWire = l0Server && process.env.ZLINK_LADDER_L3R_SERVICE_WIRE === '1';
+const l4TypedPayload = l0Server && process.env.ZLINK_LADDER_L4_SERVER === '1';
+const l3ServiceWireEnabled = l3ServiceWire || l4TypedPayload;
 let applicationJobQueue;
 let ApplicationJobQueue;
 let resolveApplicationJobQueueConfiguration;
@@ -37,7 +39,7 @@ if (l1Permit) {
   applicationJobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
 }
 if (l2Envelope || l2rEnvelope) rawWire.requireProductionChannelEnvelope();
-if (l3ServiceWire || l3rServiceWire) rawWire.requireProductionServiceWire();
+if (l3ServiceWireEnabled || l3rServiceWire) rawWire.requireProductionServiceWire();
 const frameworkWire = process.env.ZLINK_LADDER_L0_FRAMEWORK_CLIENT === '1'
   || process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
 let contract;
@@ -92,7 +94,7 @@ if (l0Server) {
   let idleSpins = 0;
 
   function decodeLadderParts(targetReceived) {
-    return l3ServiceWire
+    return l3ServiceWireEnabled
       ? rawWire.decodeProductionServiceRequest(
           targetReceived.parts,
           targetReceived.replyToken !== null
@@ -101,20 +103,23 @@ if (l0Server) {
   }
 
   function closeLadderParts(decoded) {
-    if (l3ServiceWire) {
+    if (l3ServiceWireEnabled) {
       for (const part of decoded.parts) part.close();
     }
   }
 
   function ladderReplyParts(channelHeader, payload) {
-    return l2Envelope || l3ServiceWire
+    if (l4TypedPayload) {
+      return rawWire.encodeProductionTypedChannelReply(channelHeader, { body: payload });
+    }
+    return l2Envelope || l3ServiceWireEnabled
       ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
       : [RESPONSE_ENVELOPE, encodeBenchPayloadMessage(payload)];
   }
 
   function submitLadderReply(targetReceived, decoded, payload, channelHeader) {
     const replyParts = ladderReplyParts(channelHeader, payload);
-    if (l3ServiceWire) {
+    if (l3ServiceWireEnabled) {
       const reply = rawWire.encodeProductionServiceReply(decoded.correlation, replyParts);
       replyParts[1].close?.();
       targetReceived.reply().message(reply.header).message(reply.frame).submit();
@@ -147,15 +152,17 @@ if (l0Server) {
       try {
         decoded = decodeLadderParts(received);
         const parts = decoded.parts;
-        const channelHeader = l2Envelope || l3ServiceWire
+        const channelHeader = l2Envelope || l3ServiceWireEnabled
           ? rawWire.decodeProductionChannelHeader(parts)
           : null;
         const header = frameworkWire ? parts[0].data() : null;
-        const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+        const payload = l4TypedPayload
+          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         if (received.replyToken !== null) {
           echoHandler.handleL0(payload);
-          if (l3ServiceWire) submitLadderReply(received, decoded, payload, channelHeader);
+          if (l3ServiceWireEnabled) submitLadderReply(received, decoded, payload, channelHeader);
           else {
             const reply = l2Envelope
               ? ladderReplyParts(channelHeader, payload)
@@ -195,8 +202,12 @@ if (l0Server) {
       try {
         decoded = decodeLadderParts(commandReceived);
         const parts = decoded.parts;
-        if (l2Envelope || l3ServiceWire) rawWire.decodeProductionChannelHeader(parts);
-        const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+        const channelHeader = l2Envelope || l3ServiceWireEnabled
+          ? rawWire.decodeProductionChannelHeader(parts)
+          : null;
+        const payload = l4TypedPayload
+          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         commandHandler.handleL0(payload);
       } catch (error) {
@@ -244,10 +255,12 @@ if (l0Server) {
       const decoded = decodeLadderParts(received);
       const parts = decoded.parts;
       try {
-        const channelHeader = l2Envelope || l3ServiceWire
+        const channelHeader = l2Envelope || l3ServiceWireEnabled
           ? rawWire.decodeProductionChannelHeader(parts)
           : null;
-        const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+        const payload = l4TypedPayload
+          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         if (received.replyToken !== null) {
           permit.releaseBeforeHandler();
@@ -268,8 +281,12 @@ if (l0Server) {
       const decoded = decodeLadderParts(commandReceived);
       const parts = decoded.parts;
       try {
-        if (l2Envelope || l3ServiceWire) rawWire.decodeProductionChannelHeader(parts);
-        const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+        const channelHeader = l2Envelope || l3ServiceWireEnabled
+          ? rawWire.decodeProductionChannelHeader(parts)
+          : null;
+        const payload = l4TypedPayload
+          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         permit.releaseBeforeHandler();
         commandHandler.handleL0(payload);

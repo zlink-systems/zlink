@@ -56,7 +56,9 @@ function requireProductionChannelEnvelope() {
   const {
     encodeChannelEnvelopeParts,
     encodeChannelReplyParts,
-    decodeChannelHeader
+    decodeChannelHeader,
+    decodeChannelPayload,
+    decodeChannelReply
   } = require(path.join(root, 'runtime/channels/channel-envelope.js'));
   const { ZLinkEncodedPayload } = require(path.join(root, 'contracts/Common/ZLinkEncodedPayload.js'));
   const body = ZLinkEncodedPayload.fromOwned(Buffer.alloc(0));
@@ -80,6 +82,8 @@ function requireProductionChannelEnvelope() {
     encodeChannelEnvelopeParts,
     encodeChannelReplyParts,
     decodeChannelHeader,
+    decodeChannelPayload,
+    decodeChannelReply,
     codecs,
     replyCodecs,
     ZLinkEncodedPayload
@@ -110,6 +114,44 @@ function decodeProductionChannelHeader(parts) {
 function encodeProductionProtobufChannelReply(requestHeader, payload) {
   const { encodeChannelReplyParts, replyCodecs } = requireProductionChannelEnvelope();
   return encodeChannelReplyParts(requestHeader, { body: payload }, replyCodecs);
+}
+
+function encodeProductionTypedChannelPayload(kind, payload, timeoutMs, correlationId) {
+  const { encodeChannelEnvelopeParts } = requireProductionChannelEnvelope();
+  const parts = encodeChannelEnvelopeParts(
+    kind,
+    'bench',
+    'BenchPayload',
+    payload,
+    timeoutMs,
+    undefined,
+    undefined,
+    correlationId,
+    false
+  );
+  return [parts[0], zlink.Message.from(Buffer.from(parts[1], 'utf8'))];
+}
+
+function encodeProductionTypedChannelReply(requestHeader, payload) {
+  const { encodeChannelReplyParts } = requireProductionChannelEnvelope();
+  const parts = encodeChannelReplyParts(requestHeader, payload);
+  return [parts[0], zlink.Message.from(Buffer.from(parts[1], 'utf8'))];
+}
+
+function decodeProductionTypedPayload(encoded, header) {
+  const { decodeChannelPayload } = requireProductionChannelEnvelope();
+  const payload = decodeChannelPayload({
+    header,
+    packetName: 'BenchPayload',
+    payload: Buffer.from(encoded)
+  });
+  return Buffer.from(payload.body, 'base64');
+}
+
+function decodeProductionTypedReply(parts) {
+  const { decodeChannelReply } = requireProductionChannelEnvelope();
+  const payload = decodeChannelReply(parts);
+  return Buffer.from(payload.body, 'base64');
 }
 
 function requireProductionServiceWire() {
@@ -221,6 +263,10 @@ module.exports = {
   encodeProductionChannelHeader,
   decodeProductionChannelHeader,
   encodeProductionProtobufChannelReply,
+  encodeProductionTypedChannelPayload,
+  encodeProductionTypedChannelReply,
+  decodeProductionTypedPayload,
+  decodeProductionTypedReply,
   requireProductionServiceWire,
   encodeProductionServiceRequest,
   encodeProductionServiceReply,
