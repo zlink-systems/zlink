@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="/root/worktree/zlink-v21-s033/lad-dotnet/framework/bench/grpc/dotnet"
+TOOLS_DIR="/root/jobs/fx/cx/v21/s033/binding-rebase/tools/dotnet"
 # shellcheck source=../runner_common.sh
-source "${ROOT_DIR}/../runner_common.sh"
+source "${TOOLS_DIR}/runner_common.sh"
 bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 

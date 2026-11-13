@@ -12,7 +12,7 @@ bench_init cpp "grpc-cpp,zlink-cpp,zlink-framework-cpp" \
 cd "${HERE}"
 
 WARMUP_SEGMENTS=10
-BUILD_DIR="${HERE}/build"
+BUILD_DIR="/root/worktree/zlink-v21-s033/l3868/build-l3868"
 
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 

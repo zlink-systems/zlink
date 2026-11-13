@@ -22,5 +22,5 @@ while IFS='|' read -r lang stage job; do
   if [ "$state" = "실행" ]; then s="실행 중 ($age)${lockinfo:+, $lockinfo}"
   elif [ -s $B/$job/report.md ]; then s="**끝남 — 보고서 있음, kairos 판정 대기**"
   else s="**멈춤 — 보고서 없이 끝남 ($state)**"; fi
-  echo "$lang $stage: $s${verdict:+ · 직전 판정: $verdict}"
+  echo "$lang $stage: $s${verdict:+ · 단계: $verdict}"
 done < $B/ladder-jobs.txt

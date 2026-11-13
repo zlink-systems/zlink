@@ -18,6 +18,8 @@ record_window "$RAW/lock-windows/before.txt"
 IFS='|' read -r -a ARTS <<< '/root/worktree/zlink-v21-s033/lad-dotnet/framework/bench/grpc/dotnet/Client/bin/Release/net8.0/WithGrpcBench.Client.dll|/root/worktree/zlink-v21-s033/lad-dotnet/framework/bench/grpc/dotnet/ZLinkRawServer/bin/Release/net8.0/WithGrpcBench.ZLinkRawServer.dll'
 IFS='|' read -r -a SRCS <<< '/root/worktree/zlink-v21-s033/lad-dotnet/framework/bench/grpc/dotnet/Client|/root/worktree/zlink-v21-s033/lad-dotnet/framework/bench/grpc/dotnet/ZLinkRawServer'
 previous_signature=''
+BUILD_META=''
+BUILD_SIGNATURE=''
 snapshot() {
   local commit dirty base artifacts signature art src newer idx
   commit=$(git -C "$ROOT" rev-parse HEAD)
@@ -43,7 +45,8 @@ snapshot() {
     printf '%s artifact_changed_between_runs previous=%s current=%s\n' "$(date -u +%FT%TZ)" "$previous_signature" "$signature" >> "$JOB/progress.md"
   fi
   previous_signature="$signature"
-  printf '%s HEAD=%s dirty=%s merge_base=%s artifacts=%s\n' "$(date -u +%FT%TZ)" "$commit" "$dirty" "$base" "$artifacts"
+  BUILD_SIGNATURE="$signature"
+  BUILD_META="$(date -u +%FT%TZ) HEAD=$commit dirty=$dirty merge_base=$base artifacts=$artifacts"
 }
 one_run() {
   local pattern="$1" size="$2" kind="$3" stage="$4" attempt=1 out result sched rate meta
@@ -52,7 +55,8 @@ one_run() {
     out="$RAW/${pattern}-${size}/${stage}"
     (( attempt == 1 )) || out+="/attempt${attempt}"
     mkdir -p "$out"
-    meta=$(snapshot)
+    snapshot
+    meta="$BUILD_META"
     printf -- '- %s %s-%s %s built{%s}; receive{binding=ZLinkRawServer/Program.cs:64-76,119-137 Recv(None); L0=ZLinkServer/Program.cs:140-159} reply{binding=ZLinkRawServer/Program.cs:74-85,103-109; L0=ZLinkServer/Program.cs:148-159}; costs{binding path retains one native receive pattern, existing completion, metrics, allocations and copies; no Framework permit}; raw=%s\n' "$LANG" "$pattern" "$size" "$kind" "$meta" "$out" >> "$PROGRESS"
     RUN_STAMP="4350-binding-${LANG}-${pattern}-${size}-${stage}-$(date -u +%Y%m%dT%H%M%SZ)"
     "$TOOLS/run-one-binding.sh" "$pattern" "$size" "$out" "$RUN_STAMP" "$WARMUP"

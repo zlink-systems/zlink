@@ -18,6 +18,8 @@ record_window "$RAW/lock-windows/before.txt"
 IFS='|' read -r -a ARTS <<< '/root/worktree/zlink-v21-s033/lad-node/framework/bench/grpc/node/client/main.js|/root/worktree/zlink-v21-s033/lad-node/framework/bench/grpc/node/zlink-raw-server/main.js'
 IFS='|' read -r -a SRCS <<< '/root/worktree/zlink-v21-s033/lad-node/framework/bench/grpc/node/client/main.js|/root/worktree/zlink-v21-s033/lad-node/framework/bench/grpc/node/zlink-raw-server/main.js'
 previous_signature=''
+BUILD_META=''
+BUILD_SIGNATURE=''
 snapshot() {
   local commit dirty base artifacts signature art src newer idx
   commit=$(git -C "$ROOT" rev-parse HEAD)
@@ -43,7 +45,8 @@ snapshot() {
     printf '%s artifact_changed_between_runs previous=%s current=%s\n' "$(date -u +%FT%TZ)" "$previous_signature" "$signature" >> "$JOB/progress.md"
   fi
   previous_signature="$signature"
-  printf '%s HEAD=%s dirty=%s merge_base=%s artifacts=%s\n' "$(date -u +%FT%TZ)" "$commit" "$dirty" "$base" "$artifacts"
+  BUILD_SIGNATURE="$signature"
+  BUILD_META="$(date -u +%FT%TZ) HEAD=$commit dirty=$dirty merge_base=$base artifacts=$artifacts"
 }
 one_run() {
   local pattern="$1" size="$2" kind="$3" stage="$4" attempt=1 out result sched rate meta
@@ -52,7 +55,8 @@ one_run() {
     out="$RAW/${pattern}-${size}/${stage}"
     (( attempt == 1 )) || out+="/attempt${attempt}"
     mkdir -p "$out"
-    meta=$(snapshot)
+    snapshot
+    meta="$BUILD_META"
     printf -- '- %s %s-%s %s built{%s}; receive{binding=zlink-raw-server/main.js:61-119,132-142 DontWait batch pump; L0=zlink-framework-server/main.js:63-155,228-242} reply{binding=zlink-raw-server/main.js:77-86; L0=zlink-framework-server/main.js:107-120}; costs{binding path retains one native receive pattern, existing completion, metrics, allocations and copies; no Framework permit}; raw=%s\n' "$LANG" "$pattern" "$size" "$kind" "$meta" "$out" >> "$PROGRESS"
     RUN_STAMP="4350-binding-${LANG}-${pattern}-${size}-${stage}-$(date -u +%Y%m%dT%H%M%SZ)"
     "$TOOLS/run-one-binding.sh" "$pattern" "$size" "$out" "$RUN_STAMP" "$WARMUP"

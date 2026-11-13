@@ -12,7 +12,7 @@
 
 | 언어 | L2 응답 envelope | L5~L7 |
 |---|---|---|
-| C++ | 있음 fbdcb16e26 | 미구현 |
+| C++ | 있음 fbdcb16e26 | 구현 중 l3868-impl3 |
 | .NET | 추가 중 lad-dotnet-l2r | 묶음 de0507ae48 (재적재 예정) |
 | Java | 추가 중 lad-java-l2e | 묶음 4bf0f1c4bf (재적재 예정) |
 | Node | 추가 중 lad-node-l2r | 묶음 3c50a02908 (재적재 예정) |
