@@ -1,4 +1,4 @@
-Node|L5~L7 수신 0: main 경로 대조·미처리 dispatch 확인(node-l57f 후속)|node-l57g
+Node|L4·L5~L7 측정(handler DI 수정 c019495a82 후)|lad-node-s2
 J4json|typed JSON base64 encode·decode 복사·할당 줄이기(Java 수정 + 세 언어 대조)|j4json2
 N4json|Node L4 typed JSON 손실 원인·production 수정|n4json
 C4json|C++ L4 typed JSON 손실 원인·production 수정|c4json

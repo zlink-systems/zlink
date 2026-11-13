@@ -1,0 +1,83 @@
+import os, sys, time, json, subprocess, pathlib, urllib.request, hashlib, threading
+scratch = pathlib.Path('/root/worktree/zlink-v21-s033/d4json-scratch')
+job = pathlib.Path('/root/jobs/fx/cx/v21/s033/d4json')
+level, pattern, label = sys.argv[1:]
+out = job/'raw'/label/(level+'-'+pattern)
+out.mkdir(parents=True, exist_ok=False)
+bench = scratch/'framework/bench/grpc/dotnet'
+paths = [bench/'Client/bin/Release/net8.0/WithGrpcBench.Client.dll', bench/'ZLinkServer/bin/Release/net8.0/WithGrpcBench.ZLinkServer.dll']
+for f in paths:
+    assert f.exists(), f
+    assert f.stat().st_mtime > max(x.stat().st_mtime for x in f.parents[4].rglob('*.cs') if '/obj/' not in str(x) and '/bin/' not in str(x)), f
+manifest = dict(commit='29d9fca82b', scratch_archive=True, production_dirty=bool(subprocess.check_output(['git','status','--porcelain'],text=True).strip()), base=subprocess.check_output(['git','merge-base','HEAD','origin/main'],text=True).strip(), pinned='6-7,14-15', max_process_seconds=20, throughput_verdict=False, artifacts={str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in paths + [paths[0].parent/'Zlink.Framework.dll']})
+(out/'manifest.json').write_text(json.dumps(manifest,indent=2))
+with (job/'progress.md').open('a') as f: f.write('\n- profile '+str(out.relative_to(job))+': '+json.dumps(manifest)+'\n')
+env = os.environ.copy()
+env.update(ZLINK_DOTNET_LADDER_LEVEL=level, ZLINK_DOTNET_LADDER_CLIENT='raw', ZLINK_DOTNET_RAW_TARGET='framework')
+processes=[]; traces=[]; files=[]
+def launch(cmd,name):
+    log=(out/(name+'.log')).open('w'); files.append(log)
+    p=subprocess.Popen(cmd,env=env,stdout=log,stderr=subprocess.STDOUT)
+    processes.append(p)
+    timer=threading.Timer(19, lambda: p.kill() if p.poll() is None else None)
+    timer.daemon=True; timer.start()
+    return p
+def request(port,path='/bench/stats',data=None):
+    body=None if data is None else json.dumps(data).encode()
+    req=urllib.request.Request('http://127.0.0.1:'+str(port)+path,data=body,headers={'Content-Type':'application/json'})
+    with urllib.request.urlopen(req,timeout=1) as r: return json.load(r)
+def ready(port):
+    until=time.monotonic()+5
+    while time.monotonic()<until:
+        try: return request(port)
+        except Exception: time.sleep(.05)
+    raise RuntimeError('readiness timeout '+str(port))
+def idle():
+    until=time.monotonic()+7
+    while time.monotonic()<until:
+        s=request(15206)
+        if s.get('phase') in ('idle','completed','failed'):
+            if s.get('phase')=='failed': raise RuntimeError(s)
+            return s
+        time.sleep(.05)
+    raise RuntimeError('phase timeout')
+def snapshot(name, ps):
+    records=[]
+    for role,p in ps:
+        for path in pathlib.Path('/proc/'+str(p.pid)+'/task').glob('*/status'):
+            try:
+                status=path.read_text(); tid=int(path.parent.name)
+                cpus=next(x.split(':',1)[1].strip() for x in status.splitlines() if x.startswith('Cpus_allowed_list:'))
+                records.append(dict(role=role,pid=p.pid,tid=tid,cpus=cpus,policy=os.sched_getscheduler(tid)))
+                assert set(os.sched_getaffinity(tid)) <= {6,7,14,15}, (tid,cpus)
+            except FileNotFoundError: pass
+    (out/(name+'.json')).write_text(json.dumps(records,indent=2))
+try:
+    target=launch(['dotnet',str(paths[1]),'--endpoint','tcp://127.0.0.1:15214','--metrics-url','http://127.0.0.1:15215'],'target')
+    started=time.monotonic()
+    ready(15215)
+    source=launch(['dotnet',str(paths[0]),'--implementation','zlink-dotnet','--scenario',pattern,'--payload-size','4096','--request-window','100','--submit-concurrency','8','--warmup-seconds','2','--drain-bound-ms','1000','--trigger-url','http://127.0.0.1:15205','--stats-url','http://127.0.0.1:15206','--target-endpoint','tcp://127.0.0.1:15214','--target-command-endpoint','tcp://127.0.0.1:15214','--target-stats-url','http://127.0.0.1:15215','--raw-socket','router','--output',str(out),'--report-file','bench-report.txt','--configuration','Release','--timeout-seconds','2'],'source')
+    ready(15206)
+    snapshot('start', [('source',source),('target',target)])
+    trigger=dict(runId=label,cellId=level+'-'+pattern,pattern=pattern,payloadBytes=4096,requestWindow=100,submitConcurrency=8,phase='warmup',durationMs=2000)
+    request(15205,'/bench/start',trigger); time.sleep(.1); idle()
+    for role,p in [('source',source),('target',target)]:
+        traces.append(launch([str(scratch/'profile-tools/dotnet-trace'),'collect','--process-id',str(p.pid),'--profile','cpu-sampling','--providers','Microsoft-Windows-DotNETRuntime:0x1:5','--duration','00:00:06','--buffersize','128','--output',str(out/(role+'.nettrace'))],role+'-trace'))
+    time.sleep(.8)
+    trigger.update(phase='active',durationMs=5000)
+    request(15205,'/bench/start',trigger)
+    time.sleep(2.5)
+    snapshot('mid-active',[('source',source),('target',target)])
+    idle()
+    for p in traces: p.wait(timeout=max(.1,18-(time.monotonic()-started)))
+    for role,port in [('source',15206),('target',15215)]: (out/(role+'-stats.json')).write_text(json.dumps(request(port),indent=2))
+    manifest.update(elapsed_seconds=time.monotonic()-started)
+    assert manifest['elapsed_seconds']<20
+    (out/'manifest.json').write_text(json.dumps(manifest,indent=2))
+finally:
+    for p in processes:
+        if p.poll() is None: p.terminate()
+    for p in processes:
+        try: p.wait(timeout=1)
+        except subprocess.TimeoutExpired: p.kill(); p.wait()
+    for f in files: f.close()

@@ -15,6 +15,8 @@
 | JSON 구조 | `J:486-571,594-948,960-980` | typed writer/SAX다. 이 DTO 경로의 DOM/tree 생성·ostream/stringstream 사용은 없다 |
 | message 경계 | `I/contracts/codecs/serializer.hpp:163-178,205-223,365-374` | encode string을 external message에 소유권 이전하고 decode 입력을 span으로 빌린다. JSON 전체 복사는 없다 |
 
+Codec 경계의 복사와 service wire 복사는 구분한다. [경계 원문](raw/copy-boundaries.txt): default registry의 `from_text`는 external message로 storage를 이전한다. `service_wire_codec.cpp:3153-3229`는 native message를 한 번 배정하고 `:83-89,3196-3205,3240-3246`에서 body를 wire frame에 **1회 복사**한다. 수신 `:3400-3424`는 retained external slice이며 body byte copy는 0회다. 이 L3 framing 동작을 유지한다. 별도 public `message_t::from_json` utility는 `codecs/json.hpp:21-25` → binding `message.cpp:108-115`에서 JSON을 1회 복사하며, default registry의 encode 경로와 다르다.
+
 ## 결정 소유 표
 
 | 결정·spec 소유 조항 | C++ | Java | .NET | Node | 모을 소유자 |
