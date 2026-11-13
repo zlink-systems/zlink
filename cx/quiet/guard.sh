@@ -43,6 +43,8 @@ while :; do
     for root in $(ps -eo pid=,args= | grep -E "$AGENTS" | grep -v grep | awk '{print $1}'); do
       for p in $(desc $root); do
         [ -n "${mine[$p]}" ] && continue
+        # forked after mine was built: never idle anything under the holder
+        a=$p; u=0; while [ -n "$a" ] && [ "$a" -gt 1 ]; do [ "$a" = "$h" ] && { u=1; break; }; a=$(awk '{print $4}' /proc/$a/stat 2>/dev/null); done; ((u)) && continue
         [[ " ${idled[*]} " == *" $p "* ]] && continue
         chrt -a -i -p 0 $p 2>/dev/null && idled+=($p)
       done

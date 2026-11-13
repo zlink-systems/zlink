@@ -1,5 +1,5 @@
 C++|L2 envelope header 구현(측정 없음, 별도 worktree)|l3868-impl2
 .NET|L3 service wire 구현(측정 없음)|lad-dotnet-impl3
-Java|L4 codec 구현(측정 없음)|lad-java-impl4
 Node|L2 envelope header 구현(측정 없음)|lad-node-impl2
 기반|A/A 재측정(C-state 끔, 각 5회)|aa-noise4
+Java|L4 codec 완료(18a25db605), L5는 결정 대기|lad-java-impl4

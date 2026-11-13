@@ -26,3 +26,14 @@
 Java `bf83275257`·.NET `2590b2a030`는 source envelope encode/target parse를 복원하고 raw reply를 유지한다. C++ L2는 네 경로의 envelope 기능을 모두 복원하므로 response encode와 completion parse도 포함한다. 이는 L2 기능 차이이며 L3·L4 비용은 포함하지 않는다. 언어 간 단계 손실을 직접 비교할 때 이 범위를 구분해야 한다.
 
 판정 소유: envelope 형식·검증은 기존 codec 1곳, reply header는 기존 writer 1곳(전/후 각 1→1). 별도 정책 상태·queue·lock 없음. 이번 실험의 중복 parse 2→1(수신·응답 합계); protobuf 수동 completion shortcut 1→0. 복원 범위 밖 차이 0을 커밋 조건으로 삼는다.
+
+| 정상 메시지당 비용 | binding / L0 | L1 추가 | L2 추가 |
+|---|---|---|---|
+| receive wait·drain | blocking recv 1회·drain 0 | permit 예약 1회(여유 시 즉시) | 0 |
+| receive payload bytes copy | protobuf decode 공통 | 0 | 0; header/payload 원본 보존 |
+| reply 작업 | 새 envelope·body Message, set_body copy·protobuf encode·2-part submit 공통 | 0 | envelope encode 및 2-element parts vector; body 작업은 그대로 |
+| completion 작업 | binding wait·protobuf decode·stream counter 공통 | 0 | header decode 1회; stack span, payload copy 0 |
+| 추가 atomic | 없음 | queue credits load 2·fetch_add 1·fetch_sub 1, shared/weak 수명(기존 L1 정상 경로) | request correlation의 실제 `client_call_codec.cpp:20` fetch_add 1회; prepared plan의 production shared_ptr 수명 |
+| 추가 정책 상태·metrics atomic | 없음 | 실제 queue의 기존 상태만 | 0 |
+
+Allocation은 위에서 명시한 Framework container 외 Core/native Message 내부까지 추정하지 않는다. Header cache hit/miss와 invalid input 경로도 production codec이 소유한다.
