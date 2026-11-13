@@ -4,6 +4,7 @@
 function toBuffer(body) {
   if (body === undefined || body === null) return Buffer.alloc(0);
   if (Buffer.isBuffer(body)) return body;
+  if (typeof body === 'string') return Buffer.from(body, 'base64');
   if (body instanceof Uint8Array) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
   return Buffer.from(body);
 }

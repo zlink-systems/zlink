@@ -16,7 +16,8 @@ const rawWire = require('../shared/raw-wire');
 const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = rawWire;
 const zlink = require('@zlink-systems/zlink');
 const { EchoHandler, CommandHandler } = require('./bench-handlers');
-const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1';
+const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_SERVER === '1';
+const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1' && !ladderL5ToL7;
 const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
 const l0rServer = l0Server && process.env.ZLINK_LADDER_L0R === '1';
 const l1Permit = l0Server && process.env.ZLINK_LADDER_L1_PERMIT === '1';
@@ -52,12 +53,16 @@ let zlinkFramework;
 let ZLINK_PROTOBUF_CONTENT_TYPE;
 if (!lazyFramework) {
   contract = require('../shared/framework-bench-contract');
-  ({ createBenchPayloadSerializer } = require('../shared/framework-protobuf'));
+  if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
+    ({ createBenchPayloadSerializer } = require('../shared/framework-protobuf'));
+  }
   require('reflect-metadata');
   ({ Module, Injectable } = require('@nestjs/common'));
   ({ NestFactory } = require('@nestjs/core'));
   ({ ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs'));
-  ({ ZLINK_PROTOBUF_CONTENT_TYPE } = require('@zlink-systems/framework-codec-protobuf/framework'));
+  if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
+    ({ ZLINK_PROTOBUF_CONTENT_TYPE } = require('@zlink-systems/framework-codec-protobuf/framework'));
+  }
   Injectable()(EchoHandler);
   Injectable()(CommandHandler);
 }
@@ -340,11 +345,13 @@ Module({
       inject: [],
       useFactory: () => {
         const builder = zlinkFramework();
-        builder.codecs().use({
-          register: (codecs) => {
-            codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
+          if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
+            builder.codecs().use({
+              register: (codecs) => {
+                codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
+              }
+            });
           }
-        });
         const mesh = builder.addRouteMesh(contract.MESH_NAME)
           .listen(endpoint)
           .routingId(contract.SERVER_ROUTING_ID);
@@ -368,7 +375,7 @@ Module({
   startStatsServer(metricsUrl, metrics, {
     implementation: 'zlink-framework-node',
     host: '@zlink-systems/nestjs',
-    codec: 'framework-codec-protobuf',
+    codec: ladderL5ToL7 ? 'framework-json-v1' : 'framework-codec-protobuf',
     endpoint
   });
   process.stderr.write(`[framework-server] endpoint=${endpoint} stats=${metricsUrl}\n`);

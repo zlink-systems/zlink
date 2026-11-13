@@ -355,6 +355,7 @@ async function createTransport(options) {
       ? createGrpcTransport(options)
       : options.implementation === 'zlink-framework-node'
         ? process.env.ZLINK_LADDER_L0_CLIENT === '1'
+          && process.env.ZLINK_LADDER_L5_7_CLIENT !== '1'
           ? createRawTransport(options)
           : await createFrameworkTransport(options)
         : createRawTransport(options);
