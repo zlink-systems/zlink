@@ -133,14 +133,14 @@ public final class FrameworkStack implements AutoCloseable {
         if (ladderBinding == null) {
             throw new IllegalStateException("L0 operation requested outside ladder mode");
         }
+        if (System.getenv("ZLINK_BENCH_LADDER_L3") != null) {
+            return send
+                    ? ladderBinding.sendWithServiceWireEnvelope(
+                            ZLinkChannelEnvelope.KIND_COMMAND, FrameworkStack::envelopeParts)
+                    : ladderBinding.requestWithServiceWireEnvelope(
+                            ZLinkChannelEnvelope.KIND_REQUEST, FrameworkStack::envelopeParts);
+        }
         if (System.getenv("ZLINK_BENCH_LADDER_L2") != null) {
-            if (System.getenv("ZLINK_BENCH_LADDER_L3") != null) {
-                return send
-                        ? ladderBinding.sendWithServiceWireEnvelope(
-                                ZLinkChannelEnvelope.KIND_COMMAND, FrameworkStack::envelopeParts)
-                        : ladderBinding.requestWithServiceWireEnvelope(
-                                ZLinkChannelEnvelope.KIND_REQUEST, FrameworkStack::envelopeParts);
-            }
             return send
                     ? ladderBinding.sendWithEnvelope(
                             ZLinkChannelEnvelope.KIND_COMMAND, FrameworkStack::envelopeParts)
