@@ -124,6 +124,7 @@ final class ZLinkSpotRoutedOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
+            long targetNodeGeneration,
             Message payload,
             Optional<String> packetName,
             String contentType,
@@ -144,6 +145,7 @@ final class ZLinkSpotRoutedOutbound {
                     targetNodeRid,
                     spotId,
                     spotGeneration,
+                    targetNodeGeneration,
                     payload,
                     packetName,
                     contentType,
@@ -170,6 +172,7 @@ final class ZLinkSpotRoutedOutbound {
                             targetNodeRid,
                             spotId,
                             spotGeneration,
+                            targetNodeGeneration,
                             parts,
                             timeout,
                             requestAdmission)

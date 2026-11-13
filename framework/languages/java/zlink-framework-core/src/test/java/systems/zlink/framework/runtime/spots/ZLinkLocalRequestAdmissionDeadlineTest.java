@@ -647,6 +647,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                             RoutingId.from("local-deadline"),
                             target.spotId(),
                             target.lifecycleGeneration(),
+                            0L,
                             null,
                             java.util.List.of(part),
                             Duration.ofMillis(100),

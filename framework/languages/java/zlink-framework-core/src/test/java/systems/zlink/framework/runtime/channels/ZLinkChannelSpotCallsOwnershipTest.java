@@ -47,6 +47,7 @@ final class ZLinkChannelSpotCallsOwnershipTest {
                                     node,
                                     spot,
                                     generation,
+                                    targetNodeGeneration,
                                     authority,
                                     lease,
                                     parts,

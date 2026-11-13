@@ -104,7 +104,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 try (Message create = Message.from("create")) {
                     actor = target.createActor("registration-actor", create);
                 }
-                target.rememberActorAuthority(actor, 41, 1);
+                target.rememberActorAuthority(actor, 41, 1, target.localNodeGeneration());
                 var route =
                         new ZLinkServiceM6BWireCodec.ActorRouteFence(
                                 actor, node.lifecycleGeneration(), 41, 1);
@@ -179,7 +179,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = target.createActor("registration-actor", create);
             }
-            target.rememberActorAuthority(actor, 41, 1);
+            target.rememberActorAuthority(actor, 41, 1, target.localNodeGeneration());
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 1);
@@ -657,7 +657,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = spots.createActor("owner-actor", create);
             }
-            spots.rememberActorAuthority(actor, 41, 1);
+            spots.rememberActorAuthority(actor, 41, 1, spots.localNodeGeneration());
             var staleActor =
                     new ZLinkServiceM6BWireCodec.ActorMessage(
                             false,
@@ -798,7 +798,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     .rememberActorAuthority(
                             sourceRoute.actor(),
                             sourceRoute.authorityOwnerGeneration(),
-                            sourceRoute.ownerLeaseGeneration());
+                            sourceRoute.ownerLeaseGeneration(),
+                            sourceRoute.targetNodeGeneration());
             for (int index = 0; index < 3; index++) {
                 List<Message> parts =
                         List.of(
@@ -919,7 +920,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = sourceSpots.createActor("moving-actor", 7, create);
             }
-            sourceSpots.rememberActorAuthority(actor, 11, 3);
+            sourceSpots.rememberActorAuthority(actor, 11, 3, sourceSpots.localNodeGeneration());
             var sourceRoute =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, source.lifecycleGeneration(), 11, 3);
@@ -1091,7 +1092,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 try (Message create = Message.from("create")) {
                     actor = spots.createActor("published-actor", 4, create);
                 }
-                spots.rememberActorAuthority(actor, 8, 23);
+                spots.rememberActorAuthority(actor, 8, 23, spots.localNodeGeneration());
                 var route =
                         new ZLinkServiceM6BWireCodec.ActorRouteFence(
                                 actor, node.lifecycleGeneration(), 8, 23);
@@ -1333,7 +1334,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = spots.createActor("dispatch-failure-actor", create);
             }
-            spots.rememberActorAuthority(actor, 11, 3);
+            spots.rememberActorAuthority(actor, 11, 3, spots.localNodeGeneration());
             spots.entrySpot()
                     .onDispatchEvent(
                             new ZLinkInternalAsyncSpotDispatchHandler() {
@@ -1517,7 +1518,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = spots.createActor("follow-retired-actor", create);
             }
-            spots.rememberActorAuthority(actor, 11, 3);
+            spots.rememberActorAuthority(actor, 11, 3, spots.localNodeGeneration());
 
             AtomicInteger relayAttempts = new AtomicInteger();
             AtomicInteger localDispatches = new AtomicInteger();
@@ -1639,6 +1640,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         nodeRid,
                                         targetRid.toString(),
                                         target.lifecycleGeneration(),
+                                        0,
                                         null,
                                         List.of(request),
                                         Duration.ofSeconds(1),
@@ -1673,6 +1675,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         nodeRid,
                                         targetRid.toString(),
                                         target.lifecycleGeneration(),
+                                        0,
                                         null,
                                         List.of(request),
                                         Duration.ofMillis(20),
@@ -1784,6 +1787,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                             leftRid,
                                             targetRid.toString(),
                                             target.lifecycleGeneration(),
+                                            left.lifecycleGeneration(),
                                             new byte[0],
                                             List.of(header, message),
                                             Duration.ofSeconds(2),
@@ -1820,6 +1824,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         leftRid,
                                         targetRid.toString(),
                                         staleGeneration,
+                                        left.lifecycleGeneration(),
                                         null,
                                         List.of(message),
                                         Duration.ofSeconds(2),
@@ -1849,6 +1854,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         leftRid,
                                         targetRid.toString(),
                                         target.lifecycleGeneration(),
+                                        left.lifecycleGeneration(),
                                         null,
                                         List.of(message),
                                         Duration.ofSeconds(2),
@@ -1945,6 +1951,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         leftRid,
                                         targetSpotId,
                                         target.lifecycleGeneration(),
+                                        left.lifecycleGeneration(),
                                         requestMetadata,
                                         List.of(head, body),
                                         Duration.ofSeconds(2),
@@ -2167,8 +2174,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = left.spotNode().createActor("actor-remote", create);
             }
-            left.spotNode().rememberActorAuthority(actor, 89, 1);
-            right.spotNode().rememberActorAuthority(actor, 89, 1);
+            left.spotNode().rememberActorAuthority(actor, 89, 1, left.lifecycleGeneration());
+            right.spotNode().rememberActorAuthority(actor, 89, 1, left.lifecycleGeneration());
 
             awaitAdmitted(right);
 
@@ -2212,7 +2219,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
             ZLinkBackendActorRef staleAddress =
                     new ZLinkBackendActorRef(leftRid, actor.actorId(), actor.generation() + 1);
-            right.spotNode().rememberActorAuthority(staleAddress, 89, 1);
+            right.spotNode()
+                    .rememberActorAuthority(staleAddress, 89, 1, left.lifecycleGeneration());
             try (Message request = Message.from("remote-actor-progress")) {
                 reply =
                         right.spotNode()
@@ -2654,7 +2662,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = target.createActor("unbind-snapshot-actor", create);
             }
-            target.rememberActorAuthority(actor, 41, 1);
+            target.rememberActorAuthority(actor, 41, 1, target.localNodeGeneration());
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 1);
@@ -2721,7 +2729,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = target.createActor("linearized-actor", create);
             }
-            target.rememberActorAuthority(actor, 41, 1);
+            target.rememberActorAuthority(actor, 41, 1, target.localNodeGeneration());
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 1);
@@ -2791,7 +2799,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = target.createActor("route-actor", create);
             }
-            target.rememberActorAuthority(actor, 41, 7);
+            target.rememberActorAuthority(actor, 41, 7, target.localNodeGeneration());
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 7);
@@ -2835,7 +2843,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = target.createActor("owner-turn-actor", create);
             }
-            target.rememberActorAuthority(actor, 41, 7);
+            target.rememberActorAuthority(actor, 41, 7, target.localNodeGeneration());
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 7);
@@ -2896,7 +2904,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = target.createActor("two-owners-actor", create);
             }
-            target.rememberActorAuthority(actor, 41, 1);
+            target.rememberActorAuthority(actor, 41, 1, target.localNodeGeneration());
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 1);
@@ -2962,7 +2970,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = target.createActor("actor-owner-epoch", create);
             }
-            target.rememberActorAuthority(actor, 41, 1);
+            target.rememberActorAuthority(actor, 41, 1, target.localNodeGeneration());
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, actorNode.lifecycleGeneration(), 41, 1);
@@ -3027,7 +3035,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = target.createActor("duplicate-bind-actor", create);
             }
-            target.rememberActorAuthority(actor, 41, 1);
+            target.rememberActorAuthority(actor, 41, 1, target.localNodeGeneration());
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 1);
@@ -3468,8 +3476,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message create = Message.from("create")) {
                 actor = actorNode.spotNode().createActor("actor-bound-remote", create);
             }
-            actorNode.spotNode().rememberActorAuthority(actor, 73, 1);
-            sessionNode.spotNode().rememberActorAuthority(actor, 73, 1);
+            actorNode
+                    .spotNode()
+                    .rememberActorAuthority(actor, 73, 1, actorNode.lifecycleGeneration());
+            sessionNode
+                    .spotNode()
+                    .rememberActorAuthority(actor, 73, 1, actorNode.lifecycleGeneration());
 
             awaitAdmitted(sessionNode, actorNodeRid);
             // The first bound push below travels in the reverse direction.
@@ -3541,7 +3553,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
             assertEquals(sessionRid, ingress.get(1, TimeUnit.SECONDS));
 
-            sessionNode.spotNode().rememberActorAuthority(actor, 74, 1);
+            sessionNode
+                    .spotNode()
+                    .rememberActorAuthority(actor, 74, 1, actorNode.lifecycleGeneration());
             try (Message push =
                     Message.from(
                             ZLinkStreamFrameCodec.encode(
@@ -3583,7 +3597,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
             assertEquals(List.of("push-one", "push-after-unsettled"), pushed);
             assertEquals(List.of(1, 1), pushedSlots);
-            sessionNode.spotNode().rememberActorAuthority(actor, 73, 1);
+            sessionNode
+                    .spotNode()
+                    .rememberActorAuthority(actor, 73, 1, actorNode.lifecycleGeneration());
 
             sessionOwner
                     .bind(

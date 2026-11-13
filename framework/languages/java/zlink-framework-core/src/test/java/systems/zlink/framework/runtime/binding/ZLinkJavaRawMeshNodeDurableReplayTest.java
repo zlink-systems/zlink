@@ -84,7 +84,7 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
                     .join();
             var actor = new ZLinkBackendActorRef(targetRid, "actor", 3);
             var spots = (ZLinkJavaRawSpotNode) source.spotNode();
-            spots.rememberActorAuthority(actor, 9, 10);
+            spots.rememberActorAuthority(actor, 9, 10, 8);
             spots.rememberSpotAuthority(targetRid, "spot", 7, 9, 10);
             long started = System.nanoTime();
             CompletionStage<?> completion =
@@ -129,7 +129,7 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
                                         timeout);
                         case BOUND_SESSION_BIND ->
                                 source.bindRemoteStreamSession(
-                                        RoutingId.from("session"), actor, 9, 11, true, timeout);
+                                        RoutingId.from("session"), actor, 8L, 9, 11, true, timeout);
                     };
             var failure =
                     assertThrows(

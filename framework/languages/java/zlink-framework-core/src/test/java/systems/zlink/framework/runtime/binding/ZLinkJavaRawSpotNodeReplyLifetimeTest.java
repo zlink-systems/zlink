@@ -44,7 +44,7 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
             try (var create = Message.from("create")) {
                 actor = spots.createActor("relay-actor", create);
             }
-            spots.rememberActorAuthority(actor, 11, 3);
+            spots.rememberActorAuthority(actor, 11, 3, spots.localNodeGeneration());
             var dispatches = new AtomicInteger();
             spots.entrySpot()
                     .onDispatchEvent(
@@ -179,7 +179,7 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
             try (var create = Message.from("create")) {
                 actor = spots.createActor("reply-actor", create);
             }
-            spots.rememberActorAuthority(actor, 11, 3);
+            spots.rememberActorAuthority(actor, 11, 3, spots.localNodeGeneration());
             var handler = new CompletableFuture<Void>();
             var ingress = new CompletableFuture<ZLinkBackendActorReceived>();
             spots.entrySpot()
