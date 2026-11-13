@@ -44,6 +44,7 @@ app.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
 using var context = Systems.Zlink.Zlink.CreateContext();
 using var router = context.CreateRouterSocket();
 router.SetRoutingId(RoutingId.From("bench-server"));
+router.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(100);
 router.Bind(endpoint);
 var handler = new L0BenchHandler(metrics);
 var receiver = Task.Run(() => RunL0Owner(router, handler, metrics, app.Lifetime.ApplicationStopping));
@@ -96,21 +97,18 @@ static void RunL0Owner(
             if (!router.Recv(received, RecvFlags.None))
                 continue;
 
-            do
+            using var replyBody = received.ReplyToken is null
+                ? null
+                : handler.HandleRequest(PayloadPart(received));
+            if (replyBody is not null)
             {
-                using var replyBody = received.ReplyToken is null
-                    ? null
-                    : handler.HandleRequest(PayloadPart(received));
-                if (replyBody is not null)
-                {
-                    using var header = Message.From(RawEnvelopeHeaders.Response);
-                    received.Reply().Message(header).Message(replyBody).Submit();
-                }
-                else
-                {
-                    handler.HandleSend(PayloadPart(received));
-                }
-            } while (router.Recv(received, RecvFlags.DontWait));
+                using var header = Message.From(RawEnvelopeHeaders.Response);
+                received.Reply().Message(header).Message(replyBody).Submit();
+            }
+            else
+            {
+                handler.HandleSend(PayloadPart(received));
+            }
         }
         catch (ZlinkRecvException ex)
             when (stopping.IsCancellationRequested || ex.Result == ZlinkRecvException.ErrorCode.Terminated)
