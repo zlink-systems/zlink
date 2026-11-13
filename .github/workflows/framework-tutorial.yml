@@ -508,6 +508,8 @@ jobs:
           [ "${ticket}" = '"ticket-p1"' ] || fail "ClientServer route: ${ticket}"
           curl -sf -X POST http://127.0.0.1:5480/notices \
             -H 'Content-Type: application/json' -d '{"message":"ci-broadcast"}' > /dev/null
+          # Fanout completes at admission; the subscriber logs the notice a moment later.
+          for _ in $(seq 1 40); do grep -q 'maintenance notice: ci-broadcast' server.log && break; sleep 0.25; done
           grep -q 'maintenance notice: ci-broadcast' server.log || fail "fanout route"
 
           room=$(curl -sf -X POST http://127.0.0.1:5480/rooms \
