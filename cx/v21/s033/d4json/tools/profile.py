@@ -56,7 +56,7 @@ try:
     target=launch(['dotnet',str(paths[1]),'--endpoint','tcp://127.0.0.1:15214','--metrics-url','http://127.0.0.1:15215'],'target')
     started=time.monotonic()
     ready(15215)
-    source=launch(['dotnet',str(paths[0]),'--implementation','zlink-dotnet','--scenario',pattern,'--payload-size','4096','--request-window','100','--submit-concurrency','8','--warmup-seconds','2','--drain-bound-ms','1000','--trigger-url','http://127.0.0.1:15205','--stats-url','http://127.0.0.1:15206','--target-endpoint','tcp://127.0.0.1:15214','--target-command-endpoint','tcp://127.0.0.1:15214','--target-stats-url','http://127.0.0.1:15215','--raw-socket','router','--output',str(out),'--report-file','bench-report.txt','--configuration','Release','--timeout-seconds','2'],'source')
+    source=launch(['dotnet',str(paths[0]),'--implementation','zlink-dotnet','--scenario',pattern,'--payload-size','4096','--request-window','100','--submit-concurrency','8','--warmup-seconds','2','--drain-bound-ms','1000','--trigger-url','http://127.0.0.1:15205','--stats-url','http://127.0.0.1:15206','--target-endpoint','tcp://127.0.0.1:15214','--target-command-endpoint','tcp://127.0.0.1:15214','--target-stats-url','http://127.0.0.1:15215','--raw-socket','router','--output',str(out),'--report-file','bench-report.txt','--configuration','Release'],'source')
     ready(15206)
     snapshot('start', [('source',source),('target',target)])
     trigger=dict(runId=label,cellId=level+'-'+pattern,pattern=pattern,payloadBytes=4096,requestWindow=100,submitConcurrency=8,phase='warmup',durationMs=2000)

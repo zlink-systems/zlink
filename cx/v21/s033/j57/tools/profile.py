@@ -1,4 +1,4 @@
-import argparse, json, os, signal, subprocess, time, urllib.request
+import argparse, hashlib, json, os, signal, subprocess, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 P = Path('/root/jobs/fx/cx/v21/s033/j57')
@@ -86,9 +86,21 @@ def snapshot(label):
                 status = t.joinpath('status').read_text()
                 affinity = next(s.split(':',1)[1].strip() for s in status.splitlines() if s.startswith('Cpus_allowed_list:'))
                 threads.append({'tid':t.name,'affinity':affinity,'stat':t.joinpath('stat').read_text(),'wchan':t.joinpath('wchan').read_text()})
-        result['processes'][role] = threads
+        result['processes'][role] = {'threads':threads, 'processes': {child: {'stat':Path(f'/proc/{child}/stat').read_text(), 'status':Path(f'/proc/{child}/status').read_text()} for child in children}}
     (out / (label + '.json')).write_text(json.dumps(result,indent=2))
 
+fingerprint = {'scratchCommit':'cffa8009d3','mainHead':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(), 'mainDirty':subprocess.check_output(['git','status','--short'],text=True), 'cpus':CPUS, 'jars':{}}
+for project, app in [('client','bench-client'),('zlink-framework-server','bench-zlink-framework-server')]:
+    jars=list((bench/project/'build/install'/app/'lib').glob('*.jar'))
+    if not jars: raise RuntimeError('missing fresh build')
+    for jar in jars:
+        fingerprint['jars'][str(jar)]={'sha256':hashlib.sha256(jar.read_bytes()).hexdigest(),'mtime':jar.stat().st_mtime}
+if args.core:
+    jar=Path(args.core)
+    fingerprint['jars'][str(jar)]={'sha256':hashlib.sha256(jar.read_bytes()).hexdigest(),'mtime':jar.stat().st_mtime}
+(out/'fingerprint.json').write_text(json.dumps(fingerprint,indent=2))
+with (P/'progress.md').open('a') as f:
+    f.write(f'\n- profile {args.label}: {fingerprint["mainHead"]}, dirty={bool(fingerprint["mainDirty"])}, scratch cffa8009d3, CPU {CPUS}; JAR hash {out}/fingerprint.json. receive/reply와 추가 비용: call-shape.md.\n')
 try:
     launch('target', command('target') + ['--endpoint',endpoint,'--metrics-url',target, '--command-endpoint',f'tcp://127.0.0.1:{base+4}'])
     await_ready(target, False)
@@ -100,6 +112,7 @@ try:
     await_ready(stats)
     snapshot('start')
     for phase,duration in [('warmup', args.warmup), ('active',args.duration)]:
+        snapshot(phase + '-start')
         body = dict(runId='j57-' + args.label,cellId=args.label,pattern=args.scenario,payloadBytes=1024,
                     phase=phase,durationMs=int(duration*1000),requestWindow=100,submitConcurrency=8)
         phases.append({'phase':phase,'monotonicUs':time.monotonic_ns()/1000,'epochMs':time.time()*1000})
@@ -116,6 +129,7 @@ try:
                 halfway = True
             if val.get('phase') in ('idle','completed') and trigger_future.done(): break
             time.sleep(.15)
+        snapshot(phase + '-end')
         (out / (phase + '-trigger.json')).write_text(json.dumps(trigger_future.result()))
         pool.shutdown()
         (out / (phase + '-source-stats.json')).write_text(json.dumps(val,indent=2))

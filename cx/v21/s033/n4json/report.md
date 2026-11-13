@@ -1,10 +1,10 @@
-# Node L4 typed JSON — 원인과 production 수정안
+# Node L4 typed JSON — 원인과 production 수정 결과
 
-구현 전 보고다. **Node 기본 JSON serializer가 browser용 Base64 변환을 그대로 사용하면서 Uint8Array를 spread 인자 목록과 binary string으로 바꾸는 비용이 주원인이다.** Buffer.toJSON의 버려지는 숫자 배열도 존재하지만 CPU 주원인은 아니다. wire는 이미 padded RFC 4648 Base64 문자열이다. DTO와 wire를 유지하고, Node production adapter가 native Base64 변환을 사용하도록 고친다.
+**Node 기본 JSON serializer의 spread·binary string 준비 비용을 native Base64 변환으로 교체했다.** 원인은 browser용 Base64 primitive를 Node에서도 사용한 데 있었다. 구현 전에 원인·수정안을 기록했고 [원본 보고서](raw/report-before-implementation.md)를 보존했다. Buffer.toJSON의 버려지는 숫자 배열도 존재하지만 CPU 주원인은 아니다. wire는 이미 padded RFC 4648 Base64 문자열이다. DTO와 wire를 유지했으며 새 회귀 검사 19개와 관련 Framework 검사 131개가 모두 통과했다.
 
 ## 근거와 범위
 
-- Primary: `perf/4354-node-typed-json`, HEAD/base `df42a4df4098d543be8dc0b84510cf6d961576d8`; 시작 시 변경 없음. Runtime 구현은 아직 수정하지 않았다.
+- Primary: `perf/4354-node-typed-json`, HEAD/base `df42a4df4098d543be8dc0b84510cf6d961576d8`; 시작 시 변경 없음. Runtime 두 파일과 회귀 test 한 파일을 수정했다.
 - Scratch: `/root/worktree/zlink-v21-s033/n4json-scratch`, `ae8a5178b5` git archive, 자체 npm ci와 공식 `npm run build`. 다른 job worktree나 build output을 사용하지 않았다. 해당 commit과 main의 JSON profile·Node adapter·channel payload 경로는 동일하다. 전체 Node tree의 Actor 차이 때문에 다른 build를 대체하지 않았다.
 - Node 22.23.3. 모든 실행 process는 `taskset -c 6-7,14-15`를 상속했다. measure.lock 획득, GitHub, push, PR, 다른 AI 도구, internal-docs.sh 실행 없음.
 - 지정한 `lad-node-impl4c/report.md`는 없다. `lad-node-impl4/report.md`와 지정 commit의 실제 L4 호출을 확인했다. [호출 비교표](call-shape.md), [원본 코드와 line](raw/baseline-source.txt), [ladder 코드](raw/ladder-source.txt).
@@ -71,7 +71,7 @@ N은 logical body bytes, B=`4*ceil(N/3)`, J=`B+11` (`{"body":"..."}`)이다. 4K�
 
 네 구현 모두 byte sequence를 Base64 JSON string으로 표현한다. Node의 binary string/spread는 wire 계약이 요구하는 단계가 아니며, 다른 언어의 codec primitive 선택을 Framework 호출자가 재구현할 이유가 없다. 교차언어 실행 suite는 이번 단계에서 실행하지 않았다. [근거 원문](raw/baseline-source.txt).
 
-## production 수정안 — 구현 전에 확정
+## 선택한 production 수정
 
 1. 공용 `stream-wire/src/internal/framework-json-v1.ts`에서 기존 stringify 정책을 내부 stringifier factory로 묶고 byte encoder function만 받는다. 기본 portable encoder는 그대로 두며 finite number, bigint, Date/toJSON 거부, getter 처리, schema 검증, custom replacer 의미를 한 곳에 유지한다. 새 factory는 `internal/json`에만 존재하며 package root public export는 바꾸지 않는다.
 2. `packages/framework/src/runtime/messaging/framework-json-v1.ts`의 기존 Node adapter가 이 factory에 `Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')`를 제공한다. ArrayBuffer/offset/length overload는 view이며 N-byte 사본을 만들지 않는다. source 타입 판정은 기존 공용 bytes 분기 하나가 맡는다.
@@ -86,10 +86,57 @@ N은 logical body bytes, B=`4*ceil(N/3)`, J=`B+11` (`{"body":"..."}`)이다. 4K�
 - 소유 계층: Framework JSON codec, Node runtime adapter. Core·binding·transport·execution gate 결정 변경 없음.
 - spec: `00-foundation/05-message-model.ko.md:134-153`, `01-execution/05-payload-ownership-and-codec.ko.md:29-43,100-121`.
 - 교차언어: Base64 JSON wire와 기존 JSON 검증 의미를 그대로 유지한다. Node runtime primitive만 교체한다.
-- 변경 분류: **B — 기존 성능 결함**. spec/wire/public API 변경이 필요하지 않으므로 명시된 다음 단계 구현으로 진행한다.
+- 변경 분류: **B — 기존 성능 결함**. spec/wire/public API 변경 없이 구현했다.
 - 규칙 수 전/후: Node byte 표현 판정 위치 **1 → 1**, JSON 검증 owner **1 → 1**. 새 flag·queue·lock·timer·cache 없음. factory capture는 process 초기화 때만 만든다.
-- 리팩토링 점검: portable byte 변환을 Node hot path에서 쓰는 항목 1건을 수정한다. control/gate 동기화는 이번 경로에 추가하지 않는다. Buffer.toJSON 잔여 할당은 위에 구분했다.
+- 리팩토링 점검: portable byte 변환을 Node hot path에서 쓰는 항목 1건을 수정했다. control/gate 동기화는 이번 경로에 추가하지 않는다. Buffer.toJSON 잔여 할당은 위에 구분했다.
 
-## 검증 계획
+## 수정 후 profile·검증
 
-Buffer/Uint8Array body의 크기 0,1,2,3,127,128,1024,4096과 offset view를 request/reply 양쪽에서 검사한다. schema 없는 Base64 값과 bytes schema 복원을 모두 확인한다. 기존 portable serializer와 byte-identical JSON을 고정하고, native path가 portable btoa를 호출하면 실패하는 회귀 검사를 수정 전에 실행한다. 기존 JSON 문법/검증·schema·channel/payload/stream 계약 검사와 Node format check를 실행한다. 수정 후 같은 짧은 profile을 수집하되 처리량 판정을 하지 않는다.
+같은 scratch bench와 CLI로 네 cell을 다시 수집했다. 수정한 production 두 TS 파일만 scratch에 옮긴 뒤 공식 npm run build로 갱신했다. bench JS와 DTO는 그대로다. source/target은 모든 cell에서 exit 0, errors 0, submitted=completed=received다. 전체 lifetime 9.10–11.27초이며 모두 20초 이내다. [driver](raw/profile-after-driver.log), [전체 집계](raw/after-summary.json).
+
+| cell / role | Base64 active CPU sample 비중 | encodePayload allocation 표본 / message | raw |
+|---|---:|---:|---|
+| L4-send-saturation-4096 / source | 66.21% portable → 4.35% native | 332.9 → 43.3 KiB (약 87.0% 감소) | [전](raw/before2-L4-send-saturation-4096/summary-345914.json) · [후](raw/after-L4-send-saturation-4096/summary-567729.json) |
+| L4-request-serial-1024 / source | 5.97% portable → 0.39% native | 86.8 → 11.4 KiB (약 86.8% 감소) | [전](raw/before2-L4-request-serial-1024/summary-348021.json) · [후](raw/after-L4-request-serial-1024/summary-568088.json) |
+| L4-request-serial-1024 / target | 6.64% portable → 0.48% native | 87.7 → 11.3 KiB (약 87.1% 감소) | [전](raw/before2-L4-request-serial-1024/summary-348020.json) · [후](raw/after-L4-request-serial-1024/summary-568087.json) |
+
+CPU 비중은 각 run의 sample 구성이다. 함수 실행시간이나 처리량 개선 배수로 해석하지 않는다. portable Base64 stack은 수정 후 L4에서 사라졌다. source 4K의 Buffer.toJSON은 16.71% CPU와 약 32.1 KiB/message 할당 표본으로 남는다. 이는 새로 생긴 비용이 아니라, 지배적이던 spread/binary-string 비용을 제거한 뒤 드러나는 잔여 비용이다. target decode 코드는 바꾸지 않았다. 4K target parse 비중은 2.45→6.09%이며, 이 구성 변화도 decode 성능 판정으로 사용하지 않는다.
+
+단일 호출 [수정 전](raw/before-counts-expanded-deterministic-counts.json) · [수정 후](raw/after-deterministic-counts.json)는 16개 size/type 조합 모두 byte-identical JSON을 확인했다. 수정 후 Buffer/Uint8Array 모두 fromCharCode 인자=0, btoa=0, byte Buffer 복사=0, ArrayBuffer view=1, replacer=2다. Buffer.toJSON의 Array(N)과 wrapper object는 유지한다. schema 없는 Base64 값과 bytes schema의 원래 byte 값도 동일하다.
+
+| 검사 | 결과 | raw |
+|---|---|---|
+| 새 bytes 회귀 검사, 수정 전 | 18 pass / 1 fail. portable btoa를 금지한 검사가 실제 production 경로에서 실패 | [log](raw/new-test-before-fix.log) |
+| 새 bytes 회귀 검사, 수정 후 | **19 pass, 0 fail, 0 skip**. 8개 크기 × Buffer/Uint8Array, offset view, request/reply, schema 유무, source 불변, 공유 getter/replacer 의미, 잘못된 padding 거부 | [log](raw/new-test-after-fix.log) |
+| 관련 Framework 검사 10 files | **131 pass, 0 fail, 0 skip**. channel-envelope-error, framework-json bytes/parser/scan/schema-generator, stream-connector-json, node-envelope-codec-cost, node-ingress-header, contract-surface, stream-wire enum contract | [log](raw/focused-framework-tests.log) |
+| 공식 Node build | primary / scratch 모두 exit 0, browser bundle 포함 | [primary](raw/build-full-primary-after.log) · [scratch](raw/build-full-scratch-after.log) |
+| Node format check | 전체 Node TS exit 0 | [log](raw/node-format-check.log) |
+| 수정 TS lint | exit 0 | [log](raw/lint-touched.log) |
+| package root public export | factory는 Framework/stream-wire root에 노출되지 않음 | [확인](raw/public-export-check.json) |
+| git diff --check | exit 0 | 최종 commit 전에도 확인 |
+
+실행 integrity·source SHA: [validation-summary.json](raw/validation-summary.json). profile의 scratch는 git archive이므로 bench metadata의 commit은 unknown이며, 각 run의 provenance.json과 progress.md가 archive commit, primary HEAD/base/dirty와 실제 JS/native binary SHA를 기록한다.
+
+## 바꾼 파일과 남은 항목
+
+| 파일 | 변경 |
+|---|---|
+| [Node adapter](/root/worktree/zlink-v21-s033/n4json/framework/languages/node/packages/framework/src/runtime/messaging/framework-json-v1.ts:5) | 기본 stringifier를 native Base64 primitive로 구성. `:8-11`에서 원본 byte 범위를 빌려 변환한다. |
+| [공용 JSON policy](/root/worktree/zlink-v21-s033/n4json/framework/languages/node/packages/stream-wire/src/internal/framework-json-v1.ts:16) | 내부 factory에 byte encoder만 제공한다. 타입 판정은 `:72` 한 곳에 유지한다. default portable backend와 모든 JSON 검증 규칙을 유지한다. |
+| [회귀 test](/root/worktree/zlink-v21-s033/n4json/framework/languages/node/test/contract/node-typed-json.test.js:1) | byte-identical wire와 decoded 값, offset 범위, native path 및 JSON 정책을 고정한다. |
+
+공식 build가 자동 갱신한 Unity WebGL 생성물은 Node 수정 범위 밖이다. 이 세션이 만든 diff를 [raw](raw/generated-unity-diff.patch)에 보존하고 원래 내용으로 돌렸다. 기존 사용자 변경은 시작 때 없었으며 다른 job worktree/build를 수정하지 않았다. Raw 파일은 모두 보존한다. Scratch code/build도 profile 재현·검토용으로 보존하며 시작한 build/test/profile process는 종료했다.
+
+남은 test 실패는 없다. Buffer.toJSON 임시 숫자 배열, Base64/JSON output string 생성, 최초 UTF-8 인코딩과 기존 bench 수신 복사는 남는다. 처리량 판정, 전체 네 언어 runtime 실행, push·PR·GitHub 작업은 하지 않았다.
+
+소유 계층: **Framework JSON codec / Node runtime adapter**.
+
+스펙: **message-model §5 `:153` padded RFC 4648 Base64**, payload ownership §2/§5의 복사 회계.
+
+교차언어 대조: **네 구현의 Base64 JSON 표현 유지**. 이번 검증은 Node의 공용 fixture·portable serializer와 byte-identical 비교이며 네 runtime 동시 실행 검사는 하지 않았다.
+
+변경 분류: **B — 기존 성능 결함**, spec/wire/public API 변경 없음.
+
+규칙 수: **Node byte 타입 판정 위치 1 → 1** (`frameworkJsonV1Value`). 새 상태·flag·queue·lock·cache 없음. 리팩토링 점검은 hot path 변환 1건 수정, control/gate 중복 추가 0건, 별도 이슈로 넘긴 항목 0건이다. 위 잔여 할당을 제거했다고 주장하지 않는다.
+
+로컬 commit: `6e48bdf5fbfe7252b029b405f514693a91f2a92d` (`perf/4354-node-typed-json`). 작업 tree는 clean이다. 검증한 세 source 파일의 SHA가 commit 이후에도 동일함을 확인했다. [최종 repository 상태](raw/repository-final.json).

@@ -1,6 +1,6 @@
 Node|L4·L5~L7 측정(handler DI 수정 c019495a82 후)|lad-node-s2
 J4json|typed JSON base64 encode·decode 복사·할당 줄이기(Java 수정 + 세 언어 대조)|j4json2
-N4json|Node L4 typed JSON 손실 원인·production 수정|n4json
+N4json|Node L4: Buffer.toJSON 배열·base64 decode 제거(6e48bdf5fb 후속)|n4json2
 C4json|C++ L4 typed JSON 손실 원인·production 수정|c4json
 N2net|Node L2 .NET 대조·수정(손실 29% 후속)|n2net
 D4json|.NET L4 typed JSON 손실 원인·production 수정|d4json

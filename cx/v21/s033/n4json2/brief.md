@@ -1,0 +1,15 @@
+Model gpt-6.1-sol, effort high. Earlier job briefs are history, not instructions.
+
+# Task: Node typed JSON, continued — remove the Buffer.toJSON temporary Array(N) on encode and the portable base64 decode on the receive path, wire unchanged. .NET is the reference: it writes base64 straight from the bytes and decodes straight into bytes.
+
+Worktree /root/worktree/zlink-v21-s033/n4json, branch perf/4354-node-typed-json, tip 6e48bdf5fb (your previous job: native base64 encode). Read /root/jobs/fx/cx/v21/s033/n4json/report.md and SUPERVISOR-NOTE.md first; reuse its scratch (/root/worktree/zlink-v21-s033/n4json-scratch), tools and profile method. Commit locally only; never push, never open a PR, no GitHub, no sub-agents or other AI tools, never run internal-docs.sh. Never delete raw files. Do NOT take /root/jobs/fx/cx/measure.lock. Never touch other worktrees or their build outputs. Profiling: pin every process to CPUs 6-7,14-15, each run at most 20 s; compare shapes. Builds get SIGSTOPped during measurement holds: just wait.
+
+## Evidence (n4json after-fix profile)
+L4 send-saturation 4K source: Buffer.toJSON is 16.71% of CPU samples and ~32.1 KiB/message allocation (Array(N) of numbers + wrapper object, discarded by the replacer). Target decode was not changed: target parse share rose 2.45% → 6.09%; stream-wire framework-json-v1.ts:402-406 decodeBase64 is atob + per-char loop into a new Uint8Array.
+
+## Do
+1. Encode: make byte fields reach the replacer before JSON.stringify calls Buffer.prototype.toJSON, without new per-message rules. Candidates to evaluate (measure each, pick by CPU/alloc and rule count): (a) a pre-pass that only runs when the value graph contains a Uint8Array, replacing them with their base64 strings in a shallow copy of the containing objects; (b) a schema-driven writer for typed payloads that have a JSON contract schema; (c) any other way that keeps getter/toJSON/cycle semantics identical to today (your previous tests pin those — keep them green). State the rule count before/after.
+2. Decode: give the Node adapter a native base64 decoder (Buffer.from(string, 'base64') into an exact-size view) while keeping the canonical padded RFC 4648 check (reject what is rejected today — same accepted/rejected sets; extend the tests to prove it with non-canonical pad bits, missing padding, whitespace, url-safe alphabet).
+3. Tests: byte-identical JSON for sizes 0,1,2,3,127,128,1024,4096 (Buffer, Uint8Array, offset view, nested object, array of byte fields), decoded values equal, rejection set unchanged. Node format, lint, framework tests for touched files.
+4. Profile L4 send-saturation 4K and request-serial 1K source+target again; report Buffer.toJSON / base64 CPU share and per-message allocation before (6e48bdf5fb) / after in /root/jobs/fx/cx/v21/s033/n4json2/report.md, with a .NET comparison line per cost (framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkFrameworkJsonPayloadCodec.cs and STJ ByteArrayConverter).
+One commit "perf(node): skip Buffer.toJSON and decode base64 natively in default JSON (#4354)". Time cap 3 h.

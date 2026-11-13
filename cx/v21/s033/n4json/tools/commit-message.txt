@@ -1,0 +1,17 @@
+perf(node): encode default JSON bytes with native base64
+
+Configure the Node JSON adapter with native Base64 over the input byte range.
+Keep JSON policy in the shared profile and retain the portable browser encoder.
+This removes the spread argument list and intermediate binary string while
+preserving padded Base64 JSON, DTOs, decoding, and public exports.
+
+Validation: official Node builds, Node format check, touched-file lint,
+19 byte regression tests and 131 focused framework tests passed. CPU and
+allocation profiles cover L3/L4 send 4K and serial request 1K; no throughput verdict.
+
+Owner: Framework JSON codec / Node runtime adapter.
+Spec: message-model section 5 (padded RFC 4648 Base64), payload ownership sections 2/5.
+Parity: existing Base64 JSON representation retained across language implementations.
+Classification: B, existing performance defect; no wire/spec/public API change.
+Byte type decision locations: 1 -> 1. No new mutable state, queue, lock, or cache.
+Audit: one hot-path conversion corrected; Buffer.toJSON temporary array remains.

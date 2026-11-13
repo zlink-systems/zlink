@@ -123,3 +123,5 @@ Profile after-L4-request-serial-1024: scratch archive ae8a5178b5, primary base d
 /root/worktree/zlink-v21-s033/n4json-scratch/framework/languages/node/packages/stream-wire/dist/internal/framework-json-v1.js: sha256=b4fb99e9106425542874038f51b2cc941b07ed38f5504854e1f9f31e1b841f11
 /root/worktree/zlink-v21-s033/n4json-scratch/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node: sha256=ed260e4bb579df207784f76ed5e518d214f4baf1bcf485d9f303b917c23dbe05
 Receive/reply and waits/allocations/copies: see call-shape.md; L3/L4 add only restored features.
+
+2026-11-13T22:05:09.371617+00:00 local commit 6e48bdf5fbfe7252b029b405f514693a91f2a92d; clean; tests 19+131, build/format/lint success; no push/PR.
