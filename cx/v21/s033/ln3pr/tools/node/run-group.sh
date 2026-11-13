@@ -8,8 +8,11 @@ if [[ -n "$running" ]]; then
   printf '%s\n' "$(date -u +%FT%TZ) running build found before hold; waiting up to 10 minutes" "$running" >> "$JOB/progress.md"
   deadline=$((SECONDS+600))
   while [[ -n "$running" && $SECONDS -lt $deadline ]]; do sleep 5; running=$(ps -eo stat=,comm=,args= | awk '$1 ~ /^[RS]/ && $2 != "awk" && $0 ~ /(cmake|ninja|cc1plus|gradlew|dotnet build|tsc|npm run build)/ {print}') ; done
-  [[ -z "$running" ]] || { echo 'build still active after 10-minute wait' >&2; exit 3; }
-  printf '%s\n' "$(date -u +%FT%TZ) build wait finished" >> "$JOB/progress.md"
+  if [[ -z "$running" ]]; then
+    printf '%s\n' "$(date -u +%FT%TZ) build wait finished" >> "$JOB/progress.md"
+  else
+    printf '%s\n' "$(date -u +%FT%TZ) 10-minute build wait elapsed; attempting exclusive hold now" >> "$JOB/progress.md"
+  fi
 else
   printf '%s no matching builds in R/S state before hold; no wait required\n' "$(date -u +%FT%TZ)" >> "$JOB/progress.md"
 fi

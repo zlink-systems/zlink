@@ -39,3 +39,10 @@
 - profile c1-after-L57-send: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=True, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/c1-after-L57-send/fingerprint.json. receive/reply와 추가 비용: call-shape.md.
 
 - profile c1-after-L57-bp: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=True, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/c1-after-L57-bp/fingerprint.json. receive/reply와 추가 비용: call-shape.md.
+
+- 구현 전 보고: raw/report-before-implementation-v2.md. Production 4개 파일만 변경, 새 source·StateLane 검사 2개 추가. 기존 assertion 변경 없음.
+- 변경 전 새 회귀 1건 실패(expected 1 owner, actual 8 callers), 변경 후 focused 114건 통과. 전체 core 19,962건(470 suites) 실패/오류/skip 0, fakeBackendTest NO-SOURCE, Java format PASS.
+- 수정 후 C1 send 44,653 / bp 13,965건 모두 submitted=completed=received, errors=0. 비교는 costs-symmetric.json(양쪽 owner wait 포함). 전체 bp source CPU/alloc 감소는 확인하지 못함.
+- 동일 JVM owner control: caller CPU 9.90–14.02us/turn·76.28–81.31B/turn, result 1.40–1.49us/turn·6.03–9.29B/turn. Throughput gate 판정 미실행.
+
+- profile c1-L4-send-policy-confirmed: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=True, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/c1-L4-send-policy-confirmed/fingerprint.json. receive/reply와 추가 비용: call-shape.md.

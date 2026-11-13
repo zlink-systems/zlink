@@ -1,4 +1,4 @@
-# Java L5~L7 production 비용 진단과 수정안
+# Java L5~L7 production 진단·수정·검증
 
 1단계 보고 시각: 2026-11-13T22:35:07.673069+00:00 UTC. 구현 전 main worktree는 `perf/4356-java-l57`, `3bd8756f99`, clean이다. 지정 ladder `cffa8009d3`는 `git archive`로 `/root/worktree/zlink-v21-s033/j57-scratch`에 새로 빌드했다. [build log](raw/build-scratch.log), [호출 대조](call-shape.md), 실행별 `fingerprint.json`에 실제 JAR 경로·SHA-256·HEAD·dirty를 보존했다.
 
@@ -79,7 +79,7 @@ Spec root는 `framework/doc/framework/common/spec/server/`다.
 
 규칙 수(판정 protocol 수): **source queued work 실행 2(caller grant / ResultWork drain) → 1(ResultWork drain)**. StateLane의 FIFO/claim 소유자 1→1. 새 state·flag·queue·lock·timer는 없다. DI caller-turn protocol은 해당 준비 경계에서 유지한다. ResultWork enqueue helper는 기존 코드를 이동해 한 곳에 둔다.
 
-## 구현·검증 예정
+## 구현 전 검증 계획
 
 - Source binding 시도가 submit 반환 전에 끝나는지, FIFO·state lane 비재진입·close·실패 전달을 검사한다.
 - Contended source work가 기존 drain 한 회전에서 처리되는 회귀 검사를 원래 source 경로에서 먼저 실패시킨다.
@@ -88,3 +88,89 @@ Spec root는 `framework/doc/framework/common/spec/server/`다.
 - 같은 scratch bench/binding에서 수정한 core만 교체해 두 패턴을 다시 profile한다. CPU/allocations와 source grant/worker/completion stack을 전후 대조한다.
 
 이번 profile은 measure.lock을 사용하지 않았다. 다른 worktree와 그 산출물, GitHub, push, PR, internal-docs, sub-agent를 사용하지 않았다. 시작 제한/종료 제한이나 thread snapshot race로 완료하지 못한 준비 실행도 `raw/`에 모두 보존했으며 위 수치에는 포함하지 않았다.
+
+
+
+## 구현 결과
+
+Framework source operation owner의 queued work를 기존 ResultWork drain으로 실행하도록 수정했다. Source caller는 private result를 기다리므로 registration과 첫 binding 시도는 submit 반환 전에 끝난다. 무경합 호출에는 private future를 만들지 않는다. 기존 async source 경로와 handler/DI용 caller-thread awaitTurn은 유지한다.
+
+| 변경 파일 | 결과 |
+|---|---|
+| `runtime/internal/execution/ZLinkStateLane.java:144,185` | 내부 awaitResult bridge와 기존 ResultWork enqueue의 단일 소유 helper |
+| `runtime/channels/ZLinkChannelSocketRegistry.java:615` | RouteMesh node/spot source 제출에 같은 bridge 사용 |
+| `runtime/binding/ZLinkJavaRawMeshNode.java:603` | 직접 source transport 제출도 같은 owner drain 사용 |
+| `runtime/internal/service/ZLinkServiceOperationRegistry.java:282` | 직접 operation 등록·제출의 반환 전 경계에 같은 bridge 사용 |
+| `src/test/.../channels/ZLinkNodeSubmitTurnTest.java:334` | 8 queued public send의 FIFO, 반환 전 첫 binding, 완료 한 번, owner drain 실행 검증 |
+| `src/test/.../internal/execution/ZLinkStateLaneTest.java:50` | 무경합 무할당, 예외 identity, 비재진입, owner context 복원, close 후 거부 검증 |
+
+수정 전 production 코드에 새 source 회귀 검사를 먼저 실행했다. Binding을 실행한 thread 수가 기대값 1에 대해 실제 8이어서 실패했다([원본 XML](raw/regression-before.xml)). 같은 검사가 수정 후 통과했다. 기존 caller-thread awaitTurn 검사는 expectation을 바꾸지 않고 통과했다.
+
+### Source owner 원인 분리
+
+전체 request 경로의 JSON·native I/O·completion 비용과 source 인계를 구분하기 위해 같은 JVM·같은 StateLane 구현에서 기존 awaitTurn과 새 awaitResult를 caller/result/result/caller 순서로 교대했다. 8 caller가 같은 owner의 짧은 상태 변경을 수행하며 owner context·총 실행 수 일치를 검사했다. C1 고정, 동일 profiler 설정, 각 구간 1초이며 전체 process는 19초 timeout 안에서 정상 종료했다. Framework end-to-end 처리량 비교에 사용하지 않는다.
+
+| owner 경계 | process CPU µs/turn 범위 | sampled allocation B/turn 범위 | 근거 |
+|---|---:|---:|---|
+| 기존 caller grant | 9.90–14.02 | 76.28–81.31 | [window별 원본·collapsed 집계](raw/owner-probe/summary.json) |
+| 기존 ResultWork drain 재사용 | 1.40–1.49 | 6.03–9.29 | 같은 파일 |
+
+Core transport나 payload codec을 바꾸지 않은 이 대조에서 source 인계 비용이 줄었다. ResultWork drain이 밀린 work를 처리해 queued caller 수가 줄고 기존 무경합 무할당 경로도 다시 사용한다. 입력/실행 수와 source context가 일치한 원본은 [windows.json](raw/owner-probe/windows.json), 도구는 [OwnerProbe.java](tools/OwnerProbe.java)다. 이 수치는 전체 L5~L7 비용이나 21% budget의 개선률이 아니다.
+
+### 전체 production 경로 전후
+
+수정 후에는 원래 scratch bench·binding JAR을 유지하고 새로 빌드한 scratch core만 classpath 앞에 두었다. 네 production edit 외의 baseline 차이를 섞지 않았다. [freshness·hash](raw/fixed-core-freshness.json), [fixed build](raw/build-scratch-fixed.log), 실행별 `fingerprint.json`이 근거다. Source/target 모두 CPU 6–7,14–15, C1, warmup 1초·active 2초다.
+
+CPU는 compiler/GC/VM thread를 제외한 sampled µs/message, allocation은 B/message다. Source owner wall은 **기존 grant 대기와 새 result 대기를 모두 같은 owner 항목으로 합산**했다. 최종 분류는 `costs-symmetric.json`이다. 초기 파생 분류 `costs-full.json`도 보존했으며 초기 after owner-wall 값은 새 result 대기를 thread scheduling으로 분류했으므로 최종 대조에 사용하지 않는다.
+
+| 1K 패턴·역할 | CPU µs/msg 전 → 후 | allocation B/msg 전 → 후 | source owner wall µs/msg 전 → 후 | 전 / 후 raw |
+|---|---:|---:|---:|---|
+| send-saturation · source | 46.37 → 41.03 | 4885 → 4840 | 501.42 → 288.00 | [전](raw/c1-before-L57-send/costs-symmetric.json) / [후](raw/c1-after-L57-send/costs-symmetric.json) |
+| send-saturation · target | 92.94 → 62.59 | 15383 → 13825 | — | [전](raw/c1-before-L57-send/costs-symmetric.json) / [후](raw/c1-after-L57-send/costs-symmetric.json) |
+| request-backpressure · source | 137.98 → 145.86 | 20094 → 23708 | 1979.85 → 653.06 | [전](raw/valid-before-L57-bp/costs-symmetric.json) / [후](raw/c1-after-L57-bp/costs-symmetric.json) |
+| request-backpressure · target | 194.70 → 152.95 | 19463 → 20179 | — | [전](raw/valid-before-L57-bp/costs-symmetric.json) / [후](raw/c1-after-L57-bp/costs-symmetric.json) |
+
+Send source의 CPU·할당과 두 패턴의 owner 대기는 줄었다. **Backpressure source 전체 CPU·할당은 감소하지 않았다.** 증가한 char[]·byte[] 표본 대부분은 기존 reply JSON `TextBuffer` 경로에 있다(`source-alloc-full.collapsed`의 `Entry.dispatch → ZLinkJsonMessageSerializer.decodeJson → UTF8StreamJsonParser → TextBuffer`). 이 profile만으로 그 차이를 이번 bridge의 전체 allocation 개선으로 해석하지 않는다. Target은 수정하지 않았는데도 CPU 추정치가 변하므로 짧은 실행의 전체 비용 개선률을 확정하지 않는다. Source 인계 제거 자체는 동일 JVM 대조와 회귀 검사로 확인했다.
+
+| 수정 후 실행 | submitted=completed=received | errors | 수명·affinity 근거 |
+|---|---:|---:|---|
+| send 1K | 44,653 | 0 | [lifecycle](raw/c1-after-L57-send/lifecycle.json), [start](raw/c1-after-L57-send/start.json), [active](raw/c1-after-L57-send/active.json) |
+| backpressure 1K | 13,965 | 0 | [lifecycle](raw/c1-after-L57-bp/lifecycle.json), [start](raw/c1-after-L57-bp/start.json), [active](raw/c1-after-L57-bp/active.json) |
+
+### Thread 인계 수
+
+Framework가 추가하는 실행 자원 전환을 message의 호출 경로에서 센다. Core/binding 내부 I/O thread는 그 계층의 소유이므로 별도다. Bench는 외부 submit thread에서 호출한다.
+
+| message 경로 | 수정 전 | 수정 후 |
+|---|---|---|
+| Source encode(E1) | caller에서 실행, 전환 0 | 동일 |
+| Source owner turn(E2/E3/E4) | 무경합 0. 경합 시 grant를 1회 기다린 뒤 **각 caller**가 자기 thread에서 실행한다. 작업 사이에 owner 권한을 계속 인계한다. | 무경합 0. queued work는 기존 owner drain 자원으로 전환 1회, caller는 private result를 기다린다. 기존 최대 100건 drain 재사용. |
+| Target receive → owner queue | transport pump에서 직접 receiver 호출, 전환 0 | 동일 |
+| Target queue → handler worker | record당 실행 자원 전환 1회. worker task는 여러 record를 drain한다. | 동일 |
+| Handler → activation/DI → reply submit | 같은 handler 실행 자원, 추가 전환 0 | 동일 |
+| Binding terminal → source completion dispatcher(E5) | request/지연 send 1회, 즉시 admitted send 0 | 동일 |
+| Typed reply decode → caller callback | 같은 E5 turn, 추가 전환 0 | 동일 |
+
+이번 수정은 source caller별 권한 인계를 기존 drain 처리로 모은다. 한 message의 source owner 실행 자원 전환은 경합 시 0에서 1로 늘 수 있으나, 실행 권한을 매번 다음 caller에게 넘겨야 진행하던 protocol을 제거한다. Controlled 8건 검사의 binding 실행 자원은 8개 caller에서 drain 1개로 바뀌었다. 새 queue·worker pool·supervisor·타이머를 추가하지 않았다.
+
+### 검증과 남은 항목
+
+| 검사 | 결과 | raw |
+|---|---|---|
+| 새 회귀 검사·변경 전 | expected owner drain 1, actual caller threads 8로 실패 | [log](raw/regression-before.log), [XML](raw/regression-before.xml) |
+| Focused StateLane·source submit·registry·handler owner | 114 tests, 실패/오류/skip 0 | [집계](raw/focused-after-counts.json), [log](raw/focused-after.log) |
+| 전체 Java core test | **19,962 tests, 470 suites, 실패/오류/skip 0** | [집계](raw/framework-final-counts.json), [log](raw/framework-final.log), [XML](raw/framework-final-xml/) |
+| fakeBackendTest | NO-SOURCE, 실행 대상 0 | 같은 log |
+| Java 전체 format check | PASS(수정 파일 외 변경 없음) | [log](raw/format-final.log) |
+| git diff --check | PASS | 최종 검증 metadata |
+
+전체 core suite에는 scope lifetime을 검사하는 `ZLinkMeshApplicationDispatcherTest.sameNamespaceStartsNextBeforePriorTerminal`, `ZLinkHandlerInstanceOwnerTest`와 registry의 reply/cancel/close/timeout terminal-once 검사가 포함된다. 기존 assertion을 완화하지 않았다. 새 source 검사는 metadata FIFO와 반환 전 binding·완료 한 번을 함께 확인한다.
+
+- 소유 계층: Framework source operation owner(StateLane).
+- Spec: `06-state-ownership-and-lanes` 「반환 전 완료 보장」, `08-messaging-hot-path` E2–E4. Handler 준비/DI 경계와 E5는 기존 소유자가 유지한다.
+- 교차언어: .NET ResultWork와 C++ 정상 run/run_checked의 queued drain을 대조했다. Java/Kotlin의 public 결과·FIFO·deadline·terminal once 의미를 바꾸지 않는다. Node는 기존 FIFO promise/terminal owner를 유지한다.
+- 분류: B(내부 실행 비용 결함). Spec·wire·public Framework API 변경 없음.
+- 규칙 수: source queued work 실행 protocol **2→1**, state owner **1→1**. 새 state/flag/queue/lock/timer 0.
+- 리팩토링 점검: source protocol 분리 1건을 수정하고 ResultWork enqueue 중복을 기존 코드 이동으로 방지했다. 넘긴 결함 0, 추가 execution-gate 동기화 0.
+
+남은 항목은 공식 동일 조건에서의 L4/L5~L7 21% budget 재판정이다. 이번 작업에서는 지시대로 measure.lock을 사용하지 않았고 처리량 판정을 하지 않았다. Target generic queue bookkeeping, Spring handler 초기화와 JSON 비용은 profile에 보존했다. 이 비용을 scope 공유·serializer 등록·timeout 증가로 우회하지 않았다. Core unit test와 format의 남은 실패는 없다.
