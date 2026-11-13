@@ -32,6 +32,11 @@ public sealed class BenchServerMetrics
         Record(payload.Body.Span, includeLatency: true);
     }
 
+    public void Record(BenchTypedPayload payload)
+    {
+        Record(payload.Body, includeLatency: true);
+    }
+
     public void Record(ReadOnlySpan<byte> payload)
     {
         Record(payload, includeLatency: true);
@@ -40,6 +45,11 @@ public sealed class BenchServerMetrics
     public void RecordReceived(BenchPayload payload)
     {
         Record(payload.Body.Span, includeLatency: false);
+    }
+
+    public void RecordReceived(BenchTypedPayload payload)
+    {
+        Record(payload.Body, includeLatency: false);
     }
 
     public void RecordReceived(ReadOnlySpan<byte> payload)

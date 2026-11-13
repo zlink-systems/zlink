@@ -29,3 +29,5 @@ public static class BenchPayloads
         }
     }
 }
+
+public sealed record BenchTypedPayload(byte[] Body);
