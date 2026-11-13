@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.framework.runtime.internal.json;
 
+import com.fasterxml.jackson.core.Base64Variant;
+import com.fasterxml.jackson.core.Base64Variants;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
@@ -43,7 +45,6 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
-import java.util.Base64;
 import java.util.List;
 
 /** Owns the framework-json-v1 mapper decisions shared by JVM transports. */
@@ -359,24 +360,58 @@ public final class ZLinkFrameworkJsonProfile {
                             throw JsonMappingException.from(
                                     parser, "bytes must be a padded base64 JSON string");
                         }
-                        String value = parser.getText();
-                        if ((value.length() & 3) != 0) {
-                            throw context.weirdStringException(
-                                    value, byte[].class, "base64 padding is required");
-                        }
-                        try {
-                            byte[] decoded = Base64.getDecoder().decode(value);
-                            if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
-                                throw new IllegalArgumentException("base64 is not canonical");
-                            }
-                            return decoded;
-                        } catch (IllegalArgumentException failure) {
-                            throw context.weirdStringException(
-                                    value, byte[].class, "bytes are not canonical padded base64");
-                        }
+                        return readCanonicalBytes(parser, context);
                     }
                 });
         return module;
+    }
+
+    private static byte[] readCanonicalBytes(JsonParser parser, DeserializationContext context)
+            throws IOException {
+        int length = parser.getTextLength();
+        if ((length & 3) != 0) {
+            throw context.weirdStringException(
+                    parser.getText(), byte[].class, "base64 padding is required");
+        }
+        char[] text = parser.getTextCharacters();
+        int offset = parser.getTextOffset();
+        int end = offset + length;
+        int padding = 0;
+        if (length != 0 && text[end - 1] == '=') {
+            padding = text[end - 2] == '=' ? 2 : 1;
+        }
+        byte[] decoded = new byte[(length / 4) * 3 - padding];
+        Base64Variant base64 = Base64Variants.MIME_NO_LINEFEEDS;
+        int output = 0;
+        for (int index = offset; index < end; index += 4) {
+            int first = base64.decodeBase64Char(text[index]);
+            int second = base64.decodeBase64Char(text[index + 1]);
+            int third = base64.decodeBase64Char(text[index + 2]);
+            int fourth = base64.decodeBase64Char(text[index + 3]);
+            if ((first | second | third | fourth) < 0) {
+                // Only the final quartet may contain padding, with zero unused bits.
+                if (index + 4 != end
+                        || first < 0
+                        || second < 0
+                        || fourth != Base64Variant.BASE64_VALUE_PADDING
+                        || (third == Base64Variant.BASE64_VALUE_PADDING
+                                ? (second & 15) != 0
+                                : third < 0 || (third & 3) != 0)) {
+                    throw context.weirdStringException(
+                            parser.getText(),
+                            byte[].class,
+                            "bytes are not canonical padded base64");
+                }
+            }
+            decoded[output++] = (byte) ((first << 2) | (second >> 4));
+            if (third >= 0) {
+                decoded[output++] = (byte) ((second << 4) | (third >> 2));
+                if (fourth >= 0) {
+                    decoded[output++] = (byte) ((third << 6) | fourth);
+                }
+            }
+        }
+        return decoded;
     }
 
     private static final class OptionalPrimitiveValueInstantiator
