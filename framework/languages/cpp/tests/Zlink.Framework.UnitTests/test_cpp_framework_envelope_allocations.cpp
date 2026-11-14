@@ -1418,3 +1418,332 @@ TEST (EnvelopeL2Wire, DirectDecodePreservesEveryFieldAndBorrowLifetime)
 }
 
 } // namespace
+
+namespace
+{
+// The c5ser corpus fixes both the accepted bytes and the rejected diagnostics
+// from origin/main. Keep its input order so each failure has a stable case ID.
+TEST (EnvelopeWriter, C5serCorpusPreservesBytesAndRejections)
+{
+    std::vector<msg::envelope_header_t> headers;
+    std::vector<std::string> values = {"bench", "quote\"slash\\control\n\t", ""};
+    values.back () = "é한😀";
+    values.push_back (std::string ("NUL\0inside", 10));
+    values.push_back (std::string (140, 'x'));
+    for (auto kind : {msg::message_kind_t::request, msg::message_kind_t::response,
+                      msg::message_kind_t::command, msg::message_kind_t::error}) {
+        for (auto &v : values)
+            for (int fields = 0; fields < 4; ++fields) {
+                msg::envelope_header_t h{.kind = kind,
+                                         .channel_name = v,
+                                         .message_name = v,
+                                         .content_type = "application/x-protobuf",
+                                         .correlation_id = "c001",
+                                         .deadline = "2026-11-14T00:00:00Z"};
+                if (fields & 1) {
+                    h.topic = v;
+                    h.source = v;
+                    h.metadata.emplace ("key", v);
+                }
+                if (fields & 2) {
+                    h.flow_id = "019a8361-0000-7000-8000-000000000001";
+                    h.flow_origin = fw::flow_origin_t (1);
+                }
+                if (kind == msg::message_kind_t::error) {
+                    h.error_code = "protocol_error";
+                    h.error_message = v;
+                }
+                headers.push_back (std::move (h));
+            }
+    }
+    for (int n : {0, 1, 15, 16, 63, 64, 65}) {
+        msg::envelope_header_t h{.channel_name = "bench",
+                                 .message_name = "Packet",
+                                 .correlation_id = std::string (n, 'a')};
+        headers.push_back (std::move (h));
+    }
+    for (int n : {4084, 4085, 4086, 4096, 4097}) {
+        msg::envelope_header_t h{.channel_name = "bench", .message_name = "Packet"};
+        h.metadata.emplace ("k", std::string (n, 'v'));
+        headers.push_back (std::move (h));
+    }
+    for (int field = 0; field < 6; ++field) {
+        msg::envelope_header_t h{
+          .channel_name = "bench", .message_name = "Packet", .correlation_id = "c1"};
+        std::string bad (1, char (0xff));
+        if (field == 0)
+            h.channel_name = bad;
+        if (field == 1)
+            h.message_name = bad;
+        if (field == 2)
+            h.topic = bad;
+        if (field == 3)
+            h.metadata.emplace ("bad", bad);
+        if (field == 4) {
+            h.metadata.emplace (std::string ("a\0b", 3), "v");
+        }
+        if (field == 5)
+            h.correlation_id = bad;
+        headers.push_back (std::move (h));
+    }
+    {
+        msg::envelope_header_t h{.channel_name = "bench", .message_name = "Packet"};
+        h.flow_id = "bad";
+        h.flow_origin = fw::flow_origin_t (1);
+        headers.push_back (std::move (h));
+    }
+    {
+        msg::envelope_header_t h{.kind = msg::message_kind_t::error,
+                                 .channel_name = "bench",
+                                 .message_name = "Packet",
+                                 .error_code = "unrecognized"};
+        headers.push_back (std::move (h));
+    }
+
+    ASSERT_EQ (headers.size (), 100u);
+    const auto expected_error = [] (std::size_t index) -> const char * {
+        switch (index) {
+            case 13:
+            case 15:
+            case 33:
+            case 35:
+            case 53:
+            case 55:
+            case 73:
+            case 75:
+                return "ZLink envelope metadata key/value is invalid";
+            case 86:
+                return "ZLink envelope correlationId must be 1..64 byte ASCII";
+            case 87:
+            case 88:
+            case 89:
+            case 90:
+            case 91:
+                return "ZLink envelope metadata exceeds 1024 bytes";
+            case 92:
+            case 93:
+            case 94:
+            case 95:
+                return "[json.exception.type_error.316] invalid UTF-8 byte at index 0: 0xFF";
+            case 96:
+                return "ZLink envelope metadata key/value is invalid";
+            case 97:
+                return "ZLink envelope correlationId must be 1..64 byte ASCII";
+            case 98:
+                return "ZLink envelope flow id must be UUIDv7";
+            case 99:
+                return "ZLink error envelope requires a recognized errorCode";
+            default:
+                return nullptr;
+        }
+    };
+    std::size_t accepted = 0;
+    std::size_t rejected = 0;
+    std::size_t prepared = 0;
+    msg::envelope_codec_t codec;
+    for (std::size_t index = 0; index < headers.size (); ++index) {
+        SCOPED_TRACE (index);
+        const auto &header = headers[index];
+        const char *error = expected_error (index);
+        if (error) {
+            ++rejected;
+            if (index >= 92 && index <= 94) {
+                try {
+                    (void) codec.encode_header (header);
+                    FAIL () << "accepted invalid UTF-8";
+                }
+                catch (const nlohmann::json::type_error &actual) {
+                    EXPECT_STREQ (actual.what (), error);
+                }
+            } else {
+                try {
+                    (void) codec.encode_header (header);
+                    FAIL () << "accepted invalid header";
+                }
+                catch (const fw::framework_exception_t &actual) {
+                    EXPECT_EQ (actual.kind (), fw::framework_error_kind_t::protocol_error);
+                    EXPECT_STREQ (actual.what (), error);
+                }
+            }
+            continue;
+        }
+        ++accepted;
+        const auto text = [] (const auto &value) { return std::string (std::string_view (value)); };
+        const auto optional = [&] (const auto &value) -> nlohmann::json {
+            return value ? nlohmann::json (text (*value)) : nlohmann::json (nullptr);
+        };
+        const nlohmann::json expected = {
+          {"channelName", text (header.channel_name)},
+          {"contentType", text (header.content_type)},
+          {"correlationId", header.correlation_id.empty ()
+                              ? nlohmann::json (nullptr)
+                              : nlohmann::json (text (header.correlation_id))},
+          {"deadline", optional (header.deadline)},
+          {"errorCode", optional (header.error_code)},
+          {"errorMessage", optional (header.error_message)},
+          {"flowId", optional (header.flow_id)},
+          {"flowOrigin", header.flow_origin
+                           ? nlohmann::json (static_cast<int> (*header.flow_origin))
+                           : nlohmann::json (nullptr)},
+          {"formatMarker", 242},
+          {"kind", static_cast<int> (header.kind)},
+          {"messageName", text (header.message_name)},
+          {"metadata", header.metadata},
+          {"source", optional (header.source)},
+          {"topic", optional (header.topic)}};
+        const auto wire = codec.encode_header (header);
+        EXPECT_EQ (wire.to_string (), expected.dump ());
+        const auto decoded = codec.decode_header_view (wire);
+        ASSERT_TRUE (decoded);
+        expect_same_header (decoded.value (), header);
+        if (header.kind == msg::message_kind_t::request) {
+            ++prepared;
+            const auto type = std::make_shared<const fw::detail::request_type_plan_t> (
+              fw::detail::prepare_request_type (text (header.message_name),
+                                                text (header.content_type)));
+            const auto channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
+              fw::detail::prepare_request_channel (text (header.channel_name)));
+            const auto parts = msg::client_call_codec_t{}.encode_payload_parts (
+              msg::envelope_header_t (header), fw::encoded_payload_t::from_string ("body"), type,
+              channel);
+            const auto bytes = parts.part_bytes (0);
+            EXPECT_EQ (
+              std::string_view (reinterpret_cast<const char *> (bytes.data ()), bytes.size ()),
+              wire.to_string ());
+        }
+    }
+    EXPECT_EQ (accepted, 78u);
+    EXPECT_EQ (rejected, 22u);
+    EXPECT_EQ (prepared, 24u);
+}
+} // namespace
+
+namespace
+{
+TEST (EnvelopeWriter, MetadataLimitCountsEscapedUtf8Bytes)
+{
+    msg::envelope_codec_t codec;
+    const auto channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
+      fw::detail::prepare_request_channel ("bench"));
+    const auto type = std::make_shared<const fw::detail::request_type_plan_t> (
+      fw::detail::prepare_request_type ("Packet", "application/json"));
+    for (const std::string suffix : {std::string ("\"\\\n\x01"), std::string ("é한😀")}) {
+        for (const auto size : {1023u, 1024u, 1025u}) {
+            msg::envelope_header_t header{
+              .channel_name = "bench", .message_name = "Packet", .correlation_id = "c1"};
+            header.metadata.emplace ("k", suffix);
+            const auto overhead = nlohmann::json (header.metadata).dump ().size ();
+            header.metadata.at ("k").append (size - overhead, 'v');
+            ASSERT_EQ (nlohmann::json (header.metadata).dump ().size (), size);
+            for (const bool prepared : {false, true}) {
+                SCOPED_TRACE (std::to_string (size) + " prepared=" + std::to_string (prepared));
+                const auto encode = [&] {
+                    if (!prepared)
+                        return codec.encode_header (header);
+                    auto parts = msg::client_call_codec_t{}.encode_payload_parts (
+                      msg::envelope_header_t (header), fw::encoded_payload_t::from_string ("body"),
+                      type, channel);
+                    return parts[0];
+                };
+                if (size > 1024) {
+                    try {
+                        (void) encode ();
+                        FAIL () << "accepted oversized metadata";
+                    }
+                    catch (const fw::framework_exception_t &error) {
+                        EXPECT_EQ (error.kind (), fw::framework_error_kind_t::protocol_error);
+                        EXPECT_STREQ (error.what (), "ZLink envelope metadata exceeds 1024 bytes");
+                    }
+                } else {
+                    const auto wire = encode ();
+                    EXPECT_EQ (nlohmann::json::parse (wire.to_string ()).at ("metadata"),
+                               nlohmann::json (header.metadata));
+                    const auto decoded = codec.decode_header_view (wire);
+                    ASSERT_TRUE (decoded);
+                    expect_same_header (decoded.value (), header);
+                }
+            }
+        }
+    }
+}
+} // namespace
+
+namespace
+{
+TEST (EnvelopeL2Wire, WordOffsetsPreserveValuesErrorsAndRejectionContext)
+{
+    msg::envelope_codec_t codec;
+    const std::vector<std::string> fragments{"",
+                                             "x",
+                                             "\\\"",
+                                             "\\\\",
+                                             "\\b",
+                                             "\\f",
+                                             "\\n",
+                                             "\\r",
+                                             "\\t",
+                                             "\\u0000",
+                                             "\\u001f",
+                                             "é",
+                                             "한",
+                                             "😀",
+                                             "\"",
+                                             "\\",
+                                             "\\q",
+                                             "\\uD800",
+                                             std::string (1, '\0'),
+                                             std::string (1, '\x1f'),
+                                             std::string ("\xc2", 1),
+                                             std::string ("\x80", 1),
+                                             std::string ("\xc0\xaf", 2),
+                                             std::string ("\xed\xa0\x80", 3),
+                                             std::string ("\xf4\x90\x80\x80", 4)};
+    for (const auto *field : {"channelName", "topic", "flowId", "metadata-key", "metadata-value"}) {
+        for (std::size_t offset = 0; offset < 16; ++offset) {
+            for (std::size_t fragment = 0; fragment < fragments.size (); ++fragment) {
+                auto fixture = l2_wire_fixture ();
+                fixture["correlationId"] = "id";
+                fixture["flowId"] = "019a55d5-0000-7000-8000-000000000001";
+                fixture["flowOrigin"] = 3;
+                if (std::string_view (field) == "metadata-key")
+                    fixture["metadata"] = {{"SENTINEL", "value"}};
+                else if (std::string_view (field) == "metadata-value")
+                    fixture["metadata"] = {{"key", "SENTINEL"}};
+                else
+                    fixture[field] = "SENTINEL";
+                auto input = fixture.dump ();
+                input.replace (input.find ("SENTINEL"), 8,
+                               std::string (offset, 'a') + fragments[fragment] + "tail");
+                const auto canonical = zlink::message_t::from (input);
+                // A legal trailing space forces the unchanged SAX parser,
+                // keeping all earlier diagnostic byte positions identical.
+                const auto fallback = zlink::message_t::from (input + " ");
+                for (const bool capture_flow : {false, true}) {
+                    SCOPED_TRACE (std::string (field) + " offset=" + std::to_string (offset)
+                                  + " fragment=" + std::to_string (fragment)
+                                  + " flow=" + std::to_string (capture_flow));
+                    std::optional<msg::envelope_header_t> expected_context;
+                    const auto expected =
+                      codec.decode_header (fallback, capture_flow, &expected_context);
+                    for (const bool borrow : {false, true}) {
+                        std::optional<msg::envelope_header_t> context;
+                        const auto actual =
+                          borrow ? codec.decode_header_view (canonical, capture_flow, &context)
+                                 : codec.decode_header (canonical, capture_flow, &context);
+                        ASSERT_EQ (static_cast<bool> (actual), static_cast<bool> (expected));
+                        ASSERT_EQ (context.has_value (), expected_context.has_value ());
+                        if (context)
+                            expect_same_header (*context, *expected_context);
+                        if (actual) {
+                            expect_same_header (actual.value (), expected.value ());
+                        } else {
+                            EXPECT_EQ (actual.error_kind (), expected.error_kind ());
+                            EXPECT_STREQ (actual.error ()->what (), expected.error ()->what ());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+} // namespace
