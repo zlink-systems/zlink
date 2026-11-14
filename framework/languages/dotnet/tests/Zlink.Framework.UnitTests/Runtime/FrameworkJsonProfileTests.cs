@@ -329,6 +329,35 @@ public sealed class FrameworkJsonProfileTests
     }
 
     [Fact]
+    public void Encoder_rejects_null_for_a_non_nullable_reference_and_writes_declared_null()
+    {
+        var text = Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Serialize(new NullOnEncode { Label = null! })
+        );
+        Assert.Contains("Property 'label' does not allow null.", text.Message);
+        var child = Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Serialize(new NullOnEncode { Child = null! })
+        );
+        Assert.Contains("Property 'child' does not allow null.", child.Message);
+        Assert.Equal(
+            "{\"label\":\"x\",\"child\":{\"label\":\"y\"},\"note\":null}",
+            Encoding.UTF8.GetString(ZLinkFrameworkJsonPayloadCodec.Serialize(new NullOnEncode()))
+        );
+    }
+
+    private sealed class NullOnEncode
+    {
+        public string Label { get; set; } = "x";
+        public EncodeChild Child { get; set; } = new();
+        public string? Note { get; set; }
+    }
+
+    private sealed class EncodeChild
+    {
+        public string Label { get; set; } = "y";
+    }
+
+    [Fact]
     public void Decoder_rejects_null_for_a_readonly_constructor_argument()
     {
         Assert.ThrowsAny<JsonException>(() =>

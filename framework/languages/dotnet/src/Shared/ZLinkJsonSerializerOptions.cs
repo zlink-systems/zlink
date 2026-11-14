@@ -182,8 +182,14 @@ internal static class ZLinkJsonSerializerOptions
             return converter.Read(ref reader, typeToConvert, options);
         }
 
-        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) =>
+        // HandleNull also routes null values here on encode; the same non-null rule
+        // rejects them instead of writing a payload every receiver refuses (spec 05 5).
+        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+        {
+            if (value is null)
+                throw new JsonException($"Property '{propertyName}' does not allow null.");
             converter.Write(writer, value, options);
+        }
     }
 
 #if NETSTANDARD2_1
