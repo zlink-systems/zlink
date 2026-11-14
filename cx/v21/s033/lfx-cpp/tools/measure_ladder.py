@@ -13,10 +13,15 @@ def log(s):
 def cpus_setgov(value):
     for cpu in range(16): pathlib.Path(f'/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_governor').write_text(value)
 def check_guard():
-    for cpu in range(16):
-        for state in (2,3):
-            p=pathlib.Path(f'/sys/devices/system/cpu/cpu{cpu}/cpuidle/state{state}/disable')
-            if p.read_text().strip()!='1': raise RuntimeError(f'quiet guard C{state} enabled on cpu{cpu}')
+    for _ in range(240):
+        ready=True
+        for cpu in range(16):
+            for state in (2,3):
+                p=pathlib.Path(f'/sys/devices/system/cpu/cpu{cpu}/cpuidle/state{state}/disable')
+                if p.read_text().strip()!='1': ready=False
+        if ready: return
+        time.sleep(.25)
+    raise RuntimeError('quiet guard did not disable C2/C3 within 60 seconds')
 def validate(result,sched):
     c=json.loads(result.read_text())['cells'][0]; s=sched.read_text()
     assert not c.get('contaminated') and not c.get('drain_bound_hit') and not c.get('settle_bound_hit'), 'contaminated/drain bound'

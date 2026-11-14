@@ -9,6 +9,8 @@
 | A baseline | `6350275facc547759c9e143cc2515f3f528c776e` | 동일 | 6 tracked files, 756 insertions / 68 deletions; 추가 untracked bench file: `framework/bench/grpc/node/zlink-framework-server/bench-handlers.js` |
 | B PR | `ec6aa8ea5c4e6f59f8b8fc494febc8d928b9dba8` | `6350275facc547759c9e143cc2515f3f528c776e` | 6 tracked files, 756 insertions / 68 deletions; 추가 untracked bench file: `framework/bench/grpc/node/zlink-framework-server/bench-handlers.js` |
 
+두 worktree의 bench-only `git diff --stat`은 동일하다: `client/framework-transport.js` 33, `client/main.js` 96, `run_local.sh` 14, `shared/raw-wire.js` 220, `shared/raw-wire.test.js` 94, `zlink-framework-server/main.js` 367 lines changed. `bench-handlers.js`는 untracked bench 파일이다.
+
 두 빌드 모두 종료 코드 0. 각자 worktree에서 Core binding 1.25.0 tarball로 local HTTP client 패키지를 만들고 `framework/languages/node` 및 `framework/bench/grpc/node/build.sh`를 빌드했다. 대상 dist 파일은 각 대응 `.ts` source보다 최신이다.
 
 | dist 파일 | A SHA256 | B SHA256 |
@@ -22,17 +24,19 @@ A/B framework `dist`는 각 1,059개 파일이다. 위 세 JS 외 차이: `node-
 
 ## 처리량과 단계 손실
 
-| 셀 | A-L2 msg/s | B-L2 msg/s | A-L3 msg/s | B-L3 msg/s | A L3 손실 vs L2 | B L3 손실 vs L2 | B-L3 / A-L3 | 판정 |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| send-saturation-1024 | 측정 전 | 측정 전 | 측정 전 | 측정 전 | — | — | — | — |
-| send-saturation-4096 | 측정 전 | 측정 전 | 측정 전 | 측정 전 | — | — | — | — |
-| request-serial-1024 | 측정 전 | 측정 전 | 측정 전 | 측정 전 | — | — | — | — |
-| request-serial-4096 | 측정 전 | 측정 전 | 측정 전 | 측정 전 | — | — | — | — |
-| request-backpressure-1024 | 측정 전 | 측정 전 | 측정 전 | 측정 전 | — | — | — | — |
-| request-backpressure-4096 | 측정 전 | 측정 전 | 측정 전 | 측정 전 | — | — | — | — |
+처리량 링크는 raw `results.json`이며, 같은 디렉터리의 `scheduling.txt`에 thread별 affinity·정책 증거가 있다. 3회 셀은 각 L3 열의 값이 중앙값이고 그 중앙값을 만든 raw 실행에 연결했다.
 
-각 수치는 해당 raw `results.json`에 연결한다. 판정 경계: B-L3/A-L3가 ±3% 이내면 neutral, 그보다 크면 PR helps, 작으면 PR hurts. 3–9% 차이 셀은 A-L3/B-L3 추가 2쌍의 중앙값을 사용한다.
+| 셀 | A-L2 msg/s | B-L2 msg/s | A-L3 msg/s | B-L3 msg/s | A 손실 vs L2 | B 손실 vs L2 | B-L3 / A-L3 | 판정 |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| send-saturation-1024 | [122,918.4](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-1024/A-L2/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/results.json>) | [119,359.4](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-1024/B-L2/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/results.json>) | [82,520.0](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-1024/A-L3/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/results.json>) | [74,331.0](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-1024/B-L3/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/results.json>) | 32.87% | 37.73% | -9.92% | PR hurts |
+| send-saturation-4096 | [82,036.8](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-4096/A-L2/counted/attempt1/run1/zlink-framework-node-send-saturation-4096/results.json>) | [83,329.2](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-4096/B-L2/counted/attempt1/run1/zlink-framework-node-send-saturation-4096/results.json>) | [54,115.2](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-4096/A-L3/counted/attempt2/run1/zlink-framework-node-send-saturation-4096/results.json>) | [52,988.8](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-4096/B-L3/counted/attempt1/run1/zlink-framework-node-send-saturation-4096/results.json>) | 34.04% | 36.41% | -2.08% | neutral |
+| request-serial-1024 | [7,525.4](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-serial-1024/A-L2/counted/attempt1/run1/zlink-framework-node-request-serial-1024/results.json>) | [7,532.0](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-serial-1024/B-L2/counted/attempt1/run1/zlink-framework-node-request-serial-1024/results.json>) | [6,567.4](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-serial-1024/A-L3/counted/attempt2/run1/zlink-framework-node-request-serial-1024/results.json>) | [6,478.2](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-serial-1024/B-L3/counted/attempt1/run1/zlink-framework-node-request-serial-1024/results.json>) | 12.73% | 13.99% | -1.36% | neutral |
+| request-serial-4096 | [6,738.8](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-serial-4096/A-L2/counted/attempt1/run1/zlink-framework-node-request-serial-4096/results.json>) | [6,970.0](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-serial-4096/B-L2/counted/attempt1/run1/zlink-framework-node-request-serial-4096/results.json>) | [5,753.0](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-serial-4096/A-L3/counted/attempt1/run1/zlink-framework-node-request-serial-4096/results.json>) | [5,837.6](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-serial-4096/B-L3/counted/attempt1/run1/zlink-framework-node-request-serial-4096/results.json>) | 14.63% | 16.25% | +1.47% | neutral |
+| request-backpressure-1024 | [20,167.4](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-backpressure-1024/A-L2/counted/attempt1/run1/zlink-framework-node-request-backpressure-1024/results.json>) | [20,400.4](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-backpressure-1024/B-L2/counted/attempt1/run1/zlink-framework-node-request-backpressure-1024/results.json>) | [16,491.8](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-backpressure-1024/A-L3/counted/attempt1/run1/zlink-framework-node-request-backpressure-1024/results.json>) | [16,476.0](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-backpressure-1024/B-L3/counted/attempt1/run1/zlink-framework-node-request-backpressure-1024/results.json>) | 18.23% | 19.24% | -0.10% | neutral |
+| request-backpressure-4096 | [18,763.6](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-backpressure-4096/A-L2/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/results.json>) | [18,298.8](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-backpressure-4096/B-L2/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/results.json>) | [13,266.8](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-backpressure-4096/A-L3/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/results.json>) | [13,491.4](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/request-backpressure-4096/B-L3/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/results.json>) | 29.30% | 26.27% | +1.69% | neutral |
+
+3–9% 경계로 3회 측정한 셀은 `send-saturation-4096`과 `request-serial-1024`이며, 각 A-L3/B-L3 `attempt1`–`attempt3` raw를 보존하고 중앙값으로 판정했다. 그 밖의 셀은 1회다.
 
 ## 측정 근거
 
-각 counted run raw 폴더의 `scheduling.txt`에 source·target 모든 thread의 시작 및 mid-active SCHED policy와 `Cpus_allowed_list`를 보존한다. raw 파일은 삭제하지 않는다.
+총 32 counted run 모두 errors=0 및 submitted=completed=received였다. 모든 run의 `scheduling.txt`에서 시작·mid-active source/target thread 정책이 SCHED_OTHER, affinity가 각각 0–5 / 8–13임을 확인했고, C2/C3 비활성 기록도 확인했다. 각 스케줄 기록에는 source thread 13–14개, target thread 13개가 두 시점에 기록돼 있다. 예: [send-saturation-1K A-L2 scheduling](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-1024/A-L2/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/scheduling.txt>), [send-saturation-1K B-L3 scheduling](</root/jobs/fx/cx/v21/s033/ln3pr2/raw/send-saturation-1024/B-L3/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/scheduling.txt>). 나머지 각 run의 `scheduling.txt`도 해당 `results.json`과 같은 폴더에 있다. warmup 1초, active 5초, 실행 간 3초, discarded warm run 없음. 측정은 한 exclusive hold(375초)에서 셀별 A-L2 → B-L2 → A-L3 → B-L3 순서로 실행했다.
