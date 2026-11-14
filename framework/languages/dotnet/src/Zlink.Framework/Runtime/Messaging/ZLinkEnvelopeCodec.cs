@@ -138,13 +138,17 @@ internal static class ZLinkEnvelopeCodec
     private const string JsonContentType = "application/json";
     private const int MaximumSimpleHeaderCacheEntries = 4096;
     internal static readonly ZLinkStateLane CacheLane = new();
-    private static ImmutableDictionary<SimpleHeaderKey, HeaderPlan> SimpleHeaderCache =
-        ImmutableDictionary<SimpleHeaderKey, HeaderPlan>.Empty;
-    private static readonly Queue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
+    private static HeaderPlanCache SimpleHeaderCache = new(
+        ImmutableDictionary<SimpleHeaderKey, HeaderPlan>.Empty,
+        ImmutableQueue<SimpleHeaderKey>.Empty
+    );
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
     internal static (int SimpleHeaders, int DecodedHeaders) SnapshotCacheCounts() =>
-        (Volatile.Read(ref SimpleHeaderCache).Count, Volatile.Read(ref DecodedHeaderCache).Length);
+        (
+            Volatile.Read(ref SimpleHeaderCache).Entries.Count,
+            Volatile.Read(ref DecodedHeaderCache).Length
+        );
 
     public static string DefaultContentType => JsonContentType;
 
@@ -1151,35 +1155,35 @@ internal static class ZLinkEnvelopeCodec
         // Message and channel names are application input. Keep a bounded
         // replacement cache so hot keys remain cheap after arbitrary keys
         // have filled the cache.
-        if (Volatile.Read(ref SimpleHeaderCache).TryGetValue(key, out var hit))
-            return hit;
-        return AddOnMiss(key);
+        while (true)
+        {
+            var snapshot = Volatile.Read(ref SimpleHeaderCache);
+            if (snapshot.Entries.TryGetValue(key, out var hit))
+                return hit;
 
-        // Keep the mutation closure on the miss path; a warm lookup does not
-        // allocate an owner-turn callback merely to return immutable bytes.
-        static HeaderPlan AddOnMiss(SimpleHeaderKey key) =>
-            AwaitStateLane(
-                CacheLane.RunAsync(() =>
-                {
-                    var cache = SimpleHeaderCache;
-                    if (cache.TryGetValue(key, out var cached))
-                        return cached;
+            var cache = snapshot.Entries;
+            var order = snapshot.Order;
+            while (cache.Count >= MaximumSimpleHeaderCacheEntries && !order.IsEmpty)
+            {
+                order = order.Dequeue(out var evicted);
+                cache = cache.Remove(evicted);
+            }
 
-                    while (
-                        cache.Count >= MaximumSimpleHeaderCacheEntries
-                        && SimpleHeaderCacheOrder.TryDequeue(out var evicted)
-                    )
-                        cache = cache.Remove(evicted);
-
-                    var bytes = EncodeSimpleHeaderBytes(key);
-                    ReadOnlySpan<byte> dynamicField = ",\"correlationId\":"u8;
-                    var dynamicOffset = bytes.AsSpan().IndexOf(dynamicField) + dynamicField.Length;
-                    var encoded = new HeaderPlan(bytes, dynamicOffset);
-                    SimpleHeaderCacheOrder.Enqueue(key);
-                    Volatile.Write(ref SimpleHeaderCache, cache.Add(key, encoded));
-                    return encoded;
-                })
-            );
+            var bytes = EncodeSimpleHeaderBytes(key);
+            ReadOnlySpan<byte> dynamicField = ",\"correlationId\":"u8;
+            var dynamicOffset = bytes.AsSpan().IndexOf(dynamicField) + dynamicField.Length;
+            var encoded = new HeaderPlan(bytes, dynamicOffset);
+            // Publish entries and their FIFO order together; a competing miss
+            // must recompute from the snapshot that won the exchange.
+            var next = new HeaderPlanCache(cache.Add(key, encoded), order.Enqueue(key));
+            if (
+                ReferenceEquals(
+                    Interlocked.CompareExchange(ref SimpleHeaderCache, next, snapshot),
+                    snapshot
+                )
+            )
+                return encoded;
+        }
     }
 
     private static byte[] EncodeSimpleHeaderBytes(SimpleHeaderKey key) =>
@@ -1401,6 +1405,11 @@ internal static class ZLinkEnvelopeCodec
     }
 
     private sealed record HeaderPlan(byte[] Bytes, int DynamicOffset);
+
+    private sealed record HeaderPlanCache(
+        ImmutableDictionary<SimpleHeaderKey, HeaderPlan> Entries,
+        ImmutableQueue<SimpleHeaderKey> Order
+    );
 
     private static void AddDecodedHeaderCacheEntry(
         ReadOnlySpan<byte> bytes,

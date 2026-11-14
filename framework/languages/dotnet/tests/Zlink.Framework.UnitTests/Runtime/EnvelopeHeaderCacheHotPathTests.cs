@@ -5,6 +5,181 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task ColdHeaderEncodingInHandlerDoesNotWaitForCacheMutation()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ColdHeaderEncodingInHandlerDoesNotWaitForCacheMutation)
+            )
+        )
+            return;
+        var header = Header($"cache-cold-{Guid.NewGuid():N}") with { FormatMarker = 242 };
+        var lane = ZLinkEnvelopeCodec.CacheLane;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var lookup = Task.Factory.StartNew(
+            () =>
+            {
+                using var scope = ZLinkApplicationExecutionContext.Push(
+                    new("cache-handler", ZLinkUserSpotExecutionMode.SpotWide, null, false)
+                );
+                Assert.NotNull(ZLinkApplicationExecutionContext.Current);
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+                Assert.Equal(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(header), encoded.ToArray());
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default
+        );
+        try
+        {
+            // A queued mutation proves the dependency without waiting for a time budget.
+            SpinWait.SpinUntil(() => lookup.IsCompleted || lane.QueuedWorkCount != 0);
+            output.WriteLine(
+                $"Lane held: encoding completed={lookup.IsCompleted}, queued mutations={lane.QueuedWorkCount}"
+            );
+            Assert.True(
+                lookup.IsCompleted,
+                "Cold handler encoding queued behind the held cache lane."
+            );
+        }
+        finally
+        {
+            release.TrySetResult();
+            await holding;
+            await lookup;
+        }
+    }
+
+    [Fact]
+    public async Task ParallelMissesPublishEveryDistinctPlanOnce()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ParallelMissesPublishEveryDistinctPlanOnce)
+            )
+        )
+            return;
+
+        const int participants = 8;
+        const int rounds = 128;
+        foreach (var sharedKey in new[] { true, false })
+        {
+            var prefix = $"cache-parallel-{sharedKey}-{Guid.NewGuid():N}";
+            var headers = Enumerable
+                .Range(0, sharedKey ? rounds : participants * rounds)
+                .Select(index => Header($"{prefix}-{index}") with { FormatMarker = 242 })
+                .ToArray();
+            var expected = headers.Select(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes).ToArray();
+            var initialCount = ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders;
+            using var start = new Barrier(participants);
+            var workers = Enumerable
+                .Range(0, participants)
+                .Select(worker =>
+                    Task.Factory.StartNew(
+                        () =>
+                        {
+                            var actual = new byte[rounds][];
+                            for (var round = 0; round < rounds; round++)
+                            {
+                                var index = sharedKey ? round : worker * rounds + round;
+                                start.SignalAndWait();
+                                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(headers[index]);
+                                actual[round] = encoded.ToArray();
+                            }
+                            return actual;
+                        },
+                        CancellationToken.None,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default
+                    )
+                )
+                .ToArray();
+            var results = await Task.WhenAll(workers);
+            for (var worker = 0; worker < participants; worker++)
+            for (var round = 0; round < rounds; round++)
+                Assert.Equal(
+                    expected[sharedKey ? round : worker * rounds + round],
+                    results[worker][round]
+                );
+            Assert.Equal(
+                initialCount + headers.Length,
+                ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders
+            );
+            output.WriteLine(
+                $"sharedKey={sharedKey}: {participants * rounds} encodes, {headers.Length} published plans"
+            );
+        }
+    }
+
+    [Fact]
+    public async Task ReplacementRemainsFifoAndWarmHitsDoNotRefreshOrder()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ReplacementRemainsFifoAndWarmHitsDoNotRefreshOrder)
+            )
+        )
+            return;
+
+        var headers = Enumerable
+            .Range(0, 4097)
+            .Select(index => Header($"cache-fifo-{index}") with { FormatMarker = 242 })
+            .ToArray();
+        byte[] bytes;
+        using (var warm = ZLinkEnvelopeCodec.EncodeHeader(headers[0]))
+            bytes = warm.ToArray();
+        for (var index = 0; index < 256; index++)
+            _ = EncodingAllocation(headers[0]);
+        var nativeBytes =
+            PerCallAllocation.MinWindow(
+                () =>
+                {
+                    using var message = Message.From(bytes);
+                },
+                1024
+            ) / 1024;
+        for (var index = 1; index < 4096; index++)
+        {
+            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(headers[index]);
+        }
+
+        Assert.Equal(4096, ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders);
+        Assert.True(EncodingAllocation(headers[0]) <= nativeBytes + 16);
+        using var replacement = ZLinkEnvelopeCodec.EncodeHeader(headers[4096]);
+        Assert.Equal(
+            ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(headers[4096]),
+            replacement.ToArray()
+        );
+        Assert.True(EncodingAllocation(headers[4095]) <= nativeBytes + 16);
+        var evictedBytes = EncodingAllocation(headers[0]);
+        Assert.True(
+            evictedBytes > nativeBytes + 16,
+            $"The oldest plan was not evicted: {evictedBytes} B."
+        );
+        Assert.Equal(4096, ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders);
+        output.WriteLine(
+            $"FIFO: bound=4096, warm hit <= {nativeBytes + 16} B, evicted miss={evictedBytes} B"
+        );
+
+        static long EncodingAllocation(ZLinkEnvelopeHeader header)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            using (var encoded = ZLinkEnvelopeCodec.EncodeHeader(header)) { }
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
