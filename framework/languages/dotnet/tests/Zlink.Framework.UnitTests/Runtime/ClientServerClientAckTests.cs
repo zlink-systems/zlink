@@ -129,7 +129,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
     }
 
     [Fact]
-    public async Task Immediate_typed_failure_is_reported_once_outside_the_lane_and_starts_disposal()
+    public async Task Immediate_typed_failure_is_reported_once_without_changing_admission_or_disposing()
     {
         await using var fixture = new AckFixture();
         await fixture.MakeReadyAsync();
@@ -140,12 +140,11 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         await fixture.Lane.RunAsync(() =>
         {
             // TryPost queues this after the current turn. A sentinel in the same FIFO
-            // captures the observer before disposal can take the lane and close it.
+            // captures the registered observer before it finishes reporting.
             fixture.Connection.StartControlAck(ack);
             fixture.Lane.TryPost(() => observers = fixture.Requests.ToArray());
         });
         await Task.WhenAll(observers);
-        await fixture.Disposal;
         fixture.AssertControlFailure(expected);
         Assert.Equal(1, fixture.Dealer.Submissions);
         Assert.Throws<ObjectDisposedException>(() => ack.Size);
@@ -194,8 +193,9 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
             }
             releaseObserver.SetResult();
             await observer;
-            await (disposal ?? fixture.Disposal);
-            fixture.AssertControlFailure(expected);
+            if (disposal is not null)
+                await disposal;
+            fixture.AssertControlFailure(expected, disposed: disposeBeforeObserver);
         }
         finally
         {
@@ -315,9 +315,12 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         {
             await reporting.Task;
             registered = await fixture.Lane.RunAsync(() => fixture.Requests.ToArray());
-            // The send has already faulted and the state transition has run, but the
-            // registered task must still include reporting and shutdown publication.
+            // Reporting remains part of the registered task, while ACK failure itself
+            // leaves admission and connection lifetime to their existing owners.
             Assert.False(Assert.Single(registered).IsCompleted);
+            Assert.True(fixture.Connection._ready);
+            Assert.NotNull(fixture.Connection.ReadyTarget);
+            Assert.Null(fixture.Connection._disposeTask);
             disposal = ((IAsyncDisposable)fixture.Connection).DisposeAsync().AsTask();
             Assert.False(disposal.IsCompleted);
             Assert.Equal(0, fixture.Dealer.Closes);
@@ -326,9 +329,10 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         {
             release.Set();
             await Task.WhenAll(registered);
-            await (disposal ?? fixture.Disposal);
+            if (disposal is not null)
+                await disposal;
         }
-        fixture.AssertControlFailure(expected);
+        fixture.AssertControlFailure(expected, disposed: true);
     }
 
     [Fact]
@@ -526,8 +530,6 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
             return observer;
         }
 
-        internal Task Disposal => Connection._disposeTask!;
-
         internal async Task MakeReadyAsync()
         {
             await Lane.RunAsync(() =>
@@ -551,17 +553,26 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
             Assert.NotNull(Connection.ReadyTarget);
         }
 
-        internal void AssertControlFailure(Exception expected)
+        internal void AssertControlFailure(Exception expected, bool disposed = false)
         {
             Assert.Same(expected, Assert.Single(Failures.Failures));
-            Assert.Equal(false, Connection._ready);
-            Assert.Null(Connection.ReadyTarget);
-            Assert.Equal(
-                $"control:{expected.GetType().Name}:{expected.Message}",
-                Connection._diagnostics
-            );
-            Assert.True(Disposal.IsCompletedSuccessfully);
-            Assert.Equal(1, Dealer.Closes);
+            Assert.Equal("configured", Connection._diagnostics);
+            if (disposed)
+            {
+                Assert.False(Connection._ready);
+                Assert.Null(Connection.ReadyTarget);
+                Assert.True(Connection._disposeTask!.IsCompletedSuccessfully);
+                Assert.Equal(1, Dealer.Closes);
+            }
+            else
+            {
+                Assert.True(Connection._ready);
+                Assert.NotNull(Connection.ReadyTarget);
+                Assert.Null(Connection._disposeTask);
+                Assert.False(AdmissionStop.IsCancellationRequested);
+                Assert.False(ReceiveStop.IsCancellationRequested);
+                Assert.Equal(0, Dealer.Closes);
+            }
         }
 
         internal void FillSendHwm()

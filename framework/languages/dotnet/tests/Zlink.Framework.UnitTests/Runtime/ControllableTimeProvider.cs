@@ -63,6 +63,14 @@ internal sealed class ControllableTimeProvider : TimeProvider
 
     internal void AdvanceMonotonic(TimeSpan delta) => Advance(delta, advanceUtc: false);
 
+    internal void AdvanceMonotonicWithoutTimers(TimeSpan delta)
+    {
+        if (delta < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(delta));
+        lock (_gate)
+            _timestamp = checked(_timestamp + delta.Ticks);
+    }
+
     private void Advance(TimeSpan delta, bool advanceUtc)
     {
         if (delta < TimeSpan.Zero)

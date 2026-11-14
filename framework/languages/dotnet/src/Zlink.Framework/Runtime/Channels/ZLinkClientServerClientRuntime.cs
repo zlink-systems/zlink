@@ -1911,18 +1911,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
             catch (Exception exception)
             {
-                await _lane
-                    .RunAsync(() => ApplyControlFailureUnderState(exception))
-                    .ConfigureAwait(false);
                 _errorSink.ReportRuntimeTaskException(
                     $"client-server-control:{_channelName}",
                     exception
-                );
-                // Disposal joins this observer. Publish shutdown without awaiting our own join.
-                ZLinkUnawaitedSubmit.Observe(
-                    DisposeAsync(),
-                    $"client-server-control-dispose:{_channelName}",
-                    _errorSink
                 );
             }
         }
