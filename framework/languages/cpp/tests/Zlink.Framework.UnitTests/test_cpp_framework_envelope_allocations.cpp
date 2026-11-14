@@ -689,6 +689,85 @@ extern "C" zlink_config_result_t __wrap_zlink_msg_init_size (zlink_msg_t *messag
 }
 #endif
 
+#ifdef ZLINK_TEST_L2_PASS_PROBE
+extern "C" void zlink_test_l2_reset_passes ();
+extern "C" std::size_t zlink_test_l2_scan_bytes ();
+extern "C" std::size_t zlink_test_l2_metadata_checks ();
+
+namespace
+{
+TEST (EnvelopeL2Pass, CanonicalStringsShareUtf8AndSyntaxTraversal)
+{
+    msg::envelope_codec_t codec;
+    for (const std::string suffix : {std::string ("ascii"), std::string ("é한😀")}) {
+        msg::envelope_header_t header{.channel_name = std::string (48, 'c') + suffix,
+                                      .message_name = std::string (48, 'm') + suffix,
+                                      .correlation_id = std::string (64, 'i'),
+                                      .deadline = "2026-11-14T00:00:00Z"};
+        const auto wire = codec.encode_header (header);
+        const auto string_bytes = header.channel_name.size () + header.message_name.size ()
+                                  + header.content_type.size () + header.correlation_id.size ()
+                                  + header.deadline->size ();
+        zlink_test_l2_reset_passes ();
+        std::optional<fw::result_t<msg::envelope_header_t>> decoded;
+        const auto allocations =
+          count_allocations ([&] { decoded.emplace (codec.decode_header_view (wire, false)); });
+        ASSERT_TRUE (*decoded);
+        EXPECT_EQ (zlink_test_l2_scan_bytes (), string_bytes);
+        EXPECT_EQ (allocations, 0u);
+        std::printf ("L2_PASS canonical-%s scan_bytes=%zu string_bytes=%zu new=%zu\n",
+                     suffix == "ascii" ? "ascii" : "unicode", zlink_test_l2_scan_bytes (),
+                     string_bytes, allocations);
+        expect_same_header (decoded->value (), header);
+    }
+}
+
+TEST (EnvelopeL2Pass, EncodeValidatesDuringSizingAndOnlyEmitsDuringWriting)
+{
+    msg::envelope_codec_t codec;
+    msg::client_call_codec_t calls;
+    const auto channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
+      fw::detail::prepare_request_channel ("bench"));
+    const auto type = std::make_shared<const fw::detail::request_type_plan_t> (
+      fw::detail::prepare_request_type ("BenchPayload", "application/json"));
+    for (const bool prepared : {false, true}) {
+        msg::envelope_header_t header{.kind = prepared ? msg::message_kind_t::request
+                                                       : msg::message_kind_t::response,
+                                      .channel_name = "bench",
+                                      .message_name = "BenchPayload",
+                                      .correlation_id = std::string (64, 'i'),
+                                      .deadline = "2026-11-14T00:00:00Z",
+                                      .topic = std::string (48, 't') + "é한😀"};
+        header.metadata.emplace ("key", std::string (48, 'v'));
+        (void) codec.encode_header (header);
+        header.correlation_id = std::string (64, 'j');
+        const auto string_bytes =
+          header.correlation_id.size () + header.deadline->size () + header.topic->size () + 3 + 48;
+        zlink_test_l2_reset_passes ();
+        const auto expected = header;
+        std::optional<msg::message_parts_t> wire;
+        const auto allocations = count_allocations ([&] {
+            wire.emplace (prepared
+                            ? calls.encode_payload_parts (std::move (header),
+                                                          fw::encoded_payload_t::from_string ("7"),
+                                                          type, channel)
+                            : codec.encode_raw_body_parts (header, zlink::message_t::from ("7")));
+        });
+        const auto scanned = zlink_test_l2_scan_bytes ();
+        const auto checks = zlink_test_l2_metadata_checks ();
+        EXPECT_EQ (scanned, 2 * string_bytes);
+        EXPECT_EQ (checks, 1u);
+        EXPECT_EQ (allocations, 1u);
+        std::printf (
+          "L2_PASS encode-%s scan_bytes=%zu string_bytes=%zu metadata_checks=%zu new=%zu\n",
+          prepared ? "prepared" : "warm-response-path", scanned, string_bytes, checks, allocations);
+        ASSERT_TRUE (codec.decode_header (*wire, false));
+        expect_same_header (codec.decode_header (*wire, false).value (), expected);
+    }
+}
+} // namespace
+#endif
+
 namespace
 {
 template <typename Action> std::size_t measure_l2 (const char *path, Action &&action)
@@ -989,6 +1068,133 @@ TEST (EnvelopeL2Wire, BorrowedDecodePreservesRejectionsAndErrorText)
             EXPECT_STREQ (owned.error ()->what (), span.error ()->what ());
             std::printf ("L2_REJECT %s\n", owned.error ()->what ());
         }
+    }
+}
+
+TEST (EnvelopeL2Wire, UnicodeAndMetadataKeepFrozenDiagnostics)
+{
+    msg::envelope_codec_t codec;
+    // Parser diagnostics may contain the malformed input bytes themselves.
+    // Hex preserves every byte without asking a JSON serializer to validate it.
+    const auto diagnostic_bytes = [] (std::string_view value) {
+        constexpr char hex[] = "0123456789abcdef";
+        std::string result;
+        result.reserve (2 * value.size ());
+        for (const unsigned char byte : value) {
+            result += hex[byte >> 4];
+            result += hex[byte & 15];
+        }
+        return result;
+    };
+    const std::vector<std::string> values{"plain",
+                                          "é한😀",
+                                          "\\u0000",
+                                          "\\u001f",
+                                          "\\n",
+                                          "\\/",
+                                          "\\uD83D\\uDE00",
+                                          "\\uD800",
+                                          "\\uDC00",
+                                          "\\q",
+                                          std::string (1, '\0'),
+                                          std::string ("\xc2", 1),
+                                          std::string ("\x80", 1),
+                                          std::string ("\xc0\xaf", 2),
+                                          std::string ("\xe0\x9f\x80", 3),
+                                          std::string ("\xed\xa0\x80", 3),
+                                          std::string ("\xf0\x8f\x80\x80", 4),
+                                          std::string ("\xf4\x90\x80\x80", 4),
+                                          std::string ("\xf5\x80\x80\x80", 4),
+                                          std::string ("\xe2\x82", 2),
+                                          std::string ("\xe0\xa0\x80", 3),
+                                          std::string ("\xed\x9f\xbf", 3),
+                                          std::string ("\xf0\x90\x80\x80", 4),
+                                          std::string ("\xf4\x8f\xbf\xbf", 4)};
+    std::size_t index = 0;
+    for (const auto *field :
+         {"channelName", "messageName", "contentType", "correlationId", "deadline", "topic",
+          "errorCode", "errorMessage", "source", "flowId", "metadata-key", "metadata-value"}) {
+        for (const auto &value : values) {
+            auto fixture = l2_wire_fixture ();
+            fixture["correlationId"] = "id";
+            if (std::string_view (field) == "metadata-key")
+                fixture["metadata"] = {{"SENTINEL", "value"}};
+            else if (std::string_view (field) == "metadata-value")
+                fixture["metadata"] = {{"key", "SENTINEL"}};
+            else
+                fixture[field] = "SENTINEL";
+            auto input = fixture.dump ();
+            input.replace (input.find ("SENTINEL"), 8, value);
+            for (const bool capture_flow : {false, true}) {
+                const auto wire = zlink::message_t::from (input);
+                const auto owned = codec.decode_header (wire, capture_flow);
+                const auto view = codec.decode_header_view (wire, capture_flow);
+                ASSERT_EQ (static_cast<bool> (owned), static_cast<bool> (view));
+                if (owned)
+                    expect_same_header (owned.value (), view.value ());
+                else
+                    EXPECT_STREQ (owned.error ()->what (), view.error ()->what ());
+                const auto outcome =
+                  owned ? std::string ("accepted") : std::string (owned.error ()->what ());
+                std::printf ("L2_DIAG decode-%zu-%d %s\n", index, capture_flow,
+                             diagnostic_bytes (outcome).c_str ());
+            }
+            ++index;
+        }
+    }
+    for (const auto &value : values) {
+        for (const auto field : {0, 1, 2, 3, 4}) {
+            msg::envelope_header_t header{.channel_name = "bench", .message_name = "Payload"};
+            switch (field) {
+                case 0:
+                    header.channel_name = value;
+                    break;
+                case 1:
+                    header.topic = value;
+                    break;
+                case 2:
+                    header.metadata.emplace (value, "value");
+                    break;
+                case 3:
+                    header.metadata.emplace ("key", value);
+                    break;
+                case 4:
+                    header.error_message = "before\n" + value;
+                    break;
+            }
+            std::string outcome;
+            try {
+                outcome = codec.encode_header (header).to_string ();
+                // Successful encoding must retain the JSON library's bytes.
+                auto expected = l2_wire_fixture ();
+                expected["channelName"] = std::string (header.channel_name);
+                expected["messageName"] = "Payload";
+                if (header.topic)
+                    expected["topic"] = *header.topic;
+                if (header.error_message)
+                    expected["errorMessage"] = *header.error_message;
+                expected["metadata"] = header.metadata;
+                EXPECT_EQ (outcome, expected.dump ());
+            }
+            catch (const std::exception &error) {
+                outcome = error.what ();
+            }
+            std::printf ("L2_DIAG encode-%zu-%d %s\n", index, field,
+                         diagnostic_bytes (outcome).c_str ());
+        }
+        ++index;
+    }
+    for (const auto &metadata :
+         {std::map<std::string, std::string>{{"", "value"}},
+          std::map<std::string, std::string>{{std::string ("k\0", 2), "value"}},
+          std::map<std::string, std::string>{{"key", std::string ("v\0", 2)}},
+          std::map<std::string, std::string>{{"key", std::string (4096, 'v')}}}) {
+        auto fixture = l2_wire_fixture ();
+        fixture["metadata"] = metadata;
+        const auto decoded = codec.decode_header_view (zlink::message_t::from (fixture.dump ()));
+        ASSERT_FALSE (decoded);
+        std::printf ("L2_DIAG metadata-%zu %s\n", index++,
+                     diagnostic_bytes (decoded.error ()->what ()).c_str ());
     }
 }
 
