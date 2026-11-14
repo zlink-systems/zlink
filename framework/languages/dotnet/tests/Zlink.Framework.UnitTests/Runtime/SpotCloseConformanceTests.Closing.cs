@@ -515,6 +515,7 @@ public sealed partial class SpotCloseConformanceTests
                 throw new InvalidOperationException($"Unknown terminal path: {path}");
         }
         Assert.Equal(0, await catalog.CloseTransactionCountAsync());
+        Assert.Equal(0, host.Runtime.SnapshotOperationAdmissions().ActiveCount);
     }
 
     private static TestHostMessageFlowListener ClosingFlow(

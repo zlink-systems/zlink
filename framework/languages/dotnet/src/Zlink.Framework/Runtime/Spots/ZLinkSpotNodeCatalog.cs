@@ -1551,13 +1551,14 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     // Register on the current Spot gate before host admission or catalog work
     // can suspend the caller (spec 06 §7 step 1). The catalog still owns claims.
-    internal ValueTask<bool> CloseFromContextAsync(
+    internal async ValueTask<bool> CloseFromContextAsync(
         ZLinkSpotActivation activation,
         CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
         CloseRegistration claimed = default;
+        ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? operation = null;
         var attempt = activation.PostLifecycleOperation(
             async (current, ct) =>
             {
@@ -1565,7 +1566,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 await current.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);
                 try
                 {
-                    using var operation = (
+                    operation = (
                         await turn.YieldFrameworkCallAsync(_ => runtime.AdmitOperationAsync(), ct)
                             .ConfigureAwait(false)
                     ).Enter();
@@ -1599,7 +1600,16 @@ internal sealed class ZLinkSpotNodeCatalog(
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 $"Spot '{activation.SpotId}' no longer admits lifecycle work."
             );
-        return CompleteExplicitCloseAsync(activation, () => claimed, attempt);
+        try
+        {
+            return await CompleteExplicitCloseAsync(activation, () => claimed, attempt)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            // The record acquires admission; completion owns it through successor publication.
+            operation?.Dispose();
+        }
     }
 
     internal async ValueTask<bool> CloseAsync(

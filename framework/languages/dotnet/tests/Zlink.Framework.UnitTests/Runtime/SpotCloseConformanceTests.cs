@@ -70,6 +70,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         else
             Assert.True(await joined.WaitAsync(Wait));
         Assert.Equal(1, host.State.OnClosingCalls);
+        Assert.Equal(0, host.Runtime.SnapshotOperationAdmissions().ActiveCount);
         Assert.Equal(
             0,
             await host
@@ -101,6 +102,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         Assert.Equal(!hasMembers, await first.WaitAsync(Wait));
         Assert.Equal(!hasMembers, await joined.WaitAsync(Wait));
         Assert.Equal(hasMembers ? 0 : 1, host.State.OnClosingCalls);
+        Assert.Equal(0, host.Runtime.SnapshotOperationAdmissions().ActiveCount);
         if (hasMembers)
         {
             host.State.HandlerMode = null;
@@ -2981,6 +2983,7 @@ internal sealed class SpotCloseProbeState
     internal ConcurrentQueue<ulong> InitializedGenerations { get; } = new();
     internal Func<ulong, Task>? OnReinitialize { get; set; }
     internal Action<IZLinkInstanceSpotContext>? OnInstanceInitializing { get; set; }
+    internal Action<ulong>? OnInstanceClosing { get; set; }
     internal Func<CancellationToken, Task>? OnInstanceHandler { get; set; }
     internal ConcurrentQueue<string>? BranchOrder { get; set; }
     internal string? StoredMarker { get; set; }
@@ -3042,6 +3045,7 @@ internal sealed class SpotCloseInstance(
         CancellationToken cleanupCancellationToken
     )
     {
+        State.OnInstanceClosing?.Invoke(Context.ObjectGeneration);
         State.RecordOnClosing();
         State.OnClosingEntered.TrySetResult();
         if (State.HoldOnClosing)
