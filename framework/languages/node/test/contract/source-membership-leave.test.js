@@ -66,7 +66,7 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
   });
   const entryRuntime = new ZLinkEntryActorRuntimeService({
     actorManager: () => ({ getState: () => state }),
-    spotManager: () => ({ actorIngressMembership: { resolveOwner: () => ({ actorRef, spotId: state.spotId }) } }),
+    spotManager: () => ({ actorIngressMembership: { resolveOwner: () => ({ nativeActorRef: actorRef, meshName: 'game', spotId: state.spotId }) } }),
     spotNodeRuntime: () => ({ primaryMeshNode: node }),
     streamBindingRuntime: { async refreshActor() {} },
     boundSessionRelay: {

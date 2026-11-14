@@ -342,7 +342,8 @@ for (const updated of [false, true]) {
     const spotManager = {
       actorIngressMembership: {
         resolveOwner: () => ({
-          actorRef: { actorId: 'alice', objectGeneration: 1n, nodeRid: 'target', meshName: 'mesh' },
+          nativeActorRef: { actorId: 'alice', generation: 1n, nodeRid: 'target' },
+          meshName: 'mesh',
           spotId: 'target-spot'
         }),
         dispatchToOwner: (spotId, delivery) =>

@@ -2864,7 +2864,9 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       resolveActor: () => sourceActor as never,
       membership: {
         resolveOwner: () =>
-          activation!.hasDepartedActor(actorId) ? {} : { actorRef: sourceState.nativeActorRef }
+          activation!.hasDepartedActor(actorId)
+            ? {}
+            : { nativeActorRef: sourceState.nativeActorRef, meshName: activation!.meshName }
       }
     }).kind;
   };
