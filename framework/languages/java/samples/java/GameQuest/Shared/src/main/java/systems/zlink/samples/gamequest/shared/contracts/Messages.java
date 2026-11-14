@@ -76,14 +76,10 @@ public final class Messages {
 
     public record ItemCountSnapshot(String itemId, int count) {}
 
-    public record QuestProgressNotify(
-            String playerId, String targetConnectionId, QuestProgress progress) {}
+    public record QuestProgressNotify(String playerId, QuestProgress progress) {}
 
     public record QuestCompletedNotify(
-            String playerId,
-            String targetConnectionId,
-            QuestProgress progress,
-            boolean rewardGranted) {}
+            String playerId, QuestProgress progress, boolean rewardGranted) {}
 
     public record QuestProgress(
             String playerId,

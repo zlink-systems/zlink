@@ -86,13 +86,11 @@ data class ItemCountSnapshot(val itemId: String, val count: Int)
 
 data class QuestProgressNotify(
     val playerId: String,
-    val targetConnectionId: String?,
     val progress: QuestProgress,
 )
 
 data class QuestCompletedNotify(
     val playerId: String,
-    val targetConnectionId: String?,
     val progress: QuestProgress,
     val rewardGranted: Boolean,
 )
