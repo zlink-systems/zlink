@@ -14,7 +14,7 @@ import {
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { Message } from '../../contracts/Common/Message';
-import { SubmitResult } from '../backend/runtime-values';
+import { SubmitResult, type ZLinkBackendMessageLike } from '../backend/runtime-values';
 import { ReceiveKind, type ReceiveRecord } from '../foundation/service-runtime-contracts';
 import { ZLinkConfigurationException, type ZLinkRouteChannelOptions } from '../configuration';
 import type { ZLinkBackendSpotRouteBridge } from '../backend/contracts';
@@ -35,6 +35,7 @@ import {
 } from './channel-envelope-inspection';
 import {
   appendParts,
+  submitReplyParts,
   type ZLinkMultipartAsyncSubmitOperation,
   type ZLinkMultipartOperation,
   type ZLinkMultipartReplyOperation
@@ -155,12 +156,10 @@ export class ZLinkChannelRequestDispatcher {
             ? undefined
             : (protocolError) =>
                 this.submitReply(
-                  appendParts(
-                    router.reply(received.routingId, replyToken),
-                    encodeChannelErrorReplyParts(
-                      malformedProtocolErrorRequestHeader(this.options.channelName, info),
-                      protocolError
-                    )
+                  router.reply(received.routingId, replyToken),
+                  encodeChannelErrorReplyParts(
+                    malformedProtocolErrorRequestHeader(this.options.channelName, info),
+                    protocolError
                   ),
                   signal
                 )
@@ -238,18 +237,14 @@ export class ZLinkChannelRequestDispatcher {
       missingHandlerMessage: `No channel request handler is registered for '${this.options.channelName}:${packetName}'.`,
       writeReply: (reply) =>
         this.submitReply(
-          appendParts(
-            router.reply(received.routingId, replyToken),
-            encodeChannelReplyParts(envelope.header, reply, this.options.codecs)
-          ),
+          router.reply(received.routingId, replyToken),
+          encodeChannelReplyParts(envelope.header, reply, this.options.codecs),
           signal
         ),
       writeError: (error) =>
         this.submitReply(
-          appendParts(
-            router.reply(received.routingId, replyToken),
-            encodeChannelErrorReplyParts(envelope.header, error)
-          ),
+          router.reply(received.routingId, replyToken),
+          encodeChannelErrorReplyParts(envelope.header, error),
           signal
         )
     });
@@ -339,10 +334,11 @@ export class ZLinkChannelRequestDispatcher {
 
   private submitReply(
     operation: ZLinkMultipartReplyOperation,
+    parts: readonly ZLinkBackendMessageLike[],
     signal?: AbortSignal
   ): Promise<void> {
     void signal;
-    if (operation.submit() === false) {
+    if (submitReplyParts(operation, parts) === false) {
       throw new ZLinkConfigurationException('Channel reply was not accepted by Core.');
     }
     return completedChannelReply;
@@ -678,12 +674,10 @@ export class ZLinkRoutePacketDispatcher {
             ? undefined
             : (protocolError) =>
                 this.submitReply(
-                  appendParts(
-                    router.reply(received.routingId, replyToken),
-                    encodeChannelErrorReplyParts(
-                      malformedProtocolErrorRequestHeader(this.routerChannelId, info),
-                      protocolError
-                    )
+                  router.reply(received.routingId, replyToken),
+                  encodeChannelErrorReplyParts(
+                    malformedProtocolErrorRequestHeader(this.routerChannelId, info),
+                    protocolError
                   )
                 )
       });
@@ -756,17 +750,13 @@ export class ZLinkRoutePacketDispatcher {
       missingHandlerMessage: `No routed request handler is registered for '${this.routerChannelId}:${packetName}'.`,
       writeReply: (reply) =>
         this.submitReply(
-          appendParts(
-            router.reply(received.routingId, replyToken),
-            encodeChannelReplyParts(envelope.header, reply, codecs)
-          )
+          router.reply(received.routingId, replyToken),
+          encodeChannelReplyParts(envelope.header, reply, codecs)
         ),
       writeError: (error) =>
         this.submitReply(
-          appendParts(
-            router.reply(received.routingId, replyToken),
-            encodeChannelErrorReplyParts(envelope.header, error)
-          )
+          router.reply(received.routingId, replyToken),
+          encodeChannelErrorReplyParts(envelope.header, error)
         )
     });
   }
@@ -916,8 +906,11 @@ export class ZLinkRoutePacketDispatcher {
     );
   }
 
-  private submitReply(operation: ZLinkMultipartReplyOperation): Promise<void> {
-    if (operation.submit() === false) {
+  private submitReply(
+    operation: ZLinkMultipartReplyOperation,
+    parts: readonly ZLinkBackendMessageLike[]
+  ): Promise<void> {
+    if (submitReplyParts(operation, parts) === false) {
       throw new ZLinkConfigurationException('Route reply was not accepted by Core.');
     }
     return completedChannelReply;

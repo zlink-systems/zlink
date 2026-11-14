@@ -18,7 +18,8 @@ const {
   ZLinkSpotActorPacketDrain
 } = require('../../packages/framework/dist/runtime/spots/spot-actor-packet-drain');
 const {
-  encodeChannelEnvelopeParts
+  encodeChannelEnvelopeParts,
+  closeMessages
 } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const serviceWire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const {
@@ -144,10 +145,11 @@ test('mailbox receive time reaches send and request handlers after queued delay'
         false
       );
       const frame = serviceWire.encodeMultipartApplicationPayload(
-        channelParts.map(part => typeof part === 'string' ? Buffer.from(part) : part),
+        channelParts.map(part => typeof part === 'string' ? Buffer.from(part) : Buffer.isBuffer(part) ? part : part.data()),
         SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
         SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
       );
+      closeMessages(channelParts);
       const mailboxRecord = {
         owner: 'channel:orders',
         domain: 'application',

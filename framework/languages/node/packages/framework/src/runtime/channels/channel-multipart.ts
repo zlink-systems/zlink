@@ -4,6 +4,7 @@ import {
   requestResultToPublicErrorKind
 } from '../framework-errors-internal';
 import type { Message } from '../../contracts/Common/Message';
+import { submitNativeParts } from '../backend/runtime-message';
 import {
   type ZLinkBackendMessageLike as MessageLike,
   isZLinkBackendResultError
@@ -78,4 +79,12 @@ export function mapRequestFailure(error: unknown, label: string): unknown {
     true,
     error
   );
+}
+
+/** The binding takes parts on success; synchronous failure leaves them with Framework. */
+export function submitReplyParts(
+  operation: ZLinkMultipartReplyOperation,
+  parts: readonly MessageLike[]
+): unknown {
+  return submitNativeParts(parts, (nativeParts) => appendParts(operation, nativeParts).submit());
 }

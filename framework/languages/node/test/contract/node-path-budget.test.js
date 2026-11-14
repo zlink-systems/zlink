@@ -50,7 +50,8 @@ const {
   encodeChannelEnvelopeParts,
   encodeChannelReplyParts,
   decodeChannelReply,
-  decodeChannelHeader
+  decodeChannelHeader,
+  closeMessages
 } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   ZLinkBufferMessage
@@ -84,7 +85,7 @@ test('managed and binding binary replies retain payload views after source close
   const header = { channelName: 'mesh', messageName: 'Reply', correlationId: 'a'.repeat(32) };
   const payload = Buffer.alloc(1024, 7);
   const parts = encodeChannelReplyParts(header, payload);
-  const managed = parts.map((bytes) => ZLinkBufferMessage.fromOwned(bytes));
+  const managed = parts.map((part) => ZLinkBufferMessage.fromOwned(Buffer.isBuffer(part) ? part : part.data()));
   const reply = decodeChannelReply(managed);
   assert.equal(reply, payload);
   for (const part of managed) part.close();
@@ -97,6 +98,7 @@ test('managed and binding binary replies retain payload views after source close
   assert.equal(retained[0], 8);
   nativeBytes[0] = 9;
   assert.equal(retained[0], 9, 'Retain binding storage without a second payload allocation.');
+  closeMessages(parts);
 });
 
 test('rotation accounting preserves exact INT32_MAX capacity and bigint snapshots', () => {
@@ -196,11 +198,13 @@ test('trace-off command headers are prepared once while request fields remain pe
     false
   );
   assert.notEqual(request[0], other[0]);
-  const requestHeader = decodeChannelHeader([ZLinkBufferMessage.fromOwned(request[0])], false);
-  const otherHeader = decodeChannelHeader([ZLinkBufferMessage.fromOwned(other[0])], false);
+  const requestHeader = decodeChannelHeader([Buffer.isBuffer(request[0]) ? ZLinkBufferMessage.fromOwned(request[0]) : request[0]], false);
+  const otherHeader = decodeChannelHeader([Buffer.isBuffer(other[0]) ? ZLinkBufferMessage.fromOwned(other[0]) : other[0]], false);
   assert.equal(requestHeader.correlationId, firstId);
   assert.equal(otherHeader.correlationId, nextId);
   assert.notEqual(requestHeader.deadline, otherHeader.deadline);
+  closeMessages(request);
+  closeMessages(other);
 });
 
 test('a dependency-free handler has a fresh logical scope without scope Promises', async () => {

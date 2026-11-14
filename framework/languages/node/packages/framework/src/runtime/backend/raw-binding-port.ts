@@ -1,9 +1,9 @@
 import type { ServiceWireOwnedFrame } from '../foundation/service-wire-m6a-codec';
-import type { ConnectionAttempt } from '@zlink-systems/zlink';
+import type { Message, ConnectionAttempt } from '@zlink-systems/zlink';
 import type { OperationHandle } from '../foundation/operation-registry';
 import type { SubmitResult } from './runtime-values';
 
-export type ZLinkRawOutboundPart = Uint8Array | string | ServiceWireOwnedFrame;
+export type ZLinkRawOutboundPart = Uint8Array | string | Message | ServiceWireOwnedFrame;
 
 export interface ZLinkRawSendSubmission {
   readonly result: typeof SubmitResult.Ok | typeof SubmitResult.Backpressured;

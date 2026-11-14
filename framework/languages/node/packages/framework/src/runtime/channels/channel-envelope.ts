@@ -1,4 +1,6 @@
 import type { Message } from '../../contracts/Common/Message';
+import type { Message as BindingMessage } from '@zlink-systems/zlink';
+import { ServiceWireOwnedFrame } from '../foundation/service-wire-m6a-codec';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
 import { randomBytes } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
@@ -466,13 +468,7 @@ function unsupportedChannelContentType(contentType: string): ZLinkFrameworkExcep
   );
 }
 
-export function closeMessages(parts: readonly MessageLike[]): void {
-  for (const part of parts) {
-    if (typeof (part as { close?: unknown }).close === 'function') {
-      (part as Message).close();
-    }
-  }
-}
+export { closeMessages } from '../backend/runtime-message';
 
 function encodePayload(
   value: unknown,
@@ -584,7 +580,8 @@ function encodeChannelHeader(
   flowId: string | undefined,
   flowOrigin: ZLinkFlowOrigin | undefined,
   codecs?: ZLinkChannelEnvelopeCodecRegistry
-): Buffer {
+): BindingMessage | Buffer {
+  let prepared: PreparedChannelHeader | undefined;
   if (
     codecs !== undefined &&
     metadata === EMPTY_APPLICATION_METADATA &&
@@ -612,7 +609,7 @@ function encodeChannelHeader(
         errorCode === undefined &&
         errorMessage === undefined))
   ) {
-    return preparedChannelHeader(
+    prepared = preparedChannelHeader(
       codecs,
       kind,
       channelName,
@@ -622,49 +619,66 @@ function encodeChannelHeader(
       deadline,
       errorCode,
       errorMessage,
-      flowId,
       flowOrigin
     );
   }
-  // The wire has a fixed field order. Measure escaped UTF-8 first, then write
-  // each field once into the only header Buffer: no header object, whole JSON
-  // string, or post-encode byte copy exists on the outbound path.
-  const measure = new ChannelHeaderWriter();
-  writeChannelHeader(
-    measure,
-    kind,
-    channelName,
-    messageName,
-    contentType,
-    correlationId,
-    deadline,
-    topic,
-    errorCode,
-    errorMessage,
-    source,
-    metadata,
-    flowId,
-    flowOrigin
-  );
-  const result = Buffer.alloc(measure.byteLength);
-  const writer = new ChannelHeaderWriter(result);
-  writeChannelHeader(
-    writer,
-    kind,
-    channelName,
-    messageName,
-    contentType,
-    correlationId,
-    deadline,
-    topic,
-    errorCode,
-    errorMessage,
-    source,
-    metadata,
-    flowId,
-    flowOrigin
-  );
-  return result;
+  if (prepared !== undefined && correlationId === null && flowId === undefined) {
+    return prepared.bytes;
+  }
+  // The full writer measures escaped UTF-8; a prepared template already has
+  // the exact size. Both write into the binding's final native storage.
+  let length = prepared?.bytes.byteLength;
+  if (length === undefined) {
+    const measure = new ChannelHeaderWriter();
+    writeChannelHeader(
+      measure,
+      kind,
+      channelName,
+      messageName,
+      contentType,
+      correlationId,
+      deadline,
+      topic,
+      errorCode,
+      errorMessage,
+      source,
+      metadata,
+      flowId,
+      flowOrigin
+    );
+    length = measure.byteLength;
+  }
+  const frame = ServiceWireOwnedFrame.allocate(length);
+  try {
+    const bytes = frame.data();
+    if (prepared === undefined) {
+      writeChannelHeader(
+        new ChannelHeaderWriter(bytes),
+        kind,
+        channelName,
+        messageName,
+        contentType,
+        correlationId,
+        deadline,
+        topic,
+        errorCode,
+        errorMessage,
+        source,
+        metadata,
+        flowId,
+        flowOrigin
+      );
+    } else {
+      bytes.set(prepared.bytes);
+      if (correlationId !== null) bytes.write(correlationId, prepared.correlationOffset, 'ascii');
+      if (deadline !== null) bytes.write(deadline, prepared.deadlineOffset, 'ascii');
+      if (flowId !== undefined) bytes.write(flowId, prepared.flowOffset, 'ascii');
+    }
+    return frame.takeMessage();
+  } catch (error) {
+    frame.close();
+    throw error;
+  }
 }
 
 function preparedChannelHeader(
@@ -677,9 +691,8 @@ function preparedChannelHeader(
   deadline: string | null,
   errorCode: string | null | undefined,
   errorMessage: string | null | undefined,
-  flowId: string | undefined,
   flowOrigin: ZLinkFlowOrigin | undefined
-): Buffer {
+): PreparedChannelHeader {
   let channels = preparedChannelHeaders.get(codecs.serializers);
   if (channels === undefined)
     preparedChannelHeaders.set(codecs.serializers, (channels = new Map()));
@@ -693,7 +706,7 @@ function preparedChannelHeader(
   if (flows === undefined) kinds.set(kind, (flows = new Map()));
   let prepared = flows.get(flowOrigin);
   if (prepared === undefined) {
-    const bytes = encodeChannelHeader(
+    const template = encodeChannelHeader(
       kind,
       channelName,
       messageName,
@@ -707,7 +720,11 @@ function preparedChannelHeader(
       EMPTY_APPLICATION_METADATA,
       flowOrigin === undefined ? undefined : PREPARED_CHANNEL_FLOW,
       flowOrigin
-    );
+    ) as BindingMessage;
+    // No codecs were passed, so the full writer returned its native Message.
+    // Its data view retains the storage after the temporary handle closes.
+    const bytes = template.data();
+    template.close();
     prepared = {
       bytes,
       correlationOffset:
@@ -717,13 +734,7 @@ function preparedChannelHeader(
     };
     flows.set(flowOrigin, prepared);
   }
-  if (correlationId === null && flowId === undefined) return prepared.bytes;
-  const bytes = Buffer.allocUnsafe(prepared.bytes.byteLength);
-  prepared.bytes.copy(bytes);
-  if (correlationId !== null) bytes.write(correlationId, prepared.correlationOffset, 'ascii');
-  if (deadline !== null) bytes.write(deadline, prepared.deadlineOffset, 'ascii');
-  if (flowId !== undefined) bytes.write(flowId, prepared.flowOffset, 'ascii');
-  return bytes;
+  return prepared;
 }
 
 function writeChannelHeader(

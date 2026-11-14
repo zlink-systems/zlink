@@ -3,14 +3,16 @@ const assert = require('node:assert/strict');
 const {
   encodeChannelEnvelopePartsAtDeadline,
   encodeChannelReplyParts,
-  decodeChannelHeader
+  decodeChannelHeader,
+  closeMessages
 } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const { runWithFlow } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 
 const id = '00112233445566778899aabbccddeeff';
 const flow = { flowId: '01920000-0000-7abc-8def-0123456789ab', flowOrigin: 'Application' };
 const payload = Buffer.from('payload');
-const decode = (bytes) => decodeChannelHeader([{ data: () => bytes }], true);
+const decode = (part) =>
+  decodeChannelHeader([{ data: () => (Buffer.isBuffer(part) ? part : part.data()) }], true);
 
 function expectedHeader(
   kind,
@@ -44,6 +46,7 @@ function expectedHeader(
 }
 
 function assertHeader(actual, expected) {
+  actual = Buffer.isBuffer(actual) ? actual : actual.data();
   assert.deepEqual(actual, expected);
   const value = JSON.parse(expected);
   assert.deepEqual(decode(actual), {
@@ -67,7 +70,7 @@ test('request, reply and command headers preserve literal field order and escape
       ['bench', 'Packet'],
       ['quote"slash\\line\n한글😀', 'control\t\u0001']
     ]) {
-      for (const correlation of [id, 'x'.repeat(64), '\0"\\\n'.repeat(16)]) {
+      for (const correlation of ['x', id, 'x'.repeat(64), '\0"\\\n'.repeat(16)]) {
         for (const withFlow of [false, true]) {
           for (const metadata of [new Map(), new Map([['tenant"\\', 'north\n한글😀']])]) {
             for (const timestamp of [undefined, deadline]) {
@@ -105,7 +108,9 @@ test('request, reply and command headers preserve literal field order and escape
                     expectedHeader(2, ...names, correlation, null, {}, withFlow)
                   );
                   assert.strictEqual(reply[1], payload);
+                  closeMessages(reply);
                 }
+                closeMessages(encoded);
               }
             }
           }
@@ -143,6 +148,7 @@ test('deadline formatting preserves ISO bytes across calendar and expanded-year 
         parts[0],
         expectedHeader(1, 'bench', 'Packet', id, new Date(deadline).toISOString(), {}, false)
       );
+      closeMessages(parts);
     }
     for (const deadline of [0, -1, NaN, Infinity, 1.5, 8640000000000001, Number.MAX_SAFE_INTEGER]) {
       assert.throws(
@@ -183,6 +189,7 @@ test('request correlation rejects invalid inputs before encoding while accepting
       parts[0],
       expectedHeader(1, 'bench', 'Packet', correlation, '2033-05-18T03:33:20.000Z', {}, false)
     );
+    closeMessages(parts);
   }
   for (const correlation of ['', 'x'.repeat(65), 'é', '\ud800', '😀']) {
     assert.throws(() =>

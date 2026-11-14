@@ -1,4 +1,3 @@
-import { ServiceWireOwnedFrame } from '../../foundation/service-wire-m6a-codec';
 import { RequestRuntime } from '../../foundation/request-runtime';
 import type { OperationHandle } from '../../foundation/operation-registry';
 import { remainingRequestTimeout } from '../../messaging/request-deadline';
@@ -32,7 +31,7 @@ import {
 import { disconnectSocketPeer, isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
 import { SubmitResult } from '../runtime-values';
 import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
-import { ZLinkBufferMessage } from '../runtime-message';
+import { ZLinkBufferMessage, submitNativeParts } from '../runtime-message';
 import type {
   ZLinkRawBindingPort,
   ZLinkRawOutboundPart,
@@ -514,33 +513,6 @@ class NodeRawMonitorPort implements ZLinkRawMonitorPort {
     this.monitor.close();
     this.closed = true;
     this.release();
-  }
-}
-
-/** The binding consumes native Messages; failed synchronous submissions keep caller ownership. */
-function submitNativeParts<T>(
-  parts: readonly ZLinkRawOutboundPart[],
-  submit: (parts: readonly MessageLike[]) => T
-): T {
-  let nativeParts: MessageLike[] | undefined;
-  try {
-    for (let index = 0; index < parts.length; index++) {
-      const part = parts[index]!;
-      if (part instanceof ServiceWireOwnedFrame) {
-        nativeParts ??= parts.slice(0, index) as MessageLike[];
-        nativeParts.push(part.takeMessage());
-      } else {
-        nativeParts?.push(part);
-      }
-    }
-    return submit(nativeParts ?? (parts as readonly MessageLike[]));
-  } catch (error) {
-    if (nativeParts !== undefined) {
-      for (const part of nativeParts) {
-        if (part instanceof Message) part.close();
-      }
-    }
-    throw error;
   }
 }
 

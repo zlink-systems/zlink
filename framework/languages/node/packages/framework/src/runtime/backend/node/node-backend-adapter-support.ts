@@ -1,4 +1,5 @@
 import { constants as osConstants } from 'node:os';
+import { submitNativeParts } from '../runtime-message';
 import type { PendingOperation } from '../../foundation/operation-registry';
 import { remainingRequestTimeout } from '../../messaging/request-deadline';
 import {
@@ -107,13 +108,16 @@ export function submitBindingPublish(
 
 export function submitBindingReply(operation: ZLinkBindingReplyOperation, payload: unknown): void {
   try {
-    let current: ZLinkBindingReplySubmitOperation | undefined;
     const parts = Array.isArray(payload) ? payload : [payload];
-    for (const part of parts.length === 0 ? [Buffer.alloc(0)] : parts) {
-      const nativePart = toNativeMessageLike(part);
-      current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
-    }
-    current!.submit();
+    submitNativeParts(parts, (nativeParts) => {
+      let current: ZLinkBindingReplySubmitOperation | undefined;
+      for (const part of nativeParts.length === 0 ? [Buffer.alloc(0)] : nativeParts) {
+        const nativePart = toNativeMessageLike(part);
+        current =
+          current === undefined ? operation.message(nativePart) : current.message(nativePart);
+      }
+      current!.submit();
+    });
   } catch (error) {
     throw translateBindingResultError(error);
   }
@@ -194,23 +198,23 @@ export function submitBindingRequest(
   receiver: import('../../foundation/operation-registry').OperationObserver<unknown, unknown>
 ): void {
   try {
-    let current: ZLinkBindingRequestSubmitOperation | undefined;
-    if (Array.isArray(payload)) {
-      for (const part of payload) {
+    const parts = Array.isArray(payload) ? payload : [payload];
+    const submission = submitNativeParts(parts, (nativeParts) => {
+      let current: ZLinkBindingRequestSubmitOperation | undefined;
+      for (const part of nativeParts) {
         const nativePart = toNativeMessageLike(part);
         current =
           current === undefined ? operation.message(nativePart) : current.message(nativePart);
       }
-    } else {
-      current = operation.message(toNativeMessageLike(payload));
-    }
-    current ??= operation.message(Buffer.alloc(0));
-    if (timeoutMs !== undefined) {
-      current = current.timeout(
-        Math.min(timeoutMs, remainingRequestTimeout('Request', pending.deadlineMs) ?? timeoutMs)
-      );
-    }
-    bindingRequestReply(current.submit(), receiver, pending, recordReceived, onAdmitted);
+      current ??= operation.message(Buffer.alloc(0));
+      if (timeoutMs !== undefined) {
+        current = current.timeout(
+          Math.min(timeoutMs, remainingRequestTimeout('Request', pending.deadlineMs) ?? timeoutMs)
+        );
+      }
+      return current.submit();
+    });
+    bindingRequestReply(submission, receiver, pending, recordReceived, onAdmitted);
   } catch (error) {
     receiver.operationFailed(pending.id, translateBindingResultError(error), undefined);
   }

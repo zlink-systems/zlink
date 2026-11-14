@@ -2977,7 +2977,12 @@ function borrowMultipartPart(part: Buffer): Buffer {
 
 function messagePayloadView(value: MessageLike): Uint8Array | string {
   if (typeof value === 'object' && 'data' in value) {
-    return value.data();
+    try {
+      return value.data();
+    } finally {
+      // Multipart encoding retains this view until the final frame is written.
+      if (value instanceof Message) value.close();
+    }
   }
   return value;
 }

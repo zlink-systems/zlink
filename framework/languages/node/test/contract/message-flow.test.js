@@ -80,6 +80,11 @@ function makeTracer(diagnosticsOptions) {
 test.beforeEach(async () => observation.reset());
 test.after(() => observation.close());
 
+
+function channelPartBytes(part) {
+  return typeof part === 'string' ? Buffer.from(part) : Buffer.isBuffer(part) ? part : part.data();
+}
+
 test('message-flow async and sync controls complete before observation', async () => {
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
@@ -1140,7 +1145,7 @@ test('MFLOW-EXT channel wire and outbound trace use the same created flow', asyn
           parts = channelEnvelope.encodeChannelEnvelopeParts(1, 'api', 'EchoRequest', {
             value: 'ping'
           });
-          header = JSON.parse(Buffer.from(parts[0]).toString());
+          header = JSON.parse(channelPartBytes(parts[0]).toString());
           const { tracer } = makeTracer(diagnostics('normal'));
           tracer.trace(receivedEvent());
         });
@@ -1177,7 +1182,7 @@ test('MFLOW-EXT Off host does not create channel or stream flow fields', async (
         false
       );
       try {
-        const channelHeader = JSON.parse(Buffer.from(channelParts[0]).toString());
+        const channelHeader = JSON.parse(channelPartBytes(channelParts[0]).toString());
         assert.equal(channelHeader.flowId, undefined);
         assert.equal(channelHeader.flowOrigin, undefined);
 
@@ -1233,7 +1238,7 @@ test('MFLOW-EXT Off host suppresses an inbound ambient flow on outbound wire', (
       false
     );
     try {
-      const header = JSON.parse(Buffer.from(parts[0]).toString());
+      const header = JSON.parse(channelPartBytes(parts[0]).toString());
       assert.equal(header.flowId, undefined);
       assert.equal(header.flowOrigin, undefined);
     } finally {
@@ -1249,13 +1254,13 @@ test('MFLOW-EXT spec 27 \u00a74 Off decode neither validates nor keeps inbound c
         value: 'ping'
       });
       try {
-        const onHeader = JSON.parse(Buffer.from(parts[0]).toString());
+        const onHeader = JSON.parse(channelPartBytes(parts[0]).toString());
         assert.equal(typeof onHeader.flowId, 'string');
 
         // Off strips the flow pair from the decoded header, so replies and
         // forwarded messages built from it carry no flow fields.
         const offEnvelope = channelEnvelope.decodeChannelEnvelope(
-          [{ data: () => Buffer.from(parts[0]) }, { data: () => Buffer.from(parts[1]) }],
+          [{ data: () => channelPartBytes(parts[0]) }, { data: () => channelPartBytes(parts[1]) }],
           undefined,
           false
         );
@@ -1266,7 +1271,7 @@ test('MFLOW-EXT spec 27 \u00a74 Off decode neither validates nor keeps inbound c
         const replyParts = channelEnvelope.encodeChannelReplyParts(offEnvelope.header, {
           ok: true
         });
-        const replyHeader = JSON.parse(Buffer.from(replyParts[0]).toString());
+        const replyHeader = JSON.parse(channelPartBytes(replyParts[0]).toString());
         assert.equal(replyHeader.flowId, undefined);
         assert.equal(replyHeader.flowOrigin, undefined);
         assert.equal(replyHeader.correlationId, onHeader.correlationId);
@@ -1274,11 +1279,11 @@ test('MFLOW-EXT spec 27 \u00a74 Off decode neither validates nor keeps inbound c
 
         // Off skips flow validation entirely: a malformed flowId no longer
         // rejects the envelope (spec 27 \u00a74), while an enabled decode still does.
-        const malformed = JSON.parse(Buffer.from(parts[0]).toString());
+        const malformed = JSON.parse(channelPartBytes(parts[0]).toString());
         malformed.flowId = 'not-a-uuid';
         const malformedParts = [
           { data: () => Buffer.from(JSON.stringify(malformed)) },
-          { data: () => Buffer.from(parts[1]) }
+          { data: () => channelPartBytes(parts[1]) }
         ];
         const decodedOff = channelEnvelope.decodeChannelEnvelope(malformedParts, undefined, false);
         assert.equal(decodedOff.header.flowId, undefined);
@@ -1692,10 +1697,11 @@ test('MFLOW-MAL malformed request envelope replies protocol error and records in
   );
 
   assert.equal(replies.length >= 1, true);
-  const replyHeader = JSON.parse(Buffer.from(replies[0]).toString());
+  const replyHeader = JSON.parse(channelPartBytes(replies[0]).toString());
   assert.equal(replyHeader.kind, 5);
   assert.equal(replyHeader.errorCode, 'protocol_error'); // ProtocolError
   assert.equal(replyHeader.correlationId, 'corr-malformed');
+  channelEnvelope.closeMessages(replies);
 
   await observeTelemetry();
   assert.equal(traceRecords.length, 1);

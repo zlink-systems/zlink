@@ -3694,7 +3694,13 @@ for (const destinationMode of [false, true]) {
         correlationId: '0123456789abcdef0123456789abcdef'
       },
       { answer: 42 }
-    ).map((part) => (typeof part === 'string' ? Buffer.from(part) : part));
+    ).map((part) => {
+      if (typeof part === 'string') return Buffer.from(part);
+      if (Buffer.isBuffer(part)) return part;
+      const bytes = part.data();
+      part.close();
+      return bytes;
+    });
     const header = JSON.parse(parts[0].toString());
     header.contentType = CONTENT_TYPE;
     parts[0] = Buffer.from(JSON.stringify(header));

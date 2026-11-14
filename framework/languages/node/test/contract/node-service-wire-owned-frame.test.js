@@ -184,9 +184,19 @@ for (const observed of [false, true]) {
 test('production typed request/reply uses native frames in both directions', async t => {
   const pair = await frameworkPair();
   try {
+    pair.validate(await pair.submit().reply);
     const allocate = t.mock.method(zlink.Message, 'allocate');
+    const transferred = [];
+    const takeMessage = wire.ServiceWireOwnedFrame.prototype.takeMessage;
+    t.mock.method(wire.ServiceWireOwnedFrame.prototype, 'takeMessage', function () {
+      const message = takeMessage.call(this);
+      transferred.push(message.data()[0]);
+      return message;
+    });
     for (let i = 0; i < 3; i++) pair.validate(await pair.submit().reply);
-    assert.equal(allocate.mock.callCount(), 6, 'one final service frame per request and reply');
+    assert.equal(transferred.filter(first => first === 1).length, 6, 'one final service frame per request and reply');
+    assert.equal(transferred.filter(first => first === 0x7b).length, 6, 'one final JSON header per request and reply');
+    assert.equal(allocate.mock.callCount(), 12, 'each transferred frame has one native allocation');
   } finally { await pair.close(); }
 });
 

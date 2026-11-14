@@ -4,7 +4,8 @@ const {
   decodeChannelHeader,
   encodeChannelEnvelopeParts,
   encodeChannelReplyParts,
-  isValidChannelCorrelationId
+  isValidChannelCorrelationId,
+  closeMessages
 } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   ZLinkBufferMessage
@@ -101,7 +102,13 @@ test('prepared command, request, and reply headers keep their own deadline and f
   const codecs = { serializers: new Map() };
   const payload = Buffer.from('payload');
   const ids = new Set();
-  const headerOf = (parts, flow = false) => decode(parts[0], flow);
+  const headerOf = (parts, flow = false) => {
+    try {
+      return decode(Buffer.isBuffer(parts[0]) ? parts[0] : parts[0].data(), flow);
+    } finally {
+      closeMessages(parts);
+    }
+  };
   for (let index = 0; index < 12; index += 1) {
     const requestParts = encodeChannelEnvelopeParts(
       1,

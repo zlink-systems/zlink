@@ -23,7 +23,13 @@ test('cold and warm prepared headers match the full writer for every flow origin
     { flowId: '00000000-0000-7000-8000-000000000003', flowOrigin: 'Application' },
     { flowId: '00000000-0000-7000-8000-000000000004', flowOrigin: 'Lifecycle' }
   ];
-  const bytes = (parts) => parts.map((part) => Buffer.from(part));
+  const bytes = (parts) => {
+    try {
+      return parts.map((part) => Buffer.from(Buffer.isBuffer(part) ? part : part.data()));
+    } finally {
+      codec.closeMessages(parts);
+    }
+  };
   const withFlow = (flow, callback) =>
     flow === undefined ? callback() : flowContext.runWithFlow(flow, callback);
   const encode = (kind, flow, codecs, deadlineUnixMs, requestCorrelationId) =>
@@ -79,8 +85,11 @@ test('cold and warm prepared headers match the full writer for every flow origin
 
     const requestParts = encode(1, flow, codecs, deadline, correlationId);
     const request = codec.decodeChannelHeader(
-      requestParts.map((part) => ZLinkBufferMessage.fromOwned(part))
+      requestParts.map((part) =>
+        Buffer.isBuffer(part) ? ZLinkBufferMessage.fromOwned(part) : part
+      )
     );
+    codec.closeMessages(requestParts);
     const fullWriterReply = bytes(codec.encodeChannelReplyParts(request, payload));
     const coldReply = bytes(codec.encodeChannelReplyParts(request, payload, codecs));
     const warmReply = bytes(codec.encodeChannelReplyParts(request, payload, codecs));

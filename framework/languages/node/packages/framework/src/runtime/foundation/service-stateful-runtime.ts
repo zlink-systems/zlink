@@ -4,7 +4,7 @@ import type { RequestRuntime } from './request-runtime';
 import { inspectRuntime } from '../internal-observation';
 import { awaitWithAbort, isAbortError } from '../abort';
 import { decodeChannelHeader } from '../channels/channel-envelope';
-import { ZLinkBufferMessage } from '../backend/runtime-message';
+import { ZLinkBufferMessage, closeMessages } from '../backend/runtime-message';
 import {
   dispatchErrorDetails,
   dispatchReasonFromError
@@ -129,7 +129,6 @@ import {
   decodeApplicationPayload,
   decodeApplicationPayloadView,
   decodeMultipartApplicationParts,
-  ServiceWireOwnedFrame,
   encodeApplicationPayload,
   encodeOwnedApplicationPayload,
   type ServiceApplicationPayload
@@ -4826,13 +4825,11 @@ export class ServiceStatefulRuntime {
         try {
           resolve(
             parts.map((part) =>
-              Buffer.from(part instanceof ServiceWireOwnedFrame ? part.data() : part)
+              Buffer.from(typeof part === 'object' && 'data' in part ? part.data() : part)
             )
           );
         } finally {
-          for (const part of parts) {
-            if (part instanceof ServiceWireOwnedFrame) part.close();
-          }
+          closeMessages(parts);
         }
       };
       void (async () => {

@@ -1,4 +1,6 @@
 import type { Message } from '../../contracts/Common/Message';
+import type { Message as BindingMessage } from '@zlink-systems/zlink';
+import { ServiceWireOwnedFrame } from '../foundation/service-wire-m6a-codec';
 
 export class ZLinkBufferMessage implements Message {
   private readonly bytes: Buffer;
@@ -56,4 +58,44 @@ function isMessage(value: unknown): value is Message {
     value !== null &&
     typeof (value as { data?: unknown }).data === 'function'
   );
+}
+
+/** Release parts still owned by Framework after encoding or synchronous submit failure. */
+export function closeMessages(parts: readonly unknown[]): void {
+  for (const part of parts) {
+    if (
+      typeof part === 'object' &&
+      part !== null &&
+      'close' in part &&
+      typeof part.close === 'function'
+    ) {
+      part.close();
+    }
+  }
+}
+
+type NativePart<T> = T extends ServiceWireOwnedFrame ? BindingMessage : T;
+
+/** The binding consumes native Messages; failed synchronous submissions keep caller ownership. */
+export function submitNativeParts<TPart, TResult>(
+  parts: readonly TPart[],
+  submit: (parts: readonly NativePart<TPart>[]) => TResult
+): TResult {
+  let nativeParts: unknown[] | undefined;
+  try {
+    for (let index = 0; index < parts.length; index++) {
+      const part = parts[index]!;
+      if (part instanceof ServiceWireOwnedFrame) {
+        nativeParts ??= parts.slice(0, index);
+        nativeParts.push(part.takeMessage());
+      } else {
+        nativeParts?.push(part);
+      }
+    }
+    // Every owned frame above was replaced by its binding Message.
+    return submit((nativeParts ?? parts) as readonly NativePart<TPart>[]);
+  } catch (error) {
+    closeMessages(nativeParts ?? parts);
+    throw error;
+  }
 }

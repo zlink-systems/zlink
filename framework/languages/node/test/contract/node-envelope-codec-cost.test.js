@@ -83,7 +83,9 @@ test('channel request and reply stay within the final parts allocation budget', 
       parts.map((part) =>
         typeof part === 'string'
           ? ZLinkBufferMessage.from(part)
-          : ZLinkBufferMessage.fromOwned(part)
+          : Buffer.isBuffer(part)
+            ? ZLinkBufferMessage.fromOwned(part)
+            : part
       ),
       false
     );
@@ -92,12 +94,19 @@ test('channel request and reply stay within the final parts allocation budget', 
       reply.map((part) =>
         typeof part === 'string'
           ? ZLinkBufferMessage.from(part)
-          : ZLinkBufferMessage.fromOwned(part)
+          : Buffer.isBuffer(part)
+            ? ZLinkBufferMessage.fromOwned(part)
+            : part
       ),
       undefined,
       false
     );
-    return codec.decodeChannelPayload(response);
+    try {
+      return codec.decodeChannelPayload(response);
+    } finally {
+      codec.closeMessages(parts);
+      codec.closeMessages(reply);
+    }
   };
   for (let index = 0; index < 1000; index++) roundtrip();
   const allocations = await trackedCodecAllocations(
@@ -491,8 +500,8 @@ test('request header encoding avoids per-call Date and correlation string interm
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
   const codecs = { serializers: new Map() };
   const payload = Buffer.from('payload');
-  const encode = () =>
-    codec.encodeChannelEnvelopePartsAtDeadline(
+  const encode = () => {
+    const parts = codec.encodeChannelEnvelopePartsAtDeadline(
       1,
       'allocation',
       'Packet',
@@ -503,6 +512,9 @@ test('request header encoding avoids per-call Date and correlation string interm
       undefined,
       false
     );
+    codec.closeMessages(parts);
+    return parts;
+  };
   for (let index = 0; index < 1000; index++) encode();
   const allocations = await trackedCodecAllocations(
     '/runtime/channels/channel-envelope.js',
@@ -512,11 +524,25 @@ test('request header encoding avoids per-call Date and correlation string interm
   // string are the four module-owned allocations in interpreter mode. A new
   // Date or string concatenation per request exceeds this budget.
   assertAllocationBudget(t, allocations, 4.25, 152);
-  const parts = encode();
+  const parts = codec.encodeChannelEnvelopePartsAtDeadline(
+    1,
+    'allocation',
+    'Packet',
+    payload,
+    2000000000000,
+    undefined,
+    codecs,
+    undefined,
+    false
+  );
   assert.equal(parts[1], payload);
-  const header = codec.decodeChannelHeader([ZLinkBufferMessage.fromOwned(parts[0])], false);
+  const header = codec.decodeChannelHeader(
+    [Buffer.isBuffer(parts[0]) ? ZLinkBufferMessage.fromOwned(parts[0]) : parts[0]],
+    false
+  );
   assert.match(header.correlationId, /^[0-9a-f]{32}$/);
   assert.equal(header.deadline, '2033-05-18T03:33:20.000Z');
+  codec.closeMessages(parts);
 });
 
 test('correlation IDs use the fixed zero prefix without constructing padStart intermediates', (t) => {

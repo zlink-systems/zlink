@@ -910,7 +910,7 @@ test('channel Error reply encodes every framework error kind as its snake_case w
         new framework.ZLinkFrameworkException(kind, `${kindName} failed`)
       );
       try {
-        const header = JSON.parse(Buffer.from(replyParts[0]).toString('utf8'));
+        const header = JSON.parse((Buffer.isBuffer(replyParts[0]) ? replyParts[0] : replyParts[0].data()).toString('utf8'));
         assert.equal(header.errorCode, ERROR_CODE_WIRE_NAMES[kindName], kindName);
         assert.throws(
           () => envelope.decodeChannelReply(readable(replyParts)),

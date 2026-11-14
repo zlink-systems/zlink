@@ -407,7 +407,11 @@ test('RMETRIC-009 classic fanout drops are excluded from mesh-node drop metrics'
     'events',
     'MissingEvent',
     { value: 'payload' }
-  ).map((part) => ({ data: () => Buffer.from(part) }));
+  ).map((part) => {
+    const bytes = typeof part === 'string' ? Buffer.from(part) : Buffer.isBuffer(part) ? part : part.data();
+    if (typeof part.close === 'function') part.close();
+    return { data: () => bytes };
+  });
 
   await dispatcher.dispatch({ topic: 'known', parts });
 
