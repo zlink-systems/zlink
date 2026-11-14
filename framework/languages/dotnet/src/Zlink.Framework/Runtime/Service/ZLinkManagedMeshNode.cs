@@ -12375,8 +12375,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var created = 0;
         try
         {
-            wire[created++] = Message.From(
-                ZLinkServiceWireCodec.EncodeReply(correlation, (int)result, failureCode)
+            wire[created++] = ZLinkServiceWireCodec.EncodeReplyMessage(
+                correlation,
+                (int)result,
+                failureCode
             );
             if (parts.Count != 0)
                 wire[created++] =
