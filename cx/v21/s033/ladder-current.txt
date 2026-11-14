@@ -1,4 +1,4 @@
 .NET: L3 통과(옛 L1 기준) → L1 permit 교정(dbench2) 뒤 L0→L1·L1→L2·L2→L3 재측정 · d3fix PR 준비 · d2l2·d57 PR 대기
-Node: 현재 L2 · L0→L1 6칸 통과(교정 bench e5e287ac5c) · L1→L2 손실 bp 30.6·27.0 / serial 9.3·10.8% (n2env 진행) · send L2가 L1보다 13~32% 빠른 이상값 → nsend로 bench 차이 추적 · L2→L3 13~44%
-Java: 현재 L2 · L0→L1 통과 · L1→L2 손실 serial 11.1·10.0 / bp 28.4·10.6% · j2rd2(겹친 검증 제거) 순효과 없음(+0.6%)으로 닫음 · L2 차이 ≈ JSON header codec 자체(요청당 ~2.8 µs) → lspec 스펙 후보로 · correlation PR 준비(pre-pr 중)
-C++: 현재 L2 · 교정 bench(cbench2 permit)+#4443: L0→L1 통과 · L1→L2 손실 send1K 9.1 / serial1K 7.1 / bp 15.3·16.9% (send4K·serial4K 통과) → c3prof(남은 L2 비용 profile) · #4443 queue · #4439(#4420) queue
+Node: 현재 L2 · 결정 B(binding bytes 직접·send kind 3, f1e1f87e18) 적용 → binding·L0~L3 재측정 hold2 대기(d1rx 시험 뒤) · nprof 프로파일은 처리량 1/3로 근거 불가 · L2→L3 B2(완성 frame 재복사 삭제) 구현 nframe 진행
+Java: 현재 L2 · L0→L1 통과 · L1→L2 손실 serial 11.1·10.0 / bp 28.4·10.6% · L2 차이 ≈ JSON header codec(요청당 ~2.8 µs) → lspec 스펙 후보 · #4445 correlation queue · binding bench 복사 2회 정정(bdirect) 뒤 binding 재측정
+C++: 현재 L2 · 교정 bench(cbench2 permit)+#4443: L0→L1 통과 · L1→L2 손실 send1K 9.1 / serial1K 7.1 / bp 15.3·16.9% (send4K·serial4K 통과) → c3prof(남은 L2 비용 profile) · #4443 queue · binding bench 임시 버퍼 복사 정정(bdirect) 뒤 binding 재측정 · #4439(#4420) queue
