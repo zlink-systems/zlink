@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using TicTacToe.Shared.Contracts;
 
 namespace TicTacToe.Server.Configuration;

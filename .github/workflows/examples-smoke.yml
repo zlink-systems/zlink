@@ -230,8 +230,22 @@ jobs:
           fi
 
       - uses: actions/setup-dotnet@v5
+        id: dotnet
         with:
           dotnet-version: '8.0.x'
+
+      - name: Select and verify the installed SDK
+        shell: pwsh
+        env:
+          EXPECTED_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+        run: |
+          @{ sdk = @{ version = $env:EXPECTED_DOTNET_SDK; rollForward = 'disable'; allowPrerelease = $false } } |
+            ConvertTo-Json | Set-Content -Encoding utf8 global.json
+          $actual = dotnet --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:EXPECTED_DOTNET_SDK) {
+            throw "Expected SDK $env:EXPECTED_DOTNET_SDK, selected $actual"
+          }
+          Write-Host "Selected .NET SDK $actual"
 
       - uses: actions/setup-python@v6
         with:
@@ -249,10 +263,6 @@ jobs:
         working-directory: examples/zlink-engine-server
         run: bash ../run_readme_step.sh README.ko.md 실행 linux
 
-      - uses: actions/setup-dotnet@v5
-        if: contains(fromJSON(inputs.languages || '[]'), 'godot')
-        with:
-          dotnet-version: '8.0.x'
       - name: Build the Godot validation project
         if: contains(fromJSON(inputs.languages || '[]'), 'godot')
         working-directory: examples/zlink-godot-examples/csharp
@@ -320,8 +330,22 @@ jobs:
           if ($leaked) { throw "ZLINK_* leaked into the environment: $($leaked.Name -join ', ')" }
 
       - uses: actions/setup-dotnet@v5
+        id: dotnet
         with:
           dotnet-version: '8.0.x'
+
+      - name: Select and verify the installed SDK
+        shell: pwsh
+        env:
+          EXPECTED_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+        run: |
+          @{ sdk = @{ version = $env:EXPECTED_DOTNET_SDK; rollForward = 'disable'; allowPrerelease = $false } } |
+            ConvertTo-Json | Set-Content -Encoding utf8 global.json
+          $actual = dotnet --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:EXPECTED_DOTNET_SDK) {
+            throw "Expected SDK $env:EXPECTED_DOTNET_SDK, selected $actual"
+          }
+          Write-Host "Selected .NET SDK $actual"
 
       - uses: actions/setup-python@v6
         with:
@@ -360,9 +384,26 @@ jobs:
             echo "::error::ZLINK_* leaked into the environment"; env | grep '^ZLINK_'; exit 1
           fi
 
+      # The samples target net8.0; install its runtime and build with SDK 11.
       - uses: actions/setup-dotnet@v5
+        id: dotnet
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: |
+            8.0.x
+            11.0.x
+
+      - name: Select and verify the installed SDK
+        shell: pwsh
+        env:
+          EXPECTED_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+        run: |
+          @{ sdk = @{ version = $env:EXPECTED_DOTNET_SDK; rollForward = 'disable'; allowPrerelease = $false } } |
+            ConvertTo-Json | Set-Content -Encoding utf8 global.json
+          $actual = dotnet --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:EXPECTED_DOTNET_SDK) {
+            throw "Expected SDK $env:EXPECTED_DOTNET_SDK, selected $actual"
+          }
+          Write-Host "Selected .NET SDK $actual"
 
       # Quickstart: the page's own §5 command. Build only — the two processes
       # need no Redis, but the tutorial run below already proves the runtime.
@@ -453,9 +494,26 @@ jobs:
           $leaked = Get-ChildItem Env: | Where-Object { $_.Name -like 'ZLINK_*' }
           if ($leaked) { throw "ZLINK_* leaked into the environment: $($leaked.Name -join ', ')" }
 
+      # The samples target net8.0; install its runtime and build with SDK 11.
       - uses: actions/setup-dotnet@v5
+        id: dotnet
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: |
+            8.0.x
+            11.0.x
+
+      - name: Select and verify the installed SDK
+        shell: pwsh
+        env:
+          EXPECTED_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+        run: |
+          @{ sdk = @{ version = $env:EXPECTED_DOTNET_SDK; rollForward = 'disable'; allowPrerelease = $false } } |
+            ConvertTo-Json | Set-Content -Encoding utf8 global.json
+          $actual = dotnet --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:EXPECTED_DOTNET_SDK) {
+            throw "Expected SDK $env:EXPECTED_DOTNET_SDK, selected $actual"
+          }
+          Write-Host "Selected .NET SDK $actual"
 
       # windows-2022 has no python3 on PATH by default; run_readme_step.sh needs it.
       - uses: actions/setup-python@v6
@@ -649,8 +707,22 @@ jobs:
       - name: Unpack the trees
         run: tar -xf examples-trees.tar
       - uses: actions/setup-dotnet@v5
+        id: dotnet
         with:
           dotnet-version: '8.0.x'
+
+      - name: Select and verify the installed SDK
+        shell: pwsh
+        env:
+          EXPECTED_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+        run: |
+          @{ sdk = @{ version = $env:EXPECTED_DOTNET_SDK; rollForward = 'disable'; allowPrerelease = $false } } |
+            ConvertTo-Json | Set-Content -Encoding utf8 global.json
+          $actual = dotnet --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:EXPECTED_DOTNET_SDK) {
+            throw "Expected SDK $env:EXPECTED_DOTNET_SDK, selected $actual"
+          }
+          Write-Host "Selected .NET SDK $actual"
       - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
