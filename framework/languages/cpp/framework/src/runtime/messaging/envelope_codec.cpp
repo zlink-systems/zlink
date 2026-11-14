@@ -711,11 +711,12 @@ template <bool Borrow> class canonical_header_reader_t
   public:
     explicit canonical_header_reader_t (std::string_view bytes) : _remaining (bytes) {}
 
-    bool consume (std::string_view text)
+    template <std::size_t N> bool consume (const char (&text)[N])
     {
-        if (!_remaining.starts_with (text))
+        constexpr std::size_t size = N - 1;
+        if (_remaining.size () < size || std::memcmp (_remaining.data (), text, size) != 0)
             return false;
-        _remaining.remove_prefix (text.size ());
+        _remaining.remove_prefix (size);
         return true;
     }
 
@@ -735,9 +736,16 @@ template <bool Borrow> class canonical_header_reader_t
             constexpr std::uint64_t high_bits = 0x8080808080808080ULL;
             constexpr std::uint64_t ones = 0x0101010101010101ULL;
             constexpr std::uint64_t spaces = 0x2020202020202020ULL;
-            const auto count = std::min (sizeof (std::uint64_t), _remaining.size () - index);
+            const auto remaining = _remaining.size () - index;
             std::uint64_t word = spaces;
-            std::memcpy (&word, _remaining.data () + index, count);
+            std::size_t count;
+            if (remaining >= sizeof (word)) {
+                std::memcpy (&word, _remaining.data () + index, sizeof (word));
+                count = sizeof (word);
+            } else {
+                std::memcpy (&word, _remaining.data () + index, remaining);
+                count = remaining;
+            }
             const auto quotes = word ^ 0x2222222222222222ULL;
             const auto slashes = word ^ 0x5c5c5c5c5c5c5c5cULL;
             const std::uint64_t special = (word & high_bits) | ((word - spaces) & ~word & high_bits)
