@@ -90,12 +90,17 @@ try:
                 if time.monotonic()-start > 29.5: raise RuntimeError('run exceeded 29 seconds')
                 now = time.time()*1000
                 val = request(stats+'/bench/stats')
-                with (out/'stats.jsonl').open('a') as f: f.write(json.dumps({'epochMs':now,'phaseRequested':phase,**val})+'\n')
+                target_val = request(target+'/bench/stats')
+                with (out/'stats.jsonl').open('a') as f: f.write(json.dumps({'epochMs':now,'phaseRequested':phase,'targetStats':target_val,**val})+'\n')
                 if phase == 'warmup' and not cold and now-before >= 2000:
                     (out/'cold-source-stats.json').write_text(json.dumps(val,indent=2))
-                    (out/'cold-target-stats.json').write_text(json.dumps(request(target+'/bench/stats'),indent=2))
-                    phases[0]['coldEndMs']=now
+                    (out/'cold-target-stats.json').write_text(json.dumps(target_val,indent=2))
+                    phases[0]['coldEndMs']=time.time()*1000
                     cold = True
+                if phase == 'active' and now-before >= 5000 and 'steadyEndMs' not in phases[-1]:
+                    (out/'steady-source-stats.json').write_text(json.dumps(val,indent=2))
+                    (out/'steady-target-stats.json').write_text(json.dumps(target_val,indent=2))
+                    phases[-1]['steadyEndMs']=time.time()*1000
                 time.sleep(.08)
             result = future.result()
         (out/(phase+'-trigger.json')).write_text(json.dumps(result,indent=2))

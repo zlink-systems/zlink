@@ -36,3 +36,11 @@
 | field/metadata/flow 의미 검증 | 1 | 1 |
 | output buffer 소유 | 1 | 1 |
 | completion/correlation 결정 | binding 1 | binding 1 |
+
+## Native writer 추가 진단과 수정
+
+- Heap header → Message.from 경로는 Message.allocate baseline보다 **416 B/header** 추가 할당한다(`raw/tests-writer-before.log`, `raw/writer-before.xml`). .NET EnvelopeCodec:1195–1206은 최종 Message span에 직접 쓴다. Java binding Message:244/578의 allocate/mutableDataBuffer 기존 API를 사용하며 binding 변경은 필요 없다.
+- writer는 하나이며 byte[] API와 native ByteBuffer 목적지만 달라진다. PreparedNames는 값뿐 아니라 field prefix까지 같은 encoding owner에서 준비한다. HeaderField 표 하나에서 writer token과 reader field 이름을 제공한다. JSON factory·일반 Jackson parser는 삭제하고 기존 StreamReadConstraints만 유지한다.
+- correlation formatting 기존 184 B/header 실패를 보존했다(`raw/tests-correlation-before.log`, `raw/correlation-before.xml`). UUID 값·32자리 소문자 bytes를 유지하며 HexFormat.formatHex에 16-byte 입력을 한 번 전달한다(104 B/header). 판단 소유자인 internal/service/ZLinkServiceOperationIds만 변경한다.
+- 첫 native writer의 focused 검사 4,156개 중 cached command의 service frame copy 검사 1개 실패. Cached header까지 native materialization한 것이 원인이다. 기준을 바꾸지 않고, 기존 cache hit bytes는 그대로 유지하고 uncached header만 final Message를 할당하도록 encodeHeaderPart에서 한 번 결정한다. `raw/tests-focused-native-final.log` 보존.
+- MultipartView는 이미 사용하던 byte[]/Message slot 표현을 그대로 보유하며 native header의 소유권만 같은 owner로 이전한다. 기존 byte[] entry는 같은 소유 함수로 모아 constructor/cleanup 중복을 줄인다.

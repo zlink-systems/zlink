@@ -25,9 +25,11 @@ for label in labels:
  for phase in ['warmup','active']:
   s=json.loads((p/(phase+'-source-stats.json')).read_text());t=json.loads((p/(phase+'-target-stats.json')).read_text())
   assert s['errors']==t['errors']==0
-  assert s['submitted']==s['completed']==t['received']==t['completed']
+  received=t['allPhaseMessages'] if phase=='warmup' else t['received']
+  assert s['submitted']==s['completed']==received
+  if phase=='active': assert t['completed']==received
   assert s['inFlight']==t['inFlight']==0
-  phases[phase]=dict(submitted=s['submitted'],completed=s['completed'],received=t['received'],errors=0)
+  phases[phase]=dict(submitted=s['submitted'],completed=s['completed'],received=received,targetCounter='allPhaseMessages' if phase=='warmup' else 'received',errors=0)
  life=json.loads((p/'lifecycle.json').read_text());assert life['elapsed']<20 and all(v['returncode']==0 for v in life['processes'])
  for point in ['start','active']:
   snap=json.loads((p/(point+'.json')).read_text())

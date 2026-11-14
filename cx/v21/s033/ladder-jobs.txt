@@ -1,5 +1,4 @@
 Ln3pr2|#4415 A/B 재시도: Node L2·L3 main 대 PR 6칸(blocking lock)|ln3pr2
-N2hdr|Node L2 header 복사 제거(native frame 직접 쓰기, .NET 대조)|n2hdr
 C4420|#4420 C++ run 실패 뒤 shutdown 수정(sol)|c4420
 Lfx-cpp|C++ L1→L2 측정(PM L2+c4json)|lfx-cpp
 J2l2|Java L2 header 손실 원인·수정(.NET 대조, sol)|j2l2

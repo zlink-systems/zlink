@@ -5,12 +5,12 @@ base=job/'raw'/sys.argv[1]
 phases=json.loads((base/'phases.json').read_text())
 warm,active=phases
 result={}
-for window,begin,end in [('cold',warm['epochMs'],warm['coldEndMs']),('steady',active['epochMs'],active['epochMs']+5000)]:
+for window,begin,end in [('cold',warm['epochMs'],warm['coldEndMs']),('steady',active['epochMs'],active.get('steadyEndMs',active['epochMs']+5000))]:
  result[window]={}
  for role in ['source','target']:
-  counts=json.loads((base/('cold' if window=='cold' else 'active')/Path('unused')).read_text()) if False else json.loads((base/f'{"cold" if window=="cold" else "active"}-{role}-stats.json').read_text())
+  counts=json.loads((base/f'{window if window=="cold" or "steadyEndMs" in active else "active"}-{role}-stats.json').read_text())
   n=counts['submitted'] if role=='source' else counts['allPhaseMessages']
-  r={'messages':n,'completed':counts.get('completed'), 'errors':counts['errors']}
+  r={'messages':n,'submitted':counts['submitted'],'completed':counts.get('completed'), 'errors':counts['errors'],'windowMs':end-begin}
   result[window][role]=r
   for kind in ['cpu','alloc']:
    dest=base/f'{role}-{window}-{kind}.collapsed'
