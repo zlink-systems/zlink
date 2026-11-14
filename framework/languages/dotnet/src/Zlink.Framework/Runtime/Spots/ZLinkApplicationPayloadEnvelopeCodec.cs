@@ -338,7 +338,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         var payloadOffset = WriteMultipartEnvelopeFields(
             result,
             offset,
-            checked((uint)GetMultipartPayloadLength(parts))
+            checked((uint)(encodedLength - GetEnvelopeLength(0)))
         );
         WriteMultipartPayload(result, payloadOffset, parts);
     }
@@ -355,7 +355,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         var payloadOffset = WriteMultipartEnvelopeFields(
             result,
             offset,
-            checked((uint)GetMultipartPayloadLength(parts))
+            checked((uint)(encodedLength - GetEnvelopeLength(0)))
         );
         WriteMultipartPayload(result, payloadOffset, parts);
     }
