@@ -904,9 +904,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 rejection);
                                                     }
                                                     return existing == null
-                                                                    || current.objectGeneration()
-                                                                            > existing.context
-                                                                                    .objectGeneration()
                                                             ? null
                                                             : existing.admitRoute(received);
                                                 }
