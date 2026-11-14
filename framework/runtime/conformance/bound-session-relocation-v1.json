@@ -1,6 +1,10 @@
 {
   "fixture": "zlink.framework.bound-session-relocation",
   "version": 1,
+  "sameNodeDuplicateBind": [
+    { "name": "accept", "rejectionMessage": "", "callbackCount": 1, "accepted": true, "replacementCount": 1 },
+    { "name": "reject", "rejectionMessage": "already signed in", "callbackCount": 1, "accepted": false, "replacementCount": 0 }
+  ],
   "behaviorFixture": "framework/runtime/conformance/relocation-behavior-v1.json",
   "wireGolden": "framework/runtime/protocol/golden/session-relocation-barrier-v1.json",
   "behaviorBranch": "boundSessionRoute",

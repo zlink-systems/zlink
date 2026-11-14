@@ -1316,6 +1316,10 @@ assert.deepEqual(relocation.adapterContract.observationFields, [
 
 assert.equal(boundSessionRelocation.fixture, 'zlink.framework.bound-session-relocation');
 assert.equal(boundSessionRelocation.version, 1);
+assert.deepEqual(boundSessionRelocation.sameNodeDuplicateBind, [
+  { name: 'accept', rejectionMessage: '', callbackCount: 1, accepted: true, replacementCount: 1 },
+  { name: 'reject', rejectionMessage: 'already signed in', callbackCount: 1, accepted: false, replacementCount: 0 }
+]);
 assert.equal(
   boundSessionRelocation.behaviorFixture,
   'framework/runtime/conformance/relocation-behavior-v1.json'
