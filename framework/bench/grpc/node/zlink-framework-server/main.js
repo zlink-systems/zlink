@@ -13,7 +13,7 @@
 const { argValue, argInt } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
 const rawWire = require('../shared/raw-wire');
-const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = rawWire;
+const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadBytes } = rawWire;
 const zlink = require('@zlink-systems/zlink');
 const { EchoHandler, CommandHandler, BENCH_SERVER_METRICS, toBuffer } = require('./bench-handlers');
 const { createReceivePermitPump, RECEIVE_RECORD_BUDGET } = require('./receive-permit-pump');
@@ -124,7 +124,7 @@ if (l0Server) {
     }
     return l2Envelope || l3ServiceWireEnabled
       ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
-      : [RESPONSE_ENVELOPE, encodeBenchPayloadMessage(payload)];
+      : [RESPONSE_ENVELOPE, encodeBenchPayloadBytes(payload)];
   }
 
   function submitLadderReply(targetReceived, decoded, payload, channelHeader) {
@@ -185,7 +185,7 @@ if (l0Server) {
             const reply = l2Envelope
               ? ladderReplyParts(channelHeader, payload)
               : [frameworkWire ? frameworkResponseHeader(header) : RESPONSE_ENVELOPE,
-                encodeBenchPayloadMessage(payload)];
+                encodeBenchPayloadBytes(payload)];
             received.reply().message(reply[0]).message(reply[1]).submit();
           }
         } else {

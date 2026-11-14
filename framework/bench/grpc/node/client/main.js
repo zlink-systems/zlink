@@ -190,7 +190,7 @@ function createRawTransport(options) {
   let nextServiceCorrelation = 1n;
   const peerId = ladderL0 && !frameworkWire ? rawWire.ROUTING_IDS.rawRequestServer : 'bench-server';
   const commandPeerId = frameworkWire && !ladderL0 ? 'bench-server' : rawWire.ROUTING_IDS.rawCommandServer;
-  const commandEnvelope = frameworkWire ? rawWire.frameworkEnvelope(3) : rawWire.REQUEST_ENVELOPE;
+  const commandEnvelope = frameworkWire ? rawWire.frameworkEnvelope(3) : rawWire.COMMAND_ENVELOPE;
   const requestSocket =
     options.scenario === 'send-saturation'
       ? null
@@ -262,7 +262,7 @@ function createRawTransport(options) {
       : ladderL2 || ladderL3
       ? rawWire.encodeProductionProtobufChannelPayload(1, payload, options.requestTimeoutMs)
       : [frameworkWire ? rawWire.frameworkEnvelope(1) : rawWire.REQUEST_ENVELOPE,
-        rawWire.encodeBenchPayloadMessage(payload)];
+        rawWire.encodeBenchPayloadBytes(payload)];
     const serviceCorrelation = ladderL3Enabled ? nextServiceCorrelation++ : null;
     const serviceRequest = ladderL3Enabled
       ? rawWire.encodeProductionServiceRequest(true, serviceCorrelation, channelParts)
@@ -308,7 +308,7 @@ function createRawTransport(options) {
       ? rawWire.encodeProductionTypedChannelPayload(3, { body: payload })
       : ladderL2 || ladderL3
       ? rawWire.encodeProductionProtobufChannelPayload(3, payload)
-      : [commandEnvelope, rawWire.encodeBenchPayloadMessage(payload)];
+      : [commandEnvelope, rawWire.encodeBenchPayloadBytes(payload)];
     if (ladderL3Enabled) {
       const serviceRequest = rawWire.encodeProductionServiceRequest(false, 0n, channelParts);
       const frame = serviceRequest.frame.takeMessage();

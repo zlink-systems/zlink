@@ -16,17 +16,20 @@ const service = protoLoader.loadSync(path.join(__dirname, '../../proto/bench.pro
 const bodyHex = '4b4e4c5a04030201011d00000008070605040302011817161514131211';
 const wireHex = `0a1d${bodyHex}`;
 
+// The bench passes encoded bytes straight to the binding; keep the Message-shaped checks.
+const bytesView = (bytes) => ({ data: () => bytes, close() {} });
+
 test('raw request and response preserve the pre-protobuf 29-byte wire dump', () => {
   const body = Buffer.from(bodyHex, 'hex');
   assert.ok(header.isExpected(header.decode(body), 0x01020304, header.PHASE_ACTIVE,
     29, 0x0102030405060708n));
-  const encoded = raw.encodeBenchPayloadMessage(body);
+  const encoded = bytesView(raw.encodeBenchPayloadBytes(body));
   try {
     assert.equal(encoded.data().toString('hex'), wireHex);
     assert.deepEqual(encoded.data(), service.Echo.requestSerialize(new BenchPayload(body)));
     const decoded = raw.decodeBenchPayloadBody(encoded.data());
     assert.deepEqual(decoded, body);
-    const reply = raw.encodeBenchPayloadMessage(decoded);
+    const reply = bytesView(raw.encodeBenchPayloadBytes(decoded));
     try {
       assert.equal(reply.data().toString('hex'), wireHex);
       assert.deepEqual(reply.data(), service.Echo.responseSerialize(new BenchPayload(body)));
@@ -167,7 +170,7 @@ for (const size of [127, 128, 1024, 4096]) {
     const body = header.createPayloadBytes(size, 0x01020304, header.PHASE_ACTIVE,
       0x0102030405060708n);
     body.writeBigUInt64LE(0x1112131415161718n, 21);
-    const encoded = raw.encodeBenchPayloadMessage(body);
+    const encoded = bytesView(raw.encodeBenchPayloadBytes(body));
     try {
       assert.deepEqual(encoded.data(), service.Echo.requestSerialize(new BenchPayload(body)));
       assert.deepEqual(raw.decodeBenchPayloadBody(encoded.data()), body);

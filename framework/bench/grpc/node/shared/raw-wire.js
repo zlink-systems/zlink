@@ -22,6 +22,14 @@ const REQUEST_ENVELOPE = Buffer.from(
   'utf8'
 );
 
+// Fire-and-forget sends carry the command kind (3), like production command headers.
+const COMMAND_ENVELOPE = Buffer.from(
+  '{"kind":3,"channelName":"bench","messageName":"BenchPayload",'
+  + '"contentType":"application/x-protobuf","correlationId":null,"deadline":null,'
+  + '"topic":null,"errorCode":null,"errorMessage":null,"source":null}',
+  'utf8'
+);
+
 const RESPONSE_ENVELOPE = Buffer.from(
   '{"kind":2,"channelName":"bench","messageName":"BenchPayload",'
   + '"contentType":"application/x-protobuf","correlationId":null,"deadline":null,'
@@ -219,9 +227,13 @@ const payloadMethod = protoLoader.loadSync(path.join(__dirname, '../../proto/ben
   keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
 })['zlink.framework.bench.withgrpc.BenchService'].Echo;
 
-/** Construct and serialize a typed message for every request and response. */
-function encodeBenchPayloadMessage(payload) {
-  return zlink.Message.from(payloadMethod.requestSerialize(new BenchPayload(payload)));
+/**
+ * Construct and serialize a typed message for every request and response. The encoded
+ * bytes go to the binding as they are: wrapping them in zlink.Message.from first adds a
+ * copy that the best binding usage (and the Framework payload path) does not make.
+ */
+function encodeBenchPayloadBytes(payload) {
+  return payloadMethod.requestSerialize(new BenchPayload(payload));
 }
 
 /** Protobuf decode errors propagate to the caller's existing error accounting. */
@@ -236,6 +248,7 @@ const ROUTING_IDS = {
 
 module.exports = {
   REQUEST_ENVELOPE,
+  COMMAND_ENVELOPE,
   RESPONSE_ENVELOPE,
   frameworkEnvelope,
   requireProductionChannelEnvelope,
@@ -253,6 +266,6 @@ module.exports = {
   decodeProductionServiceRequest,
   decodeProductionServiceReply,
   ROUTING_IDS,
-  encodeBenchPayloadMessage,
+  encodeBenchPayloadBytes,
   decodeBenchPayloadBody
 };
