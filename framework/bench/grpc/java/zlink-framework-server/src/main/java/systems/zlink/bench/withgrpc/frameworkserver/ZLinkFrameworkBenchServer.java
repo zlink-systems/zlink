@@ -111,63 +111,68 @@ public class ZLinkFrameworkBenchServer {
         }
     }
 
-    /** Ladder L0/L1: binding-shaped owner loop and direct fixed handler. */
+    /** Ladder L0–L4: binding receive and progressively restored Framework work. */
     private static void runLadderL0(
             String endpoint, String metricsUrl, BenchServerMetrics metrics) throws Exception {
         try (Context context = Zlink.createContext();
-                RouterSocket router = context.createRouterSocket()) {
+                RouterSocket router = context.createRouterSocket();
+                ZLinkApplicationJobQueue permits = ladderPermitsEnabled()
+                        ? new ZLinkApplicationJobQueue(
+                                ZLinkApplicationJobQueueProfile.BALANCED,
+                                OptionalLong.empty(),
+                                ZLinkApplicationJobQueue.productionProcessorCandidates(null))
+                        : null) {
             router.setRoutingId(RoutingId.from(BenchContract.SERVER_ROUTING_ID));
             router.options().mandatory(true);
-            router.bind(endpoint);
-            var stats = BenchStatsServer.start(
-                    metricsUrl,
-                    metrics,
-                    "{\"implementation\":\"zlink-framework-java-ladder\","
-                            + "\"shape\":\"binding receive and protobuf reply\","
-                            + "\"endpoint\":\"" + endpoint + "\"}");
-            Thread owner = new Thread(
-                    () -> pumpLadderL0(router, metrics), "bench-framework-ladder-owner");
-            owner.setDaemon(true);
-            try {
-                owner.start();
-                System.err.println("[framework-l0] endpoint=" + endpoint
-                        + " stats=" + metricsUrl);
-                if (System.in.read() < 0) {
-                    Thread.currentThread().join();
+            // Match RawMeshNode.openRouter: apply the queue's absolute flow state before bind.
+            try (var receiveFlow = permits == null ? null
+                    : permits.registerReceiveFlowTarget(router.options()::receiveFlowState)) {
+                router.bind(endpoint);
+                var stats = BenchStatsServer.start(
+                        metricsUrl,
+                        metrics,
+                        "{\"implementation\":\"zlink-framework-java-ladder\","
+                                + "\"shape\":\"binding receive and protobuf reply\","
+                                + "\"endpoint\":\"" + endpoint + "\"}");
+                Thread owner = new Thread(
+                        () -> {
+                            if (permits == null) {
+                                pumpLadderL0(router, metrics);
+                            } else {
+                                LadderReceiveOwner.run(router, permits, metrics,
+                                        received -> handleLadderL0(received, metrics));
+                            }
+                        }, "bench-framework-ladder-owner");
+                owner.setDaemon(true);
+                try {
+                    owner.start();
+                    System.err.println("[framework-l0] endpoint=" + endpoint
+                            + " stats=" + metricsUrl);
+                    if (System.in.read() < 0) {
+                        Thread.currentThread().join();
+                    }
+                } finally {
+                    context.shutdown();
+                    owner.join();
+                    stats.stop(0);
                 }
-            } finally {
-                context.shutdown();
-                owner.join();
-                stats.stop(0);
             }
         }
     }
 
-    private static void pumpLadderL0(RouterSocket router, BenchServerMetrics metrics) {
-        boolean permitsEnabled = System.getenv("ZLINK_BENCH_LADDER_L1") != null
+    private static boolean ladderPermitsEnabled() {
+        return System.getenv("ZLINK_BENCH_LADDER_L1") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L2") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L3") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L4") != null;
-        ZLinkApplicationJobQueue permits = permitsEnabled
-                ? new ZLinkApplicationJobQueue(
-                        ZLinkApplicationJobQueueProfile.BALANCED,
-                        OptionalLong.empty(),
-                        ZLinkApplicationJobQueue.productionProcessorCandidates(null))
-                : null;
+    }
+
+    private static void pumpLadderL0(RouterSocket router, BenchServerMetrics metrics) {
         try (Received received = new Received()) {
             while (true) {
-                ZLinkApplicationJobQueue.Permit permit = null;
                 try {
-                    if (permitsEnabled) {
-                        permit = permits.acquireBlocking(
-                                ZLinkApplicationJobQueue.Origin.REMOTE);
-                    }
                     if (!router.recv(received, RecvFlags.NONE)) {
                         continue;
-                    }
-                    if (permit != null) {
-                        permit.handlerStarted();
-                        permit = null;
                     }
                     handleLadderL0(received, metrics);
                 } catch (ZlinkRecvException failure) {
@@ -178,21 +183,10 @@ public class ZLinkFrameworkBenchServer {
                         metrics.recordError();
                         System.err.println("L0 receive failed: " + failure);
                     }
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    return;
                 } catch (RuntimeException failure) {
                     metrics.recordError();
                     System.err.println("L0 owner failed: " + failure);
-                } finally {
-                    if (permit != null) {
-                        permit.close();
-                    }
                 }
-            }
-        } finally {
-            if (permits != null) {
-                permits.close();
             }
         }
     }
