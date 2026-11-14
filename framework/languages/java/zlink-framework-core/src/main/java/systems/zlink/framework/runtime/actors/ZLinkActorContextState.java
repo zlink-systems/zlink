@@ -297,11 +297,10 @@ final class ZLinkActorContextState {
     }
 
     CompletionStage<Void> disconnectBoundSessionForDestroy() {
-        ZLinkBoundSession current = boundSession;
-        if (current == null) {
-            return CompletableFuture.completedFuture(null);
+        if (boundSession instanceof ZLinkSessionBoundSession current) {
+            return current.disconnectForDestroy();
         }
-        return current.disconnect();
+        return CompletableFuture.completedFuture(null);
     }
 
     void clearAfterDestroy() {
