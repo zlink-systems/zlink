@@ -68,6 +68,37 @@ final class ZLinkJsonMessageSerializerTest {
         }
     }
 
+    @Test
+    void missingOptionalReferenceComponentIsNullAndExplicitNullFollowsNullability()
+            throws Exception {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        try (Message payload = Message.from("{\"code\":\"a\"}")) {
+            assertEquals(
+                    new OptionalReference("a", null),
+                    serializer.deserializeBorrowed(
+                            payload.dataBuffer(), OptionalReference.class));
+        }
+        try (Message payload = Message.from("{\"code\":\"a\",\"note\":null}")) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            serializer.deserializeBorrowed(
+                                    payload.dataBuffer(), OptionalReference.class));
+        }
+        for (String json : List.of("{\"code\":\"a\"}", "{\"code\":\"a\",\"note\":null}")) {
+            try (Message payload = Message.from(json)) {
+                assertEquals(
+                        new OptionalNullableReference("a", null),
+                        serializer.deserializeBorrowed(
+                                payload.dataBuffer(), OptionalNullableReference.class));
+            }
+        }
+    }
+
+    record OptionalReference(String code, @ZLinkJsonOptional String note) {}
+
+    record OptionalNullableReference(String code, @ZLinkJsonOptional @Nullable String note) {}
+
     /** Declaration-target annotation, like JSR 305 or Jakarta Nullable. */
     @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
     @java.lang.annotation.Target({

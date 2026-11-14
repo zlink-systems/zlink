@@ -548,16 +548,44 @@ public final class ZLinkFrameworkJsonProfile {
             }
             for (int index = 0; index < properties.length; index++) {
                 SettableBeanProperty property = properties[index];
-                if (property != null
-                        && property.getType().isPrimitive()
-                        && !property.getMetadata().isRequired()) {
+                if (property == null || property.getMetadata().isRequired()) continue;
+                if (property.getType().isPrimitive()) {
                     properties[index] =
                             property.withNullProvider(
                                     new OptionalPrimitiveValueProvider(
                                             property.getType().getRawClass(), property.getName()));
+                } else if (property.getMetadata().getValueNulls() == Nulls.FAIL) {
+                    // findSetterInfo decided the null rule; an absent optional reference is null.
+                    properties[index] =
+                            property.withNullProvider(
+                                    new OptionalReferenceValueProvider(property.getName()));
                 }
             }
             return properties;
+        }
+    }
+
+    private static final class OptionalReferenceValueProvider implements NullValueProvider {
+        private final String propertyName;
+
+        private OptionalReferenceValueProvider(String propertyName) {
+            this.propertyName = propertyName;
+        }
+
+        @Override
+        public Object getNullValue(DeserializationContext context) throws JsonMappingException {
+            throw JsonMappingException.from(
+                    context.getParser(), "Property '" + propertyName + "' does not allow null.");
+        }
+
+        @Override
+        public Object getAbsentValue(DeserializationContext context) {
+            return null;
+        }
+
+        @Override
+        public AccessPattern getNullAccessPattern() {
+            return AccessPattern.DYNAMIC;
         }
     }
 
