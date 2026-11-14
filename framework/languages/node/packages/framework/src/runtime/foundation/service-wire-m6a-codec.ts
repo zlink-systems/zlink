@@ -210,21 +210,17 @@ function encodeApplicationPayloadWith(
 
 /**
  * Encodes the framework multipart payload directly into its M6A application
- * frame. The caller supplies borrowed message views; this function performs
- * the single ownership copy needed for the outbound frame.
+ * frame. The caller supplies borrowed message views; this function writes
+ * each payload byte once into the caller-selected final storage.
  */
 export function encodeMultipartApplicationPayload(
   parts: readonly (Uint8Array | string)[],
   packetName: string,
-  contentType: string
+  contentType: string,
+  allocate: (length: number) => Buffer = allocatePayloadBytes
 ): Buffer {
   const multipartLength = multipartPayloadLength(parts);
-  const result = allocateApplicationPayload(
-    packetName,
-    contentType,
-    multipartLength,
-    allocatePayloadBytes
-  );
+  const result = allocateApplicationPayload(packetName, contentType, multipartLength, allocate);
   writeMultipartPayload(result, result.byteLength - multipartLength, parts);
   return result;
 }

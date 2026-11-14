@@ -2,7 +2,7 @@ import {
   createInternalFrameworkException,
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
-import type { ConnectionAttempt } from '@zlink-systems/zlink';
+import { Message, type ConnectionAttempt } from '@zlink-systems/zlink';
 import { admitServiceRequest } from './durable-service-request';
 import { remainingRequestTimeout, requestTerminalError } from '../messaging/request-deadline';
 import type { OperationHandle } from './operation-registry';
@@ -121,7 +121,7 @@ type RawServiceChannelTargetSelection =
     };
 
 /** An M6A application frame already owned by the Framework runtime. */
-type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
+type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer | Message;
 
 export interface RawServiceIngressRecord {
   /** Source identity recorded once by the first accepting owner (Location runtime §9.3). */
@@ -669,7 +669,10 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     payload: ServiceApplicationPayloadInput
   ): boolean | Promise<boolean> {
-    return this.send(targetNodeRoutingId, [NODE_SEND_HEADER, this.applicationFrame(payload)]);
+    return this.send(targetNodeRoutingId, [
+      NODE_SEND_HEADER,
+      this.applicationFrame(payload)
+    ] as unknown as readonly Uint8Array[]);
   }
 
   sendToChannel(
@@ -677,13 +680,16 @@ export class RawServiceMeshRuntime {
     payload: ServiceApplicationPayloadInput
   ): SubmitResult | Promise<SubmitResult> {
     const selection = this.selectChannelTarget(channelName);
-    if (selection.kind !== 'selected') return selection.submitResult;
+    if (selection.kind !== 'selected') {
+      closeUnsubmittedMessage(payload);
+      return selection.submitResult;
+    }
     const selected = selection.peer;
     const applicationFrame = this.applicationFrame(payload);
     const submitted = this.send(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
       applicationFrame
-    ]);
+    ] as unknown as readonly Uint8Array[]);
     return typeof submitted === 'boolean'
       ? channelSendSubmitResult(submitted)
       : submitted.then(channelSendSubmitResult);
@@ -751,6 +757,7 @@ export class RawServiceMeshRuntime {
   ): RawServiceObservedRequest {
     const selection = this.selectChannelTarget(channelName);
     if (selection.kind !== 'selected') {
+      closeUnsubmittedMessage(payload);
       const pending = this.registerRequest(timeoutMs, observer, operationKind, requestOperation);
       this.completeRequest(
         pending,
@@ -914,7 +921,7 @@ export class RawServiceMeshRuntime {
       try {
         this.requireStarted().request(
           targetNodeRoutingId,
-          parts,
+          parts as unknown as readonly Uint8Array[],
           timeoutMs,
           (reply) => receiver.operationCompleted(existing?.id ?? 0n, reply, undefined),
           (error) => receiver.operationFailed(existing?.id ?? 0n, error, undefined),
@@ -971,18 +978,31 @@ export class RawServiceMeshRuntime {
     failureCode = 0
   ): void {
     if (request.localReply !== undefined) {
-      request.localReply(
-        terminalResult,
-        failureCode,
-        terminalResult === 0 ? this.applicationPayload(payload) : undefined
-      );
+      try {
+        request.localReply(
+          terminalResult,
+          failureCode,
+          terminalResult === 0 ? this.applicationPayload(payload) : undefined
+        );
+      } finally {
+        closeUnsubmittedMessage(payload);
+      }
       return;
     }
     if (request.reply === undefined || request.correlation === undefined) {
       throw new TypeError('Reply requires a request mailbox record.');
     }
     const header = encodeReplyHeader(request.correlation, terminalResult, failureCode);
-    request.reply(terminalResult === 0 ? [header, this.applicationFrame(payload)] : [header]);
+    if (terminalResult !== 0) closeUnsubmittedMessage(payload);
+    const parts = (terminalResult === 0
+      ? [header, this.applicationFrame(payload)]
+      : [header]) as unknown as readonly Uint8Array[];
+    try {
+      request.reply(parts);
+    } catch (error) {
+      closeUnsubmittedMessages(parts);
+      throw error;
+    }
   }
 
   async pumpOne(
@@ -1756,7 +1776,16 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
-      encodedPayload = copyPayloadBytes(encodedPayload);
+      if (encodedPayload instanceof Message) {
+        const nativeFrame = encodedPayload;
+        try {
+          encodedPayload = copyPayloadBytes(nativeFrame.data());
+        } finally {
+          nativeFrame.close();
+        }
+      } else {
+        encodedPayload = copyPayloadBytes(encodedPayload);
+      }
       // The local admission path aborts its capacity wait on the terminal
       // Promise, so a local request always keeps the Promise entry.
       const pending =
@@ -1836,6 +1865,7 @@ export class RawServiceMeshRuntime {
       !this.expectedPeers.has(selectedTargetNodeRoutingId) &&
       this.topology.peer(selectedTargetNodeRoutingId) === undefined
     ) {
+      closeUnsubmittedMessage(encodedPayload);
       this.completeRequest(
         pending,
         {
@@ -1847,7 +1877,19 @@ export class RawServiceMeshRuntime {
       );
       return pending;
     }
+    if (selectedPeer === undefined && encodedPayload instanceof Message) {
+      const nativeFrame = encodedPayload;
+      try {
+        encodedPayload = copyPayloadBytes(nativeFrame.data());
+      } finally {
+        nativeFrame.close();
+      }
+    }
     const parts = [header, encodedPayload];
+    if (selectedPeer !== undefined && !pending.isPending()) {
+      closeUnsubmittedMessages(parts);
+      return pending;
+    }
     const completed = (replyParts: readonly Buffer[]) => {
       try {
         if (replyParts.length < 1 || replyParts.length > 2) {
@@ -1898,7 +1940,7 @@ export class RawServiceMeshRuntime {
       try {
         this.requireStarted().request(
           selectedTargetNodeRoutingId,
-          parts,
+          parts as unknown as readonly Uint8Array[],
           remainingRequestTimeout('Request', pending.deadlineMs)!,
           completed,
           failed,
@@ -1907,6 +1949,7 @@ export class RawServiceMeshRuntime {
           pending
         );
       } catch (error) {
+        closeUnsubmittedMessages(parts);
         failed(error);
       }
       return pending;
@@ -1918,7 +1961,7 @@ export class RawServiceMeshRuntime {
       (remaining, finished) => {
         this.requireStarted().request(
           selectedTargetNodeRoutingId,
-          parts,
+          parts as unknown as readonly Uint8Array[],
           remaining,
           (reply) => {
             finished();
@@ -1942,12 +1985,18 @@ export class RawServiceMeshRuntime {
    * The generic node/channel backend may supply its single owned M6A frame
    * directly. All other callers keep the typed application-payload boundary.
    */
-  private applicationFrame(payload: ServiceApplicationPayloadInput): Buffer {
-    return Buffer.isBuffer(payload) ? payload : encodeApplicationPayload(payload);
+  private applicationFrame(payload: ServiceApplicationPayloadInput): Buffer | Message {
+    return Buffer.isBuffer(payload) || payload instanceof Message
+      ? payload
+      : encodeApplicationPayload(payload);
   }
 
   private applicationPayload(payload: ServiceApplicationPayloadInput): ServiceApplicationPayload {
-    return Buffer.isBuffer(payload) ? decodeApplicationPayload(payload) : payload;
+    return Buffer.isBuffer(payload)
+      ? decodeApplicationPayload(payload)
+      : payload instanceof Message
+        ? decodeApplicationPayload(payload.data())
+        : payload;
   }
 
   admitPeer(
@@ -2160,7 +2209,10 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     parts: readonly Uint8Array[]
   ): boolean | Promise<boolean> {
-    if (!this.isPeerRouteReady(targetNodeRoutingId)) return false;
+    if (!this.isPeerRouteReady(targetNodeRoutingId)) {
+      closeUnsubmittedMessages(parts);
+      return false;
+    }
     try {
       const submission = this.requireStarted().submitSend(targetNodeRoutingId, parts);
       if (submission.result === SubmitResult.Ok) return true;
@@ -2169,6 +2221,7 @@ export class RawServiceMeshRuntime {
         (error) => this.sendFailure(error)
       );
     } catch (error) {
+      closeUnsubmittedMessages(parts);
       return this.sendFailure(error);
     }
   }
@@ -2181,6 +2234,14 @@ export class RawServiceMeshRuntime {
     }
     throw error;
   }
+}
+
+function closeUnsubmittedMessage(value: unknown): void {
+  if (value instanceof Message) value.close();
+}
+
+function closeUnsubmittedMessages(values: readonly unknown[]): void {
+  for (const value of values) closeUnsubmittedMessage(value);
 }
 
 function channelSendSubmitResult(accepted: boolean): SubmitResult {

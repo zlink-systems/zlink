@@ -741,10 +741,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[]
   ): SubmitResultValue | Promise<SubmitResultValue> {
-    const submitted = this.requireRuntime().sendToNode(
-      String(targetRid),
-      encodeMultipartApplicationFrame(parts)
-    );
+    const runtime = this.requireRuntime();
+    const targetNodeRid = String(targetRid);
+    const frame = runtime.isPeerRouteReady(targetNodeRid)
+      ? encodeMultipartApplicationFrameNative(parts)
+      : encodeMultipartApplicationFrame(parts);
+    const submitted = runtime.sendToNode(targetNodeRid, frame);
     return submitted instanceof Promise
       ? submitted.then(nodeSendResult)
       : nodeSendResult(submitted);
@@ -827,9 +829,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     },
     completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId {
-    const pending = this.requireRuntime().requestToNode(
-      String(targetRid),
-      encodeMultipartApplicationFrame(parts),
+    const runtime = this.requireRuntime();
+    const targetNodeRid = String(targetRid);
+    const pending = runtime.requestToNode(
+      targetNodeRid,
+      targetNodeRid !== this.routingId && runtime.isPeerRouteReady(targetNodeRid)
+        ? encodeMultipartApplicationFrameNative(parts)
+        : encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options?.onAdmitted,
       this.requestObserverFor(completion),
@@ -845,7 +851,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): Promise<SubmitResultValue> {
     try {
       return Promise.resolve(
-        this.requireRuntime().sendToChannel(channelName, encodeMultipartApplicationFrame(parts))
+        this.requireRuntime().sendToChannel(
+          channelName,
+          encodeMultipartApplicationFrameNative(parts)
+        )
       );
     } catch (error) {
       return Promise.reject(error);
@@ -864,7 +873,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
-      encodeMultipartApplicationFrame(parts),
+      encodeMultipartApplicationFrameNative(parts),
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options?.onAdmitted,
       this.requestObserverFor(completion),
@@ -2682,7 +2691,7 @@ function decodeMultipartRecord(
     parts,
     reply(parts) {
       if (record.correlation === undefined) return SubmitResult.InvalidState;
-      runtime.reply(record, encodeMultipartApplicationFrame(parts));
+      runtime.reply(record, encodeMultipartApplicationFrameNative(parts));
       return SubmitResult.Ok;
     },
     replyActorJoin: replyActorJoinNotSupported
@@ -2956,6 +2965,30 @@ function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLi
     MULTIPART_PACKET_NAME,
     MULTIPART_CONTENT_TYPE
   );
+}
+
+export function encodeMultipartApplicationFrameNative(
+  parts: MessageLike | readonly MessageLike[]
+): Message {
+  const values = Array.isArray(parts) ? parts : [parts];
+  if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
+  let frame: Message | undefined;
+  try {
+    encodeMultipartApplicationPayload(
+      values.map(messagePayloadView),
+      MULTIPART_PACKET_NAME,
+      MULTIPART_CONTENT_TYPE,
+      (length) => {
+        frame = Message.allocate(length);
+        return frame.data();
+      }
+    );
+    if (frame === undefined) throw new Error('Native frame allocation did not run.');
+    return frame;
+  } catch (error) {
+    frame?.close();
+    throw error;
+  }
 }
 
 function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {

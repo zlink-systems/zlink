@@ -226,13 +226,18 @@ test('generic channel send writes one valid multipart application frame before s
   try {
     assert.ok(sentParts);
     const frame = sentParts[1];
-    const application = decodeApplicationPayloadView(frame);
-    assert.equal(application.packetName, 'ZLinkFrameworkMultipart');
-    assert.equal(application.contentType, 'application/x-zlink-multipart');
-    assert.deepEqual(
-      multipartParts(application.payload).map((part) => part.toString()),
-      ['first', 'second']
-    );
+    assert.ok(frame instanceof zlink.Message);
+    try {
+      const application = decodeApplicationPayloadView(frame.data());
+      assert.equal(application.packetName, 'ZLinkFrameworkMultipart');
+      assert.equal(application.contentType, 'application/x-zlink-multipart');
+      assert.deepEqual(
+        multipartParts(application.payload).map((part) => part.toString()),
+        ['first', 'second']
+      );
+    } finally {
+      frame.close();
+    }
 
     replyFrame = encodeApplicationPayload({
       packetName: 'reply',

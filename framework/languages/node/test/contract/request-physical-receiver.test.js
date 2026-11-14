@@ -340,6 +340,9 @@ for (const cancelled of [false, true]) {
       notifications = 0;
     const raw = {
       mailbox: new ServiceMailbox(),
+      isPeerRouteReady() {
+        return false;
+      },
       requestToNode(_target, _parts, _timeout, _admitted, observer, kind, pending) {
         void physical.promise.then((value) => {
           notifications++;

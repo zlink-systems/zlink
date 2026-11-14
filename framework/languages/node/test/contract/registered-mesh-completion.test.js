@@ -60,6 +60,9 @@ function harness(table, checkSlot = true, stateful) {
   };
   const raw = {
     mailbox: new ServiceMailbox(),
+    isPeerRouteReady() {
+      return false;
+    },
     close() {
       this.mailbox.close();
     },
