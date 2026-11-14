@@ -53,19 +53,29 @@ internal static class ZLinkRequestSubmissionOutcome
             nativeAdmission = Task.CompletedTask;
             return submission.Reply;
         }
-        var admitted = requestAdmission is null
-            ? submission.Admitted
-            : ObserveAdmissionAsync(submission.Admitted, requestAdmission);
-        nativeAdmission = admitted;
-        return submission.Reply;
+        nativeAdmission = submission.Admitted;
+        return requestAdmission is null
+            ? submission.Reply
+            : ObserveAdmissionAsync(submission, requestAdmission);
     }
 
-    private static async Task ObserveAdmissionAsync(
-        Task admitted,
-        ZLinkRequestAdmission? requestAdmission
+    private static async Task<IReadOnlyList<Message>> ObserveAdmissionAsync(
+        RequestSubmission submission,
+        ZLinkRequestAdmission requestAdmission
     )
     {
-        await admitted.ConfigureAwait(false);
-        requestAdmission?.Complete();
+        IReadOnlyList<Message> reply;
+        try
+        {
+            await submission.Admitted.ConfigureAwait(false);
+            requestAdmission.Complete();
+        }
+        finally
+        {
+            // Binding reports the same admission failure on Reply. Keep its physical
+            // result under the existing request receiver, even after public completion.
+            reply = await submission.Reply.ConfigureAwait(false);
+        }
+        return reply;
     }
 }
