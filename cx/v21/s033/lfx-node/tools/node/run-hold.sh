@@ -20,7 +20,9 @@ for variant in "${variants[@]}"; do
   for pair in 'send-saturation 1024' 'send-saturation 4096' 'request-serial 1024' 'request-serial 4096' 'request-backpressure 1024' 'request-backpressure 4096'; do
     read -r pattern size <<<"$pair"
     if [[ -n "$CELL_FILTER" && ",${CELL_FILTER}," != *",${pattern}-${size},"* ]]; then continue; fi
+    (( SECONDS - START < 570 )) || { echo '10-minute hold safety boundary reached before cell' >&2; exit 124; }
     "$TOOLS/run-cell.sh" "$variant" "$pattern" "$size" warm
+    (( SECONDS - START < 570 )) || { echo '10-minute hold safety boundary reached before counted run' >&2; exit 124; }
     "$TOOLS/run-cell.sh" "$variant" "$pattern" "$size" counted
   done
 done
@@ -32,6 +34,7 @@ if ((${#variants[@]} == 2)); then
   [[ "$next" == L5_7 ]] && threshold=0.21
   while read -r pattern size; do
     for phase in repeat2 repeat3; do
+      (( SECONDS - START < 570 )) || { echo '10-minute hold safety boundary reached before confirmation' >&2; exit 124; }
       "$TOOLS/run-cell.sh" "$prev" "$pattern" "$size" "$phase"
       "$TOOLS/run-cell.sh" "$next" "$pattern" "$size" "$phase"
     done
@@ -52,4 +55,4 @@ for pattern,size in [('send-saturation',1024),('send-saturation',4096),('request
 PY
 )
 fi
-(( SECONDS - START < 1500 )) || { echo '30-minute hold safety boundary reached' >&2; exit 124; }
+(( SECONDS - START < 570 )) || { echo '10-minute hold safety boundary reached' >&2; exit 124; }

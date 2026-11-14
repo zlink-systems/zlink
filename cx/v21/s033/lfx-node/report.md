@@ -1,15 +1,28 @@
 # Node ladder 측정 — fix branches
 
-조건: L2→L3→L4, 직전 단계 대비; 6개 셀 × 1회, 10초 warmup·5초 측정, C2/C3 off, SCHED_OTHER, source 0–5 / target 8–13. 허용 손실 7%; 5–9% 셀은 양 단계 2회 추가해 중앙값 판정.
+조건: L2→L3→L4, 직전 단계 대비; 6개 셀 × 1회, 10초 warmup·5초 측정, C2/C3 off, SCHED_OTHER, source 0–5 / target 8–13. 허용 손실 7%; 손실 5–9%이면 양 단계 2회 추가 후 중앙값 판정.
 
 ## 빌드 지문
 
 - HEAD `50f84349c69503082774760b05834e513bdae785`, branch `exp/4350-node-fixes`, worktree clean; merge-base `6350275facc547759c9e143cc2515f3f528c776e`.
 - 빌드 성공: Node HTTP client local package, `npm ci`, cached binding selection, `npm run build`; production TS 출력 424개 최신.
-- `zlink.node` SHA-256 `ed260e4bb579df207784f76ed5e518d214f4baf1bcf485d9f303b917c23dbe05`; Framework `channel-dispatchers.js` SHA-256 `2eb493e44a2738fe318252cfd07fc0861ecadb6dc335f8104f0d6bcbb3a82f0f`.
+- [zlink.node SHA-256](/root/worktree/zlink-v21-s033/lfx-node/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node) `ed260e4bb579df207784f76ed5e518d214f4baf1bcf485d9f303b917c23dbe05`.
+- [Framework artifact SHA-256](/root/worktree/zlink-v21-s033/lfx-node/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js) `2eb493e44a2738fe318252cfd07fc0861ecadb6dc335f8104f0d6bcbb3a82f0f`.
+- HTTP client `packages/http-client/dist/index.js`: `64c839a760746f100af6668ed69f720f415cdb8c276769e73a8c5bfde843da89`; stream-wire `packages/stream-wire/dist/index.js`: `64002b54142361b539753a79bef34e49eece83067c1eb73e077df7acd2ebe619`.
 
-## 단계 결과
+## L2 vs L1
 
-측정 전.
+| 셀 | L1 msg/s (raw) | L2 msg/s (raw) | 손실 | 판정 | scheduling 증거 |
+|---|---:|---:|---:|---|---|
+| send-saturation-1K | [94,810.4](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/send-saturation-1024/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/results.json) | [105,849.6](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/send-saturation-1024/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/results.json) | −11.64% | PASS | [L1](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/send-saturation-1024/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/scheduling.txt) · [L2](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/send-saturation-1024/counted/attempt1/run1/zlink-framework-node-send-saturation-1024/scheduling.txt) |
+| send-saturation-4K | [75,073.4](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/send-saturation-4096/counted/attempt1/run1/zlink-framework-node-send-saturation-4096/results.json) | [72,850.6](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/send-saturation-4096/counted/attempt1/run1/zlink-framework-node-send-saturation-4096/results.json) | 2.96% | PASS | [L1](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/send-saturation-4096/counted/attempt1/run1/zlink-framework-node-send-saturation-4096/scheduling.txt) · [L2](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/send-saturation-4096/counted/attempt1/run1/zlink-framework-node-send-saturation-4096/scheduling.txt) |
+| request-serial-1K | [6,754.8](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/request-serial-1024/counted/attempt1/run1/zlink-framework-node-request-serial-1024/results.json) | [6,142.4](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/request-serial-1024/counted/attempt1/run1/zlink-framework-node-request-serial-1024/results.json) | 9.07% | FAIL | [L1](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/request-serial-1024/counted/attempt1/run1/zlink-framework-node-request-serial-1024/scheduling.txt) · [L2](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/request-serial-1024/counted/attempt1/run1/zlink-framework-node-request-serial-1024/scheduling.txt) |
+| request-serial-4K | [6,432.2](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/request-serial-4096/counted/attempt1/run1/zlink-framework-node-request-serial-4096/results.json) | [5,660.6](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/request-serial-4096/counted/attempt1/run1/zlink-framework-node-request-serial-4096/results.json) | 12.00% | FAIL | [L1](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/request-serial-4096/counted/attempt1/run1/zlink-framework-node-request-serial-4096/scheduling.txt) · [L2](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/request-serial-4096/counted/attempt1/run1/zlink-framework-node-request-serial-4096/scheduling.txt) |
+| request-backpressure-1K | [24,192.4](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/request-backpressure-1024/counted/attempt1/run1/zlink-framework-node-request-backpressure-1024/results.json) | [16,791.2](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/request-backpressure-1024/counted/attempt1/run1/zlink-framework-node-request-backpressure-1024/results.json) | 30.59% | FAIL | [L1](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/request-backpressure-1024/counted/attempt1/run1/zlink-framework-node-request-backpressure-1024/scheduling.txt) · [L2](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/request-backpressure-1024/counted/attempt1/run1/zlink-framework-node-request-backpressure-1024/scheduling.txt) |
+| request-backpressure-4K | [20,871.6](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/request-backpressure-4096/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/results.json) | [16,014.0](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/request-backpressure-4096/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/results.json) | 23.27% | FAIL | [L1](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L1/request-backpressure-4096/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/scheduling.txt) · [L2](/root/jobs/fx/cx/v21/s033/lfx-node/raw/node/L2/request-backpressure-4096/counted/attempt1/run1/zlink-framework-node-request-backpressure-4096/scheduling.txt) |
 
-Raw 및 thread별 affinity/scheduling 증거는 각 수치 링크에 연결한다. 진행 기록: [progress.md](progress.md), 호출 형태와 메시지 비용: [call-shape.md](call-shape.md).
+12개 counted run 모두 errors=0, submitted=completed=received였고, 모든 thread가 run 시작·mid-active에 SCHED_OTHER 및 source 0–5 / target 8–13이었다. 5–9% 추가 확인 구간에 든 셀은 없었다(9.07%는 구간 밖).
+
+**중단:** L2에서 4/6 셀이 7% 예산을 초과해 L3·L4는 측정하지 않았다. L2 정의에 따라 요청/응답 envelope header encode와 parse가 추가된다. 보조 profile 결과는 진행 중.
+
+Raw warm run도 모두 보존했다. [진행 기록](progress.md) · [call shape / per-message 비용](call-shape.md).

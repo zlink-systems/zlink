@@ -1,0 +1,11 @@
+using var pipe = new EventPipeEventSource(trace);
+var inventory = new Dictionary<string,int>();
+var examples = new List<object>();
+pipe.Dynamic.All += ev => {
+  var key=ev.ProviderName+"/"+ev.EventName;
+  inventory[key]=inventory.GetValueOrDefault(key)+1;
+  if(ev.ProviderName.Contains("D57") && examples.Count<10)
+    examples.Add(new {provider=ev.ProviderName,name=ev.EventName,payloads=ev.PayloadNames.Select((name,i)=>new {name,value=ev.PayloadValue(i)}).ToArray()});
+};
+pipe.Process();
+File.WriteAllText(trace+".direct-events.json", JsonSerializer.Serialize(new {inventory,examples},new JsonSerializerOptions{WriteIndented=true}));

@@ -11,8 +11,8 @@ def record(binary,label,sources):
 
 def run(candidate,kind):
     stem=f'{candidate}-{kind}';binary=wt/'build-c4dec'/f'c4dec-{kind}-{candidate}'
-    profile=job/'raw'/candidate/'include/zlink/json_profile.hpp'
-    sources=[profile,job/'tools'/f'{"bulk" if kind=="bulk" else "registry"}-probe.cpp']
+    profile=(wt/'framework/languages/cpp/common/include/zlink/json_profile.hpp') if candidate=='production' else (job/'raw'/candidate/'include/zlink/json_profile.hpp')
+    sources=[profile,job/'tools'/f'{"bulk" if kind=="bulk" else "registry"}-probe.cpp',wt/'framework/languages/cpp/tests/support/allocation_counter.cpp']
     if candidate=='candidate-a':sources+=[job/'raw/candidate-a/include/nlohmann/detail/input/lexer.hpp']
     record(binary,stem,sources)
     env=dict(os.environ)
@@ -26,4 +26,5 @@ def run(candidate,kind):
             subprocess.run(['perf','record','-q','-e','cpu-clock:u','-F','499','--call-graph','fp','-o',str(job/'raw'/f'{label}.perf.data'),'--',str(binary),'decode',str(size)],stdout=out,stderr=subprocess.STDOUT,env=env,check=True,timeout=20)
         for mode,args in [('self',['--no-children']),('callgraph',['--children'])]:
             with (job/'raw'/f'{label}.{mode}.txt').open('w') as out:subprocess.run(['perf','report','--stdio','-i',str(job/'raw'/f'{label}.perf.data'),'--percent-limit','0.5','--sort','symbol']+args,stdout=out,check=True)
-for candidate in ['baseline','candidate-a','candidate-b']:run(candidate,sys.argv[1] if len(sys.argv)>1 else 'bulk')
+kind=sys.argv[1] if len(sys.argv)>1 else 'bulk'
+for candidate in ['baseline','candidate-a','candidate-b']+(['production'] if kind=='registry' else []):run(candidate,kind)

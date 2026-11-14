@@ -14,6 +14,7 @@ L2 comparison enables `ZLINK_LADDER_L0_SERVER=1`, `ZLINK_LADDER_L0_CLIENT=1`, `Z
 | Path | Waits | Allocations | Atomics | Copies / encoding |
 |---|---|---|---|---|
 | Binding raw / L0 | One `DontWait` receive attempt per message; batch max 256; `setImmediate` per nonempty pump; source completion polling yields with `setImmediate` | Decoded protobuf payload and newly encoded reply payload; receive objects reused | 0 JS atomics | Static raw envelope reused; protobuf creates body buffer; no explicit `Buffer.from` body copy |
+| L1 | Above plus permit wait before receive; may suspend for permit | Permit plus promise/continuation only if acquire suspends | 0 JS atomics | Same as L0 |
 | L1 | Above plus `applicationJobQueue.acquire()` before receive and permit release before handler | Permit plus suspended promise/continuation when needed | 0 JS atomics | Same as L0 |
 | L2 | No extra async wait | Request/reply header parsed once per side; response header encoded per reply | 0 JS atomics | Adds envelope header buffer; body remains protobuf |
 | L3 | No extra async wait; same completion pump | Service correlation, mapped arrays, frame and decoded wrappers per request/reply | 0 JS atomics | Packs multipart bytes into service frame; unpack views frame and creates owned parts |

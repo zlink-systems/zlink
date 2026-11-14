@@ -47,7 +47,7 @@ def ready(port):
 def idle():
     until=time.monotonic()+7
     while time.monotonic()<until:
-        s=request(15206)
+        s=request(25506)
         if s.get('phase') in ('idle','completed','failed'):
             if s.get('phase')=='failed': raise RuntimeError(s)
             return s
@@ -65,14 +65,14 @@ def snapshot(name, ps):
             except FileNotFoundError: pass
     (out/(name+'.json')).write_text(json.dumps(records,indent=2))
 try:
-    target=launch(['dotnet',str(paths[1]),'--endpoint','tcp://127.0.0.1:15214','--metrics-url','http://127.0.0.1:15215'],'target')
+    target=launch(['dotnet',str(paths[1]),'--endpoint','tcp://127.0.0.1:25514','--metrics-url','http://127.0.0.1:25515'],'target')
     started=time.monotonic()
-    ready(15215)
-    source=launch(['dotnet',str(paths[0]),'--implementation',('zlink-dotnet' if level=='L4' else 'zlink-framework-dotnet'),'--scenario',pattern,'--payload-size','1024','--request-window','100','--submit-concurrency','8','--warmup-seconds','2','--drain-bound-ms','1000','--trigger-url','http://127.0.0.1:15205','--stats-url','http://127.0.0.1:15206','--target-endpoint','tcp://127.0.0.1:15214','--target-command-endpoint','tcp://127.0.0.1:15214','--target-stats-url','http://127.0.0.1:15215','--raw-socket','router','--output',str(out),'--report-file','bench-report.txt','--configuration','Release'],'source')
-    ready(15206)
+    ready(25515)
+    source=launch(['dotnet',str(paths[0]),'--implementation',('zlink-dotnet' if level=='L4' else 'zlink-framework-dotnet'),'--scenario',pattern,'--payload-size','1024','--request-window','100','--submit-concurrency','8','--warmup-seconds','2','--drain-bound-ms','1000','--trigger-url','http://127.0.0.1:25505','--stats-url','http://127.0.0.1:25506','--target-endpoint','tcp://127.0.0.1:25514','--target-command-endpoint','tcp://127.0.0.1:25514','--target-stats-url','http://127.0.0.1:25515','--raw-socket','router','--output',str(out),'--report-file','bench-report.txt','--configuration','Release'],'source')
+    ready(25506)
     snapshot('start', [('source',source),('target',target)])
     trigger=dict(runId=label,cellId=level+'-'+pattern,pattern=pattern,payloadBytes=1024,requestWindow=100,submitConcurrency=8,phase='warmup',durationMs=2000)
-    request(15205,'/bench/start',trigger); time.sleep(.1); idle()
+    request(25505,'/bench/start',trigger); time.sleep(.1); idle()
     for role,p in [('source',source),('target',target)]:
         traces.append(launch([str(scratch/'profile-tools/dotnet-trace'),'collect','--process-id',str(p.pid),'--profile','cpu-sampling','--providers','Microsoft-Windows-DotNETRuntime:0x10001:5','--duration','00:00:06','--buffersize','128','--output',str(out/(role+'.nettrace'))],role+'-trace'))
     for role,p in [('source',source),('target',target)]:
@@ -81,14 +81,14 @@ try:
     trigger.update(phase='active',durationMs=5000)
     before={role:counters(p) for role,p in [('source',source),('target',target)]}
     manifest['active_start_utc']=time.time()
-    request(15205,'/bench/start',trigger)
+    request(25505,'/bench/start',trigger)
     time.sleep(2.5)
     snapshot('mid-active',[('source',source),('target',target)])
     idle()
     manifest['active_stop_utc']=time.time()
     after={role:counters(p) for role,p in [('source',source),('target',target)]}
     (out/'process-counters.json').write_text(json.dumps(dict(before=before,after=after),indent=2))
-    for role,port in [('source',15206),('target',15215)]: (out/(role+'-stats.json')).write_text(json.dumps(request(port),indent=2))
+    for role,port in [('source',25506),('target',25515)]: (out/(role+'-stats.json')).write_text(json.dumps(request(port),indent=2))
     for p in traces: p.wait(timeout=max(.1,18-(time.monotonic()-started)))
     for role,p in [('source',source),('target',target)]:
         for prefix,suffix in [('perf-','.map'),('perfinfo-','.map'),('jit-','.dump')]:

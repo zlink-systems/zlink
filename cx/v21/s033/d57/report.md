@@ -148,3 +148,81 @@ Spec root: `framework/doc/framework/common/spec/server/`.
 - State lane의 FIFO·비재진입·post 예외·close·suppressed ExecutionContext와 multi-thread contention을 검사한다.
 - Batch parts/payload owner 이전·cleanup once, 기존 MeshNodeRouteDispatcher의 scope isolation/lifetime·독립 실행, completion terminal once/isolation을 검사한다.
 - .NET 전체 format check와 관련 Framework unit tests를 실행한다. 수정한 production 소스만 scratch에 복사하여 rebuild·fingerprint 뒤 같은 두 패턴을 다시 profile한다.
+
+
+## 구현 결과와 전후 대조
+
+Production은 다음 다섯 파일에서 바꿨다. Benchmark·wire·serializer·scope sharing 정책은 바꾸지 않았다. 이 장은 원인·제안을 기록한 뒤 구현한 결과이며, 최초 보고서는 [phase1 사본](raw/report-phase1.md)에 보존했다.
+
+| production 파일 | 변경 |
+|---|---|
+| `Runtime/Handlers/ZLinkHandlerMethodInvoker.cs` | 내부 invoker 반환형을 ValueTask<object?>로 고정하고 compiled expression에서 실제 반환형을 typed helper에 직접 전달한다. |
+| `Runtime/Handlers/ZLinkHandlerResultAwaiter.cs` | 선언 반환형 판정을 준비 시점 한 곳으로 모았다. object awaiter cache와 runtime awaitable 재분류를 삭제했다. non-generic null Task, object로 선언된 Task 결과, fault/cancel 결과를 유지한다. |
+| `Runtime/Handlers/ZLinkHandlerInvocationEngine.cs` | 준비된 invoker 결과를 그대로 반환/await한다. Normalized ValueTask를 다시 object로 만들지 않는다. Permit 반환 시점은 유지한다. |
+| `Runtime/Execution/ZLinkStateLane.cs` | RunAsync와 TryPost가 같은 RunSynchronous의 claim/inline/enqueue를 사용한다. 빈 lane의 post는 PostWork/mailbox allocation이 없다. 자기 lane post와 경합은 기존 FIFO, async work는 기존 scheduler다. |
+| `Runtime/Service/FrameworkServiceTypes.cs` | 소유 batch의 ref entry에서 parts/payload owner field만 이전한다. 큰 record를 포함한 tuple 전체 read-modify-write를 없앴다. |
+
+Test 파일은 `HandlerResultAwaiterTests`, `StateLaneTests`, `MeshMailboxReadinessTests`에 검사를 추가했고, 내부 typed delegate를 사용하는 다섯 기존 test 파일의 stub 반환형을 맞췄다. 기존 ordering·scope·completion assertion은 완화하지 않았다.
+
+### Allocation 회귀의 양방향 검증
+
+[수정 전](raw/test-baseline-regressions.log) 새 검사 6개가 실제 실패했다. [수정 후 focused](raw/test-focused-second.log)에서는 이 6개와 ValueTask source의 sync/async success·fault·cancel, 결과 1회 소비, 선언형 유지, FIFO·self-post·context 복원·단독 이전을 포함한 **66개가 통과**했다.
+
+| 경계 | 수정 전 B/call | 수정 후 | 근거 |
+|---|---:|---:|---|
+| 동기 reference reply | 40 | 0 | PreparedInvocation_DoesNotBoxAwaitableResults |
+| completed Task<object> | 40 | 0 | 같은 검사 |
+| completed ValueTask<object> | 80 | 0 | 같은 검사 |
+| void | 40 | 0 | 같은 검사 |
+| completed ValueTask | 72 | 0 | 같은 검사 |
+| 빈 lane의 동기 post | 104 | 기존 inline result와 같은 이하의 storage | IdlePost_UsesTheSameTurnStorageAsAnInlineResult. 원본 inline result는 72 B/turn이다. |
+
+이 결과는 hot path에서 실제 생성하던 box와 work item을 제거했음을 보인다. 동기 호출 결과가 즉시 완료되는 경우의 측정이며, 비동기 I/O에 필요한 결과 객체까지 무할당이라는 뜻은 아니다.
+
+### 실제 production profile
+
+아래의 CPU는 process 전체 active/drain CPU ticks/message이고, allocation은 EventPipe sampled B/message다. Source/target은 각 run에서 errors=0, submitted=completed=received다. 두 snapshot에서 전 thread의 CPU affinity가 6-7,14-15의 부분집합이고 scheduling policy가 SCHED_OTHER였다([validation](raw/profile-validation.json), [policy audit](raw/policy-audit.json)). 전후 configuration은 no-tier, warmup 2초·active 5초다.
+
+| 1K 셀 · 역할 | CPU µs/message 전→후 | sampled B/message 전→후 | raw |
+|---|---:|---:|---|
+| send-saturation · source | 37.75 → 44.86 | 4473 → 4373 | [전](raw/before-notier/L5_7-send-saturation/costs.json) / [후](raw/after-notier/L5_7-send-saturation/costs.json) |
+| send-saturation · target | 35.98 → 43.39 | 3966 → 3421 | [전](raw/before-notier/L5_7-send-saturation/costs.json) / [후](raw/after-notier/L5_7-send-saturation/costs.json) |
+| request-backpressure · source | 220.92 → 168.94 | 10910 → 10610 | [전](raw/before-notier/L5_7-request-backpressure/costs.json) / [후](raw/after-notier-3/L5_7-request-backpressure/costs.json) |
+| request-backpressure · target | 113.11 → 89.64 | 6230 → 5770 | [전](raw/before-notier/L5_7-request-backpressure/costs.json) / [후](raw/after-notier-3/L5_7-request-backpressure/costs.json) |
+
+**전체 CPU 개선률은 확정하지 않는다.** Send CPU 총량은 증가했고, 수정하지 않은 source의 backpressure CPU도 크게 변했다. Side CPU의 동시 부하·sampling·runtime 관리 비용이 섞인 짧은 실행에서 이 변화를 수정의 인과 효과로 단정할 수 없다. 제거한 ValueTask boxing stack이 후속 profile에 없다는 것과 아래 실제 allocation 감소를 판정 근거로 사용한다. Thread·native runtime·binding 비용을 코드 변경의 이득으로 임의 배분하지 않았다.
+
+EventPipe tick의 attribution은 표본이므로 process가 자체 기록한 allocation counter와 따로 대조했다. 아래 값은 `results.json`의 active phase delta/message와 target final stats/message다. 후자는 마지막 drain·stats 준비도 포함한다. 최종 source/target count를 분모로 사용했고, 그 원본은 위 validation에 연결했다.
+
+| 1K 패턴 | source active B/msg 전→후 | target active B/msg 전→후 | target final B/msg 전→후 |
+|---|---:|---:|---:|
+| send-saturation | 4471.5 → 4508.3 | 4175.2 → 3994.9 | 4191.9 → 4012.0 |
+| request-backpressure | 11373.3 → 11379.5 | 6551.3 → 6370.4 | 6583.8 → 6404.0 |
+
+Target의 실제 할당은 두 패턴 모두 **약 180 B/message 감소**했다(send 4.3%, backpressure 2.8%). Source 실제 allocation은 감소하지 않았다. Scope·record·native payload·JSON·request completion 자체의 할당은 남아 있으며 이 감소를 전체 ladder 손실의 해소나 21% budget 통과로 표현하지 않는다.
+
+Profile collector의 rundown이 실행 상한을 넘긴 두 backpressure 시도는 raw에 보존하고 위 비교에서 제외했다(`after-notier/L5_7-request-backpressure`, `after-notier-retry`). target/source process의 19초 watchdog이나 전체 run 상한을 늘리지 않았다. `after-notier-3`은 16.12초에 완료했다. Data snapshot을 collector 종료 대기보다 먼저 저장하도록 진단 도구 순서만 바꿨다.
+
+### Java 최종 보고서 대조
+
+최종 보고서를 다시 읽고 [사본](raw/java-report-before-final.md)을 보존했다. Java local commit은 `da04022584`다. Java는 기존 caller-grant를 queued ResultWork drain으로 모았고, controlled 8-thread owner probe의 CPU가 9.90–14.02 → 1.40–1.49 µs/turn으로 줄었다. 반면 전체 backpressure source CPU·allocation 감소는 확인하지 못했다고 보고했다. 이 Java 수치를 .NET의 성능 하한이나 이번 변경의 이득으로 사용하지 않는다.
+
+**같은 원인인가: source caller 인계는 아니다.** .NET은 원래 ResultWork drain이다. Target queue·fresh scope·JSON의 고정 비용은 공통이지만, 이번 .NET 변경의 ValueTask boxing/재해석과 idle PostWork·value tuple 복사는 .NET 내부 표현의 문제다. 두 언어 모두 scope와 독립 completion을 유지했고 공식 21% 재판정은 하지 않았다.
+
+### 소유·분류·리팩토링
+
+- 소유 계층: Framework state lane, 준비된 handler invoker, 소유 receive batch. Core·binding의 연결·재시도·completion 선택을 추가로 판정하지 않는다.
+- Spec: `06-state-ownership-and-lanes` §5 FIFO·비재진입·반환 전 경계, `08-messaging-hot-path` §4.3의 prepared activation·동기 결과 경로, `05-payload-ownership-and-codec` §2, `06-framework-api` §10·11의 fresh scope·terminal cleanup.
+- 교차언어: Java/Kotlin의 caller-grant 비용과 구분했다. C++의 typed ready result와 Node의 synchronous result/같은 event loop 처리를 대조했다. 공개 결과·순서·scope·deadline·terminal once의 언어 차이를 만들지 않았다.
+- 변경 분류: **B — 기존 내부 비용 결함.** Spec·wire·public API 변경 0.
+- 규칙 수: 동기 lane 진입 2→1, 반환형 해석 2→1, batch 소유 1→1, 합계 **5→3**. 새 persistent state/flag/queue/lock/timer 0. 기존 awaiter cache 하나를 삭제했다.
+- 리팩토링 점검: 발견 3건, 수정 3건, 이월 결함 0. 새 execution-gate 우회 동기화 0. Scope 수명과 C1 terminal owner는 기존 소유자를 유지했다.
+
+남은 성능 검증은 예약된 동일 조건의 공식 L4/L5~L7 21% budget 재판정이다. 지시대로 이번 작업에서 measure.lock을 사용하거나 throughput을 판정하지 않았다.
+
+
+### 추가 context 검토와 수정안
+
+공유 inline 경로를 검토하면서 flow suppression에서의 context 복원 차이를 확인했다. 기존 TryPost의 async drain은 compiler의 method builder가 caller ExecutionContext 전체를 복원하지만, RunAsync의 수동 fallback은 Capture가 null이면 lane marker만 복원한다. 이 fallback을 공유하면 post callback의 다른 AsyncLocal 변경이 caller에 남을 수 있다. 기존 scope/ambient 계약을 유지하기 위해 suppressed/normal × success/failure 회귀를 추가한다.
+
+수정안은 기존 inline turn 본문을 동기 완료하는 ValueTask method로 옮기고 .NET 기본 method builder의 context 복원을 사용하는 것이다. Inline turn은 완료된 ValueTask만 통과하므로 suspension·Task allocation·thread hop을 추가하지 않는다. Claim과 drain release는 같은 기존 소유자에 남기며, inline context를 복원한 다음 queued drain을 시작한다. 수동 Capture/Restore·suppression 분기를 삭제한다. 소유 spec은 기존 StateLane §5, 변경 분류 B다. 새 state/flag/queue/lock/timer나 public API는 없다.
