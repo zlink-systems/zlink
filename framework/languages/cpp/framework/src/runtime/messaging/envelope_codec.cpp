@@ -1310,10 +1310,9 @@ envelope_codec_t::decode_header_view (const message_parts_t &parts,
                                       bool capture_flow,
                                       std::optional<envelope_header_t> *rejection_context) const
 {
-    if (parts.size () == 0
-        || std::holds_alternative<std::span<const std::span<const std::byte>>> (parts._parts))
+    if (parts.size () == 0)
         return decode_header (parts, capture_flow, rejection_context);
-    return decode_header_view (parts[0], capture_flow, rejection_context);
+    return decode_header_bytes<true> (parts.part_bytes (0), capture_flow, rejection_context);
 }
 
 result_t<envelope_header_t>
