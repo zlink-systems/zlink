@@ -18,6 +18,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
 var ladderLevel = Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") ?? "L0";
+var ladderShape = BenchPayloadShapes.Parse(Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_SHAPE"));
 
 var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
@@ -34,10 +35,14 @@ if (ladderLevel == "L5_7")
             .AddRouteMesh("bench")
             .Listen(endpoint)
             .SetRoutingId(RoutingId.From("bench-server"));
-        mesh.AddRouteRequestHandler<TypedEchoHandler, BenchTypedPayload, BenchTypedPayload>(
-                "BenchTypedPayload"
-            )
-            .AddRouteSendHandler<TypedCommandHandler, BenchTypedPayload>("BenchTypedPayload");
+        if (ladderShape == BenchPayloadShape.Mixed)
+            mesh.AddRouteRequestHandler<GameEchoHandler, BenchGameMessage, BenchGameMessage>("BenchGameMessage")
+                .AddRouteSendHandler<GameCommandHandler, BenchGameMessage>("BenchGameMessage");
+        else
+            mesh.AddRouteRequestHandler<TypedEchoHandler, BenchTypedPayload, BenchTypedPayload>(
+                    "BenchTypedPayload"
+                )
+                .AddRouteSendHandler<TypedCommandHandler, BenchTypedPayload>("BenchTypedPayload");
     });
 }
 #elif !ZLINK_DOTNET_LADDER_L0 && !ZLINK_DOTNET_LADDER_L1 && !ZLINK_DOTNET_LADDER_L2 && !ZLINK_DOTNET_LADDER_L3 && !ZLINK_DOTNET_LADDER_L4
@@ -91,6 +96,7 @@ else
     var decodeEnvelope = ladderLevel is "L2" or "L3" or "L4";
     var decodeServiceWire = ladderLevel is "L3" or "L4";
     var decodeTypedPayload = ladderLevel == "L4";
+    var decodeGamePayload = decodeTypedPayload && ladderShape == BenchPayloadShape.Mixed;
     ZLinkEnvelopeHeader? preparedReplyHeader = null;
 #if ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
     var ladderCodecs = CreateLadderCodecs();
@@ -142,6 +148,7 @@ else
                 preparedReplyHeader,
                 decodeServiceWire,
                 decodeTypedPayload,
+                decodeGamePayload,
                 app.Lifetime.ApplicationStopping
             )
         );
@@ -262,6 +269,7 @@ static async Task RunL1Owner(
     ZLinkEnvelopeHeader? preparedReplyHeader,
     bool decodeServiceWire,
     bool decodeTypedPayload,
+    bool decodeGamePayload,
     CancellationToken stopping
 )
 {
@@ -321,7 +329,8 @@ static async Task RunL1Owner(
                                     handler,
                                     permit,
                                     preparedReplyHeader,
-                                    decodeTypedPayload
+                                    decodeTypedPayload,
+                                    decodeGamePayload
                                 );
                                 continue;
                             }
@@ -445,7 +454,8 @@ static async Task HandleServiceWire(
     L0BenchHandler handler,
     ZLinkApplicationJobQueueLease permit,
     ZLinkEnvelopeHeader? preparedReplyHeader,
-    bool decodeTypedPayload
+    bool decodeTypedPayload,
+    bool decodeGamePayload
 )
 {
     if (
@@ -474,19 +484,20 @@ static async Task HandleServiceWire(
 
     var envelopeHeader = ZLinkEnvelopeCodec.DecodeHeader(envelopeParts);
     if (decodeTypedPayload && (
-        envelopeHeader.MessageName != "BenchTypedPayload"
+        envelopeHeader.MessageName != (decodeGamePayload ? "BenchGameMessage" : "BenchTypedPayload")
         || envelopeHeader.ContentType != ZLinkEnvelopeCodec.DefaultContentType
     ))
         throw new InvalidOperationException("Typed JSON service payload was invalid.");
     await permit.ReleaseForHandlerStartAsync();
     if (!isRequest)
     {
-        if (decodeTypedPayload)
+        if (decodeTypedPayload && decodeGamePayload)
+            handler.HandleSend((BenchGameMessage)ZLinkEnvelopeCodec.DecodeBody(
+                envelopeParts, typeof(BenchGameMessage), envelopeHeader.ContentType, null
+            )!);
+        else if (decodeTypedPayload)
             handler.HandleSend((BenchTypedPayload)ZLinkEnvelopeCodec.DecodeBody(
-                envelopeParts,
-                typeof(BenchTypedPayload),
-                envelopeHeader.ContentType,
-                null
+                envelopeParts, typeof(BenchTypedPayload), envelopeHeader.ContentType, null
             )!);
         else
             handler.HandleSend(envelopeParts.GetSpan(1));
@@ -494,7 +505,14 @@ static async Task HandleServiceWire(
     }
 
     Message framedReply;
-    if (decodeTypedPayload)
+    if (decodeTypedPayload && decodeGamePayload)
+    {
+        var request = (BenchGameMessage)ZLinkEnvelopeCodec.DecodeBody(
+            envelopeParts, typeof(BenchGameMessage), envelopeHeader.ContentType, null
+        )!;
+        framedReply = EncodeGameReply(handler.HandleRequest(request), envelopeHeader);
+    }
+    else if (decodeTypedPayload)
     {
         var request = (BenchTypedPayload)
             ZLinkEnvelopeCodec.DecodeBody(
@@ -548,6 +566,23 @@ static Message EncodeTypedReply(BenchTypedPayload reply, ZLinkEnvelopeHeader req
         requestHeader
     );
     var parts = ZLinkEnvelopeCodec.EncodeParts(header, reply, typeof(BenchTypedPayload), null);
+    try
+    {
+        return ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts);
+    }
+    finally
+    {
+        foreach (var part in parts)
+            part.Dispose();
+    }
+}
+
+static Message EncodeGameReply(BenchGameMessage reply, ZLinkEnvelopeHeader requestHeader)
+{
+    var header = ZLinkChannelReplyWriter.CreateReplyHeader(
+        ZLinkMessageKind.Response, "bench", requestHeader
+    );
+    var parts = ZLinkEnvelopeCodec.EncodeParts(header, reply, typeof(BenchGameMessage), null);
     try
     {
         return ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts);
@@ -616,6 +651,34 @@ internal sealed class TypedCommandHandler(BenchServerMetrics metrics)
     }
 }
 
+internal sealed class GameEchoHandler(BenchServerMetrics metrics)
+    : IZLinkRouteRequestHandler<BenchGameMessage, BenchGameMessage>
+{
+    public ValueTask<BenchGameMessage> HandleAsync(
+        BenchGameMessage request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        metrics.RecordReceived(request);
+        return ValueTask.FromResult(request);
+    }
+}
+
+internal sealed class GameCommandHandler(BenchServerMetrics metrics)
+    : IZLinkRouteSendHandler<BenchGameMessage>
+{
+    public ValueTask HandleAsync(
+        BenchGameMessage message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        metrics.Record(message);
+        return ValueTask.CompletedTask;
+    }
+}
+
 #if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 internal sealed class L0BenchHandler(BenchServerMetrics metrics)
     : IZLinkRouteRequestHandler<Message, Message>, IZLinkRouteSendHandler<Message>
@@ -661,6 +724,12 @@ internal sealed class L0BenchHandler(BenchServerMetrics metrics)
         return request;
     }
 
+    public BenchGameMessage HandleRequest(BenchGameMessage request)
+    {
+        metrics.RecordReceived(request);
+        return request;
+    }
+
     public void HandleSend(Message message)
     {
         HandleSend(message.AsReadOnlySpan());
@@ -671,5 +740,7 @@ internal sealed class L0BenchHandler(BenchServerMetrics metrics)
     public void HandleSend(BenchPayload message) => metrics.Record(message);
 
     public void HandleSend(BenchTypedPayload message) => metrics.Record(message);
+
+    public void HandleSend(BenchGameMessage message) => metrics.Record(message);
 }
 #endif

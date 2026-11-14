@@ -257,16 +257,11 @@ internal static class BenchMeasurement
             while (Stopwatch.GetTimestamp() < deadline)
             {
                 var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayloadBytes(
-                    trigger.payloadBytes,
-                    runId,
-                    streamMetrics.Phase,
-                    sequence
-                );
+                var payload = BenchPayloadFactory.Create(trigger.payloadBytes, runId, streamMetrics.Phase, sequence);
                 var started = streamMetrics.Begin();
                 try
                 {
-                    Task<BenchPayload> reply;
+                    Task<BenchPayloadInput> reply;
                     Task? admitted = null;
                     if (transport is RawBenchTransport raw)
                     {
@@ -336,7 +331,7 @@ internal static class BenchMeasurement
     }
 
     private static async Task ObserveRequestReplyAsync(
-        Task<BenchPayload> replyTask,
+        Task<BenchPayloadInput> replyTask,
         SourceMetrics metrics,
         BenchTriggerRequest trigger,
         uint runId,
@@ -381,12 +376,7 @@ internal static class BenchMeasurement
             while (Stopwatch.GetTimestamp() < deadline)
             {
                 var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayloadBytes(
-                    trigger.payloadBytes,
-                    runId,
-                    streamMetrics.Phase,
-                    sequence
-                );
+                var payload = BenchPayloadFactory.Create(trigger.payloadBytes, runId, streamMetrics.Phase, sequence);
                 var started = streamMetrics.Begin();
                 try
                 {
@@ -436,12 +426,7 @@ internal static class BenchMeasurement
         CancellationToken cancellationToken
     )
     {
-        var payload = BenchMetricHeaders.CreatePayloadBytes(
-            trigger.payloadBytes,
-            runId,
-            metrics.Phase,
-            sequence
-        );
+        var payload = BenchPayloadFactory.Create(trigger.payloadBytes, runId, metrics.Phase, sequence);
         var started = metrics.Begin();
         await ObserveRequestReplyAsync(
             transport.RequestAsync(stream, payload, cancellationToken).AsTask(),
@@ -455,17 +440,22 @@ internal static class BenchMeasurement
     }
 
     private static void ValidateReply(
-        BenchPayload reply,
+        BenchPayloadInput reply,
         uint runId,
         BenchPhase phase,
         int payloadBytes,
         ulong sequence
     )
     {
-        BenchPayloads.Validate(reply, payloadBytes);
+        var expectedPayloadSize = BenchPayloadFactory.ExpectedPayloadSize(
+            payloadBytes, runId, phase, sequence
+        );
+        var game = reply.GameMessage;
+        if (game is null && reply.Bytes.Length != expectedPayloadSize)
+            throw new InvalidOperationException($"Unexpected payload size. expected={expectedPayloadSize}, actual={reply.Bytes.Length}");
         if (
-            !BenchMetricHeaders.TryDecode(reply, out var header)
-            || !BenchMetricHeaders.IsExpected(header, runId, phase, payloadBytes, sequence)
+            !(game is null ? BenchMetricHeaders.TryDecode(new BenchTypedPayload(reply.Bytes), out var header) : BenchMetricHeaders.TryDecode(game, out header))
+            || !BenchMetricHeaders.IsExpected(header, runId, phase, expectedPayloadSize, sequence)
         )
         {
             throw new InvalidOperationException(

@@ -84,6 +84,28 @@ public static class BenchMetricHeaders
         return TryDecode(payload.Body, out header);
     }
 
+    public static bool TryDecode(BenchGameMessage payload, out BenchMetricHeader header)
+    {
+        header = default;
+        var payloadSize = payload.Items.Count switch
+        {
+            16 => 1024,
+            88 => 4096,
+            _ => 0,
+        };
+        if (payloadSize == 0 || payload.Run is < 0 or > uint.MaxValue
+            || payload.Phase is < 0 or > 1 || payload.Seq < 0 || payload.SentNs <= 0)
+            return false;
+        header = new BenchMetricHeader(
+            (uint)payload.Run,
+            (BenchPhase)payload.Phase,
+            payloadSize,
+            (ulong)payload.Seq,
+            payload.SentNs
+        );
+        return true;
+    }
+
     public static bool IsExpected(
         BenchMetricHeader header,
         uint runId,
