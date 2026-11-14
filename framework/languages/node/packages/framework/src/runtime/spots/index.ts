@@ -4,6 +4,11 @@ import { encodeActorReply } from '../actors/actor-reply';
 import { boundSessionErrorPayload } from '../streams/bound-session-response-target';
 import { RELOCATED_REQUEST_OWNED_BY_REQUESTER } from '../actors/actor-handoff';
 import { routingIdsEqual } from '../routing-id';
+import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
+import type {
+  ZLinkActorDispatchOwner,
+  ZLinkActorIngressMembership
+} from './spot-actor-ingress-admission';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
@@ -231,10 +236,7 @@ export interface ZLinkSpotManagerOptions {
     meshName: string,
     spotType: Type<ZLinkSpot>
   ) => import('../../contracts').ZLinkSpotRelocationCoordinationMode;
-  readonly actorDispatchOwnerResolver?: (actorId: string) => {
-    readonly actorRef?: ActorRef;
-    readonly spotId?: RoutingId;
-  };
+  readonly actorDispatchOwnerResolver?: (actorId: string) => ZLinkActorDispatchOwner;
   readonly channelClient?: ZLinkChannelClient;
   readonly fanoutClient?: ZLinkFanoutClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
@@ -337,6 +339,7 @@ interface ZLinkTargetSpotCloseOperation {
 }
 
 export class DefaultZLinkSpotManager {
+  readonly actorIngressMembership: ZLinkActorIngressMembership;
   [inspectRuntime]() {
     return Object.freeze({
       activeActivationCount: this.activations.activeActivations().length,
@@ -414,6 +417,10 @@ export class DefaultZLinkSpotManager {
       spotRouteResolver: options.spotRouteResolver,
       actorTransferRuntime: options.actorTransferRuntime
     });
+    this.actorIngressMembership = {
+      resolveOwner: options.actorDispatchOwnerResolver,
+      dispatchToOwner: (spotId, delivery) => this.dispatchActorPacketToOwner(spotId, delivery)
+    };
     this.activationLifecycle = new ZLinkSpotActivationLifecycle({
       timerClock,
       spotTimerHandlers: options.spotTimerHandlers,
@@ -444,6 +451,7 @@ export class DefaultZLinkSpotManager {
       createTopicMessage: options.createTopicMessage,
       nativeSpotNodeProvider: options.nativeSpotNodeProvider,
       actorResolver: options.actorResolver,
+      actorIngressMembership: this.actorIngressMembership,
       detachedTaskRunner: options.detachedTaskRunner,
       actorTransferRuntime: options.actorTransferRuntime,
       boundSessionRuntime: options.boundSessionRuntime,
@@ -1626,6 +1634,28 @@ export class DefaultZLinkSpotManager {
       requestTerminal,
       messageFollowOrigin
     );
+  }
+
+  private dispatchActorPacketToOwner(
+    spotId: RoutingId | undefined,
+    delivery: ZLinkActorPacketDelivery
+  ): Promise<unknown> {
+    const args = [
+      delivery.actorId,
+      delivery.parts,
+      delivery.returnResponse,
+      delivery.remoteBoundSessionTarget,
+      delivery.fallbackActorRef,
+      delivery.requestTerminal,
+      delivery.messageFollowOrigin
+    ] as const;
+    if (spotId !== undefined) {
+      return this.dispatchRoutedActorPacket(delivery.origin, spotId, ...args);
+    }
+    if (this.options.dispatchEntryActorPacket === undefined) {
+      throw new ZLinkConfigurationException('Actor ingress requires an Entry FIFO port.');
+    }
+    return this.options.dispatchEntryActorPacket(delivery.origin, ...args);
   }
 
   /** @internal Replays a record already owned by the Actor handoff queue. */

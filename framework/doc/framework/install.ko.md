@@ -205,7 +205,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     태그를 고정하지 않으면 browser bundle과 서버 버전이 어긋난다.
 
     ```
-    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.32.1
+    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.32.2
     ```
 
     UPM 어댑터는 npm 패키지의 browser bundle을 담고 jslib·C# 호출 경계만 제공한다. **C# 표면은

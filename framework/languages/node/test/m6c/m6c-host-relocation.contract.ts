@@ -2868,7 +2868,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     assert.notEqual(activation, undefined);
     return resolveActorIngress({ actorId, parts: [] } as never, false, {
       resolveActor: () => sourceActor as never,
-      hasDepartedActor: (id) => activation!.hasDepartedActor(id)
+      membership: {
+        resolveOwner: () =>
+          activation!.hasDepartedActor(actorId) ? {} : { actorRef: sourceState.nativeActorRef }
+      }
     }).kind;
   };
   const membership = {
@@ -3856,31 +3859,23 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           assert.ok(events.includes('source:removed'));
           return undefined;
         },
-        async onDisconnectActor() {},
-        routeBeforeLocal: (delivery) => {
-          const captured = sourceHandoff.capture(
-            delivery.origin,
-            delivery.actorId,
-            delivery.parts,
-            delivery.returnResponse,
-            delivery.remoteBoundSessionTarget,
-            delivery.fallbackActorRef
-          );
-          return captured === undefined ? undefined : { handled: true, response: captured };
-        }
+        async onDisconnectActor() {}
       });
       try {
-        return await dispatch.dispatch(
+        const result = await dispatch.admitDelivery(
           undefined,
-          'remote',
-          actorId,
-          parts,
-          true,
-          undefined,
-          withFollowContext
-            ? attachActorMessageFollowContext(sourceActorRef as never, context)
-            : (sourceActorRef as never)
+          {
+            origin: 'remote',
+            actorId,
+            parts,
+            returnResponse: true,
+            fallbackActorRef: withFollowContext
+              ? attachActorMessageFollowContext(sourceActorRef as never, context)
+              : (sourceActorRef as never)
+          },
+          sourceHandoff
         );
+        return 'terminal' in result ? await result.terminal : result.response;
       } finally {
         parts.forEach((part) => part.close());
       }

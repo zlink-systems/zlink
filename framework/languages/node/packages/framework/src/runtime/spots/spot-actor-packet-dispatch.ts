@@ -1,7 +1,7 @@
 import {
   resolveActorIngress,
   type ZLinkRouteToActorJoinPrewarm,
-  type ZLinkActorIngressRoute
+  type ZLinkActorIngressMembership
 } from './spot-actor-ingress-admission';
 import type { ZLinkSpotActorHandoffRuntime } from './spot-runtime-ports';
 import { DefaultZLinkActorContext } from '../actors/actor-context';
@@ -97,8 +97,8 @@ interface ZLinkSpotActorPacketDispatchOptions {
   readonly spotId: () => string;
   readonly registry: ZLinkSpotActorHandlerRegistryRuntime;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
-  readonly hasDepartedActor?: (actorId: string) => boolean;
-  readonly routeBeforeLocal?: ZLinkActorIngressRoute;
+  readonly membershipSpotId?: RoutingId;
+  readonly membership?: ZLinkActorIngressMembership;
   readonly onDisconnectActor: (actor: ZLinkActor) => Promise<void>;
   readonly actorResponseSender?: (
     actor: ZLinkActor,
@@ -226,9 +226,9 @@ export class ZLinkSpotActorPacketDispatch {
           messageKind === ZLinkDispatchMessageKind.ActorRequest,
           {
             handoffRuntime,
-            routeBeforeLocal: this.options.routeBeforeLocal,
+            spotId: this.options.membershipSpotId,
+            membership: this.options.membership,
             resolveActor: this.options.resolveActor,
-            hasDepartedActor: this.options.hasDepartedActor,
             routeToActorJoinPrewarm: this.options.routeToActorJoinPrewarm
           }
         );

@@ -211,7 +211,7 @@ sandbox.
     pinned tag the browser bundle drifts from the server version.
 
     ```
-    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.32.1
+    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.32.2
     ```
 
     The UPM adapter carries the npm package's browser bundle and provides only the jslib and C#
