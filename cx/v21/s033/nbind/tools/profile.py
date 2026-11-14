@@ -25,7 +25,7 @@ env.update(NODE_PATH=str(ROOT/'framework/languages/node/node_modules'),ZLINK_LAD
 if args.level=='L1':env.update(ZLINK_LADDER_L1_PERMIT='1')
 if args.level=='L2':env.update(ZLINK_LADDER_L2_ENVELOPE='1',ZLINK_LADDER_L2_CLIENT='1')
 if args.level=='L3':env.update(ZLINK_LADDER_L3_SERVICE_WIRE='1',ZLINK_LADDER_L3_CLIENT='1')
-if args.mode=='alloc':env.update(LD_PRELOAD=str(JOB/'tools/alloc-counter.so'),NBIND_ALLOC_DIR=str(out))
+if args.mode=='alloc':env.update(NBIND_ALLOC_DIR=str(out))
 procs=[];perfprocs=[];logs=[];timers=[];events=[]
 started=time.monotonic()
 def event(name,**v):events.append(dict(event=name,monotonic_us=time.monotonic_ns()//1000,epoch_ms=time.time()*1000,**v))
@@ -35,7 +35,8 @@ def request(port,route='/bench/stats',body=None,timeout=.7):
 def spawn(role,cmd,control):
  log=open(out/f'{role}.log','w');logs.append(log)
  flags=['--perf-basic-prof','--interpreted-frames-native-stack'] if args.mode=='cpu' else []
- proc=subprocess.Popen(['taskset','-c',CPUS,'node',*flags,'--require',str(JOB/'tools/measure-preload.cjs'),*cmd],cwd=BENCH,env=dict(env,NBIND_ROLE=role,NBIND_CONTROL_PORT=str(control)),stdout=log,stderr=subprocess.STDOUT)
+ launch_env=['env','LD_PRELOAD='+str(JOB/'tools/alloc-counter.so')] if args.mode=='alloc' else []
+ proc=subprocess.Popen(['taskset','-c',CPUS,*launch_env,'node',*flags,'--require',str(JOB/'tools/measure-preload.cjs'),*cmd],cwd=BENCH,env=dict(env,NBIND_ROLE=role,NBIND_CONTROL_PORT=str(control)),stdout=log,stderr=subprocess.STDOUT)
  procs.append((role,proc,time.monotonic()))
  timer=threading.Timer(19.4,lambda:proc.kill() if proc.poll() is None else None);timer.daemon=True;timer.start();timers.append(timer)
  event('spawn',role=role,pid=proc.pid)
@@ -85,7 +86,7 @@ def phase(name,duration):
  ts=request(target)
  (out/f'{name}-target.json').write_text(json.dumps(ts,indent=2)+'\n')
  assert stats['errors']==ts['errors']==0,(stats,ts)
- assert stats['submitted']==stats['completed']==ts['received'],(stats,ts)
+ assert stats['submitted']==stats['completed']==ts['allPhaseMessages' if name=='warmup' else 'received'],(stats,ts)
  return stats
 try:
  tp=spawn('target',['zlink-framework-server/main.js','--endpoint',f'tcp://127.0.0.1:{endpoint}','--command-endpoint',f'tcp://127.0.0.1:{command}','--metrics-url',url(target)],tc)

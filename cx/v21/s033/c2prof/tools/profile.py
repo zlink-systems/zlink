@@ -40,7 +40,7 @@ class Perf:
         self.p.wait(timeout=5);self.log.close();os.close(self.w);os.close(self.r)
 
 def run(level,pattern,rep,mode='perf',freq=2999):
-    label=f'{mode}-L{level}-{pattern}-r{rep}'; d=J/'raw'/label;d.mkdir(exist_ok=False)
+    label=f'{mode}'+('-mono' if mode=='perf' else '')+f'-L{level}-{pattern}-r{rep}'; d=J/'raw'/label;d.mkdir(exist_ok=False)
     processes={};perfs=[];timers=[];env=dict(os.environ,ZLINK_CPP_LADDER_LEVEL=str(level))
     if mode.startswith('alloc'):
         env['LD_PRELOAD']=str(J/'tools/libwindow-counter.so')
@@ -62,13 +62,13 @@ def run(level,pattern,rep,mode='perf',freq=2999):
         save(d/'active-start.json',phase('active',5000));active=time.monotonic();time.sleep(.35)
         if mode=='perf':
             for side,p in processes.items():
-                perfs.append(Perf(['record','-q','-e','cpu-clock','-F',str(freq),'-g','--call-graph','dwarf,8192','--no-buildid','-o',str(d/(side+'.perf.data')),'-p',str(p.pid)],d/(side+'.record')))
+                perfs.append(Perf(['record','-q','-e','cpu-clock','-F',str(freq),'-g','--call-graph','dwarf,8192','--clockid','mono','-m','1024','--no-buildid','-o',str(d/(side+'.perf.data')),'-p',str(p.pid)],d/(side+'.record')))
                 tids=','.join(proc(p.pid)['threads'])
                 perfs.append(Perf(['stat','--per-thread','-t',tids,'-e','task-clock,context-switches,cpu-migrations','-x',';','-o',str(d/(side+'.stat.csv'))],d/(side+'.stat')))
             for pf in perfs:pf.control('enable')
-        if mode=='trace':
+        if mode in ('trace','stat','threadstat'):
             for side,p in processes.items():
-                perfs.append(Perf(['stat','-p',str(p.pid),'-e','syscalls:sys_enter_futex,syscalls:sys_enter_sched_yield,syscalls:sys_enter_epoll_wait,task-clock,context-switches,cpu-migrations','-x',';','-o',str(d/(side+'.syscalls.csv'))],d/(side+'.trace')))
+                perfs.append(Perf(['stat']+(['--per-thread','-t',','.join(proc(p.pid)['threads'])] if mode=='threadstat' else ['-p',str(p.pid)])+['-e',('syscalls:sys_enter_futex,syscalls:sys_enter_sched_yield,syscalls:sys_enter_epoll_wait,task-clock,context-switches,cpu-migrations' if mode=='trace' else 'task-clock,context-switches,cpu-migrations'),'-x',';','-o',str(d/(side+'.syscalls.csv'))],d/(side+'.trace')))
             for pf in perfs:pf.control('enable')
         counters={}
         if mode.startswith('alloc'):
@@ -76,17 +76,17 @@ def run(level,pattern,rep,mode='perf',freq=2999):
             for side in processes:
                 f=open(d/(side+'.counter'),'r+b');counters[side]=mmap.mmap(f.fileno(),0)
             for m in counters.values():m[0:4]=(1).to_bytes(4,'little')
-        before={'monotonic':time.monotonic(),'stats':{'source':http(5293),'target':http(5295)},'processes':{s:proc(p.pid) for s,p in processes.items()}}
+        before={'monotonic':time.monotonic(),'monotonic_raw':time.clock_gettime(time.CLOCK_MONOTONIC_RAW),'stats':{'source':http(5293),'target':http(5295)},'processes':{s:proc(p.pid) for s,p in processes.items()}}
         save(d/'before.json',before)
         until=active+4.45
         timeline=[]
         while time.monotonic()<until:
             timeline.append({'monotonic':time.monotonic(),'processes':{s:proc(p.pid) for s,p in processes.items()}})
             time.sleep(.15)
-        after={'monotonic':time.monotonic(),'stats':{'source':http(5293),'target':http(5295)},'processes':{s:proc(p.pid) for s,p in processes.items()}}
+        after={'monotonic':time.monotonic(),'monotonic_raw':time.clock_gettime(time.CLOCK_MONOTONIC_RAW),'stats':{'source':http(5293),'target':http(5295)},'processes':{s:proc(p.pid) for s,p in processes.items()}}
         if mode.startswith('alloc'):
             for m in counters.values():m[0:4]=(0).to_bytes(4,'little')
-        if mode in ('perf','trace'):
+        if mode in ('perf','trace','stat','threadstat'):
             for pf in perfs:pf.control('disable')
         save(d/'after.json',after);save(d/'timeline.json',timeline)
         for side,p in processes.items():(d/(side+'.maps')).write_text(Path(f'/proc/{p.pid}/maps').read_text())

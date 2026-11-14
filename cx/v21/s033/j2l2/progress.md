@@ -44,3 +44,9 @@
 - correlation formatting 기존 184 B/header 실패를 보존했다(`raw/tests-correlation-before.log`, `raw/correlation-before.xml`). UUID 값·32자리 소문자 bytes를 유지하며 HexFormat.formatHex에 16-byte 입력을 한 번 전달한다(104 B/header). 판단 소유자인 internal/service/ZLinkServiceOperationIds만 변경한다.
 - 첫 native writer의 focused 검사 4,156개 중 cached command의 service frame copy 검사 1개 실패. Cached header까지 native materialization한 것이 원인이다. 기준을 바꾸지 않고, 기존 cache hit bytes는 그대로 유지하고 uncached header만 final Message를 할당하도록 encodeHeaderPart에서 한 번 결정한다. `raw/tests-focused-native-final.log` 보존.
 - MultipartView는 이미 사용하던 byte[]/Message slot 표현을 그대로 보유하며 native header의 소유권만 같은 owner로 이전한다. 기존 byte[] entry는 같은 소유 함수로 모아 constructor/cleanup 중복을 줄인다.
+
+## CPU 비용 분리
+
+- 첫 통합 reader는 ByteBuffer의 mutable position을 byte마다 갱신하고, field 이름마다 14개 전체 길이를 검사했다. Steady request parse sample 추정이 source 1.34→3.07 µs/제출, target 1.72→3.57 µs/수신으로 증가했다. 이 후보를 완료안으로 채택하지 않는다(`raw/after-final-L2-bp`). Native allocation이 envelope 안으로 이동했으므로 writer 전체 envelope 비중은 이전과 직접 같은 범위가 아님도 확인했다.
+- 단일 reader 안의 cursor 하나로 position 갱신을 옮기고 성공 때만 입력 cursor를 consume 상태로 공개한다. 기존 HeaderField lookup을 field-name 길이로 묶은 grammar table 하나로 대체해 비교 후보를 최대 3개로 줄인다(.NET ReadHeaderField:637도 길이로 구분). 새 cache가 아니며 entry·lookup policy·eviction을 추가하지 않는다. 정상 optional-string 검사는 parse의 invalid bit가 0이면 끝낸다. 새 제어 상태/queue/lock/flag 없음.
+- Native writer의 null·빈 metadata 고정 토큰도 단일 bulk copy로 쓴다. writer/parser 수와 buffer/검증 owner는 동일하다. 후보 raw와 failed/invalid run은 모두 보존한다.
