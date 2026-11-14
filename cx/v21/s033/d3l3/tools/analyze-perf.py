@@ -1,5 +1,5 @@
 import pathlib,subprocess,json,re,time,bisect,shutil,collections
-j=pathlib.Path('/root/jobs/fx/cx/v21/s033/d3l3');epoch=time.time()-time.monotonic();(j/'raw/perf-clock-map.json').write_text(json.dumps(dict(epochOffsetSeconds=epoch,wall=time.time(),monotonic=time.monotonic()),indent=2))
+j=pathlib.Path('/root/jobs/fx/cx/v21/s033/d3l3');epoch=time.time()-time.clock_gettime(time.CLOCK_MONOTONIC_RAW);(j/'raw/perf-clock-map.json').write_text(json.dumps(dict(epochOffsetSeconds=epoch,wall=time.time(),monotonic=time.monotonic()),indent=2))
 for cell in ['perf-L2-send1K','perf-L3-send1K','exp-no-clone-perf-send1K']:
  d=j/'raw'/cell;window=json.loads((d/'window.json').read_text());ids=json.loads((d/'pids.json').read_text())
  for role in ['source','target']:

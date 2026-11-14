@@ -50,3 +50,15 @@
 - build/검증 fingerprint: audit-maps-L2 047b42138529679875063fa1bc603bcef79910e6 dirty=True merge-base=6350275facc547759c9e143cc2515f3f528c776e; raw/audit-maps-L2-fingerprint.json (source/output fresh, own worktree paths·sha256).
 
 - profile audit-maps-L2 L2 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.
+
+- build/검증 fingerprint: own-after-L1-final 047b42138529679875063fa1bc603bcef79910e6 dirty=True merge-base=6350275facc547759c9e143cc2515f3f528c776e; raw/own-after-L1-final-fingerprint.json (source/output fresh, own worktree paths·sha256).
+
+- profile own-after-L1-final L1 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.
+
+- build/검증 fingerprint: own-after-L2-final 047b42138529679875063fa1bc603bcef79910e6 dirty=True merge-base=6350275facc547759c9e143cc2515f3f528c776e; raw/own-after-L2-final-fingerprint.json (source/output fresh, own worktree paths·sha256).
+
+- profile own-after-L2-final L2 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.
+
+- build/검증 fingerprint: audit-final-L2 047b42138529679875063fa1bc603bcef79910e6 dirty=True merge-base=6350275facc547759c9e143cc2515f3f528c776e; raw/audit-final-L2-fingerprint.json (source/output fresh, own worktree paths·sha256).
+
+- profile audit-final-L2 L2 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.

@@ -72,6 +72,10 @@ try:
         '--trigger-url',trigger,'--stats-url',stats,'--target-endpoint',endpoint,'--target-stats-url',target,
         '--run-id','j2l2-'+args.label,'--output',str(out),'--report-file','report.txt'])
     ready(stats,True)
+    # A send probe's completion precedes target receipt. Observe it before reset.
+    while request(target+'/bench/stats')['allPhaseMessages'] < 1:
+        if time.monotonic()-start > 9: raise RuntimeError('route probe not received')
+        time.sleep(.01)
     snapshot('start')
     for phase,duration in [('warmup',15),('active',5)]:
         body = dict(runId='j2l2-'+args.label,cellId=args.label,pattern=args.pattern,payloadBytes=1024,
