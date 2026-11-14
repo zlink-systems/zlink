@@ -91,7 +91,7 @@ function pair() {
         sent.push({ target, parts });
         events.push(`send:${rid}:${parts[0][SERVICE_WIRE_COMMAND_OFFSET]}`);
         const destination = nodes.get(target);
-        const received = { sourceRoutingId: rid, parts };
+        const received = { sourceRoutingId: rid, sourceNodeGeneration: generation, parts };
         const permit = await destination.applicationJobQueue.acquire(undefined, 'remote');
         try {
           await destination.receive(received);
@@ -123,6 +123,7 @@ function pair() {
           }
           const received = {
             sourceRoutingId: rid,
+            sourceNodeGeneration: generation,
             parts,
             requestSequence: BigInt(requests.length - 1) + TEST_NATIVE_REQUEST_SEQUENCE,
             reply: (replyParts) => {

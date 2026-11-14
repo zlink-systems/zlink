@@ -4096,7 +4096,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           remainingMs,
           signal,
           onSubmitted,
-          pending
+          pending,
+          request.kind === 'prepare' ? request.target.nodeGeneration : undefined
         ).then(
           (reply) => receiver.operationCompleted(pending.id, reply, undefined),
           (error) => receiver.operationFailed(pending.id, error, undefined)
@@ -4924,7 +4925,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     timeoutMs: number,
     signal?: AbortSignal,
     onSubmitted?: (signal: AbortSignal) => Promise<void>,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    targetNodeGeneration?: bigint
   ): Promise<readonly Uint8Array[]> {
     const node = this.requireMeshNode(meshName);
     const request = node.requestInfrastructureControlFrames;
@@ -4935,7 +4937,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       timeoutMs,
       signal,
       onSubmitted,
-      requestOperation
+      requestOperation,
+      targetNodeGeneration
     });
   }
 }
