@@ -51,6 +51,35 @@ final class ZLinkJsonMessageSerializerTest {
     }
 
     @Test
+    void declarationNullableAcceptsNullAndUnannotatedReferenceRejectsIt() throws Exception {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        try (Message payload = Message.from("{\"code\":\"a\",\"note\":null}")) {
+            assertEquals(
+                    new DeclarationNullable("a", null),
+                    serializer.deserializeBorrowed(
+                            payload.dataBuffer(), DeclarationNullable.class));
+        }
+        try (Message payload = Message.from("{\"code\":null,\"note\":\"x\"}")) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            serializer.deserializeBorrowed(
+                                    payload.dataBuffer(), DeclarationNullable.class));
+        }
+    }
+
+    /** Declaration-target annotation, like JSR 305 or Jakarta Nullable. */
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target({
+        java.lang.annotation.ElementType.PARAMETER,
+        java.lang.annotation.ElementType.FIELD,
+        java.lang.annotation.ElementType.METHOD
+    })
+    @interface Nullable {}
+
+    record DeclarationNullable(String code, @Nullable String note) {}
+
+    @Test
     void borrowedTypedJsonPreservesTheArrayDecoderResultsAndErrors() throws Exception {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
         for (String json : List.of("{\"value\":\"한글😀\"}", "null")) {

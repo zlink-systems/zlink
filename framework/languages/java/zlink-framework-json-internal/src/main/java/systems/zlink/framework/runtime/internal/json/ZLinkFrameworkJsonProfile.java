@@ -90,21 +90,26 @@ public final class ZLinkFrameworkJsonProfile {
         public JsonSetter.Value findSetterInfo(Annotated member) {
             JsonSetter.Value declared = super.findSetterInfo(member);
             if (declared != null && declared.getValueNulls() != Nulls.DEFAULT) return declared;
+            // Type-use (JSpecify) and declaration (JSR 305, Jakarta) Nullable both declare null.
             java.lang.reflect.AnnotatedType type = null;
+            Annotation[] declaration = null;
             if (member instanceof AnnotatedParameter parameter
                     && parameter.getOwner().getAnnotated() instanceof Constructor<?> constructor) {
                 type = constructor.getAnnotatedParameterTypes()[parameter.getIndex()];
+                declaration = constructor.getParameterAnnotations()[parameter.getIndex()];
             } else if (member.getAnnotated() instanceof java.lang.reflect.Field field) {
                 type = field.getAnnotatedType();
+                declaration = field.getAnnotations();
             } else if (member.getAnnotated() instanceof Method method) {
+                boolean setter = method.getParameterCount() == 1;
                 type =
-                        method.getParameterCount() == 1
+                        setter
                                 ? method.getAnnotatedParameterTypes()[0]
                                 : method.getAnnotatedReturnType();
+                declaration =
+                        setter ? method.getParameterAnnotations()[0] : method.getAnnotations();
             }
-            if (type != null
-                    && java.util.Arrays.stream(type.getAnnotations())
-                            .anyMatch(a -> a.annotationType().getSimpleName().equals("Nullable")))
+            if (type != null && (isNullable(type.getAnnotations()) || isNullable(declaration)))
                 return declared;
             // Kotlin's module owns its declared nullable constructor types.
             if (member instanceof AnnotatedMember annotated
@@ -112,6 +117,14 @@ public final class ZLinkFrameworkJsonProfile {
                             annotated.getDeclaringClass())) return declared;
             return (declared == null ? JsonSetter.Value.empty() : declared)
                     .withValueNulls(Nulls.FAIL);
+        }
+
+        private static boolean isNullable(Annotation[] annotations) {
+            if (annotations == null) return false;
+            for (Annotation annotation : annotations) {
+                if (annotation.annotationType().getSimpleName().equals("Nullable")) return true;
+            }
+            return false;
         }
 
         @Override
@@ -264,7 +277,11 @@ public final class ZLinkFrameworkJsonProfile {
         @Override
         public JsonToken nextToken() throws IOException {
             JsonToken token = super.nextToken();
-            if (token != null && token.isNumeric() && !Double.isFinite(getDoubleValue()))
+            // Only fractions and integers wider than long can exceed the double range.
+            if ((token == JsonToken.VALUE_NUMBER_FLOAT
+                            || (token == JsonToken.VALUE_NUMBER_INT
+                                    && getNumberType() == NumberType.BIG_INTEGER))
+                    && !Double.isFinite(getDoubleValue()))
                 throw JsonMappingException.from(
                         this, "framework-json-v1 requires finite JSON numbers");
             return token;
