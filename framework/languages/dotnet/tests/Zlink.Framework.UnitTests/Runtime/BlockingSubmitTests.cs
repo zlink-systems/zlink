@@ -38,7 +38,8 @@ public sealed class BlockingSubmitTests
                 {
                     await ZLinkHandlerInvocationEngine.InvokeAsync(
                         new object(),
-                        (_, _, _, _, _, _) => CheckHandlerAsync()
+                        (_, _, _, _, _, _) =>
+                            ZLinkHandlerResultAwaiter.AwaitTaskAsync(CheckHandlerAsync())
                     );
 
                     async Task CheckHandlerAsync()

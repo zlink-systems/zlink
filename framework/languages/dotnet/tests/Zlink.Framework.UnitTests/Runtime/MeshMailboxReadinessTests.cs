@@ -10,6 +10,30 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
+    public void BatchTransfersPartsAndPayloadOwnerOnceWithoutChangingTheRecord()
+    {
+        using var batch = new MeshReceiveBatch();
+        using var message = Message.From(new byte[] { 1, 2, 3 });
+        var payload = new PayloadOwner();
+        var queued = NewRecord(payload);
+        var record = queued.Record;
+        IReadOnlyList<Message> parts = new[] { message };
+        batch.Add(record, parts, queued.TakePayloadOwner());
+        queued.Dispose();
+        Assert.Same(parts, batch.TakeMessage(0));
+        Assert.Empty(batch.TakeMessage(0));
+        Assert.Same(payload, batch.TakePayloadOwner(0));
+        Assert.Null(batch.TakePayloadOwner(0));
+        Assert.Equal(record.Kind, batch[0].Kind);
+        Assert.Equal(record.OperationId, batch[0].OperationId);
+        batch.Reset();
+        Assert.Equal(0, payload.DisposeCount);
+        Assert.Equal(new byte[] { 1, 2, 3 }, message.ToArray());
+        payload.Dispose();
+        Assert.Equal(1, payload.DisposeCount);
+    }
+
+    [Fact]
     public void ClaimKeepsItsOriginalPrefixAndEachRecordItsOwnPermit()
     {
         using var queue = new ZLinkApplicationJobQueue(

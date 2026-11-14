@@ -728,11 +728,11 @@ internal sealed class MeshReceiveBatch : IDisposable
     internal long StartedAt { get; set; }
     internal long Bytes { get; private set; }
     public int Count => _entries.Count;
-    public MeshReceiveRecord this[int index] => _entries[index].Record;
+    public MeshReceiveRecord this[int index] => CollectionsMarshal.AsSpan(_entries)[index].Record;
 
     public IReadOnlyList<Message> RetainMessage(int index)
     {
-        var entry = _entries[index];
+        ref var entry = ref CollectionsMarshal.AsSpan(_entries)[index];
         return entry.Record.ApplicationPayloadView is { } view
             ? view.RetainMessages()
             : entry.Parts.Select(Message.From).ToArray();
@@ -740,11 +740,12 @@ internal sealed class MeshReceiveBatch : IDisposable
 
     internal IReadOnlyList<Message> TakeMessage(int index)
     {
-        var entry = _entries[index];
+        ref var entry = ref CollectionsMarshal.AsSpan(_entries)[index];
         if (entry.Record.ApplicationPayloadView is { } view)
             return view.RetainMessages();
-        _entries[index] = (entry.Record, Array.Empty<Message>(), entry.PayloadOwner);
-        return entry.Parts;
+        var parts = entry.Parts;
+        entry.Parts = Array.Empty<Message>();
+        return parts;
     }
 
     internal bool CanAdd(long bytes)
@@ -794,18 +795,20 @@ internal sealed class MeshReceiveBatch : IDisposable
 
     internal IDisposable? TakePayloadOwner(int index)
     {
-        var entry = _entries[index];
-        _entries[index] = (entry.Record, entry.Parts, null);
-        return entry.PayloadOwner;
+        ref var entry = ref CollectionsMarshal.AsSpan(_entries)[index];
+        var owner = entry.PayloadOwner;
+        entry.PayloadOwner = null;
+        return owner;
     }
 
     internal ZLinkApplicationJobQueueLease? GetApplicationJobAdmission(int index) =>
-        _entries[index].PayloadOwner is ZLinkApplicationJobQueueRecordOwner owner
+        CollectionsMarshal.AsSpan(_entries)[index].PayloadOwner
+            is ZLinkApplicationJobQueueRecordOwner owner
             ? owner.Admission
             : null;
 
     internal ulong? GetApplicationPayloadBytes(int index) =>
-        _entries[index].Record.ApplicationPayloadBytes;
+        CollectionsMarshal.AsSpan(_entries)[index].Record.ApplicationPayloadBytes;
 
     public void Dispose() => Reset();
 }
