@@ -990,6 +990,92 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
         return admitted;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedRequestAdmission_LeavesNoUnobservedObserver(bool indexed)
+    {
+        var unobserved = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            foreach (var error in args.Exception.Flatten().InnerExceptions)
+                if (error is ZlinkSubmitException)
+                    unobserved.Enqueue(error);
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            await ObserveClosedRequestAdmissionAsync(indexed);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            Assert.Empty(unobserved);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static async Task ObserveClosedRequestAdmissionAsync(bool indexed)
+    {
+        RequestSubmission submission;
+        ZlinkSubmitException expected;
+        using (var pair = new AdmissionPair())
+        {
+            SendSubmission blocked = default;
+            for (var sequence = 0; sequence < 32; sequence++)
+            {
+                using var filler = Message.From(AdmissionPair.Payload(sequence));
+                blocked = pair.Client.Send().Message(filler).Async();
+                if (blocked.Result == SubmitResult.Backpressured)
+                    break;
+            }
+            Assert.Equal(SubmitResult.Backpressured, blocked.Result);
+            using var payload = Message.From("closed-admission");
+            submission = pair.Client.Request().Message(payload).Async();
+            Assert.Equal(SubmitResult.Backpressured, submission.Result);
+            Assert.False(submission.Admitted.IsCompleted);
+            pair.Client.Dispose();
+            expected = await Assert.ThrowsAsync<ZlinkSubmitException>(() => submission.Admitted);
+            Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated, expected.Result);
+            await Assert.ThrowsAsync<ZlinkSubmitException>(() => blocked.Admitted);
+            Assert.Same(
+                expected,
+                await Assert.ThrowsAsync<ZlinkSubmitException>(() => submission.Reply)
+            );
+        }
+
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var deadlines = new ZLinkRequestDeadlineIndex(lane);
+        // Replay the public binding result after close. The admission task is already
+        // terminal, so any discarded observer faults inline, before the GC assertion.
+        // This removes continuation scheduling and test order from the reproduction.
+        var request = ZLinkRequestAdmission.Run<IReadOnlyList<Message>>(admission =>
+            new(
+                ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                    new FixedSubmissionOperation(submission),
+                    TimeSpan.FromSeconds(5),
+                    requestAdmission: admission,
+                    deadlines: indexed ? deadlines : null
+                )
+            )
+        );
+        Assert.Same(
+            expected,
+            await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask())
+        );
+        Assert.Same(
+            expected,
+            await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.Admitted.AsTask())
+        );
+        Assert.Equal(0, deadlines.PendingCount);
+    }
+
     [Fact]
     public async Task TransportThousandHwmRequestsCreateNoDeadlineTimers()
     {
@@ -1019,6 +1105,9 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
                 )
             );
         }
+        // Registration yields while the owner visits its deadline index. Measure
+        // all requests after that owner's queued registrations have completed.
+        await _deadlineLane.RunAsync(static () => { });
         Console.WriteLine(
             $"hwm_requests=1000 timers_before={timers} timers_after={Timer.ActiveCount}"
         );
