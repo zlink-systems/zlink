@@ -9,3 +9,4 @@
 ## 셀 측정
 
 아직 측정값 없음. 첫 측정 전에 해당 셀의 binding/L-step receive·reply 호출 위치와 per-message waits/allocations/atomics/copies를 각 실행마다 아래 기록에 덧붙인다.
+- 2026-11-14T01:04:28Z build-process wait started under BUILDS BETWEEN HOLDS; at the 10-minute limit, take the blocking exclusive measure lock even if unrelated builds remain. No lock is held by this job.

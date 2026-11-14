@@ -32,3 +32,9 @@
 
 - 수정 전 bench 기록 확인: cbind2/raw/before-stats-results.json과 before-trigger-results.json 모두 -11 10/10. 새 raw/bench-before-summary.json에 원본 경로와 집계만 기록했다.
 - 수정 전 빌드는 공유 quiet guard의 측정 보호에 따라 일시 정지/재개되고 있다. measure.lock을 직접 취득하거나 다른 작업의 프로세스·worktree·출력을 변경하지 않는다. 현재 빌드 설정과 source 동일성은 raw/build-config.txt 및 git diff로 확인했다.
+
+## 수정 전 재현 및 적용
+
+- 수정 전 빌드 rc 0, binary > app.cpp/test source 확인: raw/build-before-meta.json.
+- 신규 6개 테스트를 별도 프로세스로 실행했다. request_stop, stop, shutdown 두 번, failure teardown 중 shutdown 네 경우 모두 -11. 정상 run 후 재호출 및 worker가 먼저 시작된 경합은 rc 0. raw/test-before-results.json과 test-before-*.log.
+- 재현 뒤에만 app.cpp patch를 적용했다. shutdown 함수 본문은 변경하지 않았다. 공유 게시 함수를 옮기고 run 공통 teardown에서 기존 started를 예약한다. 기존 worker가 있으면 자원 접근 완료 신호를 기다린 뒤 teardown과 join을 완료한다.

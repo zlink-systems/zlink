@@ -38,17 +38,18 @@ def done(deadline):
    return s
   time.sleep(.05)
  raise RuntimeError('phase timeout')
-def snapshot(name):
+def snapshot(name,save=True):
  rows=[]
  for role,p in [('source',source),('target',target)]:
   for t in pathlib.Path(f'/proc/{p.pid}/task').iterdir():
    try:
     status=t.joinpath('status').read_text();aff=[l.split(':')[1].strip() for l in status.splitlines() if l.startswith('Cpus_allowed_list:')][0]
     st=t.joinpath('stat').read_text();st=st[st.rfind(')')+2:].split()
-    rows.append(dict(role=role,pid=p.pid,tid=int(t.name),name=t.joinpath('comm').read_text().strip(),state=st[0],utime=int(st[11]),stime=int(st[12]),processor=int(st[36]),affinity=aff,policy=os.sched_getscheduler(int(t.name)),timestamp=time.time()))
+    sched=t.joinpath('schedstat').read_text().split();ctx={l.split(':')[0]:int(l.split(':')[1]) for l in status.splitlines() if l.startswith(('voluntary_ctxt_switches:','nonvoluntary_ctxt_switches:'))}
+    rows.append(dict(schedRunNs=int(sched[0]),schedWaitNs=int(sched[1]),schedSlices=int(sched[2]),contextSwitches=ctx,role=role,pid=p.pid,tid=int(t.name),name=t.joinpath('comm').read_text().strip(),state=st[0],utime=int(st[11]),stime=int(st[12]),processor=int(st[36]),affinity=aff,policy=os.sched_getscheduler(int(t.name)),timestamp=time.time()))
    except (FileNotFoundError,ProcessLookupError):pass
- dump(name+'-threads.json',rows)
- assert all(set(os.sched_getaffinity(r['tid'])) <= {6,7,14,15} for r in rows),'bad affinity'
+ if save:dump(name+'-threads.json',rows)
+ assert all(r['affinity'] in ('6-7,14-15','6','7','14','15','6-7','14-15','6,14','7,15','6-7,14','6-7,15','6,14-15','7,14-15') for r in rows),'bad affinity'
  return rows
 head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip();dirty=subprocess.check_output(['git','status','--porcelain'],text=True).strip()
 dump('fingerprint.json',dict(head=head,dirty=dirty,level=level,pattern=pattern,payload=size,gcServer='0',artifacts=[dict(path=str(p),sha256=hashlib.sha256(p.read_bytes()).hexdigest(),mtime=p.stat().st_mtime) for p in bench.rglob('*') if p.is_file() and (p.name in ['Zlink.Framework.dll','Zlink.Framework.UnitTests.dll','Systems.Zlink.dll'] or '.so.' in p.name)]))
@@ -58,18 +59,27 @@ try:
  ready(5445,starttime+8)
  source=spawn(['dotnet',str(bench/'Client/Zlink.Framework.UnitTests.dll'),'--implementation','zlink-dotnet','--scenario',pattern,'--payload-size',str(size),'--request-window','100','--submit-concurrency','8','--warmup-seconds','1','--trigger-url','http://127.0.0.1:5435','--stats-url','http://127.0.0.1:5436','--target-endpoint','tcp://127.0.0.1:5444','--target-command-endpoint','tcp://127.0.0.1:5444','--target-stats-url','http://127.0.0.1:5445','--raw-socket','router','--output',str(out),'--configuration','Release','--timeout-seconds','18','--drain-bound-ms','2000'],'source')
  ready(5436,starttime+10);dump('pids.json',dict(source=source.pid,target=target.pid));snapshot('start')
- for role,p in [('source',source),('target',target)]:spawn(['/root/jobs/fx/cx/v21/s033/d2l2/tools/dotnet8/dotnet-trace','collect','--process-id',str(p.pid),'--profile','cpu-sampling,gc-verbose','--duration','00:00:09','--output',str(out/(role+'.nettrace'))],role+'-trace')
+ for role,p in [('source',source),('target',target)]:spawn(['/root/jobs/fx/cx/v21/s033/d2l2/tools/dotnet8/dotnet-trace','collect','--process-id',str(p.pid),'--profile','cpu-sampling','--providers','Microsoft-Windows-DotNETRuntime:0x1:5','--duration','00:00:09','--output',str(out/(role+'.nettrace'))],role+'-trace')
  time.sleep(.6)
  dump('warmup-trigger.json',start('warmup',1));dump('warmup-stats.json',done(starttime+14))
  before=snapshot('before-active');ack=start('active',5);dump('active-trigger.json',ack)
  wall=ack.get('receivedAtUnixMs',int(time.time()*1000));dump('window.json',dict(startUnixMs=wall+100,endUnixMs=wall+4900))
- time.sleep(2);snapshot('mid-active');time.sleep(3.05);after=snapshot('after-active')
+ observations=[before];until=time.monotonic()+5.05
+ while time.monotonic()<until:
+  time.sleep(.1);observations.append(snapshot('continuous',False))
+ after=observations[-1];dump('continuous-threads.json',observations);dump('after-active-threads.json',after)
+ 
  active=done(starttime+18.7);targetStats=get(5445);dump('active-stats.json',active);dump('target-stats.json',targetStats)
  assert active['errors']==0 and active['submitted']==active['completed']==targetStats['received'] and targetStats['errors']==0,(active,targetStats)
  cpu=[];old={(r['role'],r['tid']):r for r in before};hz=os.sysconf('SC_CLK_TCK')
+ latest={}
+ for observation in observations:
+  for r in observation:latest[(r['role'],r['tid'])]=r
+ after=list(latest.values())
+ 
  for r in after:
-  if (r['role'],r['tid']) in old:
-   b=old[(r['role'],r['tid'])];seconds=r['timestamp']-b['timestamp'];cpu.append(dict(role=r['role'],tid=r['tid'],name=r['name'],cpuMs=(r['utime']+r['stime']-b['utime']-b['stime'])*1000/hz,wallMs=seconds*1000,corePercent=(r['utime']+r['stime']-b['utime']-b['stime'])/hz/seconds*100))
+  if True:
+   b=old.get((r['role'],r['tid']),dict(utime=0,stime=0,schedRunNs=0,schedWaitNs=0,timestamp=before[0]['timestamp']));seconds=5.05;cpu.append(dict(runMs=(r['schedRunNs']-b['schedRunNs'])/1e6,runqueueWaitMs=(r['schedWaitNs']-b['schedWaitNs'])/1e6,role=r['role'],tid=r['tid'],name=r['name'],cpuMs=(r['utime']+r['stime']-b['utime']-b['stime'])*1000/hz,wallMs=seconds*1000,corePercent=(r['utime']+r['stime']-b['utime']-b['stime'])/hz/seconds*100))
  dump('thread-cpu.json',sorted(cpu,key=lambda r:-r['cpuMs']))
  for p in procs[2:]:p.wait(timeout=max(.1,19.2-(time.monotonic()-starttime)))
  assert all(p.returncode==0 for p in procs[2:]),'trace failed'

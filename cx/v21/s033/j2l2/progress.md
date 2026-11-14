@@ -12,3 +12,27 @@
 | client reply parse/completion | CallRuntime:260, Envelope tryDecodeHeader:693; binding CompletionOwner | ClientCallCodec:60; binding CompletionOwner | parse 위와 동일; binding pending lookup/remove가 physical correlation 소유 | 수집 예정 | parser 비용만 변경 |
 
 비교할 항목: field/value scan, Strings, byte[]/char[] copies, metadata map, cache lookup, exceptions, correlation completion, JIT tier. wire·검증·buffer 소유 결정 위치의 전후 수를 기록한다.
+
+## 구현 전 진단과 결정 소유
+
+- 양방향 재현: 새 allocation 검사는 기존 코드에서 native correlated parse 520 B/header(상한 440), escape parse 2,080 B/header(상한 650)로 실패했다. encode는 owned array 336 B/header. 96개 request/reply/command 조합의 새 byte/decoded-value 검사는 기존 코드에서 통과했다. `raw/tests-before.log`, `raw/{allocation,header-bytes}-before.xml`.
+- steady backpressure L2 CPU sample: source envelope 8.34%, target 22.26%. 제출=완료=수신, 오류 0. CanonicalReader.consume/string와 HeaderReader.readCanonical/decode가 parse를 분리해 수행한다. correlation은 hex String 2개와 concat을 만든다.
+
+| 결정 | 소유 spec | 현재 판정 위치(언어별) | 최종 소유자 |
+|---|---|---|---|
+| header bytes | ClientServer §5.3 / messaging hot path W4 | Java Envelope:438; .NET EnvelopeCodec:1217; C++ framework/src/runtime/messaging/envelope_codec.cpp encode; Node channel-envelope.ts encodePayload | 각 언어 envelope codec 한 writer |
+| JSON 문법과 field 검증 | ClientServer §5.3 header grammar/structure | Java Envelope HeaderReader:918/1213 + CanonicalReader:1278 + finish:1149; .NET EnvelopeCodec:414/933; C++ envelope_codec.cpp decode; Node decodeChannelEnvelopeHeader | Java envelope의 단일 byte reader + 완성된 header 검증 |
+| buffer 수명 | messaging hot path I3 / payload ownership | Java MultipartView:61, Envelope:568; .NET EnvelopeCodec:1195; C++/Node envelope codec | 각 encoder가 owned output, reader가 borrowed input·독립 String을 소유 |
+| physical correlation/completion | submit-and-completion §10–11 / hot path E5 | Java binding runtime/sockets/CompletionOwner:1199–1229; .NET binding CompletionOwner; C++/Node binding completion owner | 기존 binding(변경 없음) |
+
+교차언어: C++ retained string_view, .NET Utf8JsonReader/span, Node byte reader, Java/Kotlin은 같은 Java codec. 반환 값·검증 계약 차이를 도입하지 않는다. 분류 B(기존 내부 비용 수정), Framework envelope codec 소유. 사용자 step 4에 따라 구현한다.
+
+대안 비교: canonical reader만 작게 고치면 ASCII/일반 JSON 두 parser와 중복 검증이 남는다. Jackson 하나만 쓰면 baseline escape 경로의 2 KB/header 비용을 모든 header에 부과한다. 단일 byte reader가 RFC JSON·UTF-8·escape·unknown 값·중복 검증을 한 번 처리하도록 통합한다. 기존 per-reader scratch만 유지하고 HeaderReader 의미 상태 객체와 CanonicalReader 객체를 제거한다. 새 cache/queue/lock/timer/ThreadLocal 없음.
+
+| 판정 위치 | 전 | 후(계획) |
+|---|---:|---:|
+| header writer | 1 | 1 |
+| header parser | 2 | 1 |
+| field/metadata/flow 의미 검증 | 1 | 1 |
+| output buffer 소유 | 1 | 1 |
+| completion/correlation 결정 | binding 1 | binding 1 |
