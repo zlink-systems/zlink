@@ -10,47 +10,56 @@ export interface FrameworkJsonParseOptions {
   readonly onDuplicateProperty?: (name: string, path: readonly string[]) => void;
 }
 
-export function stringifyFrameworkJsonV1(
-  value: unknown,
-  schema?: ZLinkJsonSchema,
-  replacer?: (this: unknown, key: string, value: unknown) => unknown
-): string {
-  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
-    throw new TypeError('framework-json-v1 payload is not a JSON value.');
+export const stringifyFrameworkJsonV1 = createFrameworkJsonV1Stringifier(encodeBase64);
+
+/** @internal Configures byte conversion once while keeping JSON policy shared. */
+export function createFrameworkJsonV1Stringifier(encodeBytes: (bytes: Uint8Array) => string) {
+  // JSON.stringify has already called toJSON. Read the raw source from the
+  // holder, including the root wrapper, before applying the shared policy.
+  function frameworkJsonV1Replacer(
+    this: Record<string, unknown>,
+    key: string,
+    item: unknown
+  ): unknown {
+    return frameworkJsonV1Value(this[key], item, encodeBytes);
   }
-  const encoded =
-    replacer === undefined
-      ? JSON.stringify(value, frameworkJsonV1Replacer)
-      : stringifyWithReplacer(value, replacer);
-  if (schema !== undefined) {
-    validateFrameworkJsonV1Value(JSON.parse(encoded), schema, '$', false);
-  }
-  return encoded;
+
+  return function stringifyFrameworkJsonV1(
+    value: unknown,
+    schema?: ZLinkJsonSchema,
+    replacer?: (this: unknown, key: string, value: unknown) => unknown
+  ): string {
+    if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+      throw new TypeError('framework-json-v1 payload is not a JSON value.');
+    }
+    const encoded =
+      replacer === undefined
+        ? JSON.stringify(value, frameworkJsonV1Replacer)
+        : stringifyWithReplacer(value, replacer, encodeBytes);
+    if (schema !== undefined) {
+      validateFrameworkJsonV1Value(JSON.parse(encoded), schema, '$', false);
+    }
+    return encoded;
+  };
 }
 
 // Keep custom callback captures off the default encoding path.
 function stringifyWithReplacer(
   value: unknown,
-  replacer: (this: unknown, key: string, value: unknown) => unknown
+  replacer: (this: unknown, key: string, value: unknown) => unknown,
+  encodeBytes: (bytes: Uint8Array) => string
 ): string {
   return JSON.stringify(value, function (key, item) {
     const transformed = replacer.call(this, key, item);
-    return frameworkJsonV1Value(transformed, transformed);
+    return frameworkJsonV1Value(transformed, transformed, encodeBytes);
   });
 }
 
-//  Module-level so JSON.stringify does not allocate a fresh closure per
-//  encoded message. On the root call `this` is the {'': value} wrapper, so
-//  this[key] resolves the raw (pre-toJSON) source for every key including ''.
-function frameworkJsonV1Replacer(
-  this: Record<string, unknown>,
-  key: string,
-  item: unknown
+function frameworkJsonV1Value(
+  source: unknown,
+  item: unknown,
+  encodeBytes: (bytes: Uint8Array) => string
 ): unknown {
-  return frameworkJsonV1Value(this[key], item);
-}
-
-function frameworkJsonV1Value(source: unknown, item: unknown): unknown {
   if (typeof source === 'number' && !Number.isFinite(source)) {
     throw new TypeError('framework-json-v1 only accepts finite JSON numbers.');
   }
@@ -61,7 +70,7 @@ function frameworkJsonV1Value(source: unknown, item: unknown): unknown {
     return source.toString(10);
   }
   if (source instanceof Uint8Array) {
-    return encodeBase64(source);
+    return encodeBytes(source);
   }
   if (source instanceof Date) {
     throw new TypeError('framework-json-v1 does not implicitly encode Date values.');
@@ -80,14 +89,17 @@ export function parseFrameworkJsonV1(
   text: string,
   options: FrameworkJsonParseOptions = {},
   schema?: ZLinkJsonSchema,
-  reviver?: (this: unknown, key: string, value: unknown) => unknown
+  reviver?: (this: unknown, key: string, value: unknown) => unknown,
+  decodeBytes: (value: string) => Uint8Array = decodeBase64
 ): unknown {
   if (text.charCodeAt(0) === 0xfeff) {
     throw new SyntaxError('framework-json-v1 does not allow a UTF-8 BOM.');
   }
   new JsonPropertyScanner(text, options).scan();
   const parsed = JSON.parse(text, reviver);
-  return schema === undefined ? parsed : validateFrameworkJsonV1Value(parsed, schema, '$', true);
+  return schema === undefined
+    ? parsed
+    : validateFrameworkJsonV1Value(parsed, schema, '$', true, decodeBytes);
 }
 
 //  Sticky pattern shared across scans; matching happens synchronously so the
@@ -103,7 +115,8 @@ function validateFrameworkJsonV1Value(
   value: unknown,
   schema: ZLinkJsonSchema,
   path: string,
-  decode: boolean
+  decode: boolean,
+  decodeBytes: (value: string) => Uint8Array = decodeBase64
 ): unknown {
   switch (schema.type) {
     case 'boolean':
@@ -140,8 +153,8 @@ function validateFrameworkJsonV1Value(
       }
       if (!hasCanonicalBase64Padding(value as string))
         schemaFailure(path, 'canonical padded RFC 4648 base64');
-      // decodeBase64 returns fresh storage owned by this value.
-      return decode ? decodeBase64(value as string) : value;
+      // The selected decoder returns fresh storage owned by this value.
+      return decode ? decodeBytes(value as string) : value;
     }
     case 'enum':
       if (typeof value !== 'string' || !schema.names.includes(value)) {
@@ -151,17 +164,23 @@ function validateFrameworkJsonV1Value(
     case 'nullable':
       return value === null
         ? null
-        : validateFrameworkJsonV1Value(value, schema.value, path, decode);
+        : validateFrameworkJsonV1Value(value, schema.value, path, decode, decodeBytes);
     case 'array':
       if (!Array.isArray(value)) schemaFailure(path, 'an array');
       return (value as unknown[]).map((item, index) =>
-        validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode)
+        validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode, decodeBytes)
       );
     case 'record': {
       if (!isJsonObject(value)) schemaFailure(path, 'an object');
       const result: Record<string, unknown> = {};
       for (const [name, item] of Object.entries(value as Record<string, unknown>)) {
-        result[name] = validateFrameworkJsonV1Value(item, schema.values, `${path}.${name}`, decode);
+        result[name] = validateFrameworkJsonV1Value(
+          item,
+          schema.values,
+          `${path}.${name}`,
+          decode,
+          decodeBytes
+        );
       }
       return decode ? result : value;
     }
@@ -186,7 +205,8 @@ function validateFrameworkJsonV1Value(
           item,
           propertySchema as ZLinkJsonSchema,
           `${path}.${name}`,
-          decode
+          decode,
+          decodeBytes
         );
       }
       return decode ? result : value;
