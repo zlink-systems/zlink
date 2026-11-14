@@ -3030,6 +3030,7 @@ internal sealed class SpotCloseProbeHandler
 internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLocationStore
 {
     internal string? HoldNextPutFor { get; set; }
+    internal bool HoldAfterPut { get; set; }
     internal TaskCompletionSource PutHeld { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource ReleasePut { get; } =
@@ -3098,7 +3099,8 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
             throw new InvalidOperationException("Injected authority mutation failure.");
         }
         if (
-            HoldNextPutFor is { } target
+            !HoldAfterPut
+            && HoldNextPutFor is { } target
             && request.Mutations.Any(mutation =>
                 mutation is ZLinkStoreMutation.Put put
                 && put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
@@ -3176,6 +3178,22 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
             );
         }
         var written = await inner.WriteAsync(request, cancellationToken);
+        if (
+            HoldAfterPut
+            && HoldNextPutFor is { } appliedSpot
+            && written is ZLinkStoreWriteResult.Applied
+            && request.Mutations.Any(mutation =>
+                mutation is ZLinkStoreMutation.Put put
+                && put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                && put.Key.Value.EndsWith("\0" + appliedSpot, StringComparison.Ordinal)
+            )
+        )
+        {
+            HoldNextPutFor = null;
+            PutHeld.TrySetResult();
+            await ReleasePut.Task.WaitAsync(cancellationToken);
+        }
+
         if (holdDelete && HoldAfterAuthorityDelete && written is ZLinkStoreWriteResult.Applied)
         {
             AuthorityDeleteHeld.TrySetResult();
