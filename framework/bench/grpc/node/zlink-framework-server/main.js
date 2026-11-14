@@ -10,51 +10,337 @@
 // marked "not exported by package.json" and is not used: reaching into it would
 // breach G4 (public API only).
 
-require('reflect-metadata');
-const { Module, Injectable } = require('@nestjs/common');
-const { NestFactory } = require('@nestjs/core');
-const { ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs');
-const {
-  ZLINK_PROTOBUF_CONTENT_TYPE
-} = require('@zlink-systems/framework-codec-protobuf/framework');
-
-const { argValue } = require('../shared/args');
+const { argValue, argInt } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
-const contract = require('../shared/framework-bench-contract');
-const { createBenchPayloadSerializer } = require('../shared/framework-protobuf');
+const rawWire = require('../shared/raw-wire');
+const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = rawWire;
+const zlink = require('@zlink-systems/zlink');
+const { EchoHandler, CommandHandler, BENCH_SERVER_METRICS } = require('./bench-handlers');
+const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_SERVER === '1';
+const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1' && !ladderL5ToL7;
+const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
+const l0rServer = l0Server && process.env.ZLINK_LADDER_L0R === '1';
+const l1Permit = l0Server && process.env.ZLINK_LADDER_L1_PERMIT === '1';
+const l2Envelope = l0Server && process.env.ZLINK_LADDER_L2_ENVELOPE === '1';
+const l2rEnvelope = l0Server && process.env.ZLINK_LADDER_L2R_ENVELOPE === '1';
+const l3ServiceWire = l0Server && process.env.ZLINK_LADDER_L3_SERVICE_WIRE === '1';
+const l3rServiceWire = l0Server && process.env.ZLINK_LADDER_L3R_SERVICE_WIRE === '1';
+const l4TypedPayload = l0Server && process.env.ZLINK_LADDER_L4_SERVER === '1';
+const l3ServiceWireEnabled = l3ServiceWire || l4TypedPayload;
+let applicationJobQueue;
+let ApplicationJobQueue;
+let resolveApplicationJobQueueConfiguration;
+if (l0rServer || l1Permit) {
+  require('@zlink-systems/framework');
+  ({ ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require(
+    '../../../../languages/node/packages/framework/dist/runtime/host/application-job-queue'
+  ));
+}
+if (l1Permit) {
+  applicationJobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+}
+if (l2Envelope || l2rEnvelope) rawWire.requireProductionChannelEnvelope();
+if (l3ServiceWireEnabled || l3rServiceWire) rawWire.requireProductionServiceWire();
+const frameworkWire = process.env.ZLINK_LADDER_L0_FRAMEWORK_CLIENT === '1'
+  || process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
+let contract;
+let createBenchPayloadSerializer;
+let Module;
+let Injectable;
+let Inject;
+let NestFactory;
+let ZLinkModule;
+let zlinkFramework;
+let ZLINK_PROTOBUF_CONTENT_TYPE;
+if (!lazyFramework) {
+  contract = require('../shared/framework-bench-contract');
+  if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
+    ({ createBenchPayloadSerializer } = require('../shared/framework-protobuf'));
+  }
+  require('reflect-metadata');
+  ({ Module, Injectable, Inject } = require('@nestjs/common'));
+  ({ NestFactory } = require('@nestjs/core'));
+  ({ ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs'));
+  if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
+    ({ ZLINK_PROTOBUF_CONTENT_TYPE } = require('@zlink-systems/framework-codec-protobuf/framework'));
+  }
+  Injectable()(EchoHandler);
+  Injectable()(CommandHandler);
+  Inject(BENCH_SERVER_METRICS)(EchoHandler, undefined, 0);
+  Inject(BENCH_SERVER_METRICS)(CommandHandler, undefined, 0);
+}
 
 const argv = process.argv.slice(2);
 const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5234');
 const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5235');
+const batch = argInt(argv, '--recv-batch', 256);
 
 const metrics = new BenchServerMetrics();
 
-class EchoHandler {
-  // spec section 2: request patterns echo the payload back so the
-  // client can validate the 29-byte header it sent (G2).
-  async handle(request) {
-    metrics.record(toBuffer(request && request.body));
-    return request;
+if (l0Server) {
+  const ctx = zlink.createContext();
+  const router = zlink.createRouterSocket(ctx);
+  const twoRouters = process.env.ZLINK_LADDER_L0_TWO_ROUTERS !== '0';
+  const commandRouter = twoRouters ? zlink.createRouterSocket(ctx) : null;
+  router.setRoutingId(zlink.RoutingId.from(Buffer.from(
+    frameworkWire ? 'bench-server' : ROUTING_IDS.rawRequestServer,
+    'ascii'
+  )));
+  router.options.mandatory = true;
+  if (commandRouter !== null) {
+    commandRouter.setRoutingId(zlink.RoutingId.from(Buffer.from(ROUTING_IDS.rawCommandServer, 'ascii')));
+    commandRouter.options.mandatory = true;
   }
-}
-Injectable()(EchoHandler);
+  router.bind(endpoint);
+  if (commandRouter !== null) commandRouter.bind(argValue(argv, '--command-endpoint', 'tcp://127.0.0.1:5236'));
+  startStatsServer(metricsUrl, metrics, { implementation: 'zlink-framework-node-l0', endpoint });
+  const received = new zlink.Received();
+  const commandReceived = commandRouter === null ? null : new zlink.Received();
+  const echoHandler = new EchoHandler(metrics);
+  const commandHandler = new CommandHandler(metrics);
+  const IDLE_SPIN_LIMIT = 20000;
+  let idleSpins = 0;
 
-class CommandHandler {
-  // spec section 5 / G3: the send row's throughput is this count, taken on the server.
-  async handle(message) {
-    metrics.record(toBuffer(message && message.body));
-    return undefined;
+  function decodeLadderParts(targetReceived) {
+    return l3ServiceWireEnabled
+      ? rawWire.decodeProductionServiceRequest(
+          targetReceived.parts,
+          targetReceived.replyToken !== null
+        )
+      : { correlation: null, parts: targetReceived.parts };
   }
-}
-Injectable()(CommandHandler);
 
-function toBuffer(body) {
-  if (body === undefined || body === null) return Buffer.alloc(0);
-  if (Buffer.isBuffer(body)) return body;
-  if (body instanceof Uint8Array) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
-  return Buffer.from(body);
-}
+  function closeLadderParts(decoded) {
+    if (l3ServiceWireEnabled) {
+      for (const part of decoded.parts) part.close();
+    }
+  }
 
+  function ladderReplyParts(channelHeader, payload) {
+    if (l4TypedPayload) {
+      return rawWire.encodeProductionTypedChannelReply(channelHeader, { body: payload });
+    }
+    return l2Envelope || l3ServiceWireEnabled
+      ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
+      : [RESPONSE_ENVELOPE, encodeBenchPayloadMessage(payload)];
+  }
+
+  function submitLadderReply(targetReceived, decoded, payload, channelHeader) {
+    const replyParts = ladderReplyParts(channelHeader, payload);
+    if (l3ServiceWireEnabled) {
+      const reply = rawWire.encodeProductionServiceReply(decoded.correlation, replyParts);
+      replyParts[1].close?.();
+      targetReceived.reply().message(reply.header).message(reply.frame).submit();
+      return;
+    }
+    targetReceived.reply().message(replyParts[0]).message(replyParts[1]).submit();
+  }
+
+  function frameworkResponseHeader(bytes) {
+    const header = JSON.parse(bytes.subarray(1).toString('utf8'));
+    header.kind = 2;
+    return Buffer.concat([Buffer.from([0xf2]), Buffer.from(JSON.stringify(header), 'utf8')]);
+  }
+
+  function pump() {
+    let handled = 0;
+    while (handled < batch) {
+      let hasMessage;
+      try {
+        hasMessage = router.recv(received, zlink.RecvFlags.DontWait);
+      } catch (error) {
+        if (error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData) break;
+        metrics.recordError();
+        console.error(`ladder L0 recv failed: ${error.message}`);
+        break;
+      }
+      if (!hasMessage) break;
+      handled += 1;
+      let decoded;
+      try {
+        decoded = decodeLadderParts(received);
+        const parts = decoded.parts;
+        const channelHeader = l2Envelope || l3ServiceWireEnabled
+          ? rawWire.decodeProductionChannelHeader(parts)
+          : null;
+        const header = frameworkWire ? parts[0].data() : null;
+        const payload = l4TypedPayload
+          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : decodeBenchPayloadBody(parts[parts.length - 1].data());
+        if (payload === null) throw new Error('invalid benchmark payload');
+        if (received.replyToken !== null) {
+          echoHandler.handleL0(payload);
+          if (l3ServiceWireEnabled) submitLadderReply(received, decoded, payload, channelHeader);
+          else {
+            const reply = l2Envelope
+              ? ladderReplyParts(channelHeader, payload)
+              : [frameworkWire ? frameworkResponseHeader(header) : RESPONSE_ENVELOPE,
+                encodeBenchPayloadMessage(payload)];
+            received.reply().message(reply[0]).message(reply[1]).submit();
+          }
+        } else {
+          commandHandler.handleL0(payload);
+        }
+      } catch (error) {
+        metrics.recordError();
+        console.error(`ladder L0 handler failed: ${error.message}`);
+      } finally {
+        if (decoded !== undefined) closeLadderParts(decoded);
+      }
+    }
+    return handled;
+  }
+
+  function pumpCommands() {
+    if (commandRouter === null) return 0;
+    let handled = 0;
+    while (handled < batch) {
+      let hasMessage;
+      try {
+        hasMessage = commandRouter.recv(commandReceived, zlink.RecvFlags.DontWait);
+      } catch (error) {
+        if (error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData) break;
+        metrics.recordError();
+        console.error(`ladder L0 command recv failed: ${error.message}`);
+        break;
+      }
+      if (!hasMessage) break;
+      handled += 1;
+      let decoded;
+      try {
+        decoded = decodeLadderParts(commandReceived);
+        const parts = decoded.parts;
+        const channelHeader = l2Envelope || l3ServiceWireEnabled
+          ? rawWire.decodeProductionChannelHeader(parts)
+          : null;
+        const payload = l4TypedPayload
+          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : decodeBenchPayloadBody(parts[parts.length - 1].data());
+        if (payload === null) throw new Error('invalid benchmark payload');
+        commandHandler.handleL0(payload);
+      } catch (error) {
+        metrics.recordError();
+        console.error(`ladder L0 command handler failed: ${error.message}`);
+      } finally {
+        if (decoded !== undefined) closeLadderParts(decoded);
+      }
+    }
+    return handled;
+  }
+
+  async function pumpWithPermits(socket, targetReceived, processMessage, label) {
+    let handled = 0;
+    while (handled < batch) {
+      const permit = await applicationJobQueue.acquire(undefined, 'remote');
+      let hasMessage;
+      try {
+        hasMessage = socket.recv(targetReceived, zlink.RecvFlags.DontWait);
+      } catch (error) {
+        permit.releaseUnqueued();
+        if (error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData) break;
+        metrics.recordError();
+        console.error(`ladder L1 ${label} recv failed: ${error.message}`);
+        break;
+      }
+      if (!hasMessage) {
+        permit.releaseUnqueued();
+        break;
+      }
+      handled += 1;
+      try {
+        processMessage(permit);
+      } catch (error) {
+        permit.releaseAfterInternalProcessing();
+        metrics.recordError();
+        console.error(`ladder L1 ${label} handler failed: ${error.message}`);
+      }
+    }
+    return handled;
+  }
+
+  async function pumpRequestsWithPermits() {
+    return pumpWithPermits(router, received, (permit) => {
+      const decoded = decodeLadderParts(received);
+      const parts = decoded.parts;
+      try {
+        const channelHeader = l2Envelope || l3ServiceWireEnabled
+          ? rawWire.decodeProductionChannelHeader(parts)
+          : null;
+        const payload = l4TypedPayload
+          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : decodeBenchPayloadBody(parts[parts.length - 1].data());
+        if (payload === null) throw new Error('invalid benchmark payload');
+        if (received.replyToken !== null) {
+          permit.releaseBeforeHandler();
+          echoHandler.handleL0(payload);
+          submitLadderReply(received, decoded, payload, channelHeader);
+        } else {
+          permit.releaseBeforeHandler();
+          commandHandler.handleL0(payload);
+        }
+      } finally {
+        closeLadderParts(decoded);
+      }
+    }, 'request');
+  }
+
+  async function pumpCommandsWithPermits() {
+    return pumpWithPermits(commandRouter, commandReceived, (permit) => {
+      const decoded = decodeLadderParts(commandReceived);
+      const parts = decoded.parts;
+      try {
+        const channelHeader = l2Envelope || l3ServiceWireEnabled
+          ? rawWire.decodeProductionChannelHeader(parts)
+          : null;
+        const payload = l4TypedPayload
+          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : decodeBenchPayloadBody(parts[parts.length - 1].data());
+        if (payload === null) throw new Error('invalid benchmark payload');
+        permit.releaseBeforeHandler();
+        commandHandler.handleL0(payload);
+      } finally {
+        closeLadderParts(decoded);
+      }
+    }, 'command');
+  }
+
+  async function schedulePermittedPump() {
+    const handled = await pumpRequestsWithPermits() + await pumpCommandsWithPermits();
+    if (handled > 0) {
+      idleSpins = 0;
+      setImmediate(schedulePump);
+      return;
+    }
+    idleSpins += 1;
+    if (idleSpins < IDLE_SPIN_LIMIT) setImmediate(schedulePump);
+    else setTimeout(schedulePump, 1);
+  }
+
+  function schedulePump() {
+    if (l1Permit) {
+      void schedulePermittedPump();
+      return;
+    }
+    const handled = twoRouters ? pump() + pumpCommands() : pump();
+    if (handled > 0) {
+      idleSpins = 0;
+      setImmediate(schedulePump);
+      return;
+    }
+    idleSpins += 1;
+    if (idleSpins < IDLE_SPIN_LIMIT) setImmediate(schedulePump);
+    else setTimeout(schedulePump, 1);
+  }
+
+  process.stderr.write(`[framework-server-l0] endpoint=${endpoint} stats=${metricsUrl}\n`);
+  process.on('SIGTERM', () => {
+    router.close();
+    if (commandRouter !== null) commandRouter.close();
+    ctx.close();
+    process.exit(0);
+  });
+  setImmediate(schedulePump);
+} else {
 class BenchServerModule {}
 Module({
   imports: [
@@ -62,11 +348,13 @@ Module({
       inject: [],
       useFactory: () => {
         const builder = zlinkFramework();
-        builder.codecs().use({
-          register: (codecs) => {
-            codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
+          if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
+            builder.codecs().use({
+              register: (codecs) => {
+                codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
+              }
+            });
           }
-        });
         const mesh = builder.addRouteMesh(contract.MESH_NAME)
           .listen(endpoint)
           .routingId(contract.SERVER_ROUTING_ID);
@@ -76,7 +364,9 @@ Module({
       }
     })
   ],
-  providers: [EchoHandler, CommandHandler]
+  providers: [
+    { provide: BENCH_SERVER_METRICS, useValue: metrics }
+  ]
 })(BenchServerModule);
 
 (async () => {
@@ -87,7 +377,7 @@ Module({
   startStatsServer(metricsUrl, metrics, {
     implementation: 'zlink-framework-node',
     host: '@zlink-systems/nestjs',
-    codec: 'framework-codec-protobuf',
+    codec: ladderL5ToL7 ? 'framework-json-v1' : 'framework-codec-protobuf',
     endpoint
   });
   process.stderr.write(`[framework-server] endpoint=${endpoint} stats=${metricsUrl}\n`);
@@ -96,3 +386,4 @@ Module({
   console.error(`framework server failed: ${error && error.stack}`);
   process.exit(1);
 });
+}

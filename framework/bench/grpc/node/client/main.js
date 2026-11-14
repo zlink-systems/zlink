@@ -169,13 +169,35 @@ class RawBenchSocket {
 
 function createRawTransport(options) {
   const context = zlink.createContext();
+  const ladderL0 = process.env.ZLINK_LADDER_L0_CLIENT === '1'
+    && options.implementation === 'zlink-framework-node';
+  const frameworkWire = process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
+  const ladderL2 = process.env.ZLINK_LADDER_L2_CLIENT === '1'
+    && options.implementation === 'zlink-framework-node';
+  const ladderL3 = process.env.ZLINK_LADDER_L3_CLIENT === '1'
+    && options.implementation === 'zlink-framework-node';
+  const ladderL4 = process.env.ZLINK_LADDER_L4_CLIENT === '1'
+    && options.implementation === 'zlink-framework-node';
+  const ladderL3Enabled = ladderL3 || ladderL4;
+  if (process.env.ZLINK_LADDER_L2R_CLIENT === '1'
+      && options.implementation === 'zlink-framework-node') {
+    rawWire.requireProductionChannelEnvelope();
+  }
+  if (process.env.ZLINK_LADDER_L3R_CLIENT === '1'
+      && options.implementation === 'zlink-framework-node') {
+    rawWire.requireProductionServiceWire();
+  }
+  let nextServiceCorrelation = 1n;
+  const peerId = ladderL0 && !frameworkWire ? rawWire.ROUTING_IDS.rawRequestServer : 'bench-server';
+  const commandPeerId = frameworkWire && !ladderL0 ? 'bench-server' : rawWire.ROUTING_IDS.rawCommandServer;
+  const commandEnvelope = frameworkWire ? rawWire.frameworkEnvelope(3) : rawWire.REQUEST_ENVELOPE;
   const requestSocket =
     options.scenario === 'send-saturation'
       ? null
       : RawBenchSocket.create(
           context,
           `bench-source-request-${process.pid}`,
-          rawWire.ROUTING_IDS.rawRequestServer,
+          peerId,
           options.targetEndpoint
         );
   // 서버 간 연결은 하나다. `submitConcurrency`는 stream 수이지 연결 수가 아니다.
@@ -188,7 +210,7 @@ function createRawTransport(options) {
           RawBenchSocket.create(
             context,
             `bench-source-send-${process.pid}`,
-            rawWire.ROUTING_IDS.rawCommandServer,
+            commandPeerId,
             options.targetCommandEndpoint
           )
         ]
@@ -235,19 +257,44 @@ function createRawTransport(options) {
   };
 
   const submitRequest = (payload) => {
-    const submission = requestSocket.socket
-      .request(requestSocket.peer)
-      .message(rawWire.REQUEST_ENVELOPE)
-      .message(rawWire.encodeBenchPayloadMessage(payload))
-      .timeout(options.requestTimeoutMs)
-      .submit();
+    const typedParts = ladderL4
+      ? rawWire.encodeProductionTypedChannelPayload(1, { body: payload }, options.requestTimeoutMs)
+      : null;
+    const body = typedParts === null ? rawWire.encodeBenchPayloadMessage(payload) : typedParts[1];
+    const serviceCorrelation = ladderL3Enabled ? nextServiceCorrelation++ : null;
+    const channelHeader = typedParts !== null
+      ? typedParts[0]
+      : ladderL2 || ladderL3
+      ? rawWire.encodeProductionChannelHeader(1, options.requestTimeoutMs)
+      : frameworkWire ? rawWire.frameworkEnvelope(1) : rawWire.REQUEST_ENVELOPE;
+    const serviceRequest = ladderL3Enabled
+      ? rawWire.encodeProductionServiceRequest(true, serviceCorrelation, [channelHeader, body])
+      : null;
+    const operation = requestSocket.socket.request(requestSocket.peer);
+    if (ladderL3Enabled) operation.message(serviceRequest.header).message(serviceRequest.frame);
+    else operation.message(channelHeader).message(body);
+    const submission = operation.timeout(options.requestTimeoutMs).submit();
+    if (typedParts !== null) body.close();
     const reply = submission.reply.then((parts) => {
+      let responseParts;
       try {
-        if (parts.length === 0) throw new Error('raw request returned no reply parts');
-        const body = rawWire.decodeBenchPayloadBody(parts[parts.length - 1].data());
+        responseParts = ladderL3Enabled
+          ? rawWire.decodeProductionServiceReply(parts, serviceCorrelation)
+          : parts;
+        if (responseParts.length !== 2) throw new Error('raw request returned an invalid reply part count');
+        if (!ladderL4 && (ladderL2 || ladderL3)) {
+          const replyHeader = rawWire.decodeProductionChannelHeader(responseParts);
+          if (replyHeader.kind !== 2) throw new Error('raw reply channel header is not a response');
+        }
+        const body = ladderL4
+          ? rawWire.decodeProductionTypedReply(responseParts)
+          : rawWire.decodeBenchPayloadBody(responseParts[responseParts.length - 1].data());
         if (body === null) throw new Error('raw reply protobuf body is invalid');
         return body;
       } finally {
+        if (ladderL3Enabled && responseParts !== undefined) {
+          for (const part of responseParts) part.close();
+        }
         for (const part of parts) part.close();
       }
     });
@@ -256,11 +303,25 @@ function createRawTransport(options) {
 
   const submitSend = (stream, payload) => {
     const socket = sendSockets[stream % sendSockets.length];
-    return socket.socket
-      .send(socket.peer)
-      .message(rawWire.REQUEST_ENVELOPE)
-      .message(rawWire.encodeBenchPayloadMessage(payload))
-      .submit();
+    const typedParts = ladderL4
+      ? rawWire.encodeProductionTypedChannelPayload(3, { body: payload })
+      : null;
+    const body = typedParts === null ? rawWire.encodeBenchPayloadMessage(payload) : typedParts[1];
+    const channelHeader = typedParts !== null
+      ? typedParts[0]
+      : ladderL2 || ladderL3
+      ? rawWire.encodeProductionChannelHeader(3)
+      : commandEnvelope;
+    if (ladderL3Enabled) {
+      const serviceRequest = rawWire.encodeProductionServiceRequest(false, 0n, [channelHeader, body]);
+      if (typedParts !== null) body.close();
+      return socket.socket.send(socket.peer)
+        .message(serviceRequest.header)
+        .message(serviceRequest.frame)
+        .submit();
+    }
+    if (typedParts !== null) body.close();
+    return socket.socket.send(socket.peer).message(channelHeader).message(body).submit();
   };
 
   return {
@@ -293,7 +354,10 @@ async function createTransport(options) {
     options.implementation === 'grpc-node'
       ? createGrpcTransport(options)
       : options.implementation === 'zlink-framework-node'
-        ? await createFrameworkTransport(options)
+        ? process.env.ZLINK_LADDER_L0_CLIENT === '1'
+          && process.env.ZLINK_LADDER_L5_7_CLIENT !== '1'
+          ? createRawTransport(options)
+          : await createFrameworkTransport(options)
         : createRawTransport(options);
   const probeBody = header.createPayloadBytes(1024, 1, header.PHASE_WARMUP, 0);
   await core.waitForRouteReady(async () => {

@@ -47,6 +47,100 @@ test('framework schema serializer preserves the same protobuf body bytes', () =>
   assert.deepEqual(decoded.body, body);
 });
 
+test('production L2 channel header preserves the raw protobuf body path', () => {
+  const body = raw.encodeBenchPayloadMessage(Buffer.from(bodyHex, 'hex'));
+  try {
+    const header = raw.encodeProductionChannelHeader(1, 30000);
+    const decoded = raw.decodeProductionChannelHeader([{ data: () => header }]);
+    assert.equal(decoded.formatMarker, 0xf2);
+    assert.equal(decoded.kind, 1);
+    assert.equal(decoded.channelName, 'bench');
+    assert.equal(decoded.messageName, 'BenchPayload');
+    assert.equal(decoded.contentType, 'application/x-protobuf');
+    assert.match(decoded.correlationId, /^[0-9a-f]{32}$/);
+    assert.ok(decoded.deadline);
+    assert.deepEqual(body.data(), Buffer.from(wireHex, 'hex'));
+    const badHeader = Buffer.from(header.toString('utf8').replace('"formatMarker":242', '"formatMarker":0'));
+    assert.throws(() => raw.decodeProductionChannelHeader([{ data: () => badHeader }]));
+  } finally {
+    body.close();
+  }
+});
+
+test('production L2 reply envelope preserves protobuf body and request correlation', () => {
+  const payload = Buffer.from(bodyHex, 'hex');
+  const requestBytes = raw.encodeProductionChannelHeader(1, 30000);
+  const requestHeader = raw.decodeProductionChannelHeader([{ data: () => requestBytes }]);
+  const replyParts = raw.encodeProductionProtobufChannelReply(requestHeader, payload);
+  const replyHeader = raw.decodeProductionChannelHeader([{ data: () => replyParts[0] }]);
+  assert.equal(replyHeader.kind, 2);
+  assert.equal(replyHeader.channelName, 'bench');
+  assert.equal(replyHeader.messageName, 'BenchPayload');
+  assert.equal(replyHeader.contentType, 'application/x-protobuf');
+  assert.equal(replyHeader.correlationId, requestHeader.correlationId);
+  assert.ok(Buffer.isBuffer(replyParts[1]));
+  assert.deepEqual(raw.decodeBenchPayloadBody(replyParts[1]), payload);
+});
+
+test('L4 uses the production typed JSON channel codec for request and reply', () => {
+  const body = Buffer.from(bodyHex, 'hex');
+  const requestParts = raw.encodeProductionTypedChannelPayload(1, { body }, 30000);
+  const requestHeader = raw.decodeProductionChannelHeader([{ data: () => requestParts[0] }]);
+  const replyParts = raw.encodeProductionTypedChannelReply(requestHeader, { body });
+  try {
+    for (const [parts, kind] of [[requestParts, 1], [replyParts, 2]]) {
+      const decodedHeader = raw.decodeProductionChannelHeader([{ data: () => parts[0] }]);
+      assert.equal(decodedHeader.formatMarker, 0xf2);
+      assert.equal(decodedHeader.kind, kind);
+      assert.equal(decodedHeader.channelName, 'bench');
+      assert.equal(decodedHeader.messageName, 'BenchPayload');
+      assert.equal(decodedHeader.contentType, 'application/json');
+      if (kind === 2) assert.equal(decodedHeader.correlationId, requestHeader.correlationId);
+      const decoded = kind === 2
+        ? raw.decodeProductionTypedReply([{ data: () => parts[0] }, parts[1]])
+        : raw.decodeProductionTypedPayload(parts[1].data(), decodedHeader);
+      assert.deepEqual(decoded, body);
+    }
+  } finally {
+    requestParts[1].close();
+    replyParts[1].close();
+  }
+});
+
+test('production L3 service wire frames preserve channel request and reply parts', () => {
+  const body = raw.encodeBenchPayloadMessage(Buffer.from(bodyHex, 'hex'));
+  let requestParts;
+  let replyParts;
+  try {
+    const channelHeader = raw.encodeProductionChannelHeader(1, 30000);
+    const request = raw.encodeProductionServiceRequest(true, 42n, [channelHeader, body]);
+    const decodedRequest = raw.decodeProductionServiceRequest([
+      { data: () => request.header },
+      { data: () => request.frame }
+    ], true);
+    requestParts = decodedRequest.parts;
+    assert.equal(decodedRequest.correlation, 42n);
+    assert.equal(raw.decodeProductionChannelHeader(requestParts).kind, 1);
+    assert.deepEqual(raw.decodeBenchPayloadBody(requestParts[1].data()), Buffer.from(bodyHex, 'hex'));
+
+    const reply = raw.encodeProductionServiceReply(42n, [raw.RESPONSE_ENVELOPE, body]);
+    replyParts = raw.decodeProductionServiceReply([
+      { data: () => reply.header },
+      { data: () => reply.frame }
+    ], 42n);
+    assert.equal(replyParts.length, 2);
+    assert.equal(replyParts[0].data().toString('utf8'), raw.RESPONSE_ENVELOPE.toString('utf8'));
+    assert.deepEqual(raw.decodeBenchPayloadBody(replyParts[1].data()), Buffer.from(bodyHex, 'hex'));
+    assert.throws(() => raw.decodeProductionServiceReply([
+      { data: () => reply.header }, { data: () => reply.frame }
+    ], 43n));
+  } finally {
+    for (const part of requestParts ?? []) part.close();
+    for (const part of replyParts ?? []) part.close();
+    body.close();
+  }
+});
+
 for (const size of [127, 128, 1024, 4096]) {
   test(`raw protobuf wire remains identical for ${size}-byte body`, () => {
     const body = header.createPayloadBytes(size, 0x01020304, header.PHASE_ACTIVE,
