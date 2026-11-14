@@ -14,9 +14,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
@@ -33,8 +31,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private static final String RESERVED_PACKET_NAME_PREFIX = "$zlink.";
     private static final boolean STREAM_TRACE =
             "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    final ScheduledExecutorService timeouts =
-            Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
+    final ScheduledExecutorService timeouts = ZLinkStreamExecutionResources.timeouts();
 
     private final ZLinkStreamConnectorConfiguration configuration;
     private final Map<String, List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>> handlers =
@@ -138,16 +135,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     @Override
     public ZLinkStreamLifecycleCall close() {
-        return new DefaultZLinkStreamLifecycleCall(this::closeInternal);
-    }
-
-    private CompletionStage<Void> closeInternal() {
-        try {
-            return lifecycle.close().whenComplete((ignored, failure) -> timeouts.shutdown());
-        } catch (RuntimeException error) {
-            timeouts.shutdown();
-            throw error;
-        }
+        return new DefaultZLinkStreamLifecycleCall(lifecycle::close);
     }
 
     @Override
@@ -742,15 +730,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     private long nextRequestSeq() {
         return nextRequestSeq(nextRequestSeq);
-    }
-
-    private static final class DaemonThreadFactory implements ThreadFactory {
-        @Override
-        public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "zlink-stream-connector-timeouts");
-            thread.setDaemon(true);
-            return thread;
-        }
     }
 
     static boolean traceEnabled() {
