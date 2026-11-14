@@ -3093,9 +3093,23 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                                                                         cancellation) {
                                                                     assertTrue(
                                                                             ownerTurn.isOnLane());
+                                                                    var currentRoute =
+                                                                            target
+                                                                                    .boundSessionRoute(
+                                                                                            actorRef);
+                                                                    if (currentRoute.isEmpty()
+                                                                            || currentRoute
+                                                                                    .orElseThrow()
+                                                                                    .isSamePhysicalSession(
+                                                                                            incoming,
+                                                                                            incomingSessionRid)) {
+                                                                        return CompletableFuture
+                                                                                .completedFuture(
+                                                                                        Optional
+                                                                                                .empty());
+                                                                    }
                                                                     currentIdentity.set(
-                                                                            target.boundSessionRoute(
-                                                                                            actorRef)
+                                                                            currentRoute
                                                                                     .orElseThrow()
                                                                                     .sessionBindingIdentity());
                                                                     incomingIdentity.set(incoming);

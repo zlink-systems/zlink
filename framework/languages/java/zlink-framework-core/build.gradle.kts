@@ -195,6 +195,7 @@ tasks.named("test") {
 
 dependencies {
     add("integrationTestImplementation", project(":zlink-framework-locations-redis"))
+    add("integrationTestImplementation", project(":zlink-stream-connector"))
     api(project(":zlink-framework-json-internal"))
     implementation(project(":zlink-framework-binding-internal"))
     api(project(":zlink-framework-provider-abstractions"))

@@ -531,6 +531,18 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                                 RemoteSessionBindingTransition, CompletionStage<Boolean>>
                         transition);
 
+        /**
+         * Active binds share the Actor gate; lifecycle retirement keeps its infrastructure owner.
+         */
+        default CompletionStage<Boolean> bind(
+                ZLinkInternalSpotNode node,
+                ZLinkBackendActorRef actor,
+                java.util.function.Function<
+                                RemoteSessionBindingTransition, CompletionStage<Boolean>>
+                        transition) {
+            return apply(node, actor, transition);
+        }
+
         default CompletionStage<Boolean> restoreRelocated(
                 ZLinkInternalSpotNode node,
                 ZLinkBackendActorRef actor,

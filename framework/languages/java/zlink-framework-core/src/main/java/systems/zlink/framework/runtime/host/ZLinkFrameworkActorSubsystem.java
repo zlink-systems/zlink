@@ -351,6 +351,19 @@ final class ZLinkFrameworkActorSubsystem {
                                             }
 
                                             @Override
+                                            public CompletionStage<Boolean> bind(
+                                                    ZLinkInternalSpotNode ownerNode,
+                                                    ZLinkBackendActorRef actor,
+                                                    Function<
+                                                                    ZLinkInternalSpotNode
+                                                                            .RemoteSessionBindingTransition,
+                                                                    CompletionStage<Boolean>>
+                                                            transition) {
+                                                return actors.acceptSessionBindingAsync(
+                                                        ownerNode, actor, transition);
+                                            }
+
+                                            @Override
                                             public CompletionStage<Boolean> restoreRelocated(
                                                     ZLinkInternalSpotNode ownerNode,
                                                     ZLinkBackendActorRef actor,

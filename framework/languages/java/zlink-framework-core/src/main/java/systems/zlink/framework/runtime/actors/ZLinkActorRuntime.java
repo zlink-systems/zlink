@@ -2843,6 +2843,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return inOwnerTurn(() -> transition.apply(remoteSessionBindingTransition(node, actorRef)));
     }
 
+    public CompletionStage<Boolean> acceptSessionBindingAsync(
+            ZLinkInternalSpotNode node,
+            ZLinkBackendActorRef actorRef,
+            Function<ZLinkInternalSpotNode.RemoteSessionBindingTransition, CompletionStage<Boolean>>
+                    transition) {
+        return enqueueActorLifecycleTurn(
+                actorRef.actorId(),
+                () -> applyRemoteSessionBindingAsync(node, actorRef, transition));
+    }
+
     public CompletionStage<Boolean> applyRemoteSessionBindingAsync(
             ZLinkInternalSpotNode node,
             ZLinkBackendActorRef actorRef,
@@ -2954,28 +2964,21 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 } catch (NoSuchMethodException failure) {
                     return CompletableFuture.failedFuture(failure);
                 }
-                return enqueueActorDispatchTurn(
-                        actorRef.actorId(),
-                        () -> {
-                            Optional<ZLinkInternalSpotNode.BoundSessionRoute> currentRoute =
-                                    node.boundSessionRoute(actorRef);
-                            if (currentRoute.isEmpty()) {
-                                return CompletableFuture.completedFuture(Optional.empty());
-                            }
-                            ZLinkInternalSpotNode.BoundSessionRoute current =
-                                    currentRoute.orElseThrow();
-                            if (current.isSamePhysicalSession(incoming, incomingSessionRid)) {
-                                return CompletableFuture.completedFuture(Optional.empty());
-                            }
-                            callbackStarted.run();
-                            return invokeActorLifecycle(
-                                    actor,
-                                    () ->
-                                            actor.onDuplicateBind(
-                                                    current.sessionBindingIdentity(),
-                                                    incoming,
-                                                    cancellation));
-                        });
+                Optional<ZLinkInternalSpotNode.BoundSessionRoute> currentRoute =
+                        node.boundSessionRoute(actorRef);
+                if (currentRoute.isEmpty()) {
+                    return CompletableFuture.completedFuture(Optional.empty());
+                }
+                ZLinkInternalSpotNode.BoundSessionRoute current = currentRoute.orElseThrow();
+                if (current.isSamePhysicalSession(incoming, incomingSessionRid)) {
+                    return CompletableFuture.completedFuture(Optional.empty());
+                }
+                callbackStarted.run();
+                return invokeActorLifecycle(
+                        actor,
+                        () ->
+                                actor.onDuplicateBind(
+                                        current.sessionBindingIdentity(), incoming, cancellation));
             }
         };
     }
@@ -4070,7 +4073,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .thenCompose(turn -> dispatches.runTurn(turn, operation));
     }
 
-    private <T> CompletionStage<T> enqueueActorDispatchTurn(
+    private <T> CompletionStage<T> enqueueActorLifecycleTurn(
             String actorId, Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(actorId, "actorId");
         Objects.requireNonNull(operation, "operation");
@@ -4103,7 +4106,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                 });
                                     };
                             CompletionStage<Void> queued =
-                                    dispatches.enqueue(turn, queuedOperation);
+                                    turn.activation()
+                                            .executeLifecycle(
+                                                    () ->
+                                                            dispatches.runTurn(
+                                                                    turn, queuedOperation));
                             queued.whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null) {
