@@ -20,7 +20,7 @@ the sample and its verification target one editor version.
 - `com.zlink.stream-connector.webgl` at `framework-node/v0.32.0`
 - Unity UI `2.0.0`
 
-`Assets/packages.config` declares `Zlink.Stream.Connector` `0.32.1` for the Editor and native
+`Assets/packages.config` declares `Zlink.Stream.Connector` `0.32.2` for the Editor and native
 desktop/mobile/console players. If the first open reports compile errors before that package is
 present, choose **Ignore**, not Safe Mode, and run **NuGet → Restore Packages**.
 
