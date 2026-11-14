@@ -17,7 +17,7 @@ Unity 2021.3이지만, 저장소의 실제 WebGL adapter 검증 project도 6000.
 `Packages/manifest.json`은 다음 package를 고정한다.
 
 - NuGetForUnity `v4.5.0`
-- `com.zlink.stream-connector.webgl` `framework-node/v0.32.1`
+- `com.zlink.stream-connector.webgl` `framework-node/v0.32.2`
 - Unity UI `2.0.0`
 
 `Assets/packages.config`는 native Editor와 desktop/mobile/console player가 사용하는
