@@ -353,7 +353,7 @@ Exceptions and cautions for round settlement:
 
 ### 10.3 In-Memory State and Failures
 
-- When you create in-memory state, decide at the same time what remains in the database if the process dies now, and how a restart cleans it up. Example: on start, cancel rounds that were in progress and refund their stakes.
+- When you create in-memory state, decide at the same time what remains in the database if the process dies now, and how a restart cleans it up. First choose a structure that leaves nothing to refund: reserve bets in the player's in-memory state (spendable = balance − reserved) and debit and credit them together in the round-result transaction. If the process dies, no money has moved, so there is nothing to refund. Only games that must take money during a round, such as buy-ins, need startup cleanup that cancels in-progress rounds and refunds their stakes.
 - ZLink guarantees one owner per Actor, but not that a previous node's late database write cannot land, nor business-level exactly-once. Protect game data with unique request IDs, conditional updates and generation tokens. ObjectGeneration is not a write-permission token.
 - Location Store records persist over time and across restarts. Give finished players' Actors and personal Spots a cleanup owner from the start. Without cleanup, records pile up and read cost grows even with zero players online. Tests compare only "the records this test created".
 - Send money or reward results to players only after the database commit.
@@ -372,7 +372,7 @@ An Actor moves to another node when it joins a Spot and when it is relocated. Ev
 
 Decide in this order:
 
-1. A player's data (deck, gear, balance) is player Actor state. When the Actor joins a Spot it arrives on that node with its state, so the Spot asks the Actor on the same node. No remote request is needed.
+1. A player's data (deck, gear, balance) is player Actor state. The Actor enters the Spot carrying its state, so the Spot reads the entered Actor's state directly, without sending a message. If each Actor truly needs separate handling on entry, register it with `defer()`.
 2. Room-wide data (game settings, table rules) is Spot state. Read it once when the Spot is created.
 3. Large data used only by the Spot, which Actors do not normally hold, is rare. Only when it is truly needed:
    - Do not request it per player. Before the game starts, the Spot fetches it for all participants in one request (the same shape as round settlement).
@@ -398,6 +398,7 @@ Add layers only to separate rules from external technology. If the game rules ar
 ### 10.7 Sessions and Login
 
 - Handle one player's logins in one order (that player's Actor or a per-player queue). Do not put an await between "check" and "register" on a shared map outside an Actor. Two simultaneous first logins both bind and break duplicate-login protection.
+- A player's Actor exists in exactly one place in the whole mesh. A duplicate login (the same Actor in two places) is a defect in the Framework or in login handling; fix its cause. Re-syncing the balance from the database before a game starts is only a stopgap until that fix.
 - If the login reply has a game to return to (resume), go to that game, not the lobby.
 - Clean up only with the ActorRef found during cleanup, inside that player's order. An ActorRef's generation tells creation incarnations apart and carries no binding.
 
