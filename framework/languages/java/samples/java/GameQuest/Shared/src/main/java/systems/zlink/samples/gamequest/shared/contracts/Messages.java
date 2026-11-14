@@ -1,5 +1,7 @@
 package systems.zlink.samples.gamequest.shared.contracts;
 
+import org.jspecify.annotations.Nullable;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -87,7 +89,7 @@ public final class Messages {
             String status,
             int currentCount,
             int requiredCount,
-            String lastEventId,
+            @Nullable String lastEventId,
             long updatedAtUnixMs) {}
 
     public record GameplayMsg(
