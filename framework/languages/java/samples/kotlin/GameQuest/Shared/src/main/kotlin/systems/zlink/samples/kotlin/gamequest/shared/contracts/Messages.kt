@@ -84,10 +84,7 @@ data class KillCountSnapshot(val monsterId: String, val areaId: String?, val cou
 
 data class ItemCountSnapshot(val itemId: String, val count: Int)
 
-data class QuestProgressNotify(
-    val playerId: String,
-    val progress: QuestProgress,
-)
+data class QuestProgressNotify(val playerId: String, val progress: QuestProgress)
 
 data class QuestCompletedNotify(
     val playerId: String,

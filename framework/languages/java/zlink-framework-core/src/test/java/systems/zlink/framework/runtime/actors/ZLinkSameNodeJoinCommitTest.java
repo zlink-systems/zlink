@@ -2,9 +2,7 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import com.fasterxml.jackson.annotation.JsonSetter;
-import com.fasterxml.jackson.annotation.Nulls;
-
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -266,8 +264,7 @@ final class ZLinkSameNodeJoinCommitTest {
         }
     }
 
-    public record Join(
-            @JsonSetter(nulls = Nulls.SET) String spotId, boolean reject, boolean failStore) {}
+    public record Join(@Nullable String spotId, boolean reject, boolean failStore) {}
 
     public record Admission(boolean reject) {}
 

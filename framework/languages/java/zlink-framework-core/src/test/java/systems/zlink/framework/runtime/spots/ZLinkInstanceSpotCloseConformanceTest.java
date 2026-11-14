@@ -2,10 +2,9 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import com.fasterxml.jackson.annotation.JsonSetter;
-import com.fasterxml.jackson.annotation.Nulls;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -1285,7 +1284,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         }
     }
 
-    public record Reply(long generation, @JsonSetter(nulls = Nulls.SET) String restored) {}
+    public record Reply(long generation, @Nullable String restored) {}
 
     public static final class Instance implements ZLinkInstanceSpot {
         private final ZLinkInstanceSpotContext context;

@@ -8,11 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-import com.fasterxml.jackson.annotation.JsonSetter;
-import com.fasterxml.jackson.annotation.Nulls;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -1191,7 +1190,7 @@ final class ZLinkSpotCloseConformanceTest {
 
     public record Probe(String spotId) {}
 
-    public record Reply(@JsonSetter(nulls = Nulls.SET) String spotId) {}
+    public record Reply(@Nullable String spotId) {}
 
     public record JoinRequest(String spotId) {}
 

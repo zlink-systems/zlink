@@ -89,8 +89,8 @@ public final class ZLinkFrameworkJsonProfile {
         @Override
         public JsonSetter.Value findSetterInfo(Annotated member) {
             JsonSetter.Value declared = super.findSetterInfo(member);
-            if (declared != null && declared.getValueNulls() != Nulls.DEFAULT) return declared;
-            // Type-use (JSpecify) and declaration (JSR 305, Jakarta) Nullable both declare null.
+            // Only a Nullable annotation declares null (spec 05-message-model 5): type-use
+            // (JSpecify) or declaration (JSR 305, Jakarta). Jackson null settings do not.
             java.lang.reflect.AnnotatedType type = null;
             Annotation[] declaration = null;
             if (member instanceof AnnotatedParameter parameter

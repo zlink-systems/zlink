@@ -124,8 +124,7 @@ public final class QuestDomain {
                             nextVersion,
                             now));
             if (event.publish()) {
-                progressNotifications.add(
-                        new Messages.QuestProgressNotify(event.playerId(), next));
+                progressNotifications.add(new Messages.QuestProgressNotify(event.playerId(), next));
             }
         }
         if ((previous == null || !Messages.QuestStatuses.RewardGranted.equals(previous.status()))

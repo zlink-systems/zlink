@@ -200,6 +200,8 @@ dependencies {
     api(project(":zlink-framework-provider-abstractions"))
     api(zlinkLibs.zlink.bindings)
     compileOnlyApi("org.jspecify:jspecify:1.0.0")
+    // Tests declare nullable DTO members the way applications do (spec 05-message-model 5).
+    testImplementation("org.jspecify:jspecify:1.0.0")
     api("io.netty:netty-buffer:4.1.100.Final")
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     implementation("org.lz4:lz4-java:1.8.0")

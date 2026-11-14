@@ -3,9 +3,7 @@ package systems.zlink.framework.runtime.messaging;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-import com.fasterxml.jackson.annotation.JsonSetter;
-import com.fasterxml.jackson.annotation.Nulls;
-
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -40,7 +38,7 @@ final class ZLinkTypedJsonPayloadContractTest {
                         });
     }
 
-    record NullablePayload(@JsonSetter(nulls = Nulls.SET) byte[] body) {}
+    record NullablePayload(byte @Nullable [] body) {}
 
     @Test
     void explicitlyNullableBytesAreAccepted() throws Exception {

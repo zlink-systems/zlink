@@ -8,8 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonSetter;
-import com.fasterxml.jackson.annotation.Nulls;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -19,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -75,8 +74,7 @@ final class ZLinkJsonMessageSerializerTest {
         try (Message payload = Message.from("{\"code\":\"a\"}")) {
             assertEquals(
                     new OptionalReference("a", null),
-                    serializer.deserializeBorrowed(
-                            payload.dataBuffer(), OptionalReference.class));
+                    serializer.deserializeBorrowed(payload.dataBuffer(), OptionalReference.class));
         }
         try (Message payload = Message.from("{\"code\":\"a\",\"note\":null}")) {
             assertThrows(
@@ -99,16 +97,18 @@ final class ZLinkJsonMessageSerializerTest {
 
     record OptionalNullableReference(String code, @ZLinkJsonOptional @Nullable String note) {}
 
-    /** Declaration-target annotation, like JSR 305 or Jakarta Nullable. */
-    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
-    @java.lang.annotation.Target({
-        java.lang.annotation.ElementType.PARAMETER,
-        java.lang.annotation.ElementType.FIELD,
-        java.lang.annotation.ElementType.METHOD
-    })
-    @interface Nullable {}
+    /** Holds a declaration-target annotation named like JSR 305 or Jakarta Nullable. */
+    static final class Jsr305 {
+        @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+        @java.lang.annotation.Target({
+            java.lang.annotation.ElementType.PARAMETER,
+            java.lang.annotation.ElementType.FIELD,
+            java.lang.annotation.ElementType.METHOD
+        })
+        @interface Nullable {}
+    }
 
-    record DeclarationNullable(String code, @Nullable String note) {}
+    record DeclarationNullable(String code, @Jsr305.Nullable String note) {}
 
     @Test
     void borrowedTypedJsonPreservesTheArrayDecoderResultsAndErrors() throws Exception {
@@ -512,7 +512,7 @@ final class ZLinkJsonMessageSerializerTest {
 
     record EnumPayload(ProfileReportReason reasonId) {}
 
-    record CourierActorFound(String courierId, @JsonSetter(nulls = Nulls.SET) ActorRefWire actor) {}
+    record CourierActorFound(String courierId, @Nullable ActorRefWire actor) {}
 
     record ActorRefWire(String nodeRid, String actorId, long generation) {}
 
@@ -532,12 +532,12 @@ final class ZLinkJsonMessageSerializerTest {
             double ratio,
             GoldenState state,
             byte[] bytes,
-            @JsonSetter(nulls = Nulls.SET) Object nullable,
+            @Nullable Object nullable,
             Map<String, Integer> labels) {}
 
     record RequiredPresenceRecord(
             @JsonProperty("code") String code,
-            @JsonSetter(nulls = Nulls.SET) String accessToken,
+            @Nullable String accessToken,
             int accountId,
             @ZLinkJsonOptional int attempts) {}
 
