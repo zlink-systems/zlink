@@ -153,6 +153,11 @@ final class ZLinkBoundSessionRuntime implements ZLinkSessionBoundSession {
         return actorRuntime.closeNativeSessionBinding(actor, spotNode, DEFAULT_TIMEOUT);
     }
 
+    @Override
+    public CompletionStage<Void> disconnectForDestroy() {
+        return actorRuntime.closeNativeSessionBindingForDestroy(actor, spotNode, DEFAULT_TIMEOUT);
+    }
+
     private record SendCall(
             ZLinkBackendStreamSocket stream,
             RoutingId sessionRid,
