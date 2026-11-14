@@ -1142,14 +1142,19 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, codecError);
         Assert.Equal(expectedReady, roundtrip);
+        // The managed budget also becomes each physical leg's native request timeout,
+        // which Core measures in real time while this test moves only the fake managed
+        // clock. Keep that budget far above the scenario's run time so a loaded host
+        // cannot expire the physical legs before the late replies arrive.
+        var budget = TimeSpan.FromSeconds(30);
         using var cancellation = new CancellationTokenSource();
-        var first = fixture.Request(cancellation.Token);
+        var first = fixture.Request(cancellation.Token, budget);
         using var firstReceived = await fixture
             .ReceivePrepareAndChunksAsync()
             .WaitAsync(TimeSpan.FromSeconds(5));
         if (expireOwner)
-            fixture.AdvanceClock(TimeSpan.FromMilliseconds(125));
-        var second = fixture.Request();
+            fixture.AdvanceClock(budget / 2);
+        var second = fixture.Request(budget: budget);
         using var secondReceived = await fixture
             .ReceivePrepareAndChunksAsync()
             .WaitAsync(TimeSpan.FromSeconds(5));
@@ -1160,7 +1165,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         ZLinkFrameworkException? originalFailure = null;
         if (expireOwner)
         {
-            fixture.AdvanceClock(TimeSpan.FromMilliseconds(250));
+            fixture.AdvanceClock(budget);
             originalFailure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                 first.WaitAsync(TimeSpan.FromSeconds(5))
             );
@@ -1561,13 +1566,14 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         }
 
         internal Task<ZLinkServiceWireCodec.RelocationReadyRecord> Request(
-            CancellationToken token = default
+            CancellationToken token = default,
+            TimeSpan? budget = null
         ) =>
             Node.PrepareCanonicalRelocationAsync(
                     _peer.RoutingId,
                     Prepare,
                     _payload,
-                    TimeSpan.FromMilliseconds(250),
+                    budget ?? TimeSpan.FromMilliseconds(250),
                     token
                 )
                 .AsTask();
