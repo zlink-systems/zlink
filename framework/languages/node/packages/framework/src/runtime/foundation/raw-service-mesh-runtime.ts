@@ -495,10 +495,7 @@ export class RawServiceMeshRuntime {
   }
 
   peerLifecycleGeneration(nodeRoutingId: string): bigint | undefined {
-    return (
-      this.expectedPeers.get(nodeRoutingId)?.lifecycleGeneration ??
-      this.topology.admittedPeer(nodeRoutingId)?.descriptor.lifecycleGeneration
-    );
+    return this.expectedPeers.get(nodeRoutingId)?.lifecycleGeneration;
   }
 
   async waitForPeerRoute(
