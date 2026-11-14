@@ -2925,7 +2925,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         result.complete(false);
                         return;
                     }
-                    commitRemoteStreamBinding(route, candidate, command, reply, applied)
+                    applied.commit(
+                                    () ->
+                                            commitRemoteStreamBinding(
+                                                    route, candidate, command, reply, applied))
                             .whenComplete(
                                     (accepted, commitFailure) -> {
                                         if (commitFailure != null) {

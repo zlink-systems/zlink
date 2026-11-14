@@ -2850,7 +2850,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     transition) {
         return enqueueActorLifecycleTurn(
                 actorRef.actorId(),
-                () -> applyRemoteSessionBindingAsync(node, actorRef, transition));
+                () -> transition.apply(remoteSessionBindingTransition(node, actorRef)));
     }
 
     public CompletionStage<Boolean> applyRemoteSessionBindingAsync(
@@ -2897,6 +2897,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private ZLinkInternalSpotNode.RemoteSessionBindingTransition remoteSessionBindingTransition(
             ZLinkInternalSpotNode node, ZLinkBackendActorRef actorRef) {
         return new ZLinkInternalSpotNode.RemoteSessionBindingTransition() {
+            @Override
+            public CompletionStage<Boolean> commit(Supplier<CompletionStage<Boolean>> transition) {
+                return inOwnerTurn(transition)
+                        .thenCompose(
+                                stage -> Objects.requireNonNull(stage, "binding commit stage"));
+            }
+
             @Override
             public void bind(ZLinkInternalSpotNode.BoundSessionRoute route) {
                 ZLinkActor actor = actorRegistry.actor(actorRef.actorId());

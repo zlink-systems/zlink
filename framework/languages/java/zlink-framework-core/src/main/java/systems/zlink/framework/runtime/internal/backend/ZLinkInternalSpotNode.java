@@ -564,6 +564,12 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                     public void retire(BoundSessionRoute route) {}
                 };
 
+        /** Applies the decided binding in the state owner turn, outside the user callback. */
+        default CompletionStage<Boolean> commit(
+                java.util.function.Supplier<CompletionStage<Boolean>> transition) {
+            return transition.get();
+        }
+
         void bind(BoundSessionRoute route);
 
         void retire(BoundSessionRoute route);
