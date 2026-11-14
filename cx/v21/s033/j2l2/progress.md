@@ -50,3 +50,10 @@
 - 첫 통합 reader는 ByteBuffer의 mutable position을 byte마다 갱신하고, field 이름마다 14개 전체 길이를 검사했다. Steady request parse sample 추정이 source 1.34→3.07 µs/제출, target 1.72→3.57 µs/수신으로 증가했다. 이 후보를 완료안으로 채택하지 않는다(`raw/after-final-L2-bp`). Native allocation이 envelope 안으로 이동했으므로 writer 전체 envelope 비중은 이전과 직접 같은 범위가 아님도 확인했다.
 - 단일 reader 안의 cursor 하나로 position 갱신을 옮기고 성공 때만 입력 cursor를 consume 상태로 공개한다. 기존 HeaderField lookup을 field-name 길이로 묶은 grammar table 하나로 대체해 비교 후보를 최대 3개로 줄인다(.NET ReadHeaderField:637도 길이로 구분). 새 cache가 아니며 entry·lookup policy·eviction을 추가하지 않는다. 정상 optional-string 검사는 parse의 invalid bit가 0이면 끝낸다. 새 제어 상태/queue/lock/flag 없음.
 - Native writer의 null·빈 metadata 고정 토큰도 단일 bulk copy로 쓴다. writer/parser 수와 buffer/검증 owner는 동일하다. 후보 raw와 failed/invalid run은 모두 보존한다.
+
+## 최종 후보와 제한
+
+- ByteBuffer/FFM native-write 후보는 중간 view가 남아 제외. 최종은 기존 public Message.writeLongLe/writeIntBe/writeByte만 사용한다. Prepared/native probe 496→96 B/header, 같은 probe encode CPU 378→505 ns로 증가했다. 개선 완료·7% 충족을 선언하지 않는다.
+- 최종 `final-*` 4개 profile은 warmup/active 모두 errors=0 및 submitted=completed=received. Source/target steady envelope allocation은 약 1299→961, 911→575 B/message. 상대 CPU·JIT와 raw는 report에 명시했다.
+- 최종 package 재검사는 지정 test-slot measure.gate 대기가 지속되어 시간 상한에서 취소했다. 이전 전체 검사는 통과했으나 최종 primitive writer의 최종 JUnit 통과로 간주하지 않는다. cancellation 원본 `raw/pending-test-cancellation.json`.
+- 로컬 WIP 후보만 보존하며 merge-ready가 아니다. 원격 작업·raw 삭제 없음.
