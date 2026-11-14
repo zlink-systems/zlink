@@ -66,7 +66,7 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
   });
   const entryRuntime = new ZLinkEntryActorRuntimeService({
     actorManager: () => ({ getState: () => state }),
-    spotManager: () => ({ async dispatchRoutedActorPacket(_origin ) { return 'room'; } }),
+    spotManager: () => ({ actorIngressMembership: { resolveOwner: () => ({ actorRef, spotId: state.spotId }) } }),
     spotNodeRuntime: () => ({ primaryMeshNode: node }),
     streamBindingRuntime: { async refreshActor() {} },
     boundSessionRelay: {
@@ -109,12 +109,12 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
 test('Spot context leave restores Entry state and clears the previous packet route', async () => {
   const f = fixture();
   assert.equal(f.context.spotId, 'room');
-  assert.equal((await f.entryRuntime.routePacket('alice', [])).handled, true);
+  assert.equal(f.entryRuntime.actorIngressMembership.resolveOwner('alice').spotId, 'room');
   assert.equal(f.packetRelay.actorPacketTargetForState('alice').spotId, 'room');
   await f.leave();
   assert.equal(f.location().spotId, 'node-a');
   assert.equal(f.context.spotId, undefined);
-  assert.equal((await f.entryRuntime.routePacket('alice', [])).handled, false);
+  assert.equal(f.entryRuntime.actorIngressMembership.resolveOwner('alice').spotId, undefined);
   assert.equal(f.packetRelay.actorPacketTargetForState('alice'), undefined);
   assert.deepEqual(f.clearedTargets, ['alice']);
 });

@@ -25,6 +25,7 @@ type AdmissionOptions = Pick<
   | 'actorHandoffRuntime'
   | 'admission'
   | 'actorResolver'
+  | 'actorIngressMembership'
   | 'actorTransferRuntime'
   | 'boundSessionRuntime'
   | 'detachedTaskRunner'
@@ -225,7 +226,8 @@ export class ZLinkSpotActorAdmissionCoordinator {
         this.options.actorResolver === undefined
           ? activation.resolveJoinedActor(targetActorId)
           : this.options.actorResolver(targetActorId),
-      hasDepartedActor: (targetActorId) => activation.hasDepartedActor(targetActorId),
+      membershipSpotId: activation.spotId,
+      membership: this.options.actorIngressMembership,
       onDisconnectActor: (actor) =>
         activation.serial.execute(() => activation.spot.onDisconnectActor?.(actor)),
       actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(

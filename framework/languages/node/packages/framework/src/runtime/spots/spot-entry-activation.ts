@@ -205,17 +205,7 @@ export class ZLinkEntrySpotActivation {
       spotId: () => String(this.options.nativeSpot.routingId),
       registry: this.actorHandlers,
       resolveActor: (targetActorId) => this.options.entryActorRuntime?.resolveActor(targetActorId),
-      routeBeforeLocal: (delivery) =>
-        this.options.entryActorRuntime?.routePacket(
-          delivery.actorId,
-          delivery.parts,
-          delivery.returnResponse,
-          delivery.remoteBoundSessionTarget,
-          delivery.fallbackActorRef,
-          delivery.origin,
-          delivery.requestTerminal,
-          delivery.messageFollowOrigin
-        ),
+      membership: this.options.entryActorRuntime?.actorIngressMembership,
       onDisconnectActor: (actor) => this.notifyDisconnectActor(actor),
       actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(
         this.options.boundSessionRuntime

@@ -1,15 +1,12 @@
-import type { ApplicationJobOrigin } from '../application-jobs/contracts';
-import type { ZLinkActorRequestTerminal } from '../spots/spot-actor-packet-dispatch';
-import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import type { ActorRef, ZLinkActor } from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendActorRef, ZLinkBackendSpotNode } from '../backend';
-import type { DefaultZLinkActorManager, ZLinkRemoteBoundSessionTarget } from '../actors';
+import type { DefaultZLinkActorManager } from '../actors';
 import { ZLinkPostCommitActorBinder } from '../actors/post-commit-actor-binder';
 import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkEntryActorRuntime } from '../spots/spot-runtime-ports';
 import type { ZLinkStreamActorLifecyclePort } from '../streams/stream-binding-runtime-ports';
 import type { ZLinkBoundSessionRelay } from './bound-session-relay';
+import type { ZLinkActorIngressMembership } from '../spots/spot-actor-ingress-admission';
 
 export interface ZLinkEntryActorRuntimeOptions {
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
@@ -87,35 +84,8 @@ export class ZLinkEntryActorRuntimeService implements ZLinkEntryActorRuntime {
     await this.requireActorManager().destroyActor(node, entryNodeRid, actor, signal);
   }
 
-  routePacket(
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse?: boolean,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef,
-    origin: ApplicationJobOrigin = 'remote',
-    requestTerminal?: ZLinkActorRequestTerminal,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin
-  ): { readonly handled: boolean; readonly response?: unknown } {
-    const spotManager = this.options.spotManager();
-    const spotId = this.options.actorManager()?.getState(actorId)?.spotId;
-    if (spotId === undefined || spotManager === undefined) {
-      return { handled: false };
-    }
-    return {
-      handled: true,
-      response: spotManager.dispatchRoutedActorPacket(
-        origin,
-        spotId,
-        actorId,
-        parts,
-        returnResponse,
-        remoteBoundSessionTarget,
-        fallbackActorRef,
-        requestTerminal,
-        messageFollowOrigin
-      )
-    };
+  get actorIngressMembership(): ZLinkActorIngressMembership | undefined {
+    return this.options.spotManager()?.actorIngressMembership;
   }
 
   private requireActorManager(): DefaultZLinkActorManager {

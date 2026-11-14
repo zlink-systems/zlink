@@ -82,6 +82,7 @@ import type {
 } from './spot-actor-join-dispatch';
 import { ZLinkSpotActorAdmissionCoordinator } from './spot-actor-admission-coordinator';
 import type { ZLinkRouteToActorJoinPrewarm } from './spot-actor-packet-dispatch';
+import type { ZLinkActorIngressMembership } from './spot-actor-ingress-admission';
 import { ZLinkSpotActivation } from './spot-activation-state';
 import type { ZLinkSpotLocationClaim } from './spot-location-claim';
 import type {
@@ -132,6 +133,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly createTopicMessage?: () => ZLinkBackendTopicMessage;
   readonly nativeSpotNodeProvider?: (meshName: string) => ZLinkBackendSpotNode | undefined;
   readonly actorResolver?: (actorId: string) => ZLinkActor | undefined;
+  readonly actorIngressMembership?: ZLinkActorIngressMembership;
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;

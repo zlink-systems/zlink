@@ -798,26 +798,29 @@ var ZlinkStreamConnectorBundle = (() => {
   // packages/stream-wire/src/internal/framework-json-v1.ts
   var SIGNED_64_MIN = -(1n << 63n);
   var UNSIGNED_64_MAX = (1n << 64n) - 1n;
-  function stringifyFrameworkJsonV1(value, schema, replacer) {
-    if (value === void 0 || typeof value === "function" || typeof value === "symbol") {
-      throw new TypeError("framework-json-v1 payload is not a JSON value.");
+  var stringifyFrameworkJsonV1 = createFrameworkJsonV1Stringifier(encodeBase64);
+  function createFrameworkJsonV1Stringifier(encodeBytes) {
+    function frameworkJsonV1Replacer(key, item) {
+      return frameworkJsonV1Value(this[key], item, encodeBytes);
     }
-    const encoded = replacer === void 0 ? JSON.stringify(value, frameworkJsonV1Replacer) : stringifyWithReplacer(value, replacer);
-    if (schema !== void 0) {
-      validateFrameworkJsonV1Value(JSON.parse(encoded), schema, "$", false);
-    }
-    return encoded;
+    return function stringifyFrameworkJsonV12(value, schema, replacer) {
+      if (value === void 0 || typeof value === "function" || typeof value === "symbol") {
+        throw new TypeError("framework-json-v1 payload is not a JSON value.");
+      }
+      const encoded = replacer === void 0 ? JSON.stringify(value, frameworkJsonV1Replacer) : stringifyWithReplacer(value, replacer, encodeBytes);
+      if (schema !== void 0) {
+        validateFrameworkJsonV1Value(JSON.parse(encoded), schema, "$", false);
+      }
+      return encoded;
+    };
   }
-  function stringifyWithReplacer(value, replacer) {
+  function stringifyWithReplacer(value, replacer, encodeBytes) {
     return JSON.stringify(value, function(key, item) {
       const transformed = replacer.call(this, key, item);
-      return frameworkJsonV1Value(transformed, transformed);
+      return frameworkJsonV1Value(transformed, transformed, encodeBytes);
     });
   }
-  function frameworkJsonV1Replacer(key, item) {
-    return frameworkJsonV1Value(this[key], item);
-  }
-  function frameworkJsonV1Value(source, item) {
+  function frameworkJsonV1Value(source, item, encodeBytes) {
     if (typeof source === "number" && !Number.isFinite(source)) {
       throw new TypeError("framework-json-v1 only accepts finite JSON numbers.");
     }
@@ -828,7 +831,7 @@ var ZlinkStreamConnectorBundle = (() => {
       return source.toString(10);
     }
     if (source instanceof Uint8Array) {
-      return encodeBase64(source);
+      return encodeBytes(source);
     }
     if (source instanceof Date) {
       throw new TypeError("framework-json-v1 does not implicitly encode Date values.");
@@ -838,20 +841,20 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     return item;
   }
-  function parseFrameworkJsonV1(text, options = {}, schema, reviver) {
+  function parseFrameworkJsonV1(text, options = {}, schema, reviver, decodeBytes = decodeBase64) {
     if (text.charCodeAt(0) === 65279) {
       throw new SyntaxError("framework-json-v1 does not allow a UTF-8 BOM.");
     }
     new JsonPropertyScanner(text, options).scan();
     const parsed = JSON.parse(text, reviver);
-    return schema === void 0 ? parsed : validateFrameworkJsonV1Value(parsed, schema, "$", true);
+    return schema === void 0 ? parsed : validateFrameworkJsonV1Value(parsed, schema, "$", true, decodeBytes);
   }
   var NUMBER_TOKEN_PATTERN = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/uy;
   var BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
   var INT32_MIN = -2147483648;
   var INT32_MAX = 2147483647;
   var UINT32_MAX2 = 4294967295;
-  function validateFrameworkJsonV1Value(value, schema, path, decode) {
+  function validateFrameworkJsonV1Value(value, schema, path, decode, decodeBytes = decodeBase64) {
     switch (schema.type) {
       case "boolean":
         if (typeof value !== "boolean") schemaFailure(path, "a boolean");
@@ -883,7 +886,7 @@ var ZlinkStreamConnectorBundle = (() => {
         }
         if (!hasCanonicalBase64Padding(value))
           schemaFailure(path, "canonical padded RFC 4648 base64");
-        return decode ? decodeBase64(value) : value;
+        return decode ? decodeBytes(value) : value;
       }
       case "enum":
         if (typeof value !== "string" || !schema.names.includes(value)) {
@@ -891,17 +894,23 @@ var ZlinkStreamConnectorBundle = (() => {
         }
         return value;
       case "nullable":
-        return value === null ? null : validateFrameworkJsonV1Value(value, schema.value, path, decode);
+        return value === null ? null : validateFrameworkJsonV1Value(value, schema.value, path, decode, decodeBytes);
       case "array":
         if (!Array.isArray(value)) schemaFailure(path, "an array");
         return value.map(
-          (item, index) => validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode)
+          (item, index) => validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode, decodeBytes)
         );
       case "record": {
         if (!isJsonObject(value)) schemaFailure(path, "an object");
         const result = {};
         for (const [name, item] of Object.entries(value)) {
-          result[name] = validateFrameworkJsonV1Value(item, schema.values, `${path}.${name}`, decode);
+          result[name] = validateFrameworkJsonV1Value(
+            item,
+            schema.values,
+            `${path}.${name}`,
+            decode,
+            decodeBytes
+          );
         }
         return decode ? result : value;
       }
@@ -926,7 +935,8 @@ var ZlinkStreamConnectorBundle = (() => {
             item,
             propertySchema,
             `${path}.${name}`,
-            decode
+            decode,
+            decodeBytes
           );
         }
         return decode ? result : value;

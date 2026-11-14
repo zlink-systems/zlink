@@ -155,6 +155,7 @@
         <Compile Include="Runtime/ChannelReceiveMessageFlowTests.cs"/>
         <Compile Include="Runtime/ClientServerLivenessLaneTests.cs"/>
         <Compile Include="Runtime/ClientServerClientAckTests.cs"/>
+        <Compile Include="Runtime/SelfClientServerAckFailureRecoveryTests.cs"/>
         <Compile Include="Runtime/ClientServerLoopOwnershipTests.cs"/>
         <Compile Include="Runtime/ControllableTimeProvider.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
@@ -195,6 +196,7 @@
         <Compile Include="Runtime/SessionOwnerIdentityContractTests.cs"/>
         <Compile Include="Runtime/GenerationTokenRangeTests.cs"/>
         <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
+        <Compile Include="Runtime/TypedJsonPayloadStorageTests.cs"/>
         <Compile Include="Runtime/ConnectorJsonProfileTests.cs"/>
         <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>

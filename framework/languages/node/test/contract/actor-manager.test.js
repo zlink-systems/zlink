@@ -5277,6 +5277,5 @@ function createEntryActorRuntime(resolveActor, destroyActor = async () => {}) {
     resolveActor,
     async commitActorTransaction(_actor, onJoined) { await onJoined(); },
     destroyActor,
-    routePacket() { return { handled: false }; }
   };
 }
