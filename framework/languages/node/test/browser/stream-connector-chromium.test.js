@@ -81,7 +81,7 @@ test(
       await assert.rejects(
         () =>
           untrustedPage.evaluate(
-            (endpoint) => window.browserConnectorTest.connect(endpoint),
+            (endpoint) => window.browserConnectorTest.connect(endpoint, 20),
             untrustedWssServer.endpoint
           ),
         /connect|WebSocket|transport/i
