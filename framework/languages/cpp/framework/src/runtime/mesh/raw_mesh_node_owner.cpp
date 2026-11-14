@@ -2783,7 +2783,7 @@ raw_mesh_node_owner_t::request_actor_create (std::vector<std::uint8_t> target_ro
               (void) protocol::decode_application_payload (parts[1], false);
           return protocol::pack_infrastructure_reply (parts);
       },
-      deadline, terminal_wake->task ());
+      deadline, terminal_wake->task (), {}, {}, {}, request.reservation.target_node_generation);
 }
 
 task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
@@ -3045,7 +3045,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     (void) co_await submit_registered_request (
       std::move (port), observe_request_peer (target_routing_id), operations, id, correlation,
       target_routing_id, std::move (parts), {}, deadline, admitted->task (), admitted,
-      std::move (observe));
+      std::move (observe), {}, request.target.target_node_generation);
     co_return co_await await_request_admission (admitted->task ());
 }
 
