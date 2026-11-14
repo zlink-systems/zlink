@@ -1,0 +1,26 @@
+hold start 2026-11-14T01:41:01Z A=50f84349c6 B=60f0bdf7a0
+01:41:12 A L1 request-backpressure-1024 26097.8
+01:41:25 A L2 request-backpressure-1024 17327.6
+01:41:38 B L1 request-backpressure-1024 24749
+01:41:51 B L2 request-backpressure-1024 15610.8
+01:42:04 A L1 request-backpressure-4096 22488.2
+01:42:17 A L2 request-backpressure-4096 15686
+01:42:30 B L1 request-backpressure-4096 22572.6
+01:42:42 B L2 request-backpressure-4096 15975.8
+01:42:55 A L1 request-serial-1024 7207.8
+01:43:08 A L2 request-serial-1024 6683.4
+01:43:21 B L1 request-serial-1024 6657
+01:43:34 B L2 request-serial-1024 6025.4
+01:43:46 A L1 request-serial-4096 7576.4
+01:43:59 A L2 request-serial-4096 6316.6
+01:44:11 B L1 request-serial-4096 7687.4
+01:44:24 B L2 request-serial-4096 6283.4
+01:44:36 A L1 send-saturation-1024 106653.4
+01:44:50 A L2 send-saturation-1024 121571.2
+01:45:03 B L1 send-saturation-1024 106439.6
+01:45:16 B L2 send-saturation-1024 117369.6
+01:45:29 A L1 send-saturation-4096 83628.6
+01:45:41 A L2 send-saturation-4096 86286.4
+01:45:55 B L1 send-saturation-4096 79543.6
+01:46:08 B L2 send-saturation-4096 75220.4
+hold end 2026-11-14T01:46:11Z

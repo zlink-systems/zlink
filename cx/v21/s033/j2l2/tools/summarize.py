@@ -5,12 +5,30 @@ base=job/'raw'/sys.argv[1]
 phases=json.loads((base/'phases.json').read_text())
 warm,active=phases
 result={}
-for window,begin,end in [('cold',warm['epochMs'],warm['coldEndMs']),('steady',active['epochMs'],active.get('steadyEndMs',active['epochMs']+5000))]:
+rows=[json.loads(line) for line in (base/'stats.jsonl').read_text().splitlines()]
+
+def counter_at(role, field, phase, at):
+ points=[]
+ for row in rows:
+  if row['phaseRequested'] != phase: continue
+  data=row if role=='source' else row.get('targetStats')
+  if data is not None: points.append((row['epochMs'],data[field]))
+ if not points: return None
+ before=[p for p in points if p[0]<=at]; after=[p for p in points if p[0]>=at]
+ if not before: return points[0][1]
+ if not after: return points[-1][1]
+ lo,hi=before[-1],after[0]
+ if lo[0]==hi[0]: return lo[1]
+ return lo[1]+(hi[1]-lo[1])*(at-lo[0])/(hi[0]-lo[0])
+
+for window,begin,end in [('cold',warm['epochMs'],warm['epochMs']+2000),('steady',active['epochMs'],active['epochMs']+5000)]:
  result[window]={}
  for role in ['source','target']:
   counts=json.loads((base/f'{window if window=="cold" or "steadyEndMs" in active else "active"}-{role}-stats.json').read_text())
-  n=counts['submitted'] if role=='source' else counts['allPhaseMessages']
-  r={'messages':n,'submitted':counts['submitted'],'completed':counts.get('completed'), 'errors':counts['errors'],'windowMs':end-begin}
+  field='submitted' if role=='source' else 'allPhaseMessages'
+  interpolated=counter_at(role,field,'warmup' if window=='cold' else 'active',end)
+  n=interpolated if interpolated is not None else counts[field]
+  r={'messages':n,'denominator':'interpolated boundary counter' if interpolated is not None else 'snapshot boundary counter','submitted':counts['submitted'],'completed':counts.get('completed'), 'errors':counts['errors'],'windowMs':end-begin}
   result[window][role]=r
   for kind in ['cpu','alloc']:
    dest=base/f'{role}-{window}-{kind}.collapsed'
