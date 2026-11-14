@@ -7716,7 +7716,15 @@ test('service-wire relocation replaces a learned source packet route before the 
   targetHost.setSpotManager({
     get actorIngressMembership() {
       return {
-        resolveOwner: () => ({ actorRef: targetRef, spotId: targetState.spotId }),
+        resolveOwner: () => ({
+          nativeActorRef: {
+            actorId: targetRef.actorId,
+            generation: targetRef.objectGeneration,
+            nodeRid: targetRef.nodeRid
+          },
+          meshName: targetRef.meshName,
+          spotId: targetState.spotId
+        }),
         dispatchToOwner: (spotId, delivery) => this.dispatchRoutedActorPacket(
           delivery.origin, spotId, delivery.actorId, delivery.parts, delivery.returnResponse,
           delivery.remoteBoundSessionTarget, delivery.fallbackActorRef
@@ -8054,7 +8062,7 @@ test('runtime host completes local bound actor request without native SessionRel
     },
     get actorIngressMembership() {
       return {
-        resolveOwner: () => ({ actorRef, spotId: state.spotId }),
+        resolveOwner: () => ({ nativeActorRef: actorRef, meshName: 'play.route', spotId: state.spotId }),
         dispatchToOwner: (spotId, delivery) => this.dispatchRoutedActorPacket(
           delivery.origin, spotId, delivery.actorId, delivery.parts, delivery.returnResponse,
           delivery.remoteBoundSessionTarget, delivery.fallbackActorRef
