@@ -854,12 +854,12 @@ internal static class ZLinkEnvelopeCodec
 
     public static Message EncodeJsonPart<T>(T value)
     {
-        return Message.From(EncodeJsonBytes(value));
+        return ZLinkFrameworkJsonPayloadCodec.SerializePart(value, typeof(T));
     }
 
     public static Message EncodeJsonPart(object? value, Type valueType)
     {
-        return Message.From(EncodeJsonBytes(value, valueType));
+        return ZLinkFrameworkJsonPayloadCodec.SerializePart(value, valueType);
     }
 
     public static byte[] EncodeJsonBytes<T>(T value)

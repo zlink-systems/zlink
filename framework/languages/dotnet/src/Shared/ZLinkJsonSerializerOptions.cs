@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Buffers.Text;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -40,6 +42,7 @@ internal static class ZLinkJsonSerializerOptions
         options.Converters.Add(new FrameworkSigned64JsonConverter());
         options.Converters.Add(new FrameworkUnsigned64JsonConverter());
         options.Converters.Add(new FrameworkSingleJsonConverter());
+        options.Converters.Add(new FrameworkByteArrayJsonConverter());
         options.Converters.Add(new FrameworkEnumJsonConverterFactory());
         options.Converters.Add(new UnsupportedImplicitTypeJsonConverterFactory());
 #if ZLINK_FRAMEWORK
@@ -276,6 +279,68 @@ internal static class ZLinkJsonSerializerOptions
             writer.WriteStringValue(
                 value.ToString(System.Globalization.CultureInfo.InvariantCulture)
             );
+    }
+
+    private sealed class FrameworkByteArrayJsonConverter : JsonConverter<byte[]>
+    {
+        public override byte[] Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options
+        )
+        {
+            if (reader.TokenType != JsonTokenType.String)
+                throw new JsonException("Byte sequences must be Base64 strings.");
+
+            // One decode path: obtain the unescaped token bytes, then decode once.
+            byte[]? copied = null;
+            ReadOnlySpan<byte> encoded;
+            if (!reader.HasValueSequence && !reader.ValueIsEscaped)
+            {
+                encoded = reader.ValueSpan;
+            }
+            else
+            {
+                copied = ArrayPool<byte>.Shared.Rent(
+                    reader.HasValueSequence
+                        ? checked((int)reader.ValueSequence.Length)
+                        : reader.ValueSpan.Length
+                );
+                encoded = copied.AsSpan(0, reader.CopyString(copied));
+            }
+
+            try
+            {
+                return Decode(encoded);
+            }
+            finally
+            {
+                if (copied is not null)
+                    ArrayPool<byte>.Shared.Return(copied);
+            }
+        }
+
+        // Sized from the padding; whitespace that Base64 skips can only shorten the result.
+        private static byte[] Decode(ReadOnlySpan<byte> encoded)
+        {
+            var length = Base64.GetMaxDecodedFromUtf8Length(encoded.Length);
+            if ((encoded.Length & 3) == 0 && encoded.Length != 0 && encoded[^1] == '=')
+                length -= encoded[^2] == '=' ? 2 : 1;
+            var decoded = length == 0 ? Array.Empty<byte>() : new byte[length];
+            if (
+                Base64.DecodeFromUtf8(encoded, decoded, out var consumed, out var written)
+                    != OperationStatus.Done
+                || consumed != encoded.Length
+            )
+                throw new JsonException("Byte sequence is not valid Base64.");
+            return written == decoded.Length ? decoded : decoded.AsSpan(0, written).ToArray();
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            byte[] value,
+            JsonSerializerOptions options
+        ) => writer.WriteBase64StringValue(value);
     }
 
     private sealed class FrameworkSingleJsonConverter : JsonConverter<float>
