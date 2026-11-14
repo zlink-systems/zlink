@@ -23,6 +23,21 @@ template <> struct zlink::json::dto_traits<payload>
 int main ()
 {
     using namespace zlink::stream_connector;
+    const std::array<std::string_view, 4> byte_wire{"\"\"", "\"AA==\"", "\"AAE=\"", "\"AAEC\""};
+    for (std::size_t size = 0; size < byte_wire.size (); ++size) {
+        std::vector<std::byte> bytes;
+        for (std::size_t i = 0; i < size; ++i)
+            bytes.push_back (std::byte (i));
+        const auto wire = detail::to_packet_payload (bytes, 0);
+        assert (wire);
+        assert (std::string (wire.value ().begin (), wire.value ().end ()) == byte_wire[size]);
+        const auto back =
+          detail::decode_typed_message<std::vector<std::byte>> (codec_t::json, wire.value ());
+        assert (back && back.value () == bytes);
+    }
+    const std::string invalid_bytes = "\"AB==\"";
+    assert (!detail::decode_typed_message<std::vector<std::byte>> (
+      codec_t::json, {invalid_bytes.begin (), invalid_bytes.end ()}));
     auto encoded = detail::to_packet_payload (payload{}, 0);
     assert (encoded);
     auto decoded = detail::decode_typed_message<payload> (codec_t::json, encoded.value ());
