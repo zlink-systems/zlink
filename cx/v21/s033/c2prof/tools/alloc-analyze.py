@@ -6,15 +6,15 @@ J=Path('/root/jobs/fx/cx/v21/s033/c2prof');R=J/'raw';cache={}
 def symbols(path):
  if path in cache:return cache[path]
  p=Path(path)
- if not p.exists():return ([],[])
- cmd=['nm','-n','-C','--defined-only',path]
+ if not p.exists():return ([],[],[])
+ cmd=['nm','-n','-S','-C','--defined-only',path]
  if 'libc.so' in path or 'libstdc++' in path or 'ld-linux' in path:cmd.insert(1,'-D')
  result=subprocess.run(cmd,text=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
  vals=[]
  for l in result.stdout.splitlines():
-  m=re.match(r'^([0-9a-f]+)\s+[tTwW]\s+(.*)$',l)
-  if m:vals.append((int(m[1],16),m[2]))
- vals.sort();cache[path]=([a for a,b in vals],[b for a,b in vals]);return cache[path]
+  m=re.match(r'^([0-9a-f]+)\s+([0-9a-f]+)\s+[tTwWiI]\s+(.*)$',l)
+  if m:vals.append((int(m[1],16),int(m[2],16),m[3]))
+ vals.sort();cache[path]=([a for a,b,c in vals],[b for a,b,c in vals],[c for a,b,c in vals]);return cache[path]
 
 def resolve_map(path):
  maps=[]
@@ -25,7 +25,8 @@ def resolve_map(path):
  def resolve(ip):
   for lo,hi,off,p in maps:
    if lo<=ip<hi:
-    addr=ip-lo+off;addrs,names=symbols(p);i=bisect.bisect_right(addrs,addr)-1
+    addr=ip-lo+off;addrs,sizes,names=symbols(p);i=bisect.bisect_right(addrs,addr)-1
+    if i>=0 and addr>=addrs[i]+sizes[i]:i=-1
     return {'symbol':names[i] if i>=0 else '[unknown]','offset':addr-addrs[i] if i>=0 else addr,'dso':p,'elf_address':hex(addr)}
   return {'symbol':'[unmapped]','elf_address':hex(ip)}
  return resolve
@@ -51,9 +52,9 @@ for d in sorted(R.glob('alloc-*')):
     own=next((f for f in frames if '/build-cfx/' in f.get('dso','') or '/libzlink.so' in f.get('dso','')),frames[0] if frames else {})
     key=own.get('symbol','unknown')+'+'+hex(own.get('offset',0));first[key]+=1;bycall[key][str(size)]+=1;details[key]=own
    rr['stack_samples']=sum(first.values());rr['callsites']=[{'callsite':s,'samples':v,'estimated_allocations_per_message':v*256/messages,'sizes':dict(bycall[s]),'location':details[s]} for s,v in first.most_common()]
-   (d/(side+'.alloc-collapsed.txt')).write_text('\n'.join(f'{s} {v}' for s,v in chains.most_common()))
+   (d/(side+'.alloc-collapsed-v3.txt')).write_text('\n'.join(f'{s} {v}' for s,v in chains.most_common()))
  out[d.name]={'path':str(d),'roles':roles,'seconds':counts['seconds']}
-(R/'allocations-summary.json').write_text(json.dumps(out,indent=2))
+(R/'allocations-summary-v3.json').write_text(json.dumps(out,indent=2))
 for name,r in out.items():
  print(name)
  for side,rr in r['roles'].items():

@@ -33,3 +33,16 @@ Ladder switches는 요청한 값 그대로다. L1에만 `ZLINK_LADDER_L1_PERMIT=
 ## 계측 범위
 
 Preload는 `process.dlopen`이 반환한 **addon export 객체만** 감싼다. tracked binding/framework/bench 파일을 수정하지 않는다. Audit는 export별 호출·null/성공·예외·allocator callback·실제 Buffer 길이를 기록한다. CPU와 allocation profile은 export wrapper를 쓰지 않아 계수 overhead를 CPU 결과에 합치지 않는다. L3 native body가 pack 뒤 명시적으로 close되지 않는 source ladder의 경로도 profile에 그대로 남긴다(`T/client/main.js:267,277/316,318`: typed parts일 때만 close). Finalizer 비용을 codec self 비용으로 단정하지 않는다.
+
+## boundary byte 회계
+
+Payload copy와 routingId의 작은 stack copy를 분리한다. `N/addon_message_parts.h:17,33`은 source send/request마다 peer routingId 24B를 native stack에 복사한다. Target reply는 source routingId(`bench-source-request-<pid>`)를 같은 방식으로 복사한다. Source completion은 peer routingId 24B를 매 reply마다 JS Buffer로 복사한다(`N/addon_message_values.h:271`). Target recv는 warmup 뒤 같은 routingId Buffer를 재사용해 이 방향의 추가 routing copy가 없다. 숫자·bigint 인자 추출은 payload byte copy와 합산하지 않는다. Core 내부 TCP/framing·reference count 복사 역시 이 boundary bytes에 포함하지 않는다.
+
+| 셀/역할, message당 payload B | L1 JS→native / native→JS | L2 JS→native / native→JS | L3 JS→native / native→JS |
+|---|---:|---:|---:|
+| send source | 1228 / 0 | 1247 / 0 | 2360 / 0 |
+| send target | 0 / 1027 | 0 / 1247 | 0 / 1333 |
+| request source (request 제출+reply 수신) | 1228 / 1228 | 1299 / 1240 | 2420 / 1336 |
+| request target (request 수신+reply 제출) | 1228 / 1027 | 1240 / 1299 | 1336 / 1393 |
+
+L1 고정 header 201B, L2 command/request/reply header 220/272/213B, protobuf body 1027B. L3 command/request/reply outer head 11/19/21B, multipart overhead 75B. L3 pack은 send 1247B, request 1299B, reply 1240B를 JS frame에 추가로 복사한다. 이 JS→JS/native-view write는 위 boundary copy와 별도다. L2 request/reply template의 JS copy 272/213B도 별도다. `messageFrameData`는 copy가 아니라 native Buffer view 생성이다.
