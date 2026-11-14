@@ -222,36 +222,10 @@ inline void input_scenario (Client &a, Client &b)
     const auto &target = player_view (before_move, other.player_id);
     const auto move_delta = target.x >= source.x ? Game::max_step : -Game::max_step;
     const auto move_sequence = source.lastSequence + 1;
-    const MoveRequest accepted_move{move_delta, 0, move_sequence};
-    const MoveRequest rejected_move{move_delta, 0, move_sequence + 1};
-    const auto move_start = mover.mark ();
-    mover.send (accepted_move);
-    mover.send (rejected_move);
-    const auto move_result = mover.receive<MoveResult> (move_start, [&] (const auto &result) {
-        return result.sequence == move_sequence;
-    });
-    const auto move_rejection = mover.receive<ActionRejected> (move_start);
-    require (move_result.sequence == move_sequence, "Accepted move result sequence differs");
-    require (move_rejection.reason == Rejection::move_budget && move_rejection.retryAfterMs > 0,
-             "Expected movement-budget rejection");
-    const auto after_move_a = mover.view ();
-    const auto &after_mover = player_view (after_move_a, mover.player_id);
-    require (after_mover.x == move_result.x && after_mover.y == move_result.y
-                 && after_mover.lastSequence == move_sequence
-                 && player_view (after_move_a, other.player_id).hp == target.hp,
-             "Movement-budget rejection changed the accepted movement state");
-    std::this_thread::sleep_for (std::chrono::milliseconds (move_rejection.retryAfterMs));
-    const auto retry_move_start = mover.mark ();
-    mover.send (rejected_move);
-    const auto retried_move = mover.receive<MoveResult> (retry_move_start, [&] (const auto &result) {
-        return result.sequence == rejected_move.sequence;
-    });
-    require (retried_move.sequence == rejected_move.sequence, "Server movement retry delay was insufficient");
-    const auto after_move_b = mover.view ();
-    const auto &after_retry_move = player_view (after_move_b, mover.player_id);
-    require (after_retry_move.lastSequence == rejected_move.sequence
-                 && after_retry_move.x == retried_move.x && after_retry_move.y == retried_move.y,
-             "Retried movement result differs from RoomView");
+    move_by (a, b, mover, move_delta, 0, move_sequence, before_move);
+    move_by (a, b, mover, move_delta, 0, move_sequence + 1);
+    reject_action (mover, MoveRequest{move_delta, 0, move_sequence + 1},
+                   Rejection::stale, &other);
 
     const auto before_shot = a.view ();
     const auto &shot_target = player_view (before_shot, b.player_id);

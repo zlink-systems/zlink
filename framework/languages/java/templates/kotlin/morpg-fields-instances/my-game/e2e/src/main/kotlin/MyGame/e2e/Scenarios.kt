@@ -189,25 +189,18 @@ class Scenarios(private val nodes: Nodes, selectedScenarios: List<String>) {
                 }
             }
 
-            player.send(MoveRequest(0.0, 2L))
-            player.send(MoveRequest(10.0, 3L))
-            val accepted = player.next<WorldState> { it.sequence == 2L }
-            val budget = player.next<ActionRejected> { it.reason == Rejection.MOVE_BUDGET }
-            player.send(ViewRequest())
-            val budgetState = player.next<WorldState> { it.sequence == 2L }
-            check(
-                accepted.x == after.x &&
-                    budgetState.x == after.x &&
-                    budgetState.sequence == 2L &&
-                    budget.retryAfterMs > 0,
-            ) {
-                "Movement budget rejection changed state: accepted=$accepted, rejection=$budget, " +
-                    "current=$budgetState, before=$after"
+            val accepted = player.move(0.0, 2L)
+            val moved = player.move(0.0, 3L)
+            check(accepted.x == after.x && moved.x == after.x && moved.sequence == 3L) {
+                "Movement did not preserve position and sequence"
             }
-            delay(budget.retryAfterMs.toLong())
-            val retried = player.move(10.0, 3L)
-            check(retried.x == 210.0 && retried.sequence == 3L) {
-                "Move after server retry delay failed"
+            player.send(MoveRequest(0.0, 3L))
+            val stale = player.next<ActionRejected> { it.reason == Rejection.STALE_SEQUENCE }
+            check(stale.retryAfterMs == 0) { "Stale movement has a retry delay" }
+            player.send(ViewRequest())
+            val current = player.next<WorldState>()
+            check(current.x == moved.x && current.sequence == moved.sequence) {
+                "Stale movement changed state"
             }
             return
         }

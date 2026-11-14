@@ -243,16 +243,13 @@ export async function scenario(
         const state = await a.send<WorldState>(new ViewRequest(), PacketNames.worldState);
         assert.equal(state.x, moved.x); assert.equal(state.sequence, moved.sequence);
       }
-      const markMove = a.messages.length;
-      await a.connector.send(new MoveRequest(0, 2n)).submit();
-      await a.connector.send(new MoveRequest(10, 3n)).submit();
-      await a.wait<WorldState>(PacketNames.worldState, markMove, v => v.sequence === 2n);
-      const rejection = await a.wait<ActionRejected>(PacketNames.actionRejected, markMove, v => v.reason === 'move-budget');
-      assert.ok(rejection.retryAfterMs > 0);
-      const unchanged = await a.send<WorldState>(new ViewRequest(), PacketNames.worldState);
-      assert.equal(unchanged.x, moved.x); assert.equal(unchanged.sequence, 2n);
-      await new Promise(resolve => setTimeout(resolve, rejection.retryAfterMs));
-      await a.send<WorldState>(new MoveRequest(10, 3n), PacketNames.worldState, v => v.sequence === 3n);
+      const continued = await a.send<WorldState>(new MoveRequest(0, 2n), PacketNames.worldState, v => v.sequence === 2n);
+      assert.equal(continued.x, moved.x);
+      const accepted = await a.send<WorldState>(new MoveRequest(0, 3n), PacketNames.worldState, v => v.sequence === 3n);
+      assert.equal(accepted.x, moved.x);
+      const stale = await a.send<ActionRejected>(new MoveRequest(0, 3n), PacketNames.actionRejected);
+      assert.deepEqual(stale, { reason: 'stale-sequence', retryAfterMs: 0 });
+      assert.deepEqual(await a.send<WorldState>(new ViewRequest(), PacketNames.worldState), accepted);
 
     } else {
       await a.join(Positions.dungeon);

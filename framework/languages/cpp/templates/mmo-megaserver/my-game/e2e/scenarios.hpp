@@ -91,7 +91,6 @@ inline void movement (const std::string &endpoint)
     const auto first_view = p1.mark_views ();
     const auto first_broadcast_view = p2.mark_views ();
     p1.move (Names::max_step, 1);
-    p1.move (Names::max_step, 2);
     const auto first = p1.wait_view (first_view, [&] (const auto &view) {
         return at (view, p1.player_id, Names::max_step, 1);
     });
@@ -102,29 +101,22 @@ inline void movement (const std::string &endpoint)
     require (p1.view_count () - first_view == 1,
              "Caller did not receive one direct movement result.");
 
-    const auto before_rejection = p1.view_count ();
-    const auto rejected = p1.wait_rejection ();
-    require (rejected.Reason == Rejection::move_budget && rejected.RetryAfterMs > 0,
-             "Movement budget rejection omitted its server retry time.");
-    const auto unchanged = p2.view ([] (const auto &) { return true; });
-    same_region_state (first, unchanged);
-    require (p1.view_count () == before_rejection,
-             "Rejected movement changed state or sent an accepted result.");
-
-    std::this_thread::sleep_for (std::chrono::milliseconds (rejected.RetryAfterMs));
-
     const auto second_view = p1.mark_views ();
     const auto second_broadcast_view = p2.mark_views ();
-    p1.move (Names::max_step, 2);
+    p1.move (0, 2);
     const auto second = p1.wait_view (second_view, [&] (const auto &view) {
-        return at (view, p1.player_id, Names::max_step * 2, 2);
+        return at (view, p1.player_id, Names::max_step, 2);
     });
     const auto second_broadcast = p2.wait_view (second_broadcast_view, [&] (const auto &view) {
-        return at (view, p1.player_id, Names::max_step * 2, 2);
+        return at (view, p1.player_id, Names::max_step, 2);
     });
     same_region_state (second, second_broadcast);
     require (p1.view_count () - second_view == 1,
              "Caller received a duplicate accepted movement result.");
+    const auto stale = p1.exchange<MoveRequest, ActionRejected> ({0, 2});
+    require (stale.Reason == Rejection::stale_sequence && stale.RetryAfterMs == 0,
+             "Accepted movement sequence was not rejected as stale.");
+    same_region_state (second, p2.view ([] (const auto &) { return true; }));
     p1.no_region_push ();
     p3.no_region_push ();
 

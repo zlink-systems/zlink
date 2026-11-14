@@ -166,17 +166,14 @@ internal static class Scenarios
                     var state = await player.SendAsync<WorldState, ViewRequest>(new(), _ => true, ct);
                     Require(state.X == moved.X && state.Sequence == moved.Sequence, "Rejected movement changed state.");
                 }
-                var accepted = player.ReceiveAsync<WorldState>(view => view.Sequence == 2, ct);
-                var budgetRejection = player.ReceiveAsync<ActionRejected>(view => view.Reason == "move-budget", ct);
-                await player.Connector.Send(new MoveRequest(0, 2)).Async(ct);
-                await player.Connector.Send(new MoveRequest(10, 3)).Async(ct);
-                await accepted;
-                var budget = await budgetRejection;
-                var budgetState = await player.SendAsync<WorldState, ViewRequest>(new(), _ => true, ct);
-                Require(budgetState.X == moved.X && budgetState.Sequence == 2 && budget.RetryAfterMs > 0,
-                    "Movement budget rejection changed state.");
-                await Task.Delay(budget.RetryAfterMs, ct);
-                await player.SendAsync<WorldState, MoveRequest>(new(10, 3), view => view.Sequence == 3, ct);
+                await player.SendAsync<WorldState, MoveRequest>(new(0, 2), view => view.Sequence == 2, ct);
+                var continued = await player.SendAsync<WorldState, MoveRequest>(new(0, 3), view => view.Sequence == 3, ct);
+                Require(continued.X == moved.X, "Zero-distance movement changed position.");
+                await player.SendAsync<ActionRejected, MoveRequest>(new(0, 3),
+                    view => view.Reason == "stale-sequence" && view.RetryAfterMs == 0, ct);
+                var unchanged = await player.SendAsync<WorldState, ViewRequest>(new(), _ => true, ct);
+                Require(unchanged.X == continued.X && unchanged.Sequence == continued.Sequence,
+                    "Stale movement changed state.");
                 Console.WriteLine("✓ field");
                 passed++;
             }

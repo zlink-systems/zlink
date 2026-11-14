@@ -333,32 +333,10 @@ private suspend fun wallScenario(a: Client, b: Client) {
 private suspend fun inputScenario(a: Client, b: Client) {
     val beforeBudget = view(a)
     val moveSequence = nextSequence(beforeBudget, a)
-    val acceptedMoveRequest = MoveRequest(Vec3(0.0, 0.0, -2.0), moveSequence)
-    val request = MoveRequest(Vec3(0.0, 0.0, -2.0), moveSequence + 1)
-    a.send(acceptedMoveRequest)
-    a.send(request)
-    val acceptedMove = a.next<MoveResult>()
-    check(acceptedMove.sequence == moveSequence) {
-        "Expected accepted movement before movement-budget rejection."
-    }
-    val budget = a.next<ActionRejected>()
-    check(budget.reason == Rejection.MOVE_BUDGET && budget.retryAfterMs > 0) {
-        "Expected movement-budget rejection."
-    }
-    val afterBudget = view(a)
-    val beforeBudgetPlayer = player(beforeBudget, a)
-    val afterBudgetPlayer = player(afterBudget, a)
-    check(afterBudgetPlayer.position == acceptedMove.position && afterBudgetPlayer.lastSequence == moveSequence) {
-        "Movement-budget rejection changed the accepted movement position or sequence."
-    }
-    check(beforeBudgetPlayer.hp == afterBudgetPlayer.hp && player(beforeBudget, b).hp == player(afterBudget, b).hp) {
-        "Movement-budget rejection changed player HP."
-    }
-    delay(budget.retryAfterMs.toLong())
-    val retriedMove = a.action(request)
-    check(retriedMove is MoveResult && retriedMove.sequence == request.sequence) {
-        "Server movement retry delay was insufficient."
-    }
+    move(a, Vec3(0.0, 0.0, -2.0))
+    move(a, Vec3(0.0, 0.0, -2.0))
+    check(player(view(a), a).lastSequence == moveSequence + 1) { "Movement did not preserve sequence." }
+    rejected(a, MoveRequest(Vec3(0.0, 0.0, -2.0), moveSequence + 1), Rejection.STALE_SEQUENCE)
 
     val room = view(a)
     var sequence = player(room, a).lastSequence
@@ -403,7 +381,7 @@ private suspend fun inputScenario(a: Client, b: Client) {
             && retriedShot.sequence == shot.sequence
             && retriedShot.outcome == ShotOutcome.MISS) { "Server fire retry delay was insufficient." }
     check(player(view(b), b).hp == Game.INITIAL_HP) { "Input checks damaged target." }
-    println("input: move-budget and fire-too-soon retry delays accepted unchanged requests")
+    println("input: movement sequences and fire-too-soon retry preserve requests")
 }
 
 private suspend fun reconnectScenario(

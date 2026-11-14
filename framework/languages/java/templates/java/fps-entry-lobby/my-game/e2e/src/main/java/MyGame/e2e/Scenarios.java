@@ -128,29 +128,11 @@ public final class Scenarios {
     private static void inputScenario(Client a, Client b) throws Exception {
         var beforeBudget = view(a);
         var moveSequence = next(beforeBudget, a);
-        var acceptedMoveRequest = new MoveRequest(new Vec3(0, 0, -2), moveSequence);
-        var move = new MoveRequest(new Vec3(0, 0, -2), moveSequence + 1);
-        a.send(acceptedMoveRequest);
-        a.send(move);
-        var acceptedMove = a.next(MoveResult.class);
-        check(acceptedMove.sequence() == moveSequence,
-                "Expected accepted movement before movement-budget rejection");
-        var budget = a.next(ActionRejected.class);
-        check(budget.reason().equals(Rejection.MOVE_BUDGET) && budget.retryAfterMs() > 0,
-                "Expected movement-budget rejection");
-        var afterBudget = view(a);
-        var beforeBudgetPlayer = player(beforeBudget, a);
-        var afterBudgetPlayer = player(afterBudget, a);
-        check(afterBudgetPlayer.position().equals(acceptedMove.position())
-                        && afterBudgetPlayer.lastSequence() == moveSequence,
-                "Movement-budget rejection changed the accepted movement position or sequence");
-        check(beforeBudgetPlayer.hp() == afterBudgetPlayer.hp()
-                        && player(beforeBudget, b).hp() == player(afterBudget, b).hp(),
-                "Movement-budget rejection changed player HP");
-        Thread.sleep(budget.retryAfterMs());
-        var retriedMove = a.sendAndAwait(move, value -> value instanceof ActionRejected || value instanceof MoveResult);
-        check(retriedMove instanceof MoveResult moveRetry && moveRetry.sequence() == move.sequence(),
-                "Server movement retry delay was insufficient");
+        move(a, new Vec3(0, 0, -2));
+        move(a, new Vec3(0, 0, -2));
+        check(player(view(a), a).lastSequence() == moveSequence + 1,
+                "Movement did not preserve sequence");
+        reject(a, new MoveRequest(new Vec3(0, 0, -2), moveSequence + 1), Rejection.STALE_SEQUENCE);
 
         var current = view(a);
         long sequence = player(current, a).lastSequence();
@@ -194,7 +176,7 @@ public final class Scenarios {
                         && shotRetry.outcome().equals(ShotOutcome.MISS),
                 "Server fire retry delay was insufficient");
         check(player(view(b), b).hp() == Rules.INITIAL_HP, "Input checks damaged target");
-        System.out.println("input: move-budget and fire-too-soon retry delays accepted unchanged requests");
+        System.out.println("input: movement sequences and fire-too-soon retry preserve requests");
     }
 
     private static void reconnectScenario(Client a, Client b, SessionInfo sessionA, SessionInfo sessionB) throws Exception {

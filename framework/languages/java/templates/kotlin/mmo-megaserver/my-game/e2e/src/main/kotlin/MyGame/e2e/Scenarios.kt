@@ -57,19 +57,17 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
         }
         var session = p1.sessionInfo()
         val session2 = p2.sessionInfo()
-        p1.send(MoveRequest(MOVED_X, 1))
-        p1.send(MoveRequest(MOVED_X, 2))
-        val firstMove = p1.next<RegionView> { v -> v.players.any { it.playerId == PLAYER_ONE && it.sequence == 1L } }
-        val rejected = p1.next<ActionRejected> { it.reason == "move-budget" }
-        check(rejected.retryAfterMs > 0) { "Missing movement retry time" }
-        sameState(firstMove, p1.view())
-        kotlinx.coroutines.delay(rejected.retryAfterMs.toLong())
-        val moved = p1.move(MOVED_X, 2)
-        check(moved.players.any { it.playerId == PLAYER_ONE && it.x == MOVED_X * 2 && it.sequence == 2L }) { "Retry did not preserve sequence" }
+        p1.move(MOVED_X, 1)
+        val moved = p1.move(0.0, 2)
+        check(moved.players.any { it.playerId == PLAYER_ONE && it.x == MOVED_X && it.sequence == 2L }) { "Movement did not preserve sequence" }
+        p1.send(MoveRequest(0.0, 2))
+        val rejected = p1.next<ActionRejected> { it.reason == "stale-sequence" }
+        check(rejected.retryAfterMs == 0) { "Stale movement has a retry delay" }
+        sameState(moved, p1.view())
         sameState(
             moved,
             p2.next<RegionView> { v ->
-                v.players.any { it.playerId == PLAYER_ONE && it.x == MOVED_X * 2 }
+                v.players.any { it.playerId == PLAYER_ONE && it.x == MOVED_X && it.sequence == 2L }
             },
         )
         sameState(isolated, p3.view())

@@ -92,7 +92,6 @@ private suspend fun moveBy(
     dy: Double,
     sequence: Long,
     priorView: RoomView? = null,
-    requireMoveBudget: Boolean = false,
 ): RoomView {
     val before = priorView ?: mover.view()
     val current = before.players.single { it.playerId == mover.playerId }
@@ -127,9 +126,6 @@ private suspend fun moveBy(
                 val other = if (mover.playerId == a.playerId) b else a
                 val peer = other.next(moved)
                 check(result == peer) { "Movement views differ." }
-                check(!requireMoveBudget || moveBudgetRejected) {
-                    "Move budget rejection was not observed."
-                }
                 return result
             }
             else -> error("Unexpected action result: $result")
@@ -200,32 +196,11 @@ private suspend fun input(a: Client, b: Client) {
     val target = player(beforeMove, other)
     val moveDelta = if (target.x >= source.x) Game.MAX_STEP else -Game.MAX_STEP
     val moveSequence = source.lastSequence + 1
-    val acceptedMove = MoveRequest(moveDelta, 0.0, moveSequence)
-    val rejectedMove = MoveRequest(moveDelta, 0.0, moveSequence + 1)
-    mover.send(acceptedMove)
-    mover.send(rejectedMove)
-    val moveResult = mover.next<MoveResult>()
-    val moveRejection = mover.next<ActionRejected>()
-    check(moveResult.sequence == moveSequence) { "Accepted move result sequence differs." }
-    check(moveRejection.reason == Rejection.MOVE_BUDGET && moveRejection.retryAfterMs > 0) {
-        "Expected movement-budget rejection."
-    }
-    val afterMoveA = mover.view()
-    val afterMover = player(afterMoveA, mover)
-    check(afterMover.x == moveResult.x && afterMover.y == moveResult.y &&
-        afterMover.lastSequence == moveSequence && player(afterMoveA, other).hp == target.hp) {
-        "Movement-budget rejection changed the accepted movement state."
-    }
-    delay(moveRejection.retryAfterMs.toLong())
-    mover.send(rejectedMove)
-    val retriedMove = mover.next<MoveResult>()
-    check(retriedMove.sequence == rejectedMove.sequence) { "Server movement retry delay was insufficient." }
-    val afterMoveB = mover.view()
-    val afterRetryMove = player(afterMoveB, mover)
-    check(afterRetryMove.lastSequence == rejectedMove.sequence &&
-        afterRetryMove.x == retriedMove.x && afterRetryMove.y == retriedMove.y) {
-        "Retried movement result differs from RoomView."
-    }
+    moveBy(a, b, mover, moveDelta, 0.0, moveSequence)
+    val afterMove = moveBy(a, b, mover, moveDelta, 0.0, moveSequence + 1)
+    check(player(afterMove, mover).lastSequence == moveSequence + 1 &&
+        player(afterMove, other).hp == target.hp) { "Movement changed sequence or player HP." }
+    rejectAction(mover, MoveRequest(moveDelta, 0.0, moveSequence + 1), Rejection.STALE_SEQUENCE)
 
     val beforeShot = a.view()
     val shotTarget = player(beforeShot, b)

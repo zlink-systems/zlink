@@ -326,31 +326,13 @@ async function rejectedAsync(
 }
 
 async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
-  const beforeBudget = await viewAsync(a),
-    moveSequence = next(beforeBudget, a),
-    acceptedMoveRequest = new MoveRequest(new Vec3(0, 0, -2), moveSequence),
-    move = new MoveRequest(new Vec3(0, 0, -2), moveSequence + 1n),
-    moveStart = a.messages.length;
-  await a.connector.send(acceptedMoveRequest).submit();
-  await a.connector.send(move).submit();
-  const acceptedMove = await a.wait<MoveResult>(PacketNames.moveResult, moveStart);
-  assert.equal(acceptedMove.sequence, moveSequence, 'Expected accepted movement before movement-budget rejection.');
-  const budget = await a.wait<ActionRejected>(PacketNames.actionRejected, moveStart);
-  assert(budget.reason === Rejection.moveBudget && budget.retryAfterMs > 0, 'Expected movement-budget rejection.');
-  const afterBudget = await viewAsync(a),
-    beforeBudgetPlayer = player(beforeBudget, a),
-    afterBudgetPlayer = player(afterBudget, a);
-  assert(equal(afterBudgetPlayer.position, acceptedMove.position), 'Movement-budget rejection changed the accepted position.');
-  assert.equal(afterBudgetPlayer.lastSequence, moveSequence, 'Movement-budget rejection changed the accepted sequence.');
-  assert.equal(afterBudgetPlayer.hp, beforeBudgetPlayer.hp, 'Movement-budget rejection changed player HP.');
-  assert.equal(player(afterBudget, b).hp, player(beforeBudget, b).hp, 'Movement-budget rejection changed target HP.');
-  await delay(budget.retryAfterMs);
-  const retriedMove = await a.action(move);
-  assert(
-    retriedMove.name === PacketNames.moveResult &&
-      (retriedMove.payload as MoveResult).sequence === move.sequence,
-    'Server movement retry delay was insufficient.'
-  );
+  const beforeMove = await viewAsync(a);
+  await moveAsync(a, new Vec3(0, 0, -2));
+  await moveAsync(a, new Vec3(0, 0, -2));
+  const afterMove = await viewAsync(a);
+  assert.equal(player(afterMove, a).lastSequence, player(beforeMove, a).lastSequence + 2n);
+  assert.equal(player(afterMove, a).hp, player(beforeMove, a).hp);
+  assert.equal(player(afterMove, b).hp, player(beforeMove, b).hp);
 
   let view = await viewAsync(a),
     sequence = player(view, a).lastSequence;

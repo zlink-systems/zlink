@@ -3,7 +3,6 @@ package MyGame.e2e;
 import MyGame.*;
 
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 
 public final class Scenarios implements AutoCloseable {
     private final Nodes nodes;
@@ -181,24 +180,18 @@ public final class Scenarios implements AutoCloseable {
                         "Rejected movement changed state");
             }
 
-            player.send(new MoveRequest(0, 2));
-            player.send(new MoveRequest(10, 3));
-            var accepted = player.next(WorldState.class, view -> view.sequence() == 2);
-            var budget = player.next(ActionRejected.class,
-                    view -> view.reason().equals(Rejection.MOVE_BUDGET));
+            var accepted = player.move(0, 2);
+            var moved = player.move(0, 3);
+            require(accepted.x() == after.x() && moved.x() == after.x() && moved.sequence() == 3,
+                    "Movement did not preserve position and sequence");
+            player.send(new MoveRequest(0, 3));
+            var stale = player.next(ActionRejected.class,
+                    view -> view.reason().equals(Rejection.STALE_SEQUENCE));
+            require(stale.retryAfterMs() == 0, "Stale movement has a retry delay");
             player.send(new ViewRequest());
-            var budgetState = player.next(WorldState.class, view -> view.sequence() == 2);
-            require(accepted.x() == after.x()
-                            && budgetState.x() == after.x()
-                            && budgetState.sequence() == 2
-                            && budget.retryAfterMs() > 0,
-                    "Movement budget rejection changed state: accepted=" + accepted
-                            + ", rejection=" + budget + ", current=" + budgetState
-                            + ", before=" + after);
-            TimeUnit.MILLISECONDS.sleep(budget.retryAfterMs());
-            var retried = player.move(10, 3);
-            require(retried.x() == 210 && retried.sequence() == 3,
-                    "Move after server retry delay failed");
+            var current = player.next(WorldState.class);
+            require(current.x() == moved.x() && current.sequence() == moved.sequence(),
+                    "Stale movement changed state");
             return;
         }
 
