@@ -153,6 +153,7 @@
         <Compile Include="Runtime/ChannelReceiveMessageFlowTests.cs"/>
         <Compile Include="Runtime/ClientServerLivenessLaneTests.cs"/>
         <Compile Include="Runtime/ClientServerClientAckTests.cs"/>
+        <Compile Include="Runtime/SelfClientServerAckFailureRecoveryTests.cs"/>
         <Compile Include="Runtime/ClientServerLoopOwnershipTests.cs"/>
         <Compile Include="Runtime/ControllableTimeProvider.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
