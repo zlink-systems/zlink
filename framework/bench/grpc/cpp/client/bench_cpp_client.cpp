@@ -19,6 +19,9 @@
 #include <grpcpp/grpcpp.h>
 
 #include <zlink.hpp>
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+#include "../ladder/ladder_wire.hpp"
+#endif
 
 #include <atomic>
 #include <cassert>
@@ -66,6 +69,10 @@ struct options_t
     double target_rate = 0;
     int submit_concurrency = 8;
     std::string output_file;
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+    bool ladder_raw_mesh = false;
+    std::string ladder_target_rid = "bench-server";
+#endif
 };
 
 class submission_pacer_t
@@ -223,16 +230,23 @@ struct stream_t
     void finish (uint64_t sent, const payload_t *reply, uint64_t seq,
                  const std::exception *error = nullptr)
     {
+        finish_bytes (sent, reply ? reply->body ().data () : nullptr,
+                      reply ? reply->body ().size () : 0, seq, error);
+    }
+
+    void finish_bytes (uint64_t sent, const void *body, size_t body_size, uint64_t seq,
+                       const std::exception *error = nullptr)
+    {
         std::lock_guard lock (mutex);
         if (closed)
             return;
         const auto now = clock_t_::now ();
         bool valid = !error;
-        if (reply && valid) {
+        if (body && valid) {
             decoded_header_t header{};
-            valid = decode_payload (reply->body ().data (), reply->body ().size (), &header)
+            valid = decode_payload (body, body_size, &header)
                     && header.run_id == run_id && header.phase == phase
-                    && header.payload_size == size && reply->body ().size () == size
+                    && header.payload_size == size && body_size == size
                     && header.seq == seq;
             if (!valid)
                 ++counters.header_failures;
@@ -437,6 +451,39 @@ class driver_t
         stamp_payload (payload.mutable_body ()->data (), size, _run_id, phase, sequence);
         return payload;
     }
+    // Raw and L0 use one payload/Message lifetime and binding submission path.
+    void submit_raw (zlink::router_socket_t &socket, const zlink::routing_id_t &target,
+                     std::shared_ptr<stream_t> stream, uint64_t seq)
+    {
+        const char *envelope = request_envelope ();
+        auto header = zlink::message_t::from (std::as_bytes (
+          std::span<const char> (envelope, std::strlen (envelope))));
+        const auto encoded = encode_bench_payload (make_payload (stream->size, stream->phase, seq));
+        auto body = zlink::message_t::from (std::as_bytes (
+          std::span<const char> (encoded.data (), encoded.size ())));
+        if (_command) {
+            auto submission = socket.send (target).message (header).message (body).async ();
+            observe_binding (std::move (submission.admitted),
+              [stream, seq] { stream->finish (0, nullptr, seq); stream->admit (); },
+              [stream, seq] (const auto &error) { stream->finish (0, nullptr, seq, &error); stream->admit (false); });
+        } else {
+            auto submission = socket.request (target).message (header).message (body)
+              .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).async ();
+            observe_binding (std::move (submission.reply),
+              [stream, seq] (const auto &parts) {
+                  payload_t reply;
+                  if (parts.empty () || !reply.ParseFromArray (parts.back ().data (), static_cast<int> (parts.back ().size ()))) {
+                      const std::runtime_error error ("invalid raw reply protobuf");
+                      stream->finish (0, nullptr, seq, &error);
+                  } else
+                      stream->finish (0, &reply, seq);
+              },
+              [stream, seq] (const auto &error) { stream->finish (0, nullptr, seq, &error); });
+            observe_binding (std::move (submission.admitted),
+              [stream] { stream->admit (); },
+              [stream] (const auto &) { stream->admit (false); });
+        }
+    }
     virtual void prepare_streams (int) {}
     virtual void submit (std::shared_ptr<stream_t> stream, int index, uint64_t seq) = 0;
     const options_t &_options;
@@ -603,34 +650,7 @@ class zlink_raw_driver_t final : public driver_t
   private:
     void submit (std::shared_ptr<stream_t> stream, int, uint64_t seq) override
     {
-        const char *envelope = request_envelope ();
-        auto header = zlink::message_t::from (std::as_bytes (
-          std::span<const char> (envelope, std::strlen (envelope))));
-        const auto encoded = encode_bench_payload (make_payload (stream->size, stream->phase, seq));
-        auto body = zlink::message_t::from (std::as_bytes (
-          std::span<const char> (encoded.data (), encoded.size ())));
-        if (_command) {
-            auto submission = _socket.send (_target).message (header).message (body).async ();
-            observe_binding (std::move (submission.admitted),
-              [stream, seq] { stream->finish (0, nullptr, seq); stream->admit (); },
-              [stream, seq] (const auto &error) { stream->finish (0, nullptr, seq, &error); stream->admit (false); });
-        } else {
-            auto submission = _socket.request (_target).message (header).message (body)
-              .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).async ();
-            observe_binding (std::move (submission.reply),
-              [stream, seq] (const auto &parts) {
-                  payload_t reply;
-                  if (parts.empty () || !reply.ParseFromArray (parts.back ().data (), static_cast<int> (parts.back ().size ()))) {
-                      const std::runtime_error error ("invalid raw reply protobuf");
-                      stream->finish (0, nullptr, seq, &error);
-                  } else
-                      stream->finish (0, &reply, seq);
-              },
-              [stream, seq] (const auto &error) { stream->finish (0, nullptr, seq, &error); });
-            observe_binding (std::move (submission.admitted),
-              [stream] { stream->admit (); },
-              [stream] (const auto &) { stream->admit (false); });
-        }
+        submit_raw (_socket, _target, std::move (stream), seq);
     }
     zlink::context_t _context;
     zlink::router_socket_t _socket;
@@ -640,6 +660,11 @@ class zlink_raw_driver_t final : public driver_t
     std::thread _completion_thread;
 };
 
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+#include "../ladder/ladder_driver.inc"
+#endif
+
+template <typename Payload = payload_t>
 class framework_driver_t final : public driver_t
 {
   public:
@@ -648,7 +673,8 @@ class framework_driver_t final : public driver_t
     {
         auto &app = _host.app ();
         auto &config = app.add_zlink_framework ();
-        config.codecs ().use (zlink::framework_codecs::protobuf ());
+        if constexpr (std::is_same_v<Payload, payload_t>)
+            config.codecs ().use (zlink::framework_codecs::protobuf ());
         auto mesh = config.add_route_mesh ("bench");
         mesh.set_object_role (fw::object_role_t::none).listen ("tcp://127.0.0.1:0")
           .set_routing_id (zlink::routing_id_t::from ("bench-source"));
@@ -661,8 +687,8 @@ class framework_driver_t final : public driver_t
             return false;
         const auto deadline = clock_t_::now () + std::chrono::milliseconds (timeout_ms);
         while (clock_t_::now () < deadline) {
-            auto task = _client->request_to_node ("bench", _target_node, make_payload (1024, phase_warmup, 0))
-              .timeout (std::chrono::milliseconds (500)).async<payload_t> ();
+            auto task = _client->request_to_node ("bench", _target_node, make_request (1024, phase_warmup, 0))
+              .timeout (std::chrono::milliseconds (500)).template async<Payload> ();
             if (task.result ())
                 return true;
             std::this_thread::sleep_for (std::chrono::milliseconds (50));
@@ -684,10 +710,20 @@ class framework_driver_t final : public driver_t
       private:
         fw::route_client_t *&_client;
     };
+    Payload make_request (size_t size, phase_t phase, uint64_t seq)
+    {
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        if constexpr (std::is_same_v<Payload, ladder::typed_payload_t>)
+            return ladder::make_typed_payload (size, _run_id, phase, seq);
+        else
+#endif
+            return make_payload (size, phase, seq);
+    }
     void submit (std::shared_ptr<stream_t> stream, int, uint64_t seq) override
     {
-        const auto sent = _command ? 0 : now_ns ();
-        auto payload = make_payload (stream->size, stream->phase, seq);
+        // The ladder derives latency from the same in-body stamp as L4.
+        const auto sent = std::is_same_v<Payload, payload_t> && !_command ? now_ns () : 0;
+        auto payload = make_request (stream->size, stream->phase, seq);
         if (_command) {
             auto task = _client->send_to_node ("bench", _target_node, std::move (payload)).async ();
             observe_framework (task, [stream, seq] (const auto &result) {
@@ -696,10 +732,11 @@ class framework_driver_t final : public driver_t
             });
         } else {
             auto task = _client->request_to_node ("bench", _target_node, std::move (payload))
-              .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).async<payload_t> ();
+              .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).template async<Payload> ();
             observe_framework (task, [stream, sent, seq] (const auto &result) {
-                stream->finish (sent, result ? &result.value () : nullptr, seq,
-                                result ? nullptr : result.error ());
+                stream->finish_bytes (sent, result ? result.value ().body ().data () : nullptr,
+                                      result ? result.value ().body ().size () : 0, seq,
+                                      result ? nullptr : result.error ());
             });
             auto admission = task.admitted ();
             observe_framework (admission, [stream] (const auto &result) {
@@ -760,12 +797,24 @@ class source_t
             try {
                 const auto window = pattern_window (_options.pattern);
                 const bool command = _options.pattern == "send-saturation";
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+                if (((_options.implementation == "zlink-framework-cpp"
+                                  && fw::detail::ablation::level () <= 4)
+                                 || _options.ladder_raw_mesh))
+                    _driver = std::make_unique<ladder_driver_t> (_options, window, command,
+                      _options.ladder_raw_mesh ? -1 : fw::detail::ablation::level ());
+                else if (_options.implementation == "zlink-framework-cpp"
+                         && fw::detail::ablation::level () == 7)
+                    _driver = std::make_unique<framework_driver_t<ladder::typed_payload_t>> (
+                      _options, window, command);
+                else
+#endif
                 if (_options.implementation == "grpc-cpp")
                     _driver = std::make_unique<grpc_driver_t> (_options, window, command);
                 else if (_options.implementation == "zlink-cpp")
                     _driver = std::make_unique<zlink_raw_driver_t> (_options, window, command);
                 else if (_options.implementation == "zlink-framework-cpp")
-                    _driver = std::make_unique<framework_driver_t> (_options, window, command);
+                    _driver = std::make_unique<framework_driver_t<>> (_options, window, command);
                 else
                     throw std::runtime_error ("unknown implementation: " + _options.implementation);
 
@@ -1001,6 +1050,10 @@ class source_t
         auto record = json::parse (input);
         input.close ();
         record["metadata"]["submitConcurrency"] = _options.submit_concurrency;
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        record["metadata"]["ablationLadderLevel"] = fw::detail::ablation::level ();
+        record["metadata"]["rawMeshAdapter"] = _options.ladder_raw_mesh;
+#endif
         auto &value = record["cells"][0];
         value["role"] = "source";
         value["trigger"] = trigger;
@@ -1050,6 +1103,12 @@ int main (int argc, char **argv)
     try {
         options_t options;
         options.implementation = arg_value (argc, argv, "--implementation", "grpc-cpp");
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        options.ladder_target_rid = arg_value (argc, argv, "--ladder-target-rid", "bench-server");
+        options.ladder_raw_mesh = arg_value (argc, argv, "--ladder-raw-mesh", "0") == "1";
+        options.raw_request_rid = arg_value (argc, argv, "--ladder-request-rid", options.raw_request_rid.c_str ());
+        options.raw_command_rid = arg_value (argc, argv, "--ladder-command-rid", options.raw_command_rid.c_str ());
+#endif
         options.pattern = arg_value (argc, argv, "--pattern", "request-serial");
         options.payload_size = std::stoul (arg_value (argc, argv, "--payload-size", "1024"));
         if (options.payload_size != 1024 && options.payload_size != 4096)

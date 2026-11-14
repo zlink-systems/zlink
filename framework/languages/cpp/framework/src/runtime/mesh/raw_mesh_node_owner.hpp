@@ -17,6 +17,9 @@
 #include "runtime/mesh/service_topology_registry.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/Contracts/Core/routing_id.hpp>
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+#include <zlink/Contracts/Messaging/operation_contracts.hpp>
+#endif
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <atomic>
@@ -150,6 +153,17 @@ class raw_mesh_node_owner_t
     raw_mesh_node_owner_t &operator= (const raw_mesh_node_owner_t &) = delete;
 
     void start ();
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+    // #4350 experiment: the real owner retains its socket and single poller.
+    // L5 restores the standard lane/mailbox/worker entry points instead.
+    void ablation_start ();
+    zlink::router_socket_t &ablation_socket ();
+    zlink::poller_t &ablation_poller ();
+    void ablation_receive (std::atomic<bool> &stop,
+                           void (*handler) (void *, zlink::received_t &,
+                                            application_job_queue_t::permit_t *),
+                           void *state, application_job_queue_t *application_jobs = nullptr);
+#endif
     void close ();
     bool started () const noexcept;
 

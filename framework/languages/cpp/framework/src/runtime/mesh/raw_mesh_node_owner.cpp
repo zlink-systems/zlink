@@ -9,6 +9,9 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+#include <cerrno>
+#endif
 #include "runtime/disconnect_rid.hpp"
 #include "runtime/mesh/receive_path_probe.hpp"
 #include <zlink/framework/contracts/configuration/mesh_node.hpp>
@@ -507,6 +510,42 @@ raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
           });
     }
 }
+
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+void raw_mesh_node_owner_t::ablation_start ()
+{
+    start ();
+    // L0 source waits for binding completions, exactly like the raw client.
+    // The target receives directly from the socket, exactly like the raw server.
+    _ingress_poller->modify (*_router, zlink::poll_event_flag_t::pollcompletion);
+}
+
+zlink::router_socket_t &raw_mesh_node_owner_t::ablation_socket () { return *_router; }
+zlink::poller_t &raw_mesh_node_owner_t::ablation_poller () { return *_ingress_poller; }
+
+void raw_mesh_node_owner_t::ablation_receive (
+  std::atomic<bool> &stop,
+  void (*handler) (void *, zlink::received_t &, application_job_queue_t::permit_t *),
+  void *state, application_job_queue_t *application_jobs)
+{
+    zlink::received_t received;
+    while (!stop.load ()) {
+        std::optional<application_job_queue_t::permit_t> permit;
+        if (application_jobs) {
+            permit = application_jobs->wait_for_supply_blocking (
+              application_job_queue_t::origin_t::remote);
+            if (!permit)
+                return;
+        }
+        const int rc = _router->recv (received, zlink::recv_flags_t::none);
+        if (rc != 0) {
+            std::this_thread::sleep_for (std::chrono::microseconds (50));
+            continue;
+        }
+        handler (state, received, permit ? &*permit : nullptr);
+    }
+}
+#endif
 
 std::exception_ptr raw_mesh_node_owner_t::deliver_topology_notifications (
   std::vector<std::function<void ()>> &notifications, std::exception_ptr failure) noexcept
