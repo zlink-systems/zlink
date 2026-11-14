@@ -16,7 +16,7 @@ const rawWire = require('../shared/raw-wire');
 const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadBytes } = rawWire;
 const zlink = require('@zlink-systems/zlink');
 const { EchoHandler, CommandHandler, BENCH_SERVER_METRICS, toBuffer } = require('./bench-handlers');
-const { createReceivePermitPump } = require('./receive-permit-pump');
+const { createReceivePermitPump, RECEIVE_RECORD_BUDGET } = require('./receive-permit-pump');
 const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_SERVER === '1';
 const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1' && !ladderL5ToL7;
 const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
@@ -255,7 +255,7 @@ if (l0Server) {
           && error.result === zlink.RecvResult.NoData) return;
         metrics.recordError();
         console.error(`ladder L1 ${label} ${phase} failed: ${error.message}`);
-      }, permitStop.signal, batch);
+      }, permitStop.signal);
   }
 
   const pumpRequestsWithPermits = permittedPump(router, received, (permit) => {
@@ -336,7 +336,7 @@ if (l0Server) {
 
   process.stderr.write(`[framework-server-l0] endpoint=${endpoint} stats=${metricsUrl}\n`);
   if (l1Permit) {
-    process.stderr.write(`[framework-server-l0] permit_path=production-receive-rotation budget=${batch}\n`);
+    process.stderr.write(`[framework-server-l0] permit_path=production-receive-rotation budget=${RECEIVE_RECORD_BUDGET}\n`);
   }
   process.on('SIGTERM', () => {
     permitStop.abort();

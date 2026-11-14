@@ -3,7 +3,9 @@
 
 const path = require('node:path');
 const protoLoader = require('@grpc/proto-loader');
-const { ZLinkEncodedPayload } = require('@zlink-systems/framework');
+const {
+  createProtobufEnvelopeMessageSerializer
+} = require('@zlink-systems/framework-codec-protobuf/framework');
 
 const definition = protoLoader.loadSync(path.join(__dirname, '../../proto/bench.proto'), {
   keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
@@ -11,14 +13,19 @@ const definition = protoLoader.loadSync(path.join(__dirname, '../../proto/bench.
 const payloadMethod = definition['zlink.framework.bench.withgrpc.BenchService'].Echo;
 
 function createBenchPayloadSerializer() {
-  return {
-    serialize(value) {
-      return ZLinkEncodedPayload.fromOwned(payloadMethod.requestSerialize(value));
+  return createProtobufEnvelopeMessageSerializer({
+    encode(value) {
+      return { payload: payloadMethod.requestSerialize(value) };
     },
-    deserialize(payload) {
-      return payloadMethod.requestDeserialize(payload.view());
+    decode(payload) {
+      return payloadMethod.requestDeserialize(toBuffer(payload.payload));
     }
-  };
+  });
+}
+
+function toBuffer(value) {
+  if (Buffer.isBuffer(value)) return value;
+  return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
 }
 
 module.exports = { createBenchPayloadSerializer };

@@ -7,8 +7,7 @@ require('@zlink-systems/framework');
 const {
   ApplicationJobQueue, resolveApplicationJobQueueConfiguration
 } = require('../../../../languages/node/packages/framework/dist/runtime/host/application-job-queue');
-const { createReceivePermitPump } = require('./receive-permit-pump');
-const RECEIVE_RECORD_BUDGET = 64;
+const { createReceivePermitPump, RECEIVE_RECORD_BUDGET } = require('./receive-permit-pump');
 
 function fixture(max = 128n) {
   const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
@@ -34,7 +33,7 @@ function fixture(max = 128n) {
   return { queue, stop, errors, calls,
     pump: (receive, processMessage = (permit) => permit.releaseBeforeHandler()) =>
       createReceivePermitPump(queue, receive, processMessage,
-        (error, phase) => errors.push({ error, phase }), stop.signal, RECEIVE_RECORD_BUDGET)
+        (error, phase) => errors.push({ error, phase }), stop.signal)
   };
 }
 
@@ -112,19 +111,6 @@ test('stopping a pending capacity wait removes the waiter without reporting a re
   await new Promise(setImmediate);
   held.releaseAfterInternalProcessing();
   assert.equal(f.queue.snapshot().capacityWaiters, 0n);
-  assert.equal(f.queue.snapshot().permitsInUse, 0n);
-  assert.deepEqual(f.errors, []);
-});
-
-
-test('permit receive keeps the caller drain limit instead of imposing the runtime 64-record limit', () => {
-  const f = fixture(512n);
-  let calls = 0;
-  const pump = createReceivePermitPump(f.queue, () => { calls++; return true; },
-    permit => permit.releaseBeforeHandler(),
-    (error, phase) => f.errors.push({error, phase}), f.stop.signal, 256);
-  assert.equal(pump(), 256);
-  assert.equal(calls, 256);
   assert.equal(f.queue.snapshot().permitsInUse, 0n);
   assert.deepEqual(f.errors, []);
 });
