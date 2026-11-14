@@ -260,7 +260,7 @@ result_t<void> validate_channel_native_reply (const runtime::messaging::message_
     }
     runtime::messaging::envelope_codec_t envelope;
     /* Reply validation only inspects the kind — flow fields are unused. */
-    auto header = envelope.decode_header (parts, false);
+    auto header = envelope.decode_header_view (parts, false);
     if (!header) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         header.error () ? header.error ()->what ()
@@ -1819,7 +1819,7 @@ void route_client_t::submit_request_reply_message_erased (
                 if (!reply)
                     return detail::propagate_failure<encoded_payload_t> (reply,
                                                                          "route request failed");
-                auto reply_header = envelope.decode_header (reply.value (), false);
+                auto reply_header = envelope.decode_header_view (reply.value (), false);
                 if (!reply_header) {
                     return result_t<encoded_payload_t>::failure (
                       reply_header.error_kind (), reply_header.error ()
@@ -1895,8 +1895,10 @@ void route_client_t::submit_request_reply_message_erased (
     const auto deadline = request_started + effective_timeout;
     {
         runtime::messaging::client_call_codec_t codec;
+        // The endpoint and serializer plans already own the wire names.
+        // Only per-request fields belong in the deferred envelope header.
         auto header = codec.create_envelope (
-          runtime::messaging::message_kind_t::request, decode.router_channel_id, decode.packet_name,
+          runtime::messaging::message_kind_t::request, {}, {},
           runtime::messaging::remaining_request_timeout (deadline), std::nullopt, std::nullopt, {});
         header.metadata = metadata;
         if (detail::message_flow_tracer_t (state->runtime->dispatch)
@@ -2076,7 +2078,7 @@ try {
                       return detail::propagate_failure<zlink::message_t> (
                         reply, "RouteMesh channel request failed");
                   }
-                  auto reply_header = envelope.decode_header (reply.value (), false);
+                  auto reply_header = envelope.decode_header_view (reply.value (), false);
                   if (!reply_header) {
                       return result_t<zlink::message_t>::failure (
                         reply_header.error_kind (),
@@ -2241,7 +2243,7 @@ void route_client_t::submit_spot_request_reply_message_erased (
                     return detail::propagate_failure<encoded_payload_t> (
                       reply, "route spot request failed");
                 }
-                auto reply_header = envelope.decode_header (reply.value (), false);
+                auto reply_header = envelope.decode_header_view (reply.value (), false);
                 if (!reply_header) {
                     return result_t<encoded_payload_t>::failure (
                       reply_header.error_kind (), reply_header.error ()
