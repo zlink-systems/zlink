@@ -5,7 +5,6 @@ import java.net.http.HttpClient;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 
@@ -58,10 +57,11 @@ final class ZLinkStreamExecutionResources {
     }
 
     private static HttpClient.Builder clientBuilder() {
-        // The common pool and the JDK selector use daemon threads and live with the process.
-        return HttpClient.newBuilder()
-                .proxy(ProxySelector.of(null))
-                .executor(ForkJoinPool.commonPool());
+        // One client per TLS policy keeps the JDK selector and its default executor shared by all
+        // connections. The default executor grows with concurrent callbacks, not with
+        // connections, and is not the application's common pool, so a blocking Immediate
+        // handler cannot starve unrelated work.
+        return HttpClient.newBuilder().proxy(ProxySelector.of(null));
     }
 
     private static SSLContext insecureSslContext() {
