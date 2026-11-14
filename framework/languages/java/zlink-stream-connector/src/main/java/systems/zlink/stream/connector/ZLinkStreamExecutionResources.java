@@ -5,16 +5,14 @@ import java.net.http.HttpClient;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.util.Objects;
 import java.util.concurrent.Callable;
-import java.util.concurrent.Delayed;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RunnableScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -62,76 +60,23 @@ final class ZLinkStreamExecutionResources {
         }
 
         @Override
-        protected <V> RunnableScheduledFuture<V> decorateTask(
-                Runnable runnable, RunnableScheduledFuture<V> task) {
-            return new TimerTask<>(task);
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            Objects.requireNonNull(command, "command");
+            // Keep the JDK future in the queue so cancellation uses its heap index.
+            return super.schedule(() -> WorkerHolder.INSTANCE.execute(command), delay, unit);
         }
 
         @Override
-        protected <V> RunnableScheduledFuture<V> decorateTask(
-                Callable<V> callable, RunnableScheduledFuture<V> task) {
-            return new TimerTask<>(task);
-        }
-
-        private final class TimerTask<V> implements RunnableScheduledFuture<V> {
-            private final RunnableScheduledFuture<V> task;
-
-            private TimerTask(RunnableScheduledFuture<V> task) {
-                this.task = task;
-            }
-
-            @Override
-            public void run() {
-                // The JDK future owns completion, failure, cancellation and periodic requeue.
-                // It requeues this wrapper only after the body returns, so even a blocking
-                // heartbeat never overlaps its next invocation. No second running flag is needed.
-                WorkerHolder.INSTANCE.execute(task);
-            }
-
-            @Override
-            public boolean cancel(boolean mayInterruptIfRunning) {
-                boolean cancelled = task.cancel(mayInterruptIfRunning);
-                // The delay queue contains the wrapper, not the JDK future it delegates to.
-                if (cancelled) remove(this);
-                return cancelled;
-            }
-
-            @Override
-            public boolean isPeriodic() {
-                return task.isPeriodic();
-            }
-
-            @Override
-            public long getDelay(TimeUnit unit) {
-                return task.getDelay(unit);
-            }
-
-            @Override
-            public int compareTo(Delayed other) {
-                return task.compareTo(
-                        other instanceof TimerTask<?> timerTask ? timerTask.task : other);
-            }
-
-            @Override
-            public boolean isCancelled() {
-                return task.isCancelled();
-            }
-
-            @Override
-            public boolean isDone() {
-                return task.isDone();
-            }
-
-            @Override
-            public V get() throws InterruptedException, ExecutionException {
-                return task.get();
-            }
-
-            @Override
-            public V get(long timeout, TimeUnit unit)
-                    throws InterruptedException, ExecutionException, TimeoutException {
-                return task.get(timeout, unit);
-            }
+        public <V> ScheduledFuture<V> schedule(Callable<V> command, long delay, TimeUnit unit) {
+            Objects.requireNonNull(command, "command");
+            // This future tracks handoff, not the body's result or completion.
+            return super.schedule(
+                    () -> {
+                        WorkerHolder.INSTANCE.submit(command);
+                        return null;
+                    },
+                    delay,
+                    unit);
         }
     }
 

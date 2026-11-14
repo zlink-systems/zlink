@@ -14,6 +14,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -41,7 +42,7 @@ final class ZLinkStreamConnectionLifecycle {
 
     volatile ZLinkStreamConnectionState state = ZLinkStreamConnectionState.CREATED;
     volatile ZLinkStreamTransportConnection connection;
-    private volatile ScheduledFuture<?> heartbeatTask;
+    private final AtomicReference<HeartbeatTask> heartbeatTask = new AtomicReference<>();
     private volatile long lastInboundNanos = System.nanoTime();
     volatile CompletableFuture<Void> connectionAttempt;
     //  Guarded by connectionAttemptLock. Set once by the first close; every
@@ -640,26 +641,62 @@ final class ZLinkStreamConnectionLifecycle {
         if (!configuration.heartbeat().enabled()) {
             return;
         }
-        heartbeatTask =
-                timeouts.scheduleAtFixedRate(
-                        this::heartbeatTick,
-                        configuration.heartbeat().interval().toMillis(),
-                        configuration.heartbeat().interval().toMillis(),
-                        TimeUnit.MILLISECONDS);
+        scheduleHeartbeat(null);
     }
 
-    private void stopHeartbeat() {
-        ScheduledFuture<?> current = heartbeatTask;
-        heartbeatTask = null;
-        if (current != null) {
-            current.cancel(false);
+    private void scheduleHeartbeat(HeartbeatTask previous) {
+        HeartbeatTask next = new HeartbeatTask();
+        // The handle is the only authority for both stopping and advancing the chain.
+        if (heartbeatTask.compareAndSet(previous, next)) {
+            next.schedule();
         }
     }
 
-    private void heartbeatTick() {
+    private void stopHeartbeat() {
+        HeartbeatTask current = heartbeatTask.getAndSet(null);
+        if (current != null) {
+            current.cancel();
+        }
+    }
+
+    private final class HeartbeatTask implements Runnable {
+        private volatile ScheduledFuture<?> future;
+
+        private void schedule() {
+            ScheduledFuture<?> scheduled =
+                    timeouts.schedule(
+                            this,
+                            configuration.heartbeat().interval().toMillis(),
+                            TimeUnit.MILLISECONDS);
+            future = scheduled;
+            // Stop may win before schedule returns. The queued object is still the JDK future.
+            if (heartbeatTask.get() != this) {
+                scheduled.cancel(false);
+            }
+        }
+
+        private void cancel() {
+            ScheduledFuture<?> scheduled = future;
+            if (scheduled != null) {
+                scheduled.cancel(false);
+            }
+        }
+
+        @Override
+        public void run() {
+            if (heartbeatTask.get() != this) {
+                return;
+            }
+            if (heartbeatTick()) {
+                scheduleHeartbeat(this);
+            }
+        }
+    }
+
+    private boolean heartbeatTick() {
         ZLinkStreamTransportConnection current = connection;
         if (current == null || state != ZLinkStreamConnectionState.CONNECTED) {
-            return;
+            return false;
         }
         long idleNanos = System.nanoTime() - lastInboundNanos;
         if (idleNanos > configuration.heartbeat().timeout().toNanos()) {
@@ -673,9 +710,10 @@ final class ZLinkStreamConnectionLifecycle {
                             "Heartbeat timed out",
                             new TimeoutException("Heartbeat timed out")),
                     ZLinkStreamCloseReason.HEARTBEAT_TIMEOUT);
-            return;
+            return false;
         }
         controlSender.apply(ZLinkStreamReceiveDispatcher.HEARTBEAT_PING_NAME);
+        return true;
     }
 
     private void transitionTo(ZLinkStreamConnectionState next) {

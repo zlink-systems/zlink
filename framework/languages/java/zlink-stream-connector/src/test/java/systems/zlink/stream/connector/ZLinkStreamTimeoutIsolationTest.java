@@ -10,7 +10,6 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -157,48 +156,73 @@ class ZLinkStreamTimeoutIsolationTest {
     }
 
     @Test
-    void scheduledFutureTracksBodyCompletionExceptionsAndCancellation() throws Exception {
+    void scheduledFutureKeepsJdkQueueCancellationAndCompletesOnHandoff() throws Exception {
         var timers = ZLinkStreamExecutionResources.timeouts();
         var scheduler = (ScheduledThreadPoolExecutor) timers;
+        var cancelled = timers.schedule(() -> fail("cancelled deadline ran"), 1, TimeUnit.DAYS);
+        try {
+            assertEquals(
+                    "java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask",
+                    cancelled.getClass().getName(),
+                    "the queue must retain the JDK future and its heap index");
+            assertTrue(scheduler.getQueue().contains(cancelled));
+        } finally {
+            assertTrue(cancelled.cancel(false));
+        }
+        assertTrue(cancelled.isCancelled());
+        assertFalse(
+                scheduler.getQueue().contains(cancelled), "cancel must remove the queued future");
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
+        var exited = new CountDownLatch(1);
         ScheduledFuture<?> running =
                 timers.schedule(
                         () -> {
                             entered.countDown();
-                            awaitRelease(release);
+                            try {
+                                awaitRelease(release);
+                            } finally {
+                                exited.countDown();
+                            }
                         },
                         0,
                         TimeUnit.MILLISECONDS);
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            assertFalse(running.isDone(), "handoff alone must not complete the future");
+            assertNull(running.get(5, TimeUnit.SECONDS));
+            assertTrue(running.isDone(), "the future completes when the body is handed off");
+            var independent = new CountDownLatch(1);
+            timers.schedule(independent::countDown, 0, TimeUnit.MILLISECONDS);
+            assertTrue(
+                    independent.await(5, TimeUnit.SECONDS),
+                    "a blocked body must not hold the clock");
+            assertEquals(1, exited.getCount(), "the first body remains blocked");
         } finally {
             release.countDown();
+            assertTrue(exited.await(5, TimeUnit.SECONDS));
         }
-        running.get(5, TimeUnit.SECONDS);
-        assertTrue(running.isDone());
-        var callable = timers.schedule(() -> 42, 0, TimeUnit.MILLISECONDS);
-        assertEquals(42, callable.get(5, TimeUnit.SECONDS));
-        var failure = new IllegalStateException("periodic body failed");
-        var periodic =
-                timers.scheduleAtFixedRate(
+
+        var callableEntered = new CountDownLatch(1);
+        var callableRelease = new CountDownLatch(1);
+        var callableBody = new CompletableFuture<Integer>();
+        var callable =
+                timers.schedule(
                         () -> {
-                            throw failure;
+                            callableEntered.countDown();
+                            awaitRelease(callableRelease);
+                            callableBody.complete(42);
+                            return 42;
                         },
                         0,
-                        10,
                         TimeUnit.MILLISECONDS);
-        assertSame(
-                failure,
-                assertThrows(ExecutionException.class, () -> periodic.get(5, TimeUnit.SECONDS))
-                        .getCause());
-        var cancelled = timers.schedule(() -> fail("cancelled deadline ran"), 1, TimeUnit.DAYS);
-        assertTrue(scheduler.getQueue().contains(cancelled));
-        assertTrue(cancelled.cancel(false));
-        assertTrue(cancelled.isCancelled());
-        assertFalse(
-                scheduler.getQueue().contains(cancelled), "cancel must remove the queued wrapper");
+        try {
+            assertTrue(callableEntered.await(5, TimeUnit.SECONDS));
+            assertNull(callable.get(5, TimeUnit.SECONDS));
+            assertFalse(callableBody.isDone(), "the callable body remains blocked after handoff");
+        } finally {
+            callableRelease.countDown();
+        }
+        assertEquals(42, callableBody.get(5, TimeUnit.SECONDS));
     }
 
     private static void assertBefore(
@@ -219,9 +243,6 @@ class ZLinkStreamTimeoutIsolationTest {
                     ex);
         }
         long elapsed = TimeUnit.NANOSECONDS.toMillis(observed - start);
-        System.out.printf(
-                "%s: scheduled=%dms observed=%dms grace=%dms%n",
-                name, scheduledMillis, elapsed, GRACE_MILLIS);
         assertTrue(observed <= deadline, name + " exceeded deadline: " + elapsed + "ms");
     }
 
