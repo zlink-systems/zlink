@@ -289,34 +289,51 @@ internal static class ZLinkJsonSerializerOptions
             JsonSerializerOptions options
         )
         {
-            if (
-                reader.TokenType == JsonTokenType.String
-                && !reader.HasValueSequence
-                && !reader.ValueIsEscaped
-                && (reader.ValueSpan.Length & 3) == 0
-            )
+            if (reader.TokenType != JsonTokenType.String)
+                throw new JsonException("Byte sequences must be Base64 strings.");
+
+            // One decode path: obtain the unescaped token bytes, then decode once.
+            byte[]? copied = null;
+            ReadOnlySpan<byte> encoded;
+            if (!reader.HasValueSequence && !reader.ValueIsEscaped)
             {
-                var encoded = reader.ValueSpan;
-                var length = Base64.GetMaxDecodedFromUtf8Length(encoded.Length);
-                if (!encoded.IsEmpty && encoded[encoded.Length - 1] == '=')
-                {
-                    length--;
-                    if (encoded[encoded.Length - 2] == '=')
-                        length--;
-                }
-                var decoded = length == 0 ? Array.Empty<byte>() : new byte[length];
-                if (
-                    Base64.DecodeFromUtf8(encoded, decoded, out var consumed, out var written)
-                        == OperationStatus.Done
-                    && consumed == encoded.Length
-                    && written == decoded.Length
-                )
-                    return decoded;
+                encoded = reader.ValueSpan;
+            }
+            else
+            {
+                copied = ArrayPool<byte>.Shared.Rent(
+                    reader.HasValueSequence
+                        ? checked((int)reader.ValueSequence.Length)
+                        : reader.ValueSpan.Length
+                );
+                encoded = copied.AsSpan(0, reader.CopyString(copied));
             }
 
-            // Keep the reader's existing handling of escaped, segmented and
-            // noncanonical input without an intermediate string conversion.
-            return reader.GetBytesFromBase64();
+            try
+            {
+                return Decode(encoded);
+            }
+            finally
+            {
+                if (copied is not null)
+                    ArrayPool<byte>.Shared.Return(copied);
+            }
+        }
+
+        // Sized from the padding; whitespace that Base64 skips can only shorten the result.
+        private static byte[] Decode(ReadOnlySpan<byte> encoded)
+        {
+            var length = Base64.GetMaxDecodedFromUtf8Length(encoded.Length);
+            if ((encoded.Length & 3) == 0 && encoded.Length != 0 && encoded[^1] == '=')
+                length -= encoded[^2] == '=' ? 2 : 1;
+            var decoded = length == 0 ? Array.Empty<byte>() : new byte[length];
+            if (
+                Base64.DecodeFromUtf8(encoded, decoded, out var consumed, out var written)
+                    != OperationStatus.Done
+                || consumed != encoded.Length
+            )
+                throw new JsonException("Byte sequence is not valid Base64.");
+            return written == decoded.Length ? decoded : decoded.AsSpan(0, written).ToArray();
         }
 
         public override void Write(
