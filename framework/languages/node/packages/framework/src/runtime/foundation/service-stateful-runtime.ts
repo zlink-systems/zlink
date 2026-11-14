@@ -1059,6 +1059,7 @@ export class ServiceStatefulRuntime {
           command: M6bServiceWireCommand.instanceSpot,
           flags: envelope.metadataFrame === undefined ? 0 : M6bServiceWireFlag.metadata,
           sourceRoutingId: envelope.sourceNodeRid,
+          sourceNodeGeneration: envelope.sourceNodeGeneration,
           parts: [
             encodeInstanceSpotActivationHeader(
               record.target,
