@@ -205,27 +205,24 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
     return result_t<void>::success ();
 }
 
-bool valid_utf8 (std::string_view value) noexcept
+// The caller has consumed the lead byte. Consume its continuation bytes in
+// the same traversal that recognizes JSON escapes and string boundaries.
+bool consume_utf8 (std::string_view value, std::size_t &index, unsigned char lead) noexcept
 {
-    for (std::size_t index = 0; index < value.size ();) {
-        const auto lead = static_cast<unsigned char> (value[index++]);
-        if (lead < 0x80)
-            continue;
-        const auto remaining = lead >= 0xc2 && lead <= 0xdf   ? 1
-                               : lead >= 0xe0 && lead <= 0xef ? 2
-                               : lead >= 0xf0 && lead <= 0xf4 ? 3
-                                                              : 0;
-        if (remaining == 0 || value.size () - index < static_cast<std::size_t> (remaining))
+    const auto remaining = lead >= 0xc2 && lead <= 0xdf   ? 1
+                           : lead >= 0xe0 && lead <= 0xef ? 2
+                           : lead >= 0xf0 && lead <= 0xf4 ? 3
+                                                          : 0;
+    if (remaining == 0 || value.size () - index < static_cast<std::size_t> (remaining))
+        return false;
+    const auto second = static_cast<unsigned char> (value[index]);
+    if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second >= 0xa0)
+        || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second >= 0x90))
+        return false;
+    for (int part = 0; part < remaining; ++part) {
+        const auto byte = static_cast<unsigned char> (value[index++]);
+        if (byte < 0x80 || byte > 0xbf)
             return false;
-        const auto second = static_cast<unsigned char> (value[index]);
-        if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second >= 0xa0)
-            || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second >= 0x90))
-            return false;
-        for (int part = 0; part < remaining; ++part) {
-            const auto byte = static_cast<unsigned char> (value[index++]);
-            if (byte < 0x80 || byte > 0xbf)
-                return false;
-        }
     }
     return true;
 }
@@ -256,18 +253,21 @@ class header_writer_t
 
     void string (std::string_view value)
     {
-        if (!_output && !valid_utf8 (value)) {
-            // Keep the JSON library's strict UTF-8 exception and diagnostic.
-            // Only malformed input takes this path; valid headers have no DOM.
-            (void) nlohmann::json (value).dump ();
-        }
         append ("\"");
         std::size_t start = 0;
-        for (std::size_t index = 0; index < value.size (); ++index) {
-            const auto byte = static_cast<unsigned char> (value[index]);
+        for (std::size_t index = 0; index < value.size ();) {
+            const auto position = index;
+            const auto byte = static_cast<unsigned char> (value[index++]);
+            if (byte >= 0x80 && validates_input ()) {
+                if (!consume_utf8 (value, index, byte)) {
+                    // Preserve the JSON library's strict UTF-8 diagnostic.
+                    (void) nlohmann::json (value).dump ();
+                }
+                continue;
+            }
             if (byte >= 0x20 && byte != '"' && byte != '\\')
                 continue;
-            append (std::string_view (value).substr (start, index - start));
+            append (std::string_view (value).substr (start, position - start));
             switch (byte) {
                 case '"':
                     append ("\\\"");
@@ -297,7 +297,7 @@ class header_writer_t
                     break;
                 }
             }
-            start = index + 1;
+            start = index;
         }
         append (std::string_view (value).substr (start));
         append ("\"");
@@ -313,6 +313,10 @@ class header_writer_t
 
     std::size_t size () const noexcept { return _size; }
 
+    // The sizing/string writer owns validation; the final frame writer only
+    // emits the bytes whose size and validity have already been established.
+    bool validates_input () const noexcept { return _output == nullptr; }
+
   private:
     char *_output = nullptr;
     std::string *_string_output = nullptr;
@@ -325,8 +329,9 @@ void write_metadata (header_writer_t &writer, const std::map<std::string, std::s
     writer.append ("{");
     bool first = true;
     for (const auto &[key, value] : metadata) {
-        if (key.empty () || key.find ('\0') != std::string::npos
-            || value.find ('\0') != std::string::npos)
+        if (writer.validates_input ()
+            && (key.empty () || key.find ('\0') != std::string::npos
+                || value.find ('\0') != std::string::npos))
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "ZLink envelope metadata key/value is invalid");
         if (!first)
@@ -342,7 +347,7 @@ void write_metadata (header_writer_t &writer, const std::map<std::string, std::s
         }
     }
     writer.append ("}");
-    if (writer.size () - start > protocol::metadataBytes)
+    if (writer.validates_input () && writer.size () - start > protocol::metadataBytes)
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "ZLink envelope metadata exceeds "
                                        + std::to_string (protocol::metadataBytes) + " bytes");
@@ -710,6 +715,12 @@ template <bool Borrow> class canonical_header_reader_t
             const auto byte = static_cast<unsigned char> (_remaining[index++]);
             if (byte < 0x20)
                 return false;
+            if (byte >= 0x80) {
+                const auto continuation = index;
+                if (!consume_utf8 (_remaining, index, byte))
+                    return false;
+                decoded_size += index - continuation;
+            }
             if (byte == '\\') {
                 char decoded;
                 if (!escape (_remaining, index, decoded))
@@ -721,8 +732,6 @@ template <bool Borrow> class canonical_header_reader_t
         if (index == _remaining.size ())
             return false;
         const auto encoded = _remaining.substr (0, index);
-        if (!valid_utf8 (encoded))
-            return false;
         if (output) {
             if (!escaped) {
                 if constexpr (std::is_same_v<T, header_text_t>) {
@@ -975,14 +984,12 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
         if (!reader.consume ("}")) {
             do {
                 std::string key;
-                if (!reader.string (&key) || !reader.consume (":") || key.empty ()
-                    || key.find ('\0') != std::string::npos
+                if (!reader.string (&key) || !reader.consume (":")
                     || (!_metadata.empty () && key <= _metadata.rbegin ()->first))
                     return false;
                 auto entry =
                   _metadata.emplace_hint (_metadata.end (), std::move (key), std::string ());
-                if (!reader.string (&entry->second)
-                    || entry->second.find ('\0') != std::string::npos)
+                if (!reader.string (&entry->second))
                     return false;
             } while (reader.consume (","));
             if (!reader.consume ("}"))
@@ -1310,10 +1317,9 @@ envelope_codec_t::decode_header_view (const message_parts_t &parts,
                                       bool capture_flow,
                                       std::optional<envelope_header_t> *rejection_context) const
 {
-    if (parts.size () == 0
-        || std::holds_alternative<std::span<const std::span<const std::byte>>> (parts._parts))
+    if (parts.size () == 0)
         return decode_header (parts, capture_flow, rejection_context);
-    return decode_header_view (parts[0], capture_flow, rejection_context);
+    return decode_header_bytes<true> (parts.part_bytes (0), capture_flow, rejection_context);
 }
 
 result_t<envelope_header_t>

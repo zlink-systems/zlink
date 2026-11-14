@@ -315,7 +315,8 @@ export class ZLinkSpotRuntimeOptionsFactory {
           state?.meshName === undefined ? undefined : this.meshNodeRoutingId(state.meshName);
         if (
           state?.actor === undefined ||
-          state.remoteActorPacketTarget !== undefined ||
+          (state.remoteActorPacketTarget !== undefined &&
+            !routingIdsEqual(state.remoteActorPacketTarget.targetNodeRid, localNodeRid)) ||
           actorRef === undefined ||
           localNodeRid === undefined ||
           !routingIdsEqual(actorRef.nodeRid, localNodeRid)

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../common/bench_common.hpp"
+#include "../common/binding_wire.hpp"
 #include "bench.pb.h"
 
 #include <cstdio>
@@ -76,25 +77,34 @@ int main ()
     // Captured pre-#66 encoder dump: tag, length, and the fixed 29-byte header.
     const std::string golden =
       "0a1d4b4e4c5a04030201011d00000008070605040302011817161514131211";
-    for (const size_t size : {29U, 127U, 128U, 1024U}) {
-        std::vector<unsigned char> legacy;
-        const size_t offset = legacy_wire::encode_bench_payload (legacy, size, run_id, phase_active, sequence);
-        write_u64_le (legacy.data () + offset + 21, sent_ns);
+    for (const size_t size : {0U, 1U, 29U, 1024U, 4096U}) {
         zlink::framework::bench::withgrpc::BenchPayload payload;
-        payload.set_body (legacy.data () + offset, size);
-        const std::string encoded = encode_bench_payload (payload);
-        if (encoded.size () != legacy.size ()
-            || std::memcmp (encoded.data (), legacy.data (), legacy.size ()) != 0)
-            throw std::runtime_error ("legacy/protobuf wire mismatch");
+        std::vector<unsigned char> body (size, 0xab);
+        if (size == 29U) {
+            std::vector<unsigned char> legacy;
+            const size_t offset = legacy_wire::encode_bench_payload (
+              legacy, size, run_id, phase_active, sequence);
+            write_u64_le (legacy.data () + offset + 21, sent_ns);
+            payload.set_body (legacy.data () + offset, size);
+        } else {
+            payload.set_body (body.data (), body.size ());
+        }
+        std::string legacy_temporary;
+        if (!payload.SerializeToString (&legacy_temporary))
+            throw std::runtime_error ("temporary protobuf encoding failed");
+        zlink::message_t encoded = encode_bench_payload_message (payload);
+        if (encoded.size () != legacy_temporary.size ()
+            || std::memcmp (encoded.data (), legacy_temporary.data (), encoded.size ()) != 0)
+            throw std::runtime_error ("temporary/native protobuf wire mismatch");
         zlink::framework::bench::withgrpc::BenchPayload decoded;
-        if (!decoded.ParseFromString (encoded) || decoded.body () != payload.body ()
-            || encode_bench_payload (decoded) != encoded)
+        if (!decoded.ParseFromArray (encoded.data (), static_cast<int> (encoded.size ()))
+            || decoded.body () != payload.body ())
             throw std::runtime_error ("protobuf roundtrip mismatch");
-        if (size == 29) {
+        if (size == 29U) {
             std::string hex;
-            for (const unsigned char byte : encoded) {
+            for (const std::byte byte : encoded.bytes ()) {
                 char pair[3];
-                std::snprintf (pair, sizeof pair, "%02x", byte);
+                std::snprintf (pair, sizeof pair, "%02x", std::to_integer<unsigned char> (byte));
                 hex += pair;
             }
             if (hex != golden)
@@ -102,5 +112,5 @@ int main ()
             std::printf ("cpp raw wire 29B: %s\n", hex.c_str ());
         }
     }
-    std::puts ("cpp raw wire identity: 29, 127, 128, 1024 bytes PASS");
+    std::puts ("cpp native message identity: 0, 1, 29, 1024, 4096 bytes PASS");
 }

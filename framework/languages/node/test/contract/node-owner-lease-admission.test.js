@@ -136,7 +136,7 @@ async function actorEndpoint(t, s, entry) {
       s.host.createDispatchErrorReporter(s.host.runtimeOrPreStartErrorSink));
     const manager = new framework.ZLinkSpotNodeRuntimeManager({
       ...options,
-      entryActorRuntime: { resolveActor: () => actor, routePacket: () => undefined }
+      entryActorRuntime: { resolveActor: () => actor }
     });
     const nativeSpot = { routingId: 'entry', setDispatchHandler() {}, async dispose() {} };
     await manager.initializeEntrySpot('mesh', {
@@ -162,7 +162,7 @@ async function actorEndpoint(t, s, entry) {
     t.after(async () => { serial.closeAdmission(); await serial.whenIdle(); });
     const activation = {
       meshName: 'mesh', spotId: 'room', spot: { context: { meshName: 'mesh' } },
-      actorHandlers: registry, hasDepartedActor: () => false,
+      actorHandlers: registry,
       resolveJoinedActor: () => actor,
       executeActor: (_id, operation) => operation(serial)
     };

@@ -340,6 +340,24 @@ for (const updated of [false, true]) {
     f.target.spot.onDisconnectActor = async () => callbacks.push('target-spot');
     f.move();
     const spotManager = {
+      actorIngressMembership: {
+        resolveOwner: () => ({
+          actorRef: { actorId: 'alice', objectGeneration: 1n, nodeRid: 'target', meshName: 'mesh' },
+          spotId: 'target-spot'
+        }),
+        dispatchToOwner: (spotId, delivery) =>
+          spotManager.dispatchRoutedActorPacket(
+            delivery.origin,
+            spotId,
+            delivery.actorId,
+            delivery.parts,
+            delivery.returnResponse,
+            delivery.remoteBoundSessionTarget,
+            delivery.fallbackActorRef,
+            delivery.requestTerminal,
+            delivery.messageFollowOrigin
+          )
+      },
       dispatchRoutedActorPacket: (
         origin,
         spotId,
@@ -389,9 +407,22 @@ for (const updated of [false, true]) {
               bound,
               ref
             );
-          const result = await runtime.routePacket(actorId, parts, response, bound, ref);
-          assert.equal(result.handled, true);
-          return result.response;
+          const {
+            resolveActorIngress
+          } = require('../../packages/framework/dist/runtime/spots/spot-actor-ingress-admission');
+          const result = resolveActorIngress(
+            {
+              origin: 'remote', actorId, parts, returnResponse: response,
+              remoteBoundSessionTarget: bound, fallbackActorRef: ref
+            },
+            false,
+            {
+              membership: runtime.actorIngressMembership,
+              resolveActor: (id) => runtime.resolveActor(id)
+            }
+          );
+          assert.equal(result.kind, 'follow');
+          return result.terminal;
         }
       })
     });

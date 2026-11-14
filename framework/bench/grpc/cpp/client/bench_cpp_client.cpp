@@ -2,6 +2,7 @@
 // Source A: HTTP-triggered logical streams. The runner owns process isolation and settle.
 #include "../common/bench_async.hpp"
 #include "../common/bench_common.hpp"
+#include "../common/binding_wire.hpp"
 #include "../common/bench_stats_server.hpp"
 #include <zlink/codecs/protobuf.hpp>
 #include <zlink/framework.hpp>
@@ -606,9 +607,7 @@ class zlink_raw_driver_t final : public driver_t
         const char *envelope = request_envelope ();
         auto header = zlink::message_t::from (std::as_bytes (
           std::span<const char> (envelope, std::strlen (envelope))));
-        const auto encoded = encode_bench_payload (make_payload (stream->size, stream->phase, seq));
-        auto body = zlink::message_t::from (std::as_bytes (
-          std::span<const char> (encoded.data (), encoded.size ())));
+        auto body = encode_bench_payload_message (make_payload (stream->size, stream->phase, seq));
         if (_command) {
             auto submission = _socket.send (_target).message (header).message (body).async ();
             observe_binding (std::move (submission.admitted),

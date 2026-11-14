@@ -278,6 +278,23 @@ void verify_float_bytes ()
     }
 }
 
+std::string legacy_encode_bytes (const std::vector<std::byte> &bytes)
+{
+    std::string text;
+    text.reserve ((bytes.size () / 3 + (bytes.size () % 3 != 0)) * 4);
+    for (std::size_t i = 0; i < bytes.size (); i += 3) {
+        const unsigned a = std::to_integer<unsigned> (bytes[i]);
+        const unsigned b = i + 1 < bytes.size () ? std::to_integer<unsigned> (bytes[i + 1]) : 0;
+        const unsigned c = i + 2 < bytes.size () ? std::to_integer<unsigned> (bytes[i + 2]) : 0;
+        text += zlink::detail::json_profile::base64_alphabet[a >> 2];
+        text += zlink::detail::json_profile::base64_alphabet[((a & 3) << 4) | (b >> 4)];
+        text += i + 1 < bytes.size ()
+                  ? zlink::detail::json_profile::base64_alphabet[((b & 15) << 2) | (c >> 6)]
+                  : '=';
+        text += i + 2 < bytes.size () ? zlink::detail::json_profile::base64_alphabet[c & 63] : '=';
+    }
+    return text;
+}
 bool legacy_decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
 {
     namespace p = zlink::detail::json_profile;
@@ -300,7 +317,7 @@ bool legacy_decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
         if (text[i + 3] != '=')
             bytes.push_back (std::byte ((v[2] << 6) | v[3]));
     }
-    return p::encode_bytes (bytes) == text;
+    return legacy_encode_bytes (bytes) == text;
 }
 void verify_base64_padding ()
 {
@@ -327,9 +344,85 @@ void verify_base64_padding ()
     for (const std::string text : {"", "AAAA", "AQIDBAUG", "A", "AAA", "AAAA=", "=AAA", "A=AA",
                                    "AA=A", "AA==AAAA", "AAAA\n", "AA-_", "AA?="})
         verify (text);
+    for (unsigned ch = 0; ch < 256; ++ch)
+        for (std::size_t position = 0; position < 4; ++position) {
+            auto text = std::string ("AAAA");
+            text[position] = static_cast<char> (ch);
+            verify (text);
+            verify ("AAAA" + text);
+            verify (text + "AAAA");
+        }
     assert (canonical > 0 && noncanonical > 0);
     std::cout << "base64_canonical=" << canonical << " base64_noncanonical=" << noncanonical
               << '\n';
+}
+struct bytes_dto
+{
+    std::vector<std::byte> body;
+};
+template <> struct zlink::json::dto_traits<bytes_dto>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("body", &bytes_dto::body)};
+};
+void verify_byte_sequence_wire ()
+{
+    namespace fw = zlink::framework;
+    namespace p = zlink::detail::json_profile;
+    fw::serializer_registry_t registry;
+    const auto serializer = registry.get<bytes_dto> ();
+    assert (serializer.content_type () == "application/json");
+    std::ifstream goldens (ZLINK_TYPED_JSON_BYTES_GOLDEN_PATH);
+    assert (goldens);
+    for (const auto size : {0, 1, 2, 3, 127, 128, 1024, 4096}) {
+        bytes_dto input;
+        input.body.resize (size);
+        for (int i = 0; i < size; ++i)
+            input.body[i] = std::byte (i % 256);
+        std::string expected;
+        assert (std::getline (goldens, expected));
+        auto encoded = serializer.serialize (input);
+        assert (encoded.to_string () == expected);
+        assert (serializer.deserialize (encoded).body == input.body);
+        assert (serializer.deserialize (fw::encoded_payload_t::from_string (expected)).body
+                == input.body);
+        const auto message = zlink::message_t::from_json (input);
+        assert (std::string (reinterpret_cast<const char *> (message.data ()), message.size ())
+                == expected);
+        assert (message.parse_json<bytes_dto> ().body == input.body);
+        auto connector = zlink::stream_connector::detail::to_packet_payload (input, 0);
+        assert (connector);
+        assert (std::string (connector.value ().begin (), connector.value ().end ()) == expected);
+        auto decoded = zlink::stream_connector::detail::decode_typed_message<bytes_dto> (
+          zlink::stream_connector::codec_t::json, connector.value ());
+        assert (decoded && decoded.value ().body == input.body);
+        const auto atom = expected.substr (8, expected.size () - 9);
+        using collection_t = std::vector<std::vector<std::byte>>;
+        const collection_t collection{input.body, {}, input.body};
+        assert (p::encode (input.body) == atom);
+        const auto array = "[" + atom + ",\"\"," + atom + "]";
+        assert (p::encode (collection) == array);
+        const auto back = p::try_decode<collection_t> (array.begin (), array.end ());
+        assert (back && *back == collection);
+    }
+    std::string extra;
+    assert (!std::getline (goldens, extra));
+    for (const std::string text : {R"({"body":"\u0041A=="})", R"({"body":"\/w=="})"}) {
+        const auto value = serializer.deserialize (fw::encoded_payload_t::from_string (text));
+        assert (value.body.size () == 1);
+    }
+    for (const std::string text :
+         {R"({"body":null})", R"({"body":[0]})", R"({"body":"AB=="})", R"({"body":"AAF="})",
+          R"({"body":"AA"})", R"({"body":"AA==AA=="})"}) {
+        bool rejected = false;
+        try {
+            (void) serializer.deserialize (fw::encoded_payload_t::from_string (text));
+        }
+        catch (const fw::framework_exception_t &) {
+            rejected = true;
+        }
+        assert (rejected);
+    }
+    std::cout << "byte_sequence_wire_sizes=0,1,2,3,127,128,1024,4096\n";
 }
 struct mask_dto
 {
@@ -382,6 +475,7 @@ void verify_field_masks ()
 
 int main ()
 {
+    verify_byte_sequence_wire ();
     verify_base64_padding ();
     verify_field_masks ();
     verify_float_round_trips ();

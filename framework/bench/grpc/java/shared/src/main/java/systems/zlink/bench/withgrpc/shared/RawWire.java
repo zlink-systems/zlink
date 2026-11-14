@@ -3,10 +3,13 @@
 package systems.zlink.bench.withgrpc.shared;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.UnsafeByteOperations;
+import java.io.IOException;
 import java.nio.ByteBuffer;
-import systems.zlink.bench.withgrpc.proto.BenchPayload;
 import java.nio.charset.StandardCharsets;
+import systems.zlink.bench.withgrpc.proto.BenchPayload;
 import systems.zlink.contracts.messaging.Message;
 
 /**
@@ -41,16 +44,29 @@ public final class RawWire {
     /** Creates and serializes a typed payload for every raw send/request. */
     public static Message encodeBenchPayloadMessage(
         int payloadSize, int runId, byte phase, long sequence) {
-        return encodeBenchPayloadMessage(ByteBuffer.wrap(
+        return encodeBenchPayloadMessage(UnsafeByteOperations.unsafeWrap(
             BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)));
     }
 
     /** Replies preserve the received measurement header, including its timestamp. */
     public static Message encodeBenchPayloadMessage(ByteBuffer body) {
+        return encodeBenchPayloadMessage(UnsafeByteOperations.unsafeWrap(body.duplicate()));
+    }
+
+    private static Message encodeBenchPayloadMessage(ByteString body) {
         BenchPayload payload = BenchPayload.newBuilder()
-            .setBody(ByteString.copyFrom(body.duplicate()))
+            .setBody(body)
             .build();
-        return Message.from(payload.toByteArray());
+        Message message = Message.allocate(payload.getSerializedSize());
+        try {
+            CodedOutputStream output = CodedOutputStream.newInstance(message.mutableDataBuffer());
+            payload.writeTo(output);
+            output.flush();
+            return message;
+        } catch (IOException error) {
+            message.close();
+            throw new IllegalStateException("cannot serialize BenchPayload", error);
+        }
     }
 
     /** Parses BenchPayload with the same protobuf runtime used by the typed stacks. */

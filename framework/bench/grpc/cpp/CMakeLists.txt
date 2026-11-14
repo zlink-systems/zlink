@@ -154,7 +154,7 @@ target_link_libraries(bench_cpp_server_metrics_test PRIVATE opentelemetry-cpp::m
 add_test(NAME bench_cpp_server_rejections COMMAND bench_cpp_server_metrics_test)
 add_executable(bench_cpp_raw_wire_test tests/raw_wire_test.cpp ${BENCH_PROTO_CC})
 target_include_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTO_GEN_DIR})
-target_link_libraries(bench_cpp_raw_wire_test PRIVATE protobuf::libprotobuf)
+target_link_libraries(bench_cpp_raw_wire_test PRIVATE zlink::cpp protobuf::libprotobuf)
 add_test(NAME bench_cpp_raw_wire_identity COMMAND bench_cpp_raw_wire_test)
 
 add_executable(bench_cpp_grpc_callback_test

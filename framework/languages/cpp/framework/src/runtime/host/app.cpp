@@ -60,6 +60,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <iterator>
@@ -567,6 +568,26 @@ class app_state_t
         // Timers are already stopped. Observe the accepted source owner's
         // cutoff cleanup before hosted services release its native resources.
         (void) detail::task_result_access_t::read (terminal);
+    }
+
+    void complete_termination (termination_result_t terminal)
+    {
+        std::vector<std::shared_ptr<termination_waiter_t>> waiters;
+        {
+            std::lock_guard lock (termination_operation.mutex);
+            if (!termination_operation.terminal) {
+                termination_operation.terminal = true;
+                termination_operation.result = terminal;
+                waiters = std::move (termination_operation.waiters);
+                termination_operation.waiters.clear ();
+            }
+            auto expected = framework_runtime_state_t::draining;
+            (void) runtime_state.compare_exchange_strong (
+              expected, framework_runtime_state_t::stopped, std::memory_order_acq_rel);
+        }
+        for (auto &waiter : waiters) {
+            waiter->complete (terminal);
+        }
     }
 
     service_collection_t services;
@@ -3412,35 +3433,37 @@ try {
     }
     const completion_owner_t completion_owner;
     const auto completion_dispatcher = detail::borrow_completion_dispatcher ();
-    _apply_zlink_framework ();
-    _state->config.load_cli (argc, argv);
-    detail::serializer_registry_access_t::freeze (_state->serializers);
-    _state->handlers.bind_codecs (_state->serializers);
-    _state->config.model ().set ("host.signal_handlers", "installed");
-    g_stop_signal_requested = 0;
-    std::signal (SIGINT, handle_process_signal);
-    std::signal (SIGTERM, handle_process_signal);
-#ifdef _WIN32
-    std::signal (SIGBREAK, handle_process_signal);
-#endif
-
-    auto provider = _state->services.build_provider ();
-    {
-        std::lock_guard lock (_state->termination_teardown_mutex);
-        if (_state->runtime_state.load (std::memory_order_acquire)
-            == framework_runtime_state_t::stopped)
-            return 0;
-        _state->run_active = true;
-        _state->teardown_complete = false;
-    }
+    std::optional<service_provider_t> provider;
     std::vector<hosted_service_t *> started;
     task_t<void> startup_publication (result_t<void>::success ());
+    std::exception_ptr startup_failure;
     try {
+        _apply_zlink_framework ();
+        _state->config.load_cli (argc, argv);
+        detail::serializer_registry_access_t::freeze (_state->serializers);
+        _state->handlers.bind_codecs (_state->serializers);
+        _state->config.model ().set ("host.signal_handlers", "installed");
+        g_stop_signal_requested = 0;
+        std::signal (SIGINT, handle_process_signal);
+        std::signal (SIGTERM, handle_process_signal);
+#ifdef _WIN32
+        std::signal (SIGBREAK, handle_process_signal);
+#endif
+
+        provider.emplace (_state->services.build_provider ());
+        {
+            std::lock_guard lock (_state->termination_teardown_mutex);
+            if (_state->runtime_state.load (std::memory_order_acquire)
+                == framework_runtime_state_t::stopped)
+                return 0;
+            _state->run_active = true;
+            _state->teardown_complete = false;
+        }
         runtime::install_host_context_hooks ();
         runtime::configure_handler_coroutine_executor (
           _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0,
           completion_dispatcher);
-        _state->start_hosted_services (provider, started);
+        _state->start_hosted_services (*provider, started);
         startup_publication = detail::app_state_t::enter_serving_after_publication (
           _state->status_access, _state->startup_publication ());
         while (!_state->stop_requested.load (std::memory_order_acquire)) {
@@ -3460,30 +3483,38 @@ try {
         }
     }
     catch (...) {
+        startup_failure = std::current_exception ();
         _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
-        _state->delays.stop_and_join ();
-        _state->wait_relocation_cleanup ();
-        _state->stop_hosted_services (started);
-        _state->close_framework_resources (provider);
-        {
-            std::lock_guard lock (_state->termination_teardown_mutex);
-            _state->run_active = false;
-            _state->teardown_complete = true;
-        }
-        _state->termination_teardown_changed.notify_all ();
-        throw;
     }
 
+    // Reserve the shared termination operation before releasing any resources.
+    // A concurrent shutdown either joins this teardown or already owns its worker.
+    {
+        std::lock_guard lock (_state->termination_operation.mutex);
+        _state->termination_operation.started = true;
+    }
+    if (_state->termination_operation.worker.joinable ()) {
+        std::unique_lock lock (_state->termination_teardown_mutex);
+        _state->termination_teardown_changed.wait (
+          lock, [&] { return _state->stop_requested.load (std::memory_order_acquire); });
+    }
     _state->delays.stop_and_join ();
     _state->wait_relocation_cleanup ();
     _state->stop_hosted_services (started);
-    _state->close_framework_resources (provider);
+    if (provider)
+        _state->close_framework_resources (*provider);
     {
         std::lock_guard lock (_state->termination_teardown_mutex);
         _state->run_active = false;
         _state->teardown_complete = true;
     }
     _state->termination_teardown_changed.notify_all ();
+    if (_state->termination_operation.worker.joinable ())
+        _state->termination_operation.worker.join ();
+    else
+        _state->complete_termination ({termination_outcome_t::stopped, termination_reason_t::none});
+    if (startup_failure)
+        std::rethrow_exception (startup_failure);
     if (startup_publication.await_ready ())
         startup_publication.result ().value ();
     _state->runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
@@ -4642,10 +4673,11 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     termination_result_t terminal{force_stopped ? termination_outcome_t::force_stopped
                                                 : termination_outcome_t::stopped,
                                   terminal_reason};
-    state.stop_requested.store (true, std::memory_order_release);
     bool teardown_completed = true;
     {
         std::unique_lock lock (state.termination_teardown_mutex);
+        state.stop_requested.store (true, std::memory_order_release);
+        state.termination_teardown_changed.notify_all ();
         if (state.run_active) {
             teardown_completed = state.termination_teardown_changed.wait_until (
               lock, deadline_at, [&] { return state.teardown_complete; });
@@ -4675,22 +4707,7 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
                                            ? "deadline_exceeded"
                                            : "teardown_failed"}});
     }
-    std::vector<std::shared_ptr<detail::app_state_t::termination_waiter_t>> waiters;
-    {
-        std::lock_guard lock (state.termination_operation.mutex);
-        if (!state.termination_operation.terminal) {
-            state.termination_operation.terminal = true;
-            state.termination_operation.result = terminal;
-            waiters = std::move (state.termination_operation.waiters);
-            state.termination_operation.waiters.clear ();
-        }
-        auto expected = framework_runtime_state_t::draining;
-        (void) state.runtime_state.compare_exchange_strong (
-          expected, framework_runtime_state_t::stopped, std::memory_order_acq_rel);
-    }
-    for (auto &waiter : waiters) {
-        waiter->complete (terminal);
-    }
+    state.complete_termination (terminal);
 }
 
 void app_t::stop () noexcept

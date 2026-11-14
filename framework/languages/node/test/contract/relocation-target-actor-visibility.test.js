@@ -204,7 +204,9 @@ for (const [changedVersion, departed] of [
       locationLifecycle: () => undefined,
       createLocationSpotRouteResolver: () => undefined,
       boundSessionRelay: {},
-      spotNodeRuntime: () => undefined,
+      spotNodeRuntime: () => ({
+        meshNode: () => ({ status: () => ({ routingId: 'target', lifecycleGeneration: 1n }) })
+      }),
       dispatchErrorReporter: () => undefined
     }).create(undefined);
     const spotManager = new DefaultZLinkSpotManager({

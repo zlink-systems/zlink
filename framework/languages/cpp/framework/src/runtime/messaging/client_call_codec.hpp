@@ -60,9 +60,10 @@ class client_call_codec_t
                                             serializer_registry_t &serializers,
                                             TEncodePayload &&encode_payload) const
     {
-        auto header =
-          create_envelope (message_kind_t::command, channel_name, packet_name,
-                           std::chrono::milliseconds (0), std::nullopt, std::nullopt, {});
+        envelope_header_t header{.kind = message_kind_t::command,
+                                 .channel_name = header_text_t::view (channel_name),
+                                 .message_name = header_text_t::view (packet_name),
+                                 .content_type = {}};
         header.metadata = metadata;
         if (detail::message_flow_tracer_t (dispatch).enabled_for (message_flow_outcome_t::sent)) {
             detail::message_flow_tracer_t (dispatch).trace (message_flow_outcome_t::sent, [&] {
@@ -103,7 +104,7 @@ class client_call_codec_t
         }
         /* Reply flow fields are never consumed here (the requester keeps its
          * ambient submit flow) — skip their validation/materialization. */
-        auto header = _codec.decode_header (reply, false);
+        auto header = _codec.decode_header_view (reply, false);
         if (!header) {
             return result_t<TReply>::failure (
               header.error_kind (), header.error () ? header.error ()->what () : error_message);
