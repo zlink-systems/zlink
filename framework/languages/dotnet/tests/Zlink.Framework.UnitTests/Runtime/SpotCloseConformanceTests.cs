@@ -34,6 +34,102 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Context_Close_record_not_started_before_queue_close_joins_the_committed_Close(
+        bool cancelJoined,
+        bool failOwner
+    )
+    {
+        using var flow = ClosingFlow(
+            nameof(Context_Close_record_not_started_before_queue_close_joins_the_committed_Close),
+            cancelJoined,
+            failOwner ? 1 : 0
+        );
+        using var cancellation = new CancellationTokenSource();
+        await using var host = await SpotCloseHost.StartAsync();
+        var catalog = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Catalog;
+        var spotId = $"unstarted-close-join-{Guid.NewGuid():N}";
+        if (failOwner)
+        {
+            host.Store.ThrowAuthorityMutationFor = spotId;
+            host.Store.ThrowAuthorityDelete = true;
+        }
+        ZLinkSpotActivation? activation = null;
+        host.State.OnInstanceInitializing = context =>
+        {
+            activation = (ZLinkSpotActivation)context;
+            host.State.ContextCloseTask = context.CloseAsync().AsTask();
+        };
+        var selected = new TaskCompletionSource<(bool Committed, bool Stopped)>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var pendingAtStop = 0;
+        host.State.OnInstanceClosing = _ =>
+        {
+            var gate = ZLinkSerialTurn.Current!.ExecutionGate!;
+            // Finalization cancels the incarnation before completing its queue.
+            // Submit at that existing boundary without holding either turn.
+            activation!.StopToken.Register(() =>
+            {
+                gate.ConsumerSelected = () =>
+                    selected.TrySetResult(
+                        (
+                            activation.HasCommittedClose,
+                            activation.ExecutionStatus == ZLinkObjectExecutionStatus.Stopped
+                        )
+                    );
+                host.State.JoinedContextCloseTask = catalog
+                    .CloseFromContextAsync(activation, cancellation.Token)
+                    .AsTask();
+                pendingAtStop = gate.LifecyclePendingCount;
+                if (cancelJoined)
+                    cancellation.Cancel();
+            });
+        };
+
+        await host.RequestInstanceAsync(spotId);
+        Exception? ownerFailure = null;
+        if (failOwner)
+        {
+            ownerFailure = await Record.ExceptionAsync(() =>
+                host.State.ContextCloseTask!.WaitAsync(Wait)
+            );
+            Assert.NotNull(ownerFailure);
+            Assert.Contains("Injected authority mutation failure", ownerFailure.ToString());
+        }
+        else
+            Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
+        var observed = await selected.Task.WaitAsync(Wait);
+        output.WriteLine(
+            $"Unstarted record: pendingAtStop={pendingAtStop}, committed={observed.Committed}, stopped={observed.Stopped}"
+        );
+        Assert.Equal(1, pendingAtStop);
+        Assert.True(observed.Committed);
+        Assert.True(observed.Stopped);
+        var joined = host.State.JoinedContextCloseTask!;
+        if (cancelJoined)
+        {
+            var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                joined.WaitAsync(Wait)
+            );
+            Assert.Equal(cancellation.Token, error.CancellationToken);
+        }
+        else if (failOwner)
+        {
+            var joinedFailure = await Record.ExceptionAsync(() => joined.WaitAsync(Wait));
+            Assert.Same(ownerFailure, joinedFailure);
+        }
+        else
+            Assert.True(await joined.WaitAsync(Wait));
+        Assert.Equal(1, host.State.OnClosingCalls);
+        Assert.Equal(0, host.Runtime.SnapshotOperationAdmissions().ActiveCount);
+        Assert.Equal(0, await catalog.CloseTransactionCountAsync());
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Initialization_Close_join_preserves_cancellation_without_canceling_the_owner(

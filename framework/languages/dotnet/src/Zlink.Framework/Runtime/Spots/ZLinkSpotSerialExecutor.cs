@@ -596,8 +596,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         var admission = _queue.TryPostNextWithAdmission(
             ct =>
             {
-                if (terminalRelease is not null)
-                    ZLinkSerialTurn.Current!.Item.AddTerminalRelease(terminalRelease);
                 return ExecuteLifecycleOperationAsync(
                     async (activation, token) =>
                     {
@@ -616,7 +614,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                     ct
                 );
             },
-            out var item
+            out var item,
+            initialize: terminalRelease is null
+                ? null
+                : item => item.AddTerminalRelease(terminalRelease)
         );
         return admission == ZLinkSerialPostAdmission.Accepted ? CompleteAsync() : null;
 

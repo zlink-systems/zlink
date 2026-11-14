@@ -1560,11 +1560,12 @@ internal sealed class ZLinkSpotNodeCatalog(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        CloseRegistration claimed = default;
+        Task<CloseRegistration>? registration = null;
         ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? operation = null;
         var attempt = activation.PostLifecycleOperation(
             async (current, ct) =>
             {
+                CloseRegistration claimed = default;
                 var turn = ZLinkSerialTurn.Current!;
                 await current.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);
                 try
@@ -1574,15 +1575,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                             .ConfigureAwait(false)
                     ).Enter();
                     claimed = await turn.YieldFrameworkCallAsync(
-                            _ =>
-                                _lane.RunAsync(() =>
-                                    RegisterCloseLocked(
-                                        current.SpotId,
-                                        current.ObjectGeneration,
-                                        cancellationToken,
-                                        current
-                                    )
-                                ),
+                            _ => new ValueTask<CloseRegistration>(registration = RegisterClose()),
                             ct
                         )
                         .ConfigureAwait(false);
@@ -1596,6 +1589,13 @@ internal sealed class ZLinkSpotNodeCatalog(
                     if (claimed.Owner is null)
                         current.AbortCloseBoundary();
                 }
+            },
+            () =>
+            {
+                // Register before this record releases queue drain. The owner's
+                // transaction cannot be removed before this catalog submission.
+                if (registration is null && activation.HasCommittedClose)
+                    registration = RegisterClose();
             }
         );
         if (attempt is null)
@@ -1605,7 +1605,12 @@ internal sealed class ZLinkSpotNodeCatalog(
             );
         try
         {
-            return await CompleteExplicitCloseAsync(activation, () => claimed, attempt)
+            return await CompleteExplicitCloseAsync(
+                    activation,
+                    () =>
+                        registration is null ? new(default(CloseRegistration)) : new(registration),
+                    attempt
+                )
                 .ConfigureAwait(false);
         }
         finally
@@ -1613,6 +1618,18 @@ internal sealed class ZLinkSpotNodeCatalog(
             // The record acquires admission; completion owns it through successor publication.
             operation?.Dispose();
         }
+
+        Task<CloseRegistration> RegisterClose() =>
+            _lane
+                .RunAsync(() =>
+                    RegisterCloseLocked(
+                        activation.SpotId,
+                        activation.ObjectGeneration,
+                        cancellationToken,
+                        activation
+                    )
+                )
+                .AsTask();
     }
 
     internal async ValueTask<bool> CloseAsync(
@@ -1769,7 +1786,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             _ = transaction.Task.Exception;
             throw closedLane;
         }
-        return await CompleteExplicitCloseAsync(activation, () => registration, attempt)
+        return await CompleteExplicitCloseAsync(activation, () => new(registration), attempt)
             .ConfigureAwait(false);
     }
 
@@ -2029,7 +2046,7 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     private async ValueTask<bool> CompleteExplicitCloseAsync(
         ZLinkSpotActivation activation,
-        Func<CloseRegistration> getRegistration,
+        Func<ValueTask<CloseRegistration>> getRegistration,
         Task<(
             bool Closed,
             ZLinkSpotActivation? Successor,
@@ -2052,10 +2069,18 @@ internal sealed class ZLinkSpotNodeCatalog(
             {
                 outcome = await attempt.ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (attempt.IsCanceled)
+            {
+                // A discarded context record may already have joined the Close.
+                // Only the catalog registration can replace its queue cancellation.
+                claimed = await getRegistration().ConfigureAwait(false);
+                if (claimed.Joined is null)
+                    throw;
+            }
             finally
             {
-                // Context claims are made by the record, including failed attempts.
-                claimed = getRegistration();
+                // Context records register while running or before terminal drain release.
+                claimed = await getRegistration().ConfigureAwait(false);
                 transaction = claimed.Owner?.Transaction;
             }
             if (claimed.Owner is not { } owner)
