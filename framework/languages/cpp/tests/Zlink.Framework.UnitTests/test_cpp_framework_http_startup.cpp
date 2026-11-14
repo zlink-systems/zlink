@@ -1,20 +1,27 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/http/http_host_service.hpp"
+#include <zlink/framework.hpp>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <gtest/gtest.h>
 
 #include <cerrno>
+#include <chrono>
+#include <future>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace
 {
 using namespace zlink::framework;
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
+using namespace std::chrono_literals;
+constexpr termination_result_t stopped_terminal{termination_outcome_t::stopped,
+                                                termination_reason_t::none};
 
 std::string http_uri (const tcp::endpoint &endpoint)
 {
@@ -151,5 +158,140 @@ TEST (HttpStartup, SuccessfulStartOwnsThePortUntilDestruction)
     EXPECT_EQ (health.report ().status, health_status_t::unhealthy);
     probe.bind (endpoint, error);
     EXPECT_FALSE (error) << error.message ();
+}
+
+TEST (HttpStartup, RequestStopAfterFailedRunReturnsCompletedShutdown)
+{
+    asio::io_context io;
+    tcp::acceptor occupied (io, {asio::ip::address_v4::loopback (), 0});
+    {
+        auto app = app_t::create ();
+        app.add_zlink_framework ().http ().listen (http_uri (occupied.local_endpoint ()));
+        ASSERT_EQ (app.run (0, nullptr), 1);
+        app.request_stop ();
+        auto shutdown = app.shutdown (1s);
+        EXPECT_TRUE (shutdown.await_ready ());
+        EXPECT_EQ (shutdown.result ().value (), stopped_terminal);
+    }
+    EXPECT_TRUE (occupied.is_open ());
+}
+
+TEST (HttpStartup, StopAfterFailedRunAllowsDestruction)
+{
+    asio::io_context io;
+    tcp::acceptor occupied (io, {asio::ip::address_v4::loopback (), 0});
+    {
+        auto app = app_t::create ();
+        app.add_zlink_framework ().http ().listen (http_uri (occupied.local_endpoint ()));
+        ASSERT_EQ (app.run (0, nullptr), 1);
+        app.stop ();
+    }
+    EXPECT_TRUE (occupied.is_open ());
+}
+
+TEST (HttpStartup, ShutdownTwiceAfterFailedRunReturnsSameCompletedResult)
+{
+    asio::io_context io;
+    tcp::acceptor occupied (io, {asio::ip::address_v4::loopback (), 0});
+    auto app = app_t::create ();
+    app.add_zlink_framework ().http ().listen (http_uri (occupied.local_endpoint ()));
+    ASSERT_EQ (app.run (0, nullptr), 1);
+    auto first = app.shutdown (1s);
+    EXPECT_TRUE (first.await_ready ());
+    const auto terminal = first.result ().value ();
+    EXPECT_EQ (terminal, stopped_terminal);
+    auto second = app.shutdown (1s);
+    EXPECT_TRUE (second.await_ready ());
+    EXPECT_EQ (second.result ().value (), terminal);
+}
+
+TEST (HttpStartup, ShutdownAfterSuccessfulRunReturnsSameCompletedResult)
+{
+    auto app = app_t::create ();
+    app.add_zlink_framework ().http ().listen ("http://127.0.0.1:0");
+    auto running = std::async (std::launch::async, [&] { return app.run (0, nullptr); });
+    const auto deadline = std::chrono::steady_clock::now () + 3s;
+    while (!app.is_ready () && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    EXPECT_TRUE (app.is_ready ());
+    const auto terminal = app.shutdown (1s).result ().value ();
+    EXPECT_EQ (running.get (), 0);
+    EXPECT_EQ (terminal, stopped_terminal);
+    auto second = app.shutdown (1s);
+    EXPECT_TRUE (second.await_ready ());
+    EXPECT_EQ (second.result ().value (), terminal);
+}
+
+class teardown_barrier_service_t final : public hosted_service_t
+{
+  public:
+    std::promise<void> entered;
+    std::promise<void> release;
+
+    task_t<void> start (service_provider_t &) override { co_return; }
+
+    void stop () noexcept override
+    {
+        entered.set_value ();
+        release.get_future ().wait ();
+    }
+};
+
+TEST (HttpStartup, ShutdownDuringFailedRunTeardownSharesTerminalResult)
+{
+    asio::io_context io;
+    tcp::acceptor occupied (io, {asio::ip::address_v4::loopback (), 0});
+    auto app = app_t::create ();
+    auto service = std::make_unique<teardown_barrier_service_t> ();
+    auto *barrier = service.get ();
+    auto entered = barrier->entered.get_future ();
+    app.add_hosted_service (std::move (service));
+    app.add_zlink_framework ().http ().listen (http_uri (occupied.local_endpoint ()));
+    auto running = std::async (std::launch::async, [&] { return app.run (0, nullptr); });
+    const auto status = entered.wait_for (3s);
+    EXPECT_EQ (status, std::future_status::ready);
+    auto shutdown = app.shutdown (1s);
+    EXPECT_FALSE (shutdown.await_ready ());
+    barrier->release.set_value ();
+    EXPECT_EQ (running.get (), 1);
+    EXPECT_TRUE (shutdown.await_ready ());
+    const auto terminal = shutdown.result ().value ();
+    EXPECT_EQ (terminal, stopped_terminal);
+    EXPECT_EQ (app.shutdown (1s).result ().value (), terminal);
+}
+
+class startup_barrier_service_t final : public hosted_service_t
+{
+  public:
+    std::promise<void> entered;
+    std::promise<void> release;
+
+    task_t<void> start (service_provider_t &) override
+    {
+        entered.set_value ();
+        release.get_future ().wait ();
+        co_return;
+    }
+
+    void stop () noexcept override {}
+};
+
+TEST (HttpStartup, ShutdownBeforeStartupFailureJoinsWorkerBeforeReturning)
+{
+    asio::io_context io;
+    tcp::acceptor occupied (io, {asio::ip::address_v4::loopback (), 0});
+    auto app = app_t::create ();
+    auto service = std::make_unique<startup_barrier_service_t> ();
+    auto *barrier = service.get ();
+    auto entered = barrier->entered.get_future ();
+    app.add_hosted_service (std::move (service));
+    app.add_zlink_framework ().http ().listen (http_uri (occupied.local_endpoint ()));
+    auto running = std::async (std::launch::async, [&] { return app.run (0, nullptr); });
+    EXPECT_EQ (entered.wait_for (3s), std::future_status::ready);
+    auto shutdown = app.shutdown (1s);
+    barrier->release.set_value ();
+    EXPECT_EQ (running.get (), 1);
+    EXPECT_TRUE (shutdown.await_ready ());
+    EXPECT_EQ (app.shutdown (1s).result ().value (), shutdown.result ().value ());
 }
 } // namespace
