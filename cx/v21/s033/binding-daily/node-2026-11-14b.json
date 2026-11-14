@@ -1,0 +1,38 @@
+{
+  "language": "node",
+  "utc_date": "2026-11-14",
+  "conditions": "C2\u00b7C3 off, SCHED_OTHER, CPU pinning source 0-5 / target 8-13 by runner, quiet guard v8; warm run per cell; PM decision B + terminal-read and shared completion sweep (lfx-node 9b81f0c05a), hold3",
+  "measured_utc": "2026-11-14T07:06:01Z",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_s": 200436.0,
+      "raw": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/send-saturation-1024/counted/attempt2/run1/zlink-node-send-saturation-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/send-saturation-1024/counted/attempt2/run1/zlink-node-send-saturation-1024/scheduling.txt"
+    },
+    "send-saturation-4096": {
+      "msg_s": 101165.0,
+      "raw": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/send-saturation-4096/counted/attempt2/run1/zlink-node-send-saturation-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/send-saturation-4096/counted/attempt2/run1/zlink-node-send-saturation-4096/scheduling.txt"
+    },
+    "request-serial-1024": {
+      "msg_s": 9109.8,
+      "raw": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/request-serial-1024/counted/attempt2/run1/zlink-node-request-serial-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/request-serial-1024/counted/attempt2/run1/zlink-node-request-serial-1024/scheduling.txt"
+    },
+    "request-serial-4096": {
+      "msg_s": 8075.8,
+      "raw": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/request-serial-4096/counted/attempt2/run1/zlink-node-request-serial-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/request-serial-4096/counted/attempt2/run1/zlink-node-request-serial-4096/scheduling.txt"
+    },
+    "request-backpressure-1024": {
+      "msg_s": 55443.2,
+      "raw": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/request-backpressure-1024/counted/attempt2/run1/zlink-node-request-backpressure-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/request-backpressure-1024/counted/attempt2/run1/zlink-node-request-backpressure-1024/scheduling.txt"
+    },
+    "request-backpressure-4096": {
+      "msg_s": 40364.4,
+      "raw": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/request-backpressure-4096/counted/attempt2/run1/zlink-node-request-backpressure-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/nlad/raw/node/binding/request-backpressure-4096/counted/attempt2/run1/zlink-node-request-backpressure-4096/scheduling.txt"
+    }
+  }
+}
