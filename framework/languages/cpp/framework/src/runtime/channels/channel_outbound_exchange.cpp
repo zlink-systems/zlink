@@ -1010,7 +1010,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                                                          "channel request failed");
             }
 
-            auto reply_header = envelope.decode_header (native_reply, false);
+            auto reply_header = envelope.decode_header_view (native_reply, false);
             if (!reply_header) {
                 co_return result_t<zlink::message_t>::failure (
                   reply_header.error_kind (), reply_header.error ()
