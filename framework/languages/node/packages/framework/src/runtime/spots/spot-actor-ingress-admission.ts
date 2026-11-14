@@ -32,11 +32,17 @@ export type ZLinkRouteToActorJoinPrewarm = (
   }
 ) => 'parked' | 'not-found';
 
-export interface ZLinkActorDispatchOwner {
-  readonly nativeActorRef?: ZLinkBackendActorRef;
-  readonly meshName?: string;
-  readonly spotId?: RoutingId;
-}
+export type ZLinkActorDispatchOwner =
+  | {
+      readonly nativeActorRef?: undefined;
+      readonly meshName?: undefined;
+      readonly spotId?: undefined;
+    }
+  | {
+      readonly nativeActorRef: ZLinkBackendActorRef;
+      readonly meshName: string;
+      readonly spotId?: RoutingId;
+    };
 
 export interface ZLinkActorIngressMembership {
   readonly resolveOwner?: (actorId: string) => ZLinkActorDispatchOwner;

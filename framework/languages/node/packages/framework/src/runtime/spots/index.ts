@@ -1749,7 +1749,7 @@ export class DefaultZLinkSpotManager {
       if (this.options.admitEntryActorPacketPrefix === undefined) {
         throw new ZLinkConfigurationException(`Actor '${actorId}' has no Entry FIFO port.`);
       }
-      return this.options.admitEntryActorPacketPrefix(owner.meshName ?? '', actorId, records);
+      return this.options.admitEntryActorPacketPrefix(owner.meshName, actorId, records);
     }
     return this.admitRoutedActorPacketPrefix(owner.spotId, actorId, records);
   }
@@ -2207,14 +2207,15 @@ export class DefaultZLinkSpotManager {
       nativeTarget === undefined
         ? this.options.actorDispatchOwnerResolver?.(actor.actorId)
         : undefined;
-    const resolvedActorRef = (dispatchOwner?.nativeActorRef !== undefined
-      ? toFrameworkActorRef(dispatchOwner.nativeActorRef, meshName)
-      : undefined) ?? {
-      actorId: ingressActor.actorId,
-      objectGeneration: ingressActor.generation,
-      meshName,
-      nodeRid: ingressActor.nodeRid
-    };
+    const resolvedActorRef: ActorRef =
+      dispatchOwner?.nativeActorRef === undefined
+        ? {
+            actorId: ingressActor.actorId,
+            objectGeneration: ingressActor.generation,
+            meshName,
+            nodeRid: ingressActor.nodeRid
+          }
+        : toFrameworkActorRef(dispatchOwner.nativeActorRef, dispatchOwner.meshName);
     const responseActorRef =
       record.sourceBindingGeneration > 0n
         ? ({

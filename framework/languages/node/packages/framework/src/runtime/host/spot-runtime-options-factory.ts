@@ -308,13 +308,14 @@ export class ZLinkSpotRuntimeOptionsFactory {
       actorDispatchOwnerResolver: (actorId) => {
         const state = this.options.actorManager()?.getState(actorId);
         const nativeActorRef = state?.nativeActorRef;
-        const localNodeRid =
-          state?.meshName === undefined ? undefined : this.meshNodeRoutingId(state.meshName);
+        const meshName = state?.meshName;
+        const localNodeRid = meshName === undefined ? undefined : this.meshNodeRoutingId(meshName);
         if (
           state?.actor === undefined ||
           (state.remoteActorPacketTarget !== undefined &&
             !routingIdsEqual(state.remoteActorPacketTarget.targetNodeRid, localNodeRid)) ||
           nativeActorRef === undefined ||
+          meshName === undefined ||
           localNodeRid === undefined ||
           !routingIdsEqual(toFrameworkRoutingId(nativeActorRef.nodeRid), localNodeRid)
         ) {
@@ -322,7 +323,7 @@ export class ZLinkSpotRuntimeOptionsFactory {
         }
         return {
           nativeActorRef,
-          meshName: state.meshName,
+          meshName,
           spotId: state.spotId
         };
       },
