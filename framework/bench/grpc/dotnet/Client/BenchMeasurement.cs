@@ -257,7 +257,7 @@ internal static class BenchMeasurement
             while (Stopwatch.GetTimestamp() < deadline)
             {
                 var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayload(
+                var payload = BenchMetricHeaders.CreatePayloadBytes(
                     trigger.payloadBytes,
                     runId,
                     streamMetrics.Phase,
@@ -381,7 +381,7 @@ internal static class BenchMeasurement
             while (Stopwatch.GetTimestamp() < deadline)
             {
                 var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayload(
+                var payload = BenchMetricHeaders.CreatePayloadBytes(
                     trigger.payloadBytes,
                     runId,
                     streamMetrics.Phase,
@@ -436,7 +436,7 @@ internal static class BenchMeasurement
         CancellationToken cancellationToken
     )
     {
-        var payload = BenchMetricHeaders.CreatePayload(
+        var payload = BenchMetricHeaders.CreatePayloadBytes(
             trigger.payloadBytes,
             runId,
             metrics.Phase,

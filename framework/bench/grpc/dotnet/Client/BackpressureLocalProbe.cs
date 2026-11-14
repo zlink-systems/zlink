@@ -131,7 +131,7 @@ internal static class BackpressureLocalProbe
             Task<BenchPayload> reply;
             Task admission;
             issued++;
-            var payload = BenchMetricHeaders.CreatePayload(
+            var payload = BenchMetricHeaders.CreatePayloadBytes(
                 1024,
                 1,
                 BenchPhase.Warmup,
@@ -234,10 +234,10 @@ internal static class BackpressureLocalProbe
                 droppedSamples++;
         }
 
-        async Task Observe(Task<BenchPayload> pending, BenchPayload expected)
+        async Task Observe(Task<BenchPayload> pending, byte[] expected)
         {
             var result = await pending.ConfigureAwait(false);
-            if (!result.Body.Equals(expected.Body))
+            if (!result.Body.Span.SequenceEqual(expected))
                 throw new InvalidOperationException("Echo payload changed.");
             Interlocked.Increment(ref completed);
             Interlocked.Decrement(ref inFlight);

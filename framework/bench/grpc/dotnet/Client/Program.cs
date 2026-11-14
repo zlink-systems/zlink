@@ -142,10 +142,10 @@ internal interface IBenchTransport : IAsyncDisposable
     ValueTask ProbeAsync(CancellationToken cancellationToken);
     ValueTask<BenchPayload> RequestAsync(
         int stream,
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     );
-    ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken);
+    ValueTask SendAsync(int stream, byte[] payload, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns <paramref name="pending"/> once the transport has made it complete. A transport
@@ -257,7 +257,7 @@ internal sealed class GrpcBenchTransport : IBenchTransport
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
-        var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
+        var payload = BenchMetricHeaders.CreatePayloadBytes(1024, 1, BenchPhase.Warmup, 0);
         var reply = await RequestAsync(0, payload, cancellationToken);
         if (
             !BenchMetricHeaders.TryDecode(reply, out var header)
@@ -268,19 +268,19 @@ internal sealed class GrpcBenchTransport : IBenchTransport
 
     public async ValueTask<BenchPayload> RequestAsync(
         int stream,
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     ) =>
         await clients[stream % clients.Length]
-            .EchoAsync(payload, cancellationToken: cancellationToken);
+            .EchoAsync(new BenchPayload { Body = UnsafeByteOperations.UnsafeWrap(payload) }, cancellationToken: cancellationToken);
 
     public async ValueTask SendAsync(
         int stream,
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     ) =>
         await clients[stream % clients.Length]
-            .CommandAsync(payload, cancellationToken: cancellationToken);
+            .CommandAsync(new BenchPayload { Body = UnsafeByteOperations.UnsafeWrap(payload) }, cancellationToken: cancellationToken);
 
     public ValueTask DisposeAsync()
     {
@@ -310,7 +310,7 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
-        var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
+        var payload = BenchMetricHeaders.CreatePayloadBytes(1024, 1, BenchPhase.Warmup, 0);
         var reply = await RequestAsync(0, payload, cancellationToken);
         if (
             !BenchMetricHeaders.TryDecode(reply, out var header)
@@ -381,19 +381,19 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
     }
 
     public FrameworkRequestSubmission SubmitRequest(
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     )
     {
         if (!typedJson)
         {
-            var request = client.RequestToNode("bench", Target, payload)
+            var request = client.RequestToNode("bench", Target, new BenchPayload { Body = UnsafeByteOperations.UnsafeWrap(payload) })
                 .Async<BenchPayload>(cancellationToken);
             return new FrameworkRequestSubmission(request.AsTask(), request.Admitted.AsTask());
         }
 
         var typedRequest = client
-            .RequestToNode("bench", Target, new BenchTypedPayload(payload.Body.ToByteArray()))
+            .RequestToNode("bench", Target, new BenchTypedPayload(payload))
             .Async<BenchTypedPayload>(cancellationToken);
         return new FrameworkRequestSubmission(
             ConvertTypedReplyAsync(typedRequest),
@@ -406,27 +406,27 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
     )
     {
         var reply = await request;
-        return new BenchPayload { Body = ByteString.CopyFrom(reply.Body) };
+        return new BenchPayload { Body = UnsafeByteOperations.UnsafeWrap(reply.Body) };
     }
 
     public async ValueTask<BenchPayload> RequestAsync(
         int stream,
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     ) => await SubmitRequest(payload, cancellationToken).Reply;
 
     public async ValueTask SendAsync(
         int stream,
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     )
     {
         if (typedJson)
             await client
-                .SendToNode("bench", Target, new BenchTypedPayload(payload.Body.ToByteArray()))
+                .SendToNode("bench", Target, new BenchTypedPayload(payload))
                 .Async();
         else
-            await client.SendToNode("bench", Target, payload).Async();
+            await client.SendToNode("bench", Target, new BenchPayload { Body = UnsafeByteOperations.UnsafeWrap(payload) }).Async();
     }
 
     public async ValueTask DisposeAsync()
@@ -590,7 +590,7 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
-        var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
+        var payload = BenchMetricHeaders.CreatePayloadBytes(1024, 1, BenchPhase.Warmup, 0);
         if (commands.Length > 0)
         {
             await DriveAsync(SendAsync(0, payload, cancellationToken).AsTask());
@@ -608,7 +608,7 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     public async ValueTask<BenchPayload> RequestAsync(
         int stream,
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     )
     {
@@ -616,7 +616,7 @@ internal sealed class RawBenchTransport : IBenchTransport
     }
 
     public RawRequestSubmission SubmitRequest(
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     )
     {
@@ -693,7 +693,7 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     public async ValueTask SendAsync(
         int stream,
-        BenchPayload payload,
+        byte[] payload,
         CancellationToken cancellationToken
     )
     {
@@ -763,7 +763,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         }
     }
 
-    private IReadOnlyList<Message> CreatePayloadParts(BenchPayload payload, bool isRequest)
+    private IReadOnlyList<Message> CreatePayloadParts(byte[] payload, bool isRequest)
     {
 #if ZLINK_DOTNET_LADDER_L4
         if (encodeTypedPayload)
@@ -776,7 +776,7 @@ internal sealed class RawBenchTransport : IBenchTransport
             );
             return ZLinkClientCallCodec.EncodeEnvelopeParts(
                 envelope,
-                new BenchTypedPayload(payload.Body.ToByteArray()),
+                new BenchTypedPayload(payload),
                 null
             );
         }
@@ -788,12 +788,13 @@ internal sealed class RawBenchTransport : IBenchTransport
         ];
     }
 
-    private static Message EncodeRawPayload(BenchPayload payload)
+    private static Message EncodeRawPayload(byte[] payload)
     {
-        var body = Message.Allocate(payload.CalculateSize());
+        var protobuf = new BenchPayload { Body = UnsafeByteOperations.UnsafeWrap(payload) };
+        var body = Message.Allocate(protobuf.CalculateSize());
         try
         {
-            RawWire.Encode(payload, body.AsSpan());
+            RawWire.Encode(protobuf, body.AsSpan());
             return body;
         }
         catch (Exception)
@@ -858,7 +859,7 @@ internal sealed class RawBenchTransport : IBenchTransport
                             replyHeader.ContentType,
                             null
                         )!;
-                    return new BenchPayload { Body = ByteString.CopyFrom(typedReply.Body) };
+                    return new BenchPayload { Body = UnsafeByteOperations.UnsafeWrap(typedReply.Body) };
                 }
 #endif
                 return RawWire.Decode(replyParts.GetSpan(1));
