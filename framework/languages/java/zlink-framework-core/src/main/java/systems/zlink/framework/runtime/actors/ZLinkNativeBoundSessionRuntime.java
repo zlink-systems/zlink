@@ -99,6 +99,11 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkSessionBoundSession {
         return actorRuntime.closeNativeSessionBinding(actor, spotNode, timeout);
     }
 
+    @Override
+    public CompletionStage<Void> disconnectForDestroy() {
+        return actorRuntime.closeNativeSessionBindingForDestroy(actor, spotNode, timeout);
+    }
+
     private ZLinkBackendActorRef currentActorRef() {
         return actorRuntime.actorRef(actor);
     }
