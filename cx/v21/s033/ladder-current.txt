@@ -1,4 +1,4 @@
 .NET: L3 통과(옛 L1 기준) → L1 permit 교정(dbench2) 뒤 L0→L1·L1→L2·L2→L3 재측정 · d3fix PR 준비 · d2l2·d57 PR 대기
 Node: 현재 L2 · 결정 B 적용(f1e1f87e18) hold2 완료 05:14Z · L0→L1 6칸 통과 · L1→L2 손실 serial 22.7·18.5 / bp 40.0·35.0% · send L2가 L1보다 33·10% 빠른 이상값 지속 → nsend2(sol) 진단 · L3 F÷B send .667·.632 / serial .610·.688 / bp .451·.520 · B2 nframe 구현 중
 Java: 현재 L2 · L0→L1 통과 · L1→L2 손실 serial 11.1·10.0 / bp 28.4·10.6% · L2 차이 ≈ JSON header codec(요청당 ~2.8 µs) → lspec 스펙 후보 · #4445 correlation queue · binding bench 복사 2회 정정(bdirect) 뒤 binding 재측정
-C++: 현재 L2 · L0→L1 통과 · L1→L2 손실 send1K 9.1 / serial1K 7.1 / bp 15.3·16.9% · cdirect(canonical header 직접 기록, header_sax_t 제거) 진행 → microbench 200 ns↓면 L1→L2 6칸 · binding bench 정정 bdirect 진행 · #4443 queue
+C++: 현재 L2 · L0→L1 통과 · cdirect(canonical header 직접 기록) A/B 3회 중앙: L1→L2 손실 send1K 8.4·serial1K 6.8(경계) / send4K 3.6·serial4K 4.8·bp1K 4.9·bp4K 5.9 통과 (A=#4443만: 12.2·5.7·1.3·5.8·8.3·10.3) → #4443 머지 뒤 PR · binding bench 정정 #4453 queue
