@@ -3438,17 +3438,6 @@ export class ZLinkFrameworkRuntimeHost
       sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
       bindingGeneration: binding.bindingGeneration
     };
-    const currentBinding = state.boundSession;
-    const currentActor = state.actor;
-    if (
-      currentBinding === undefined ||
-      currentActor?.onDuplicateBind === undefined ||
-      samePhysicalSession(currentBinding, incomingTarget)
-    ) {
-      state.installBoundSessionBinding(incomingTarget);
-      replyBindingSuccess();
-      return;
-    }
     const spotManager = this.spotManager;
     if (spotManager === undefined || state.meshName === undefined) {
       replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
