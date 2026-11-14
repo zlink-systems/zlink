@@ -16,17 +16,19 @@ const rawWire = require('../shared/raw-wire');
 const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = rawWire;
 const zlink = require('@zlink-systems/zlink');
 const { EchoHandler, CommandHandler, BENCH_SERVER_METRICS, toBuffer } = require('./bench-handlers');
+const { createReceivePermitPump, RECEIVE_RECORD_BUDGET } = require('./receive-permit-pump');
 const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_SERVER === '1';
 const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1' && !ladderL5ToL7;
 const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
 const l0rServer = l0Server && process.env.ZLINK_LADDER_L0R === '1';
-const l1Permit = l0Server && process.env.ZLINK_LADDER_L1_PERMIT === '1';
 const l2Envelope = l0Server && process.env.ZLINK_LADDER_L2_ENVELOPE === '1';
 const l2rEnvelope = l0Server && process.env.ZLINK_LADDER_L2R_ENVELOPE === '1';
 const l3ServiceWire = l0Server && process.env.ZLINK_LADDER_L3_SERVICE_WIRE === '1';
 const l3rServiceWire = l0Server && process.env.ZLINK_LADDER_L3R_SERVICE_WIRE === '1';
 const l4TypedPayload = l0Server && process.env.ZLINK_LADDER_L4_SERVER === '1';
 const l3ServiceWireEnabled = l3ServiceWire || l4TypedPayload;
+const l1Permit = l0Server && (process.env.ZLINK_LADDER_L1_PERMIT === '1'
+  || l2Envelope || l2rEnvelope || l3ServiceWireEnabled || l3rServiceWire);
 let applicationJobQueue;
 let ApplicationJobQueue;
 let resolveApplicationJobQueueConfiguration;
@@ -239,90 +241,70 @@ if (l0Server) {
     return handled;
   }
 
-  async function pumpWithPermits(socket, targetReceived, processMessage, label) {
-    let handled = 0;
-    while (handled < batch) {
-      const permit = await applicationJobQueue.acquire(undefined, 'remote');
-      let hasMessage;
-      try {
-        hasMessage = socket.recv(targetReceived, zlink.RecvFlags.DontWait);
-      } catch (error) {
-        permit.releaseUnqueued();
-        if (error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData) break;
+  const permitStop = new AbortController();
+  function permittedPump(socket, targetReceived, processMessage, label) {
+    if (!l1Permit || socket === null) return () => 0;
+    return createReceivePermitPump(applicationJobQueue,
+      () => socket.recv(targetReceived, zlink.RecvFlags.DontWait),
+      processMessage,
+      (error, phase) => {
+        if (phase === 'recv' && error instanceof zlink.RecvError
+          && error.result === zlink.RecvResult.NoData) return;
         metrics.recordError();
-        console.error(`ladder L1 ${label} recv failed: ${error.message}`);
-        break;
-      }
-      if (!hasMessage) {
-        permit.releaseUnqueued();
-        break;
-      }
-      handled += 1;
-      try {
-        processMessage(permit);
-      } catch (error) {
-        permit.releaseAfterInternalProcessing();
-        metrics.recordError();
-        console.error(`ladder L1 ${label} handler failed: ${error.message}`);
-      }
-    }
-    return handled;
+        console.error(`ladder L1 ${label} ${phase} failed: ${error.message}`);
+      }, permitStop.signal);
   }
 
-  async function pumpRequestsWithPermits() {
-    return pumpWithPermits(router, received, (permit) => {
-      const decoded = decodeLadderParts(received);
-      const parts = decoded.parts;
-      try {
-        const channelHeader = l2Envelope || l3ServiceWireEnabled
-          ? rawWire.decodeProductionChannelHeader(parts)
-          : null;
-        const typedPayload = l4TypedPayload
-          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
-          : null;
-        const payload = l4TypedPayload
-          ? toBuffer(typedPayload.body)
-          : decodeBenchPayloadBody(parts[parts.length - 1].data());
-        if (payload === null) throw new Error('invalid benchmark payload');
-        if (received.replyToken !== null) {
-          permit.releaseBeforeHandler();
-          echoHandler.handleL0(payload);
-          submitLadderReply(received, decoded, l4TypedPayload ? typedPayload : payload, channelHeader);
-        } else {
-          permit.releaseBeforeHandler();
-          commandHandler.handleL0(payload);
-        }
-      } finally {
-        closeLadderParts(decoded);
-      }
-    }, 'request');
-  }
-
-  async function pumpCommandsWithPermits() {
-    return pumpWithPermits(commandRouter, commandReceived, (permit) => {
-      const decoded = decodeLadderParts(commandReceived);
-      const parts = decoded.parts;
-      try {
-        const channelHeader = l2Envelope || l3ServiceWireEnabled
-          ? rawWire.decodeProductionChannelHeader(parts)
-          : null;
-        const typedPayload = l4TypedPayload
-          ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
-          : null;
-        const payload = l4TypedPayload
-          ? toBuffer(typedPayload.body)
-          : decodeBenchPayloadBody(parts[parts.length - 1].data());
-        if (payload === null) throw new Error('invalid benchmark payload');
+  const pumpRequestsWithPermits = permittedPump(router, received, (permit) => {
+    const decoded = decodeLadderParts(received);
+    const parts = decoded.parts;
+    try {
+      const channelHeader = l2Envelope || l3ServiceWireEnabled
+        ? rawWire.decodeProductionChannelHeader(parts)
+        : null;
+      const typedPayload = l4TypedPayload
+        ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+        : null;
+      const payload = l4TypedPayload
+        ? toBuffer(typedPayload.body)
+        : decodeBenchPayloadBody(parts[parts.length - 1].data());
+      if (payload === null) throw new Error('invalid benchmark payload');
+      if (received.replyToken !== null) {
+        permit.releaseBeforeHandler();
+        echoHandler.handleL0(payload);
+        submitLadderReply(received, decoded, l4TypedPayload ? typedPayload : payload, channelHeader);
+      } else {
         permit.releaseBeforeHandler();
         commandHandler.handleL0(payload);
-      } finally {
-        closeLadderParts(decoded);
       }
-    }, 'command');
-  }
+    } finally {
+      closeLadderParts(decoded);
+    }
+  }, 'request');
 
-  async function schedulePermittedPump() {
-    const handled = await pumpRequestsWithPermits() + await pumpCommandsWithPermits();
+  const pumpCommandsWithPermits = permittedPump(commandRouter, commandReceived, (permit) => {
+    const decoded = decodeLadderParts(commandReceived);
+    const parts = decoded.parts;
+    try {
+      const channelHeader = l2Envelope || l3ServiceWireEnabled
+        ? rawWire.decodeProductionChannelHeader(parts)
+        : null;
+      const typedPayload = l4TypedPayload
+        ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+        : null;
+      const payload = l4TypedPayload
+        ? toBuffer(typedPayload.body)
+        : decodeBenchPayloadBody(parts[parts.length - 1].data());
+      if (payload === null) throw new Error('invalid benchmark payload');
+      permit.releaseBeforeHandler();
+      commandHandler.handleL0(payload);
+    } finally {
+      closeLadderParts(decoded);
+    }
+  }, 'command');
+
+  function schedulePermittedPump() {
+    const handled = pumpRequestsWithPermits() + pumpCommandsWithPermits();
     if (handled > 0) {
       idleSpins = 0;
       setImmediate(schedulePump);
@@ -335,7 +317,7 @@ if (l0Server) {
 
   function schedulePump() {
     if (l1Permit) {
-      void schedulePermittedPump();
+      schedulePermittedPump();
       return;
     }
     const handled = twoRouters ? pump() + pumpCommands() : pump();
@@ -350,7 +332,11 @@ if (l0Server) {
   }
 
   process.stderr.write(`[framework-server-l0] endpoint=${endpoint} stats=${metricsUrl}\n`);
+  if (l1Permit) {
+    process.stderr.write(`[framework-server-l0] permit_path=production-receive-rotation budget=${RECEIVE_RECORD_BUDGET}\n`);
+  }
   process.on('SIGTERM', () => {
+    permitStop.abort();
     router.close();
     if (commandRouter !== null) commandRouter.close();
     ctx.close();
