@@ -352,7 +352,7 @@ Actor는 Spot에 들어갈 때(Join)와 노드를 옮길 때 다른 노드로 �
 
 판단 순서:
 
-1. 이용자의 데이터(덱, 장비, 잔액)는 이용자 Actor의 상태다. Actor가 상태를 들고 Spot에 들어오므로, Spot은 들어온 Actor의 상태를 그대로 읽는다. 메시지를 보내지 않는다. 입장 때 Actor마다 따로 처리할 일이 꼭 있으면 `defer()`로 등록한다.
+1. 이용자의 데이터(덱, 장비, 잔액)는 이용자 Actor의 상태다. Actor가 상태를 들고 Spot에 들어오므로, SpotWide Spot(기본)은 들어온 Actor의 상태를 메시지 없이 그대로 읽는다. Actor handler와 Spot handler가 같은 Spot gate를 쓰기 때문이다. PerActor Spot에서는 Actor가 자기 lane에서 따로 실행되므로 Spot이 그 상태를 직접 읽으면 경합이다. Actor에 묻는다([실행 모델 §4](32-execution-model.ko.md#4-peractor-lane마다-하나)). 입장 때 Actor마다 따로 처리할 일이 꼭 있으면 `defer()`로 등록한다.
 2. 방 전체의 데이터(게임 설정, 테이블 규칙)는 Spot의 상태다. Spot을 만들 때 한 번 읽는다.
 3. 크고 Spot에서만 쓰여 Actor가 평소 들고 있지 않는 데이터는 드물다. 정말 필요할 때만:
    - 이용자별로 따로 요청하지 않는다. 게임 시작 전에 참가자 전체 분을 Spot이 요청 하나로 가져온다(판 결과 정산과 같은 방식).

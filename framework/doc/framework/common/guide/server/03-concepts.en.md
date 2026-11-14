@@ -449,7 +449,7 @@ An Actor moves to another node when it joins a Spot and when it is relocated. Ev
 
 Decide in this order:
 
-1. A player's data (deck, gear, balance) is player Actor state. The Actor enters the Spot carrying its state, so the Spot reads the entered Actor's state directly, without sending a message. If each Actor truly needs separate handling on entry, register it with `Defer()`.
+1. A player's data (deck, gear, balance) is player Actor state. The Actor enters the Spot carrying its state, so a SpotWide Spot (the default) reads the entered Actor's state directly, without sending a message, because Actor handlers and Spot handlers share the same Spot gate. In a PerActor Spot each Actor runs on its own lane, so reading its state directly from the Spot is a race; ask the Actor instead ([Execution model §4](32-execution-model.en.md#4-peractor-one-lane-each)). If each Actor truly needs separate handling on entry, register it with `Defer()`.
 2. Room-wide data (game settings, table rules) is Spot state. Read it once when the Spot is created.
 3. Large data used only by the Spot, which Actors do not normally hold, is rare. Only when it is truly needed:
    - Do not request it per player. Before the game starts, the Spot fetches it for all participants in one request (the same shape as round settlement).
