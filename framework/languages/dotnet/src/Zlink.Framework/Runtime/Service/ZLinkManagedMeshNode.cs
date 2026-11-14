@@ -2196,10 +2196,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
         var peer = RunState(() => _peersByRid.GetValueOrDefault(target.TargetNodeRid));
         if (
-            (!request && (peer is null || !peer.Admitted))
-            || (
-                peer is { Admitted: true }
-                && peer.LifecycleGeneration != target.TargetNodeGeneration
+            !request
+            && (
+                peer is not { Admitted: true }
+                || peer.LifecycleGeneration != target.TargetNodeGeneration
             )
         )
         {
