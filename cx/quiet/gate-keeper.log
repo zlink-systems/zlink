@@ -389,3 +389,5 @@
 14:33:31 gate closed: measurement waiting or running
 05:48:15Z keeper restarted (stuck closed since 05:33:31Z with no measure.lock writer; 14 gate waiters released)
 14:48:58 gate closed: measurement waiting or running
+15:01:15 gate open
+15:02:33 gate closed: measurement waiting or running
