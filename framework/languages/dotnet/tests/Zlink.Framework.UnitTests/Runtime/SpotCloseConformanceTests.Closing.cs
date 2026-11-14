@@ -446,9 +446,13 @@ public sealed partial class SpotCloseConformanceTests
     [InlineData("context-success")]
     [InlineData("membership")]
     [InlineData("cas-conflict")]
+    [InlineData("context-cas-conflict")]
     [InlineData("put-exception")]
+    [InlineData("context-put-exception")]
     [InlineData("delete-exception")]
+    [InlineData("context-delete-exception")]
     [InlineData("closing-exception")]
+    [InlineData("context-closing-exception")]
     [InlineData("host-shutdown")]
     public async Task Close_transaction_registry_is_empty_after_terminal_path(string path)
     {
@@ -469,26 +473,39 @@ public sealed partial class SpotCloseConformanceTests
                 Assert.False(await host.Manager.CloseAsync(spot));
                 break;
             case "cas-conflict":
+            case "context-cas-conflict":
                 host.Store.ConflictPutsFor = spot.SpotId;
                 var conflict = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                    host.Manager.CloseAsync(spot).AsTask()
+                    BeginClose(host, spot, path.StartsWith("context-", StringComparison.Ordinal))
                 );
                 Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, conflict.Kind);
                 Assert.Equal("Ready", await host.AuthorityAsync(spot.SpotId));
                 break;
             case "put-exception":
+            case "context-put-exception":
             case "delete-exception":
+            case "context-delete-exception":
                 host.Store.ThrowAuthorityMutationFor = spot.SpotId;
-                host.Store.ThrowAuthorityDelete = path == "delete-exception";
+                host.Store.ThrowAuthorityDelete = path.EndsWith(
+                    "delete-exception",
+                    StringComparison.Ordinal
+                );
                 var failure = await Record.ExceptionAsync(() =>
-                    host.Manager.CloseAsync(spot).AsTask()
+                    BeginClose(host, spot, path.StartsWith("context-", StringComparison.Ordinal))
                 );
                 Assert.NotNull(failure);
                 Assert.Contains("Injected authority mutation failure", failure.ToString());
                 break;
             case "closing-exception":
+            case "context-closing-exception":
                 host.State.ThrowOnClosing = true;
-                Assert.True(await host.Manager.CloseAsync(spot));
+                Assert.True(
+                    await BeginClose(
+                        host,
+                        spot,
+                        path.StartsWith("context-", StringComparison.Ordinal)
+                    )
+                );
                 Assert.Equal(1, host.State.OnClosingCalls);
                 break;
             case "host-shutdown":
