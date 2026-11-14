@@ -1,4 +1,4 @@
 C++: 현재 L2 · 손실(PM b5afcf4c55) send1K 12.3 / serial1K 18.8 / bp 17.6·21.5% · c2prof: L2 bench가 PM 수정(b5afcf4c55) 경로 우회 확인 → cbench 교정 중(L1 permit 포함) · #4420(c4420) 진행 · #4427 typed JSON 승인·queue
 .NET: L3 통과(옛 L1 기준) → L1 permit 교정(dbench2) 뒤 L0→L1·L1→L2·L2→L3 재측정 · d3fix PR 준비 · d2l2·d57 PR 대기
-Java: L1 통과(PM) → L2 · 손실 send 9.9·7.4 / serial 8.3·8.2 / bp 22.9·9.6% (1초 warmup) · 수정: j2l2(sol) 진행
+Java: bench 교정(e0e6c05fcf: view·serializer·L1 permit) 빌드 중 → L0~L2 재측정 · j2l2 후보 CPU 손해(encode 378→505, parse 667→739 ns) 불채택, correlation만 분리 후보
 Node: 현재 L2 · 손실 bp 30.6·23.3 / serial 9.1·12.0% · #4415 A/B 이득 없음(send1K −9.9%) → 닫기 제안 · n2hdr A/B 이득 없음(접음) · nbind: N-API 경계 단일 원인 기각, L2 비용=channel-envelope.ts JS header 처리 · nbench(bench 교정) 진행
