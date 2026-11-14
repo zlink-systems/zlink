@@ -42,14 +42,24 @@ struct test_metrics_t
 template <typename Payload = ladder::payload_t>
 void socket_contract (int level)
 {
-    zlink::context_t context;
-    zlink::router_socket_t target (context);
-    zlink::router_socket_t source (context);
+    auto context = std::make_shared<zlink::context_t> ();
+    std::shared_ptr<fw::runtime::application_job_queue_t> jobs;
+    if (level >= 1)
+        jobs = std::make_shared<fw::runtime::application_job_queue_t> (
+          fw::runtime::resolve_application_job_queue_configuration (
+            fw::application_job_queue_profile_t::balanced, std::nullopt,
+            fw::runtime::detect_application_job_queue_processor_limits ()));
+    zlink::router_socket_t source (*context);
     const auto target_rid = zlink::routing_id_t::from ("ladder-contract-target");
-    target.set_routing_id (target_rid);
+    auto options = ladder::owner_options (target_rid, "inproc://ladder-contract", jobs);
+    options.receive_timeout = std::chrono::seconds (2);
+    fw::runtime::mesh::raw_mesh_node_owner_t owner (std::move (options), context);
+    if (jobs)
+        owner.start ();
+    else
+        owner.ablation_start ();
+    auto &target = owner.ablation_socket ();
     source.set_routing_id (zlink::routing_id_t::from ("ladder-contract-source"));
-    target.options ().recv_timeout (std::chrono::seconds (2));
-    target.bind ("inproc://ladder-contract");
     source.connect ("inproc://ladder-contract");
     zlink::poller_t poller;
     poller.add (source, zlink::poll_event_flag_t::pollcompletion, 1);
@@ -61,23 +71,17 @@ void socket_contract (int level)
     });
     test_metrics_t metrics;
     std::exception_ptr target_failure;
-    std::jthread responder ([&] {
+    std::atomic<bool> stop{false};
+    std::jthread responder ([&] (std::stop_token token) {
+        std::stop_callback cancel (token, [&] { stop = true; owner.signal_activity (); });
         try {
-            std::unique_ptr<fw::runtime::application_job_queue_t> jobs;
-            if (level >= 1)
-                jobs = std::make_unique<fw::runtime::application_job_queue_t> (
-                  fw::runtime::resolve_application_job_queue_configuration (
-                    fw::application_job_queue_profile_t::balanced, std::nullopt,
-                    fw::runtime::detect_application_job_queue_processor_limits ()));
             ladder::fixed_handler_t<test_metrics_t, Payload> handler{metrics, level};
-            zlink::received_t received;
-            for (int record = 0; record < 4; ++record) {
-                std::optional<fw::runtime::application_job_queue_t::permit_t> permit;
+            const auto handle = [&] (zlink::received_t &received,
+                                    fw::runtime::application_job_queue_t::permit_t *permit) {
                 if (jobs)
-                    permit = jobs->wait_for_supply_blocking (
-                      fw::runtime::application_job_queue_t::origin_t::remote);
-                require (target.recv (received, zlink::recv_flags_t::none) == 0,
-                         "contract target recv failed");
+                    require (permit && static_cast<bool> (*permit)
+                               && jobs->snapshot ().permits_in_use != 0,
+                             "target received without a production reservation");
                 std::optional<std::uint64_t> correlation;
                 require (!ladder::handle_control (target, received,
                            ladder::descriptor (target_rid, "inproc://ladder-contract"),
@@ -129,6 +133,22 @@ void socket_contract (int level)
                 }
                 if (received.reply_token ())
                     ladder::raw_reply (received, payload, header, correlation);
+                if (metrics.count == 4)
+                    stop = true;
+            };
+            if (jobs) {
+                const auto evidence = ladder::receive_reserved (owner, jobs, stop, handle);
+                require (evidence.received == 4 && evidence.reserved > evidence.received,
+                         "target did not reserve a receive batch");
+                require (jobs->snapshot ().permits_in_use == 0,
+                         "target retained unused receive permits");
+            } else {
+                zlink::received_t received;
+                while (!stop) {
+                    require (target.recv (received, zlink::recv_flags_t::none) == 0,
+                             "contract target recv failed");
+                    handle (received, nullptr);
+                }
             }
         }
         catch (...) { target_failure = std::current_exception (); }
@@ -169,6 +189,86 @@ void socket_contract (int level)
         std::rethrow_exception (target_failure);
     require (metrics.count == 4, "target did not handle all four records");
     std::printf ("L%d socket contract: 1K/4K command and request/reply passed\n", level);
+}
+
+void receive_pressure_contract (int level)
+{
+    if (level < 1)
+        return;
+    using queue_t = fw::runtime::application_job_queue_t;
+    auto jobs = std::make_shared<queue_t> (fw::runtime::application_job_queue_configuration_t{
+      fw::application_job_queue_profile_t::balanced, 2, 1, 2});
+    auto context = std::make_shared<zlink::context_t> ();
+    const auto rid = zlink::routing_id_t::from ("permit-contract");
+    fw::runtime::mesh::raw_mesh_node_owner_t owner (
+      ladder::owner_options (rid, "inproc://permit-contract", jobs), context);
+    owner.start ();
+    zlink::router_socket_t source (*context);
+    source.set_routing_id (zlink::routing_id_t::from ("permit-source"));
+    source.connect ("inproc://permit-contract");
+    auto source_monitor = source.monitor_open ();
+    // Buffer input before applying pressure: synchronous send admission itself
+    // waits while the peer is paused, so it must not block this test's releaser.
+    for (int index = 0; index < 5; ++index) {
+        auto part = ladder::message ("permit");
+        source.send (rid).message (part).submit ();
+    }
+    auto held = jobs->try_reserve_supply_batch (2);
+    require (held && held.size () == 2, "could not occupy the queue capacity");
+    std::atomic<bool> stop{false};
+    std::atomic<unsigned> received{0};
+    std::exception_ptr failure;
+    ladder::receive_permit_evidence_t evidence;
+    std::jthread receiver ([&] (std::stop_token token) {
+        std::stop_callback cancel (token, [&] { stop = true; owner.signal_activity (); });
+        try {
+            evidence = ladder::receive_reserved (owner, jobs, stop,
+              [&] (zlink::received_t &record, queue_t::permit_t *permit) {
+                  require (permit && static_cast<bool> (*permit)
+                               && jobs->snapshot ().permits_in_use != 0,
+                           "capacity shortage allowed receive without a permit");
+                  require (record.parts ().size () == 1 && record.parts ()[0].to_string () == "permit",
+                           "pressure contract payload changed");
+                  permit->release_for_handler_entry ();
+                  if (++received == 5)
+                      stop = true;
+              });
+        }
+        catch (...) { failure = std::current_exception (); stop = true; }
+    });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while ((jobs->snapshot ().capacity_waiters == 0
+            || source_monitor.status ().flow_paused_connections == 0) && !stop
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const bool waited_without_receive = jobs->snapshot ().capacity_waiters == 1 && received == 0;
+    const bool peer_paused = source_monitor.status ().flow_paused_connections != 0;
+    held.release_without_handler ();
+    while (!stop && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    stop = true;
+    owner.signal_activity ();
+    receiver.join ();
+    if (failure)
+        std::rethrow_exception (failure);
+    require (waited_without_receive, "full queue did not withhold ordinary receive");
+    require (peer_paused, "owner queue pressure did not reach the peer socket");
+    require (received == 5 && evidence.received == 5, "supply wake did not resume receive");
+    const auto status = jobs->snapshot ();
+    const auto pressure = jobs->pressure_metrics_snapshot ();
+    require (status.capacity_wait_count != 0 && status.permits_in_use == 0
+               && status.capacity_waiters == 0, "reservation or waiter leaked");
+    require (pressure.paused_transition_count != 0 && pressure.running_transition_count != 0
+               && pressure.flow_state_config_failure_count == 0,
+             "owner receive-flow pressure application failed");
+    while (source_monitor.status ().flow_paused_connections != 0
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const auto peer = source_monitor.status ();
+    require (peer.flow_paused_connections == 0 && peer.flow_resume_applied_total != 0,
+             "owner permit return did not resume the peer socket");
+    std::printf ("L%d permit pressure: zero receive while full; supply wake resumed 5 records; "
+                 "receive-flow pause/resume; no leaked permits/waiters\n", level);
 }
 
 void reply_contract ()
@@ -254,6 +354,7 @@ int main ()
         reply_contract ();
         typed_codec_contract ();
         const auto level = fw::detail::ablation::level ();
+        receive_pressure_contract (level);
         if (level == 4)
             socket_contract<ladder::typed_payload_t> (level);
         else

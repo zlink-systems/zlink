@@ -6,6 +6,7 @@
 #include <zlink/framework/detail/ablation_ladder.hpp>
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/dispatch/application_job_queue_capacity.hpp"
+#include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
@@ -13,6 +14,7 @@
 #include "runtime/host/runtime_failure_collector.hpp"
 #include <zlink.hpp>
 #include <array>
+#include <limits>
 
 namespace zlink_cpp_bench::ladder
 {
@@ -95,12 +97,14 @@ inline bool handle_control (zlink::router_socket_t &socket, zlink::received_t &r
 
 
 inline fw::runtime::mesh::raw_mesh_node_options_t owner_options (
-  const zlink::routing_id_t &rid, std::string endpoint)
+  const zlink::routing_id_t &rid, std::string endpoint,
+  std::shared_ptr<fw::runtime::application_job_queue_t> application_jobs = {})
 {
     fw::runtime::mesh::raw_mesh_node_options_t options;
     options.descriptor = descriptor (rid, std::move (endpoint));
     options.descriptor.state = fw::runtime::mesh::service_node_state_t::preparing;
     options.runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ();
+    options.application_jobs = std::move (application_jobs);
     return options;
 }
 
@@ -369,6 +373,82 @@ Payload decode_reply (const std::vector<zlink::message_t> &parts, int level,
     }
 }
 
+// L1-L4 share the production host's persistent supply and receive-turn budget.
+// The fixed callback replaces mailbox/dispatch work, which starts at L5_7.
+struct receive_permit_evidence_t
+{
+    std::uint64_t batches = 0;
+    std::uint64_t reserved = 0;
+    std::uint64_t received = 0;
+};
+
+template <typename Handler>
+receive_permit_evidence_t receive_reserved (
+  fw::runtime::mesh::raw_mesh_node_owner_t &owner,
+  std::shared_ptr<fw::runtime::application_job_queue_t> application_jobs,
+  std::atomic<bool> &stop, Handler handler)
+{
+    fw::runtime::application_supply_slot_t supply (
+      std::move (application_jobs), [&owner] { owner.signal_activity (); });
+    std::optional<zlink::poll_event_flag_t> readiness;
+    receive_permit_evidence_t evidence;
+    zlink::received_t received;
+    while (!stop.load ()) {
+        // mesh_node_host_service_t::node_receive_role_t::rotate, in production order.
+        supply.ensure_waiter (fw::runtime::dispatch_limits::receive_batch_messages);
+        auto budget = supply.take_budget ();
+        auto application_permit = budget
+          ? std::optional<fw::runtime::application_job_queue_t::permit_t> (budget->take ())
+          : std::nullopt;
+        auto application_permit_budget = budget
+          ? std::move (*budget) : fw::runtime::application_job_queue_t::permit_batch_t{};
+        const bool accept_application_receive = static_cast<bool> (application_permit);
+        if (accept_application_receive) {
+            ++evidence.batches;
+            evidence.reserved += 1 + application_permit_budget.size ();
+        }
+        fw::runtime::receive_batch_budget_t receive_budget;
+        const auto turn = owner.begin_receive_turn (readiness);
+        if (!turn)
+            throw std::runtime_error ("ladder receive turn failed");
+        const bool receive_ready = accept_application_receive
+          && (static_cast<short> (*turn) & static_cast<short> (zlink::poll_event_flag_t::pollin)) != 0;
+        std::size_t count = 0;
+        while (receive_ready && receive_budget.can_receive ()) {
+            // The same raw port call used by raw_mesh_node_owner_t::receive_next.
+            if (!turn.port || !turn.port->receive_if_ready (received, zlink::poll_event_flag_t::pollin)) {
+                receive_budget.account (0);
+                break;
+            }
+            std::size_t bytes = 0;
+            for (const auto &part : received.parts ()) {
+                if (part.size () > std::numeric_limits<std::size_t>::max () - bytes) {
+                    bytes = std::numeric_limits<std::size_t>::max ();
+                    break;
+                }
+                bytes += part.size ();
+            }
+            receive_budget.account (bytes);
+            ++count;
+            ++evidence.received;
+            handler (received, &*application_permit);
+            if (receive_budget.exhausted ())
+                break;
+            application_permit.reset ();
+            if (stop.load () || !application_permit_budget)
+                break;
+            application_permit.emplace (application_permit_budget.take ());
+        }
+        application_permit.reset ();
+        application_permit_budget.release_without_handler ();
+        readiness.reset ();
+        if (count == 0 && !stop.load () && !supply.has_supply ())
+            readiness = owner.wait_for_activity (std::chrono::milliseconds (50),
+                                                  accept_application_receive);
+    }
+    return evidence;
+}
+
 template <typename Metrics, typename Payload = payload_t>
 int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bool> &stop,
                    int level, bool raw_mesh)
@@ -400,36 +480,60 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
         }
         return 0;
     }
-    fw::runtime::mesh::raw_mesh_node_owner_t owner (
-      owner_options (zlink::routing_id_t::from ("bench-server"), endpoint));
-    owner.ablation_start ();
-    std::unique_ptr<fw::runtime::application_job_queue_t> application_jobs;
+    std::shared_ptr<fw::runtime::application_job_queue_t> application_jobs;
     if (level >= 1) {
-        application_jobs = std::make_unique<fw::runtime::application_job_queue_t> (
+        application_jobs = std::make_shared<fw::runtime::application_job_queue_t> (
           fw::runtime::resolve_application_job_queue_configuration (
             fw::application_job_queue_profile_t::balanced, std::nullopt,
             fw::runtime::detect_application_job_queue_processor_limits ()));
     }
+    fw::runtime::mesh::raw_mesh_node_owner_t owner (
+      owner_options (zlink::routing_id_t::from ("bench-server"), endpoint, application_jobs));
+    if (application_jobs)
+        owner.start ();
+    else
+        owner.ablation_start ();
     std::fprintf (stderr, "#4350 target L%d: real raw_mesh_node_owner_t; fixed handler\n", level);
     struct state_t {
         fw::runtime::mesh::raw_mesh_node_owner_t &owner;
         fixed_handler_t<Metrics, Payload> handler;
+        std::uint64_t handler_releases = 0;
     } state{owner, {metrics, level}};
-    owner.ablation_receive (stop, [] (void *opaque, zlink::received_t &received,
-                                    fw::runtime::application_job_queue_t::permit_t *permit) {
+    const auto handle = [] (void *opaque, zlink::received_t &received,
+                            fw::runtime::application_job_queue_t::permit_t *permit) {
         auto &state = *static_cast<state_t *> (opaque);
         std::optional<std::uint64_t> correlation;
         if (handle_control (state.owner.ablation_socket (), received,
                             state.owner.startup_descriptor (), nullptr, &correlation))
             return;
         // L0-L4: one fixed handler; activation/scope starts at L5_7.
-        if (permit)
+        if (permit) {
             permit->release_for_handler_entry ();
+            ++state.handler_releases;
+        }
         std::optional<messaging::envelope_header_t> header;
         auto payload = state.handler.handle (received, header);
         if (received.reply_token ())
             raw_reply (received, payload, header, correlation);
-    }, &state, application_jobs.get ());
+    };
+    if (application_jobs) {
+        const auto evidence = receive_reserved (owner, application_jobs, stop,
+          [&] (zlink::received_t &received, auto *permit) { handle (&state, received, permit); });
+        const auto status = application_jobs->snapshot ();
+        const auto pressure = application_jobs->pressure_metrics_snapshot ();
+        std::fprintf (stderr,
+          "#4350 permit L%d: persistent_supply=1 receive_flow=owner_options "
+          "batches=%llu reserved=%llu received=%llu handler_releases=%llu "
+          "in_use=%u capacity_waits=%llu flow_failures=%llu\n", level,
+          static_cast<unsigned long long> (evidence.batches),
+          static_cast<unsigned long long> (evidence.reserved),
+          static_cast<unsigned long long> (evidence.received),
+          static_cast<unsigned long long> (state.handler_releases),
+          status.permits_in_use,
+          static_cast<unsigned long long> (status.capacity_wait_count),
+          static_cast<unsigned long long> (pressure.flow_state_config_failure_count));
+    } else
+        owner.ablation_receive (stop, handle, &state);
     return 0;
 }
 }
