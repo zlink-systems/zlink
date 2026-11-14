@@ -1,0 +1,44 @@
+{
+  "language": "cpp",
+  "utc_date": "2026-11-14",
+  "measured_utc": "2026-11-14T13:32:20Z..13:35:33Z",
+  "conditions": "exclusive measure.lock hold, governor performance, source pin 0-5 / target pin 8-13, guard v8, load 2.9-5.9",
+  "warmup_seconds": 1,
+  "active_seconds": 5,
+  "worktree": "/root/worktree/zlink-v21-s033/cstep",
+  "commit": "ea75a693c6 (ladder bench + main incl. #4453 binding native-message encode, #4466)",
+  "status": "valid",
+  "validity_note": "submitted==completed, errors 0, not contaminated per results.json; interleaved with L1/L2 framework cells in the same hold (hold-4466.sh)",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_s": 570106.97878,
+      "raw": "/root/jobs/fx/cx/v21/s033/cstep/raw/r4466/binding/send-saturation-1024/run1/zlink-cpp-send-saturation-1024/results.json",
+      "counted_runs": 1
+    },
+    "send-saturation-4096": {
+      "msg_s": 234015.531947,
+      "raw": "/root/jobs/fx/cx/v21/s033/cstep/raw/r4466/binding/send-saturation-4096/run1/zlink-cpp-send-saturation-4096/results.json",
+      "counted_runs": 1
+    },
+    "request-serial-1024": {
+      "msg_s": 12648.45494,
+      "raw": "/root/jobs/fx/cx/v21/s033/cstep/raw/r4466/binding/request-serial-1024/run1/zlink-cpp-request-serial-1024/results.json",
+      "counted_runs": 1
+    },
+    "request-serial-4096": {
+      "msg_s": 12490.449493,
+      "raw": "/root/jobs/fx/cx/v21/s033/cstep/raw/r4466/binding/request-serial-4096/run1/zlink-cpp-request-serial-4096/results.json",
+      "counted_runs": 1
+    },
+    "request-backpressure-1024": {
+      "msg_s": 128759.414013,
+      "raw": "/root/jobs/fx/cx/v21/s033/cstep/raw/r4466/binding/request-backpressure-1024/run1/zlink-cpp-request-backpressure-1024/results.json",
+      "counted_runs": 1
+    },
+    "request-backpressure-4096": {
+      "msg_s": 132607.015863,
+      "raw": "/root/jobs/fx/cx/v21/s033/cstep/raw/r4466/binding/request-backpressure-4096/run1/zlink-cpp-request-backpressure-4096/results.json",
+      "counted_runs": 1
+    }
+  }
+}
