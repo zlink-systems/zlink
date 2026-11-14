@@ -3751,10 +3751,12 @@ void verify_authority_generation_request (std::string_view path, bool invalidate
         assert (terminal.get ()
                 == (invalidated ? foundation::operation_terminal_t::route_unavailable
                                 : foundation::operation_terminal_t::timed_out));
+        // Actor create reports registration; Instance Spot reports the failed admission.
         const auto submitted = pending.result ();
-        std::fprintf (stderr, "authority-generation %s submitted=%d value=%d\n",
-                      std::string (path).c_str (), static_cast<int> (static_cast<bool> (submitted)),
-                      submitted ? static_cast<int> (submitted.value ()) : -1);
+        if (path == "actor-create")
+            assert (submitted && submitted.value ());
+        else
+            assert (!submitted);
     } else {
         assert (path == "spot" || path == "actor");
         std::promise<foundation::operation_terminal_t> promise;
