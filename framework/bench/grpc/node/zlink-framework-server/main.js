@@ -15,7 +15,7 @@ const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server
 const rawWire = require('../shared/raw-wire');
 const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = rawWire;
 const zlink = require('@zlink-systems/zlink');
-const { EchoHandler, CommandHandler, BENCH_SERVER_METRICS } = require('./bench-handlers');
+const { EchoHandler, CommandHandler, BENCH_SERVER_METRICS, toBuffer } = require('./bench-handlers');
 const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_SERVER === '1';
 const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1' && !ladderL5ToL7;
 const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
@@ -118,7 +118,7 @@ if (l0Server) {
 
   function ladderReplyParts(channelHeader, payload) {
     if (l4TypedPayload) {
-      return rawWire.encodeProductionTypedChannelReply(channelHeader, { body: payload });
+      return rawWire.encodeProductionTypedChannelReply(channelHeader, payload);
     }
     return l2Envelope || l3ServiceWireEnabled
       ? rawWire.encodeProductionProtobufChannelReply(channelHeader, payload)
@@ -129,8 +129,13 @@ if (l0Server) {
     const replyParts = ladderReplyParts(channelHeader, payload);
     if (l3ServiceWireEnabled) {
       const reply = rawWire.encodeProductionServiceReply(decoded.correlation, replyParts);
-      replyParts[1].close?.();
-      targetReceived.reply().message(reply.header).message(reply.frame).submit();
+      const frame = reply.frame.takeMessage();
+      try {
+        targetReceived.reply().message(reply.header).message(frame).submit();
+      } catch (error) {
+        frame.close();
+        throw error;
+      }
       return;
     }
     targetReceived.reply().message(replyParts[0]).message(replyParts[1]).submit();
@@ -164,13 +169,16 @@ if (l0Server) {
           ? rawWire.decodeProductionChannelHeader(parts)
           : null;
         const header = frameworkWire ? parts[0].data() : null;
-        const payload = l4TypedPayload
+        const typedPayload = l4TypedPayload
           ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : null;
+        const payload = l4TypedPayload
+          ? toBuffer(typedPayload.body)
           : decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         if (received.replyToken !== null) {
           echoHandler.handleL0(payload);
-          if (l3ServiceWireEnabled) submitLadderReply(received, decoded, payload, channelHeader);
+          if (l3ServiceWireEnabled) submitLadderReply(received, decoded, l4TypedPayload ? typedPayload : payload, channelHeader);
           else {
             const reply = l2Envelope
               ? ladderReplyParts(channelHeader, payload)
@@ -213,8 +221,11 @@ if (l0Server) {
         const channelHeader = l2Envelope || l3ServiceWireEnabled
           ? rawWire.decodeProductionChannelHeader(parts)
           : null;
-        const payload = l4TypedPayload
+        const typedPayload = l4TypedPayload
           ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : null;
+        const payload = l4TypedPayload
+          ? toBuffer(typedPayload.body)
           : decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         commandHandler.handleL0(payload);
@@ -266,14 +277,17 @@ if (l0Server) {
         const channelHeader = l2Envelope || l3ServiceWireEnabled
           ? rawWire.decodeProductionChannelHeader(parts)
           : null;
-        const payload = l4TypedPayload
+        const typedPayload = l4TypedPayload
           ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : null;
+        const payload = l4TypedPayload
+          ? toBuffer(typedPayload.body)
           : decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         if (received.replyToken !== null) {
           permit.releaseBeforeHandler();
           echoHandler.handleL0(payload);
-          submitLadderReply(received, decoded, payload, channelHeader);
+          submitLadderReply(received, decoded, l4TypedPayload ? typedPayload : payload, channelHeader);
         } else {
           permit.releaseBeforeHandler();
           commandHandler.handleL0(payload);
@@ -292,8 +306,11 @@ if (l0Server) {
         const channelHeader = l2Envelope || l3ServiceWireEnabled
           ? rawWire.decodeProductionChannelHeader(parts)
           : null;
-        const payload = l4TypedPayload
+        const typedPayload = l4TypedPayload
           ? rawWire.decodeProductionTypedPayload(parts[parts.length - 1].data(), channelHeader)
+          : null;
+        const payload = l4TypedPayload
+          ? toBuffer(typedPayload.body)
           : decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         permit.releaseBeforeHandler();

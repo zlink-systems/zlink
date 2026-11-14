@@ -60,24 +60,11 @@ function requireProductionChannelEnvelope() {
     decodeChannelPayload,
     decodeChannelReply
   } = require(path.join(root, 'runtime/channels/channel-envelope.js'));
-  const { ZLinkEncodedPayload } = require(path.join(root, 'contracts/Common/ZLinkEncodedPayload.js'));
-  const body = ZLinkEncodedPayload.fromOwned(Buffer.alloc(0));
+  const { createBenchPayloadSerializer } = require('./framework-protobuf');
   const codecs = {
-    serializers: new Map([['application/x-protobuf', {
-      serialize() { return body; },
-      deserialize() { throw new Error('benchmark header codec is encode-only'); }
-    }]])
+    serializers: new Map([['application/x-protobuf', createBenchPayloadSerializer()]])
   };
-  const replyCodecs = {
-    serializers: new Map([['application/x-protobuf', {
-      serialize(value) {
-        return ZLinkEncodedPayload.fromOwned(
-          payloadMethod.requestSerialize(new BenchPayload(value.body))
-        );
-      },
-      deserialize() { throw new Error('benchmark reply codec is encode-only'); }
-    }]])
-  };
+  const typedCodecs = { serializers: new Map() };
   productionChannelEnvelope = {
     encodeChannelEnvelopeParts,
     encodeChannelReplyParts,
@@ -85,26 +72,24 @@ function requireProductionChannelEnvelope() {
     decodeChannelPayload,
     decodeChannelReply,
     codecs,
-    replyCodecs,
-    ZLinkEncodedPayload
+    typedCodecs
   };
   return productionChannelEnvelope;
 }
 
-function encodeProductionChannelHeader(kind, timeoutMs) {
+function encodeProductionProtobufChannelPayload(kind, payload, timeoutMs, correlationId) {
   const { encodeChannelEnvelopeParts, codecs } = requireProductionChannelEnvelope();
-  const parts = encodeChannelEnvelopeParts(
+  return encodeChannelEnvelopeParts(
     kind,
     'bench',
     'BenchPayload',
-    {},
+    new BenchPayload(payload),
     timeoutMs,
     undefined,
     codecs,
-    undefined,
+    correlationId,
     false
   );
-  return parts[0];
 }
 
 function decodeProductionChannelHeader(parts) {
@@ -112,45 +97,47 @@ function decodeProductionChannelHeader(parts) {
 }
 
 function encodeProductionProtobufChannelReply(requestHeader, payload) {
-  const { encodeChannelReplyParts, replyCodecs } = requireProductionChannelEnvelope();
-  return encodeChannelReplyParts(requestHeader, { body: payload }, replyCodecs);
+  const { encodeChannelReplyParts, codecs } = requireProductionChannelEnvelope();
+  return encodeChannelReplyParts(requestHeader, new BenchPayload(payload), codecs);
+}
+
+function decodeProductionProtobufReply(parts) {
+  const { decodeChannelReply, codecs } = requireProductionChannelEnvelope();
+  return decodeChannelReply(parts, codecs).body;
 }
 
 function encodeProductionTypedChannelPayload(kind, payload, timeoutMs, correlationId) {
-  const { encodeChannelEnvelopeParts } = requireProductionChannelEnvelope();
-  const parts = encodeChannelEnvelopeParts(
+  const { encodeChannelEnvelopeParts, typedCodecs } = requireProductionChannelEnvelope();
+  return encodeChannelEnvelopeParts(
     kind,
     'bench',
     'BenchPayload',
     payload,
     timeoutMs,
     undefined,
-    undefined,
+    typedCodecs,
     correlationId,
     false
   );
-  return [parts[0], zlink.Message.from(Buffer.from(parts[1], 'utf8'))];
 }
 
 function encodeProductionTypedChannelReply(requestHeader, payload) {
-  const { encodeChannelReplyParts } = requireProductionChannelEnvelope();
-  const parts = encodeChannelReplyParts(requestHeader, payload);
-  return [parts[0], zlink.Message.from(Buffer.from(parts[1], 'utf8'))];
+  const { encodeChannelReplyParts, typedCodecs } = requireProductionChannelEnvelope();
+  return encodeChannelReplyParts(requestHeader, payload, typedCodecs);
 }
 
 function decodeProductionTypedPayload(encoded, header) {
-  const { decodeChannelPayload } = requireProductionChannelEnvelope();
-  const payload = decodeChannelPayload({
+  const { decodeChannelPayload, typedCodecs } = requireProductionChannelEnvelope();
+  return decodeChannelPayload({
     header,
     packetName: 'BenchPayload',
-    payload: Buffer.from(encoded)
-  });
-  return Buffer.from(payload.body, 'base64');
+    payload: encoded
+  }, typedCodecs);
 }
 
 function decodeProductionTypedReply(parts) {
-  const { decodeChannelReply } = requireProductionChannelEnvelope();
-  const payload = decodeChannelReply(parts);
+  const { decodeChannelReply, typedCodecs } = requireProductionChannelEnvelope();
+  const payload = decodeChannelReply(parts, typedCodecs);
   return Buffer.from(payload.body, 'base64');
 }
 
@@ -169,11 +156,7 @@ function encodeProductionServiceRequest(request, correlation, parts) {
   const header = request
     ? wire.encodeChannelRequestHeader(correlation, 'bench')
     : wire.encodeChannelSendHeader('bench');
-  const frame = wire.encodeMultipartApplicationPayload(
-    parts.map((part) => Buffer.isBuffer(part) ? part : part.data()),
-    wire.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
-    wire.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
-  );
+  const frame = wire.encodeFrameworkMultipartApplicationMessage(parts);
   return { header, frame };
 }
 
@@ -181,11 +164,7 @@ function encodeProductionServiceReply(correlation, parts) {
   const wire = requireProductionServiceWire();
   return {
     header: wire.encodeReplyHeader(correlation),
-    frame: wire.encodeMultipartApplicationPayload(
-      parts.map((part) => Buffer.isBuffer(part) ? part : part.data()),
-      wire.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
-      wire.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
-    )
+    frame: wire.encodeFrameworkMultipartApplicationMessage(parts)
   };
 }
 
@@ -260,7 +239,8 @@ module.exports = {
   RESPONSE_ENVELOPE,
   frameworkEnvelope,
   requireProductionChannelEnvelope,
-  encodeProductionChannelHeader,
+  encodeProductionProtobufChannelPayload,
+  decodeProductionProtobufReply,
   decodeProductionChannelHeader,
   encodeProductionProtobufChannelReply,
   encodeProductionTypedChannelPayload,
