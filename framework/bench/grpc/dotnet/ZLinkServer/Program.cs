@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Google.Protobuf;
 using Systems.Zlink;
 using WithGrpcBench.Shared;
@@ -265,77 +266,132 @@ static async Task RunL1Owner(
 )
 {
     using var received = Received.Create();
-    while (!stopping.IsCancellationRequested)
+    using var poller = Systems.Zlink.Zlink.CreatePoller();
+    poller.Add(router, PollEventFlags.PollIn, 0);
+    var events = new PollEvent[1];
+    ZLinkApplicationJobQueueLease? reservedAdmission = null;
+    try
     {
-        ZLinkApplicationJobQueueLease? permit = null;
-        try
+        while (!stopping.IsCancellationRequested)
         {
-            permit = await queue.AcquireAsync(stopping, ZLinkApplicationJobOrigin.Remote);
-            if (!router.Recv(received, RecvFlags.None))
-                continue;
+            try
+            {
+                if (
+                    reservedAdmission is null
+                    && poller.Wait(events, TimeSpan.FromMilliseconds(100)) == 0
+                )
+                    continue;
+                var reservation = new ZLinkApplicationJobQueueReservation(
+                    queue,
+                    ZLinkApplicationJobOrigin.Remote,
+                    reservedAdmission
+                );
+                reservedAdmission = null;
+                var count = 0;
+                try
+                {
+                    // Use the production receive rotation's reservation and three-axis budget.
+                    reservation.ReserveAvailable(ZLinkReceiveBatchBudget.MaximumRecords);
+                    count = reservation.Count;
+                    var startedAt = Stopwatch.GetTimestamp();
+                    long bytes = 0;
+                    for (var index = 0; reservation.Count != 0; index++)
+                    {
+                        if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
+                            break;
+                        ZLinkApplicationJobQueueLease? permit = null;
+                        try
+                        {
+                            if (!router.Recv(received, RecvFlags.DontWait))
+                                break;
+                            permit = reservation.Claim();
+                            bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
 
 #if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
-            ZLinkEnvelopeHeader? requestHeader = null;
-            if (decodeEnvelope && !decodeServiceWire)
-                requestHeader = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
+                            ZLinkEnvelopeHeader? requestHeader = null;
+                            if (decodeEnvelope && !decodeServiceWire)
+                                requestHeader = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
 #endif
 
 #if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
-            if (decodeServiceWire)
-            {
-                await HandleServiceWire(
-                    received,
-                    handler,
-                    permit,
-                    preparedReplyHeader,
-                    decodeTypedPayload
-                );
-                continue;
-            }
+                            if (decodeServiceWire)
+                            {
+                                await HandleServiceWire(
+                                    received,
+                                    handler,
+                                    permit,
+                                    preparedReplyHeader,
+                                    decodeTypedPayload
+                                );
+                                continue;
+                            }
 #endif
 
-            if (received.ReplyToken is not null)
-            {
-                await permit.ReleaseForHandlerStartAsync();
-                using var replyBody = handler.HandleRequest(PayloadPart(received));
+                            if (received.ReplyToken is not null)
+                            {
+                                await permit.ReleaseForHandlerStartAsync();
+                                using var replyBody = handler.HandleRequest(PayloadPart(received));
 #if ZLINK_DOTNET_LADDER_L2
-                if (decodeEnvelope)
-                {
-                    ReplyL2(received, requestHeader!, replyBody, preparedReplyHeader!);
-                    continue;
-                }
+                                if (decodeEnvelope)
+                                {
+                                    ReplyL2(received, requestHeader!, replyBody, preparedReplyHeader!);
+                                    continue;
+                                }
 #endif
-                using var header = Message.From(RawEnvelopeHeaders.Response);
-                received.Reply().Message(header).Message(replyBody).Submit();
+                                using var header = Message.From(RawEnvelopeHeaders.Response);
+                                received.Reply().Message(header).Message(replyBody).Submit();
+                            }
+                            else
+                            {
+                                await permit.ReleaseForHandlerStartAsync();
+                                handler.HandleSend(PayloadPart(received));
+                            }
+                        }
+                        finally
+                        {
+                            permit?.Dispose();
+                        }
+                    }
+                }
+                finally
+                {
+                    reservation.Dispose();
+                }
+
+                // Like production receive, wait for one permit only when reservation found none.
+                if (count == 0)
+                    reservedAdmission = await queue.AcquireAsync(
+                        stopping,
+                        ZLinkApplicationJobOrigin.Remote
+                    );
             }
-            else
+            catch (ZlinkRecvException ex)
+                when (stopping.IsCancellationRequested || ex.Result == ZlinkRecvException.ErrorCode.Terminated)
             {
-                await permit.ReleaseForHandlerStartAsync();
-                handler.HandleSend(PayloadPart(received));
+                return;
+            }
+            catch (ZlinkRecvException ex) when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
+            {
+                continue;
+            }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (ZlinkConfigException) when (stopping.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"L1 zlink owner failed: {ex.Message}");
+                metrics.RecordError();
             }
         }
-        catch (ZlinkRecvException ex)
-            when (stopping.IsCancellationRequested || ex.Result == ZlinkRecvException.ErrorCode.Terminated)
-        {
-            return;
-        }
-        catch (ZlinkRecvException ex) when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
-        {
-            continue;
-        }
-        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
-        {
-            return;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"L1 zlink owner failed: {ex.Message}");
-            metrics.RecordError();
-        }
-        finally
-        {
-            permit?.Dispose();
-        }
+    }
+    finally
+    {
+        reservedAdmission?.Dispose();
     }
 }
 
