@@ -42,6 +42,75 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 final class ZLinkBoundSessionSendCallContractTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false",
+        "false,true",
+        "true,false",
+        "true,true"
+    })
+    void destroyWaitsOnlyForACurrentBindingAndPreservesCloseFailure(
+            boolean hasCurrentBinding, boolean closeFails) throws Exception {
+        var available = new AtomicBoolean(true);
+        var closeRequests = new AtomicInteger();
+        var closeStarted = new CompletableFuture<Void>();
+        var closeTerminal = new CompletableFuture<Void>();
+        var node =
+                spotNode(
+                        new AtomicInteger(),
+                        new AtomicInteger(),
+                        CompletableFuture.completedFuture(null),
+                        available,
+                        closeRequests,
+                        closeStarted,
+                        closeTerminal);
+        var actors =
+                new ZLinkActorRuntime(
+                        node,
+                        Map.of("probe", ProbeFactory.class),
+                        Map.of(),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        new ZLinkJsonMessageSerializer(),
+                        ZLinkHandlerActivator.reflection(),
+                        ZLinkStreamCodec.RAW,
+                        unusedAdmission());
+        var actor =
+                actors.getOrCreateLocalActor("destroy-binding", ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        var ref = actors.currentRef(actor);
+        var route = node.boundSessionRoute(ref).orElseThrow();
+        actors.bindNativeSession(actor, node, ref, route.sessionOwnerNodeRid(), route.sessionRid())
+                .toCompletableFuture()
+                .join();
+
+        // Retire the owner's record while the context still holds the session facade.
+        available.set(hasCurrentBinding);
+        var destroyed = actors.destroyFromEntrySpot(ref.nodeRid(), actor).toCompletableFuture();
+        if (hasCurrentBinding) {
+            closeStarted.get(5, TimeUnit.SECONDS);
+            assertFalse(destroyed.isDone(), "destroy must await the current binding's close");
+            assertEquals(1, closeRequests.get());
+        } else {
+            destroyed.get(5, TimeUnit.SECONDS);
+            assertEquals(0, closeRequests.get());
+        }
+        var failure =
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE, "session owner rejected close");
+        if (closeFails) closeTerminal.completeExceptionally(failure);
+        else closeTerminal.complete(null);
+        if (hasCurrentBinding && closeFails) {
+            assertEquals(
+                    failure, assertThrows(CompletionException.class, destroyed::join).getCause());
+        } else {
+            destroyed.join();
+        }
+        assertTrue(actors.localActor("destroy-binding").isEmpty());
+    }
+
     @Test
     void acceptedRetirementClearsTheContextAfterTheOwnerRemovesItsRecord() {
         var available = new AtomicBoolean(true);
@@ -481,6 +550,24 @@ final class ZLinkBoundSessionSendCallContractTest {
             AtomicInteger asynchronousSends,
             CompletionStage<Void> bindingTerminal,
             AtomicBoolean hasBoundSessionRoute) {
+        return spotNode(
+                synchronousSends,
+                asynchronousSends,
+                bindingTerminal,
+                hasBoundSessionRoute,
+                new AtomicInteger(),
+                new CompletableFuture<>(),
+                CompletableFuture.completedFuture(null));
+    }
+
+    private static ZLinkInternalSpotNode spotNode(
+            AtomicInteger synchronousSends,
+            AtomicInteger asynchronousSends,
+            CompletionStage<Void> bindingTerminal,
+            AtomicBoolean hasBoundSessionRoute,
+            AtomicInteger closeRequests,
+            CompletableFuture<Void> closeStarted,
+            CompletionStage<Void> closeTerminal) {
         return (ZLinkInternalSpotNode)
                 Proxy.newProxyInstance(
                         ZLinkInternalSpotNode.class.getClassLoader(),
@@ -527,6 +614,11 @@ final class ZLinkBoundSessionSendCallContractTest {
                                                                     1))
                                                     : Optional.empty();
                                     case "destroyActor" -> CompletableFuture.completedFuture(null);
+                                    case "closeActorBoundSessionAsync" -> {
+                                        closeRequests.incrementAndGet();
+                                        closeStarted.complete(null);
+                                        yield closeTerminal;
+                                    }
                                     case "close" -> null;
                                     default -> defaultValue(method.getReturnType());
                                 });

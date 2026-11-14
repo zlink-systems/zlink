@@ -1,7 +1,10 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -13,7 +16,11 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
@@ -47,14 +54,21 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class SessionActorsRuntimeIntegrationTest {
     private static final long REMOTE_BIND_WAIT_SECONDS = 10;
@@ -62,6 +76,7 @@ final class SessionActorsRuntimeIntegrationTest {
     static final AtomicReference<ZLinkActorManager> channelActors = new AtomicReference<>();
     private static final LinkedBlockingQueue<RoutingId> connectedSessions =
             new LinkedBlockingQueue<>();
+    private static final AtomicReference<PlayerActor> createdPlayer = new AtomicReference<>();
 
     private static java.util.logging.FileHandler closeFlow;
 
@@ -80,6 +95,144 @@ final class SessionActorsRuntimeIntegrationTest {
                         "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
                 .removeHandler(closeFlow);
         closeFlow.close();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false",
+        "false,true",
+        "true,false",
+        "true,true"
+    })
+    void destroyCompletesAfterSessionBindingHasClosed(boolean remote, boolean cleanupCompleted)
+            throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(locations);
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        var node = options.addRouteMesh("game");
+        node.listen("tcp://127.0.0.1:0");
+        node.objects()
+                .server()
+                .addEntrySpot(GameEntrySpot.class)
+                .addActorFactory(
+                        "player",
+                        PlayerActor.class,
+                        PlayerActorFactory.class,
+                        factory -> factory.disableRelocation());
+        if (!remote) {
+            var stream = options.addStreamNode("gateway");
+            stream.bind("tcp://127.0.0.1:0");
+            stream.enableActorDispatch();
+            stream.registerSession(GameSession.class);
+        }
+        try (var owner =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntime sessionOwner = owner;
+            if (remote) {
+                var gatewayOptions = new DefaultZLinkFrameworkOptions();
+                gatewayOptions.addLocationStore(locations);
+                gatewayOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+                var gateway = gatewayOptions.addRouteMesh("game");
+                gateway.listen("tcp://127.0.0.1:0");
+                gateway.objects().client();
+                gateway.peerConnections()
+                        .connect(
+                                owner.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game")
+                                        .endpoint());
+                var stream = gatewayOptions.addStreamNode("gateway");
+                stream.bind("tcp://127.0.0.1:0");
+                stream.enableActorDispatch();
+                stream.registerSession(GameSession.class);
+                sessionOwner =
+                        RuntimeTestSupport.startFramework(
+                                gatewayOptions, new ZLinkJavaBackendAdapterFactory());
+            }
+            try {
+                var created =
+                        assertInstanceOf(
+                                ZLinkActorCreateResult.Created.class,
+                                owner.actorManager()
+                                        .create("destroy-unbound", "player")
+                                        .submit()
+                                        .toCompletableFuture()
+                                        .get(3, TimeUnit.SECONDS));
+                var actor = createdPlayer.get();
+                if (!cleanupCompleted) actor.disconnectCompletion = new CompletableFuture<>();
+                ZLinkBoundSession boundSession;
+                ZLinkSessionActorsRuntime sessionActors;
+                try (Socket client = connectStream(sessionOwner, "gateway")) {
+                    sessionActors = sessionOwner.sessionActors("gateway", connectedSession());
+                    sessionActors
+                            .bindOrGet(created.actor())
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+                    boundSession = actor.context().boundSession();
+                    assertTrue(sessionActors.find("destroy-unbound").isPresent());
+                }
+                actor.disconnected.get(3, TimeUnit.SECONDS);
+                if (cleanupCompleted) {
+                    long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+                    while (sessionActors.find("destroy-unbound").isPresent()
+                            && System.nanoTime() < cleanupDeadline) Thread.sleep(10);
+                    assertTrue(sessionActors.find("destroy-unbound").isEmpty());
+                    var disconnectedSession = boundSession;
+                    var unbound =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () ->
+                                            disconnectedSession
+                                                    .disconnect()
+                                                    .toCompletableFuture()
+                                                    .get(3, TimeUnit.SECONDS));
+                    assertEquals(
+                            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                            assertInstanceOf(ZLinkFrameworkException.class, unbound.getCause())
+                                    .kind());
+                }
+
+                var errors = new CopyOnWriteArrayList<LogRecord>();
+                var logger = Logger.getLogger("systems.zlink.framework");
+                var handler =
+                        new Handler() {
+                            @Override
+                            public void publish(LogRecord record) {
+                                if (record.getLevel().intValue() >= Level.SEVERE.intValue()
+                                        || record.getMessage().contains("outcome=failed"))
+                                    errors.add(record);
+                            }
+
+                            @Override
+                            public void flush() {}
+
+                            @Override
+                            public void close() {}
+                        };
+                logger.addHandler(handler);
+                try {
+                    var destroyed = owner.actorManager().destroy(created.actor());
+                    actor.disconnectCompletion.complete(null);
+                    assertTrue(destroyed.toCompletableFuture().get(3, TimeUnit.SECONDS));
+                    assertTrue(
+                            owner.actorManager()
+                                    .find("destroy-unbound")
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS)
+                                    .isEmpty());
+                    assertFalse(
+                            owner.actorManager()
+                                    .destroy(created.actor())
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS));
+                    assertEquals(List.of(), errors);
+                } finally {
+                    actor.disconnectCompletion.complete(null);
+                    logger.removeHandler(handler);
+                }
+            } finally {
+                if (remote) sessionOwner.close();
+            }
+        }
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -546,13 +699,15 @@ final class SessionActorsRuntimeIntegrationTest {
 
     public static final class PlayerActor implements ZLinkActor {
         final CompletableFuture<Void> disconnected = new CompletableFuture<>();
+        volatile CompletableFuture<Void> disconnectCompletion =
+                CompletableFuture.completedFuture(null);
         final java.util.concurrent.atomic.AtomicInteger disconnectCount =
                 new java.util.concurrent.atomic.AtomicInteger();
 
         CompletionStage<Void> observeDisconnect() {
             disconnectCount.incrementAndGet();
             disconnected.complete(null);
-            return CompletableFuture.completedFuture(null);
+            return disconnectCompletion;
         }
 
         private final ZLinkActorContext context;
@@ -570,7 +725,9 @@ final class SessionActorsRuntimeIntegrationTest {
     public static final class PlayerActorFactory implements ZLinkActorFactory {
         @Override
         public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
-            return CompletableFuture.completedFuture(new PlayerActor(context));
+            var actor = new PlayerActor(context);
+            createdPlayer.set(actor);
+            return CompletableFuture.completedFuture(actor);
         }
     }
 
