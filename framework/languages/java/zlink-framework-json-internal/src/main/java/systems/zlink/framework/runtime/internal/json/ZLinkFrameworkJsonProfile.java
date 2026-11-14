@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.framework.runtime.internal.json;
 
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
 import com.fasterxml.jackson.core.Base64Variant;
 import com.fasterxml.jackson.core.Base64Variants;
 import com.fasterxml.jackson.core.JsonFactory;
@@ -10,6 +12,7 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.core.io.IOContext;
 import com.fasterxml.jackson.core.io.InputDecorator;
+import com.fasterxml.jackson.core.util.JsonParserDelegate;
 import com.fasterxml.jackson.databind.AnnotationIntrospector;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -26,6 +29,7 @@ import com.fasterxml.jackson.databind.deser.NullValueProvider;
 import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
 import com.fasterxml.jackson.databind.deser.ValueInstantiator;
 import com.fasterxml.jackson.databind.deser.ValueInstantiators;
+import com.fasterxml.jackson.databind.introspect.Annotated;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMethod;
 import com.fasterxml.jackson.databind.introspect.AnnotatedParameter;
@@ -82,6 +86,34 @@ public final class ZLinkFrameworkJsonProfile {
 
     private static final class ConstructorRequirednessIntrospector
             extends JacksonAnnotationIntrospector {
+        @Override
+        public JsonSetter.Value findSetterInfo(Annotated member) {
+            JsonSetter.Value declared = super.findSetterInfo(member);
+            if (declared != null && declared.getValueNulls() != Nulls.DEFAULT) return declared;
+            java.lang.reflect.AnnotatedType type = null;
+            if (member instanceof AnnotatedParameter parameter
+                    && parameter.getOwner().getAnnotated() instanceof Constructor<?> constructor) {
+                type = constructor.getAnnotatedParameterTypes()[parameter.getIndex()];
+            } else if (member.getAnnotated() instanceof java.lang.reflect.Field field) {
+                type = field.getAnnotatedType();
+            } else if (member.getAnnotated() instanceof Method method) {
+                type =
+                        method.getParameterCount() == 1
+                                ? method.getAnnotatedParameterTypes()[0]
+                                : method.getAnnotatedReturnType();
+            }
+            if (type != null
+                    && java.util.Arrays.stream(type.getAnnotations())
+                            .anyMatch(a -> a.annotationType().getSimpleName().equals("Nullable")))
+                return declared;
+            // Kotlin's module owns its declared nullable constructor types.
+            if (member instanceof AnnotatedMember annotated
+                    && KotlinAwareLowerCamelCaseStrategy.isKotlinClass(
+                            annotated.getDeclaringClass())) return declared;
+            return (declared == null ? JsonSetter.Value.empty() : declared)
+                    .withValueNulls(Nulls.FAIL);
+        }
+
         @Override
         public Boolean hasRequiredMarker(AnnotatedMember member) {
             if (!(member instanceof AnnotatedParameter parameter)) {
@@ -157,16 +189,14 @@ public final class ZLinkFrameworkJsonProfile {
 
     public static ObjectMapper mapper(Module... transportModules) {
         JsonMapper.Builder builder =
-                JsonMapper.builder(
-                                JsonFactory.builder()
-                                        .inputDecorator(new ProfileInputDecorator())
-                                        .build())
+                JsonMapper.builder(new ProfileJsonFactory())
                         .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                         .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, false)
                         .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
                         .configure(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES, false)
                         .configure(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES, true)
                         .configure(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY, true)
+                        .configure(DeserializationFeature.FAIL_ON_TRAILING_TOKENS, true)
                         .configure(DeserializationFeature.ACCEPT_FLOAT_AS_INT, false)
                         .configure(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS, true)
                         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
@@ -187,6 +217,78 @@ public final class ZLinkFrameworkJsonProfile {
                                 AnnotationIntrospector.pair(
                                         new ConstructorRequirednessIntrospector(), existing)));
         return mapper;
+    }
+
+    private static final class ProfileJsonFactory extends JsonFactory {
+        ProfileJsonFactory() {
+            super(JsonFactory.builder().inputDecorator(new ProfileInputDecorator()).build(), null);
+        }
+
+        @Override
+        protected JsonParser _createParser(InputStream input, IOContext context)
+                throws IOException {
+            return new ProfileParser(super._createParser(input, context));
+        }
+
+        @Override
+        protected JsonParser _createParser(Reader input, IOContext context) throws IOException {
+            return new ProfileParser(super._createParser(input, context));
+        }
+
+        @Override
+        protected JsonParser _createParser(
+                char[] input, int offset, int length, IOContext context, boolean recyclable)
+                throws IOException {
+            return new ProfileParser(
+                    super._createParser(input, offset, length, context, recyclable));
+        }
+
+        @Override
+        protected JsonParser _createParser(byte[] input, int offset, int length, IOContext context)
+                throws IOException {
+            return new ProfileParser(super._createParser(input, offset, length, context));
+        }
+
+        @Override
+        protected JsonParser _createParser(java.io.DataInput input, IOContext context)
+                throws IOException {
+            return new ProfileParser(super._createParser(input, context));
+        }
+    }
+
+    private static final class ProfileParser extends JsonParserDelegate {
+        ProfileParser(JsonParser parser) {
+            super(parser);
+        }
+
+        @Override
+        public JsonToken nextToken() throws IOException {
+            JsonToken token = super.nextToken();
+            if (token != null && token.isNumeric() && !Double.isFinite(getDoubleValue()))
+                throw JsonMappingException.from(
+                        this, "framework-json-v1 requires finite JSON numbers");
+            return token;
+        }
+
+        @Override
+        public JsonToken nextValue() throws IOException {
+            JsonToken token = nextToken();
+            return token == JsonToken.FIELD_NAME ? nextToken() : token;
+        }
+
+        @Override
+        public JsonParser skipChildren() throws IOException {
+            if (currentToken() != JsonToken.START_OBJECT && currentToken() != JsonToken.START_ARRAY)
+                return this;
+            int depth = 1;
+            while (depth != 0) {
+                JsonToken token = nextToken();
+                if (token == null) throw JsonMappingException.from(this, "Incomplete JSON value");
+                if (token.isStructStart()) depth++;
+                else if (token.isStructEnd()) depth--;
+            }
+            return this;
+        }
     }
 
     private static void rejectBomPrefix(int prefix) throws IOException {

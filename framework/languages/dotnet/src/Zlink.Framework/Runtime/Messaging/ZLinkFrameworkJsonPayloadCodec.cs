@@ -8,21 +8,18 @@ internal static class ZLinkFrameworkJsonPayloadCodec
     internal static IZLinkMessageSerializer ReceiveSerializer { get; } =
         new JsonMessageSerializer();
 
-    internal static T? Deserialize<T>(ReadOnlySpan<byte> payload)
-    {
-        ZLinkFrameworkJsonDocument.ValidateDocument(payload);
-        return JsonSerializer.Deserialize<T>(payload, ZLinkJsonSerializerOptions.FrameworkPayload);
-    }
+    internal static T? Deserialize<T>(ReadOnlySpan<byte> payload) =>
+        ZLinkFrameworkJsonDocument.Deserialize<T>(
+            payload,
+            ZLinkJsonSerializerOptions.FrameworkPayload
+        );
 
-    internal static object? Deserialize(ReadOnlySpan<byte> payload, Type type)
-    {
-        ZLinkFrameworkJsonDocument.ValidateDocument(payload);
-        return JsonSerializer.Deserialize(
+    internal static object? Deserialize(ReadOnlySpan<byte> payload, Type type) =>
+        ZLinkFrameworkJsonDocument.Deserialize(
             payload,
             type,
             ZLinkJsonSerializerOptions.FrameworkPayload
         );
-    }
 
     internal static byte[] Serialize<T>(T value) =>
         JsonSerializer.SerializeToUtf8Bytes(value, ZLinkJsonSerializerOptions.FrameworkPayload);

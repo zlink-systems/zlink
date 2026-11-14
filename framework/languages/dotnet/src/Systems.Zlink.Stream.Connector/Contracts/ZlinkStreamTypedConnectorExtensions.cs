@@ -21,7 +21,12 @@ public static class ZlinkStreamJsonCodec
     {
         if (options is null)
             throw new ArgumentNullException(nameof(options));
-        SerializerOptions = options;
+        var configured = new JsonSerializerOptions(options);
+        if (configured.TypeInfoResolver is not ZLinkFrameworkJsonDocument.Resolver)
+            configured.TypeInfoResolver = new ZLinkFrameworkJsonDocument.Resolver(
+                configured.TypeInfoResolver
+            );
+        SerializerOptions = configured;
     }
 }
 
@@ -30,8 +35,10 @@ public static class ZlinkStreamJsonExtensions
     public static T FromJson<T>(this ZlinkStreamEncodedPayload payload)
     {
         EnsureJson(payload);
-        ZLinkFrameworkJsonDocument.ValidateDocument(payload.Payload.Span);
-        return JsonSerializer.Deserialize<T>(payload.Payload.Span, ZlinkStreamJsonCodec.Snapshot)!;
+        return ZLinkFrameworkJsonDocument.Deserialize<T>(
+            payload.Payload.Span,
+            ZlinkStreamJsonCodec.Snapshot
+        )!;
     }
 
     public static ZlinkStreamEncodedPayload ToJson<T>(this T value)

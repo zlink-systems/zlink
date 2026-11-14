@@ -48,18 +48,15 @@ internal static class ZLinkJsonSerializerOptions
 #if ZLINK_FRAMEWORK
         options.Converters.Add(new RoutingIdJsonConverter());
 #endif
-        var resolver = new DefaultJsonTypeInfoResolver();
-        resolver.Modifiers.Add(ApplyApplicationDtoMetadata);
-        options.TypeInfoResolver = resolver;
+        options.TypeInfoResolver = new ZLinkFrameworkJsonDocument.Resolver();
         return options;
     }
 
-    private static void ApplyApplicationDtoMetadata(JsonTypeInfo typeInfo)
+    internal static void ApplyApplicationDtoMetadata(JsonTypeInfo typeInfo)
     {
         if (typeInfo.Kind != JsonTypeInfoKind.Object)
             return;
         ApplyConstructorRequiredness(typeInfo);
-        RequireDeclaredNullability(typeInfo);
     }
 
     private static void ApplyConstructorRequiredness(JsonTypeInfo typeInfo)
@@ -67,22 +64,7 @@ internal static class ZLinkJsonSerializerOptions
         if (Nullable.GetUnderlyingType(typeInfo.Type) is not null)
             return;
 
-        var constructors = typeInfo.Type.GetConstructors(
-            BindingFlags.Instance | BindingFlags.Public
-        );
-        var constructor = constructors.FirstOrDefault(candidate =>
-            candidate.IsDefined(typeof(JsonConstructorAttribute), inherit: false)
-        );
-        if (constructor is null)
-        {
-            if (constructors.Any(candidate => candidate.GetParameters().Length == 0))
-                return;
-            var publicParameterized = constructors.Where(candidate =>
-                candidate.GetParameters().Length > 0
-            );
-            constructor =
-                publicParameterized.Take(2).Count() == 1 ? publicParameterized.First() : null;
-        }
+        var constructor = ApplicationConstructor(typeInfo.Type);
         if (constructor is null)
             return;
 
@@ -109,42 +91,47 @@ internal static class ZLinkJsonSerializerOptions
         }
     }
 
-    private static void RequireDeclaredNullability(JsonTypeInfo typeInfo)
+    internal static ConstructorInfo? ApplicationConstructor(Type type)
     {
-#if NET6_0_OR_GREATER
-        var nullability = new System.Reflection.NullabilityInfoContext();
-#endif
-        foreach (var property in typeInfo.Properties)
+        var constructors = type.GetConstructors(BindingFlags.Instance | BindingFlags.Public);
+        var constructor = constructors.FirstOrDefault(candidate =>
+            candidate.IsDefined(typeof(JsonConstructorAttribute), inherit: false)
+        );
+        if (constructor is null)
         {
-            if (property.PropertyType.IsValueType || property.Set is null)
-                continue;
-#if NET6_0_OR_GREATER
-            var state = property.AttributeProvider switch
-            {
-                System.Reflection.PropertyInfo reflectedProperty => nullability
-                    .Create(reflectedProperty)
-                    .WriteState,
-                System.Reflection.FieldInfo reflectedField => nullability
-                    .Create(reflectedField)
-                    .WriteState,
-                _ => System.Reflection.NullabilityState.Unknown,
-            };
-            if (state != System.Reflection.NullabilityState.NotNull)
-                continue;
-
-#else
-            if (!IsDeclaredNotNull(property.AttributeProvider))
-                continue;
-#endif
-
-            var assign = property.Set;
-            property.Set = (instance, value) =>
-            {
-                if (value is null)
-                    throw new JsonException($"Property '{property.Name}' does not allow null.");
-                assign(instance, value);
-            };
+            if (constructors.Any(candidate => candidate.GetParameters().Length == 0))
+                return null;
+            var publicParameterized = constructors.Where(candidate =>
+                candidate.GetParameters().Length > 0
+            );
+            constructor =
+                publicParameterized.Take(2).Count() == 1 ? publicParameterized.First() : null;
         }
+        return constructor;
+    }
+
+    internal static bool AllowsNull(JsonPropertyInfo property, ParameterInfo? parameter)
+    {
+        if (property.PropertyType.IsValueType)
+            return Nullable.GetUnderlyingType(property.PropertyType) is not null;
+#if NET6_0_OR_GREATER
+        var context = new NullabilityInfoContext();
+        var info = parameter is not null
+            ? context.Create(parameter)
+            : property.AttributeProvider switch
+            {
+                PropertyInfo reflected => context.Create(reflected),
+                FieldInfo reflected => context.Create(reflected),
+                _ => null,
+            };
+        var state =
+            info?.WriteState == NullabilityState.Unknown ? info.ReadState : info?.WriteState;
+        return state != NullabilityState.NotNull;
+#else
+        return !IsDeclaredNotNull(
+            (System.Reflection.ICustomAttributeProvider?)parameter ?? property.AttributeProvider
+        );
+#endif
     }
 
 #if NETSTANDARD2_1
@@ -156,23 +143,35 @@ internal static class ZLinkJsonSerializerOptions
 
     private static bool IsDeclaredNotNull(System.Reflection.ICustomAttributeProvider? provider)
     {
-        if (provider is not System.Reflection.MemberInfo member)
+        var member = provider is ParameterInfo parameter
+            ? parameter.Member
+            : provider as MemberInfo;
+        if (member is null)
             return false;
-        var declared = NullableFlag(member, NullableAttributeName);
+        var attributes = provider is ParameterInfo argument
+            ? argument.GetCustomAttributesData()
+            : member.GetCustomAttributesData();
+        var declared = NullableFlag(attributes, NullableAttributeName);
         if (declared.HasValue)
             return declared.Value == NotNullFlag;
         for (var type = member.DeclaringType; type is not null; type = type.DeclaringType)
         {
-            var context = NullableFlag(type, NullableContextAttributeName);
+            var context = NullableFlag(
+                type.GetCustomAttributesData(),
+                NullableContextAttributeName
+            );
             if (context.HasValue)
                 return context.Value == NotNullFlag;
         }
         return false;
     }
 
-    private static byte? NullableFlag(System.Reflection.MemberInfo member, string attributeName)
+    private static byte? NullableFlag(
+        IEnumerable<CustomAttributeData> attributes,
+        string attributeName
+    )
     {
-        foreach (var attribute in member.GetCustomAttributesData())
+        foreach (var attribute in attributes)
         {
             if (
                 attribute.AttributeType.FullName != attributeName
@@ -320,20 +319,39 @@ internal static class ZLinkJsonSerializerOptions
             }
         }
 
-        // Sized from the padding; whitespace that Base64 skips can only shorten the result.
         private static byte[] Decode(ReadOnlySpan<byte> encoded)
         {
-            var length = Base64.GetMaxDecodedFromUtf8Length(encoded.Length);
-            if ((encoded.Length & 3) == 0 && encoded.Length != 0 && encoded[^1] == '=')
-                length -= encoded[^2] == '=' ? 2 : 1;
+            if ((encoded.Length & 3) != 0)
+                throw new JsonException("Byte sequence requires padded RFC 4648 Base64.");
+            var padding =
+                encoded.Length == 0 || encoded[^1] != '=' ? 0
+                : encoded[^2] == '=' ? 2
+                : 1;
+            // The BCL owns alphabet validation and the decode. Reject whitespace
+            // separately because its decoder accepts it; only padding bits need
+            // an additional symbol lookup, independent of the payload length.
+            if (encoded.IndexOfAny(" \t\r\n\v\f"u8) >= 0)
+                throw new JsonException("Byte sequence must not contain Base64 whitespace.");
+            if (padding != 0)
+            {
+                var ch = encoded[encoded.Length - padding - 1];
+                var last =
+                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"u8.IndexOf(
+                        ch
+                    );
+                if ((padding == 2 && (last & 15) != 0) || (padding == 1 && (last & 3) != 0))
+                    throw new JsonException("Byte sequence has nonzero Base64 padding bits.");
+            }
+            var length = encoded.Length / 4 * 3 - padding;
             var decoded = length == 0 ? Array.Empty<byte>() : new byte[length];
             if (
                 Base64.DecodeFromUtf8(encoded, decoded, out var consumed, out var written)
                     != OperationStatus.Done
                 || consumed != encoded.Length
+                || written != length
             )
                 throw new JsonException("Byte sequence is not valid Base64.");
-            return written == decoded.Length ? decoded : decoded.AsSpan(0, written).ToArray();
+            return decoded;
         }
 
         public override void Write(

@@ -473,8 +473,52 @@ void verify_field_masks ()
         assert (!p::try_decode<empty_dto> (text.begin (), text.end ()));
 }
 
+struct payload_contract_dto
+{
+    std::vector<std::byte> body;
+};
+template <> struct zlink::json::dto_traits<payload_contract_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("body", &payload_contract_dto::body)};
+};
+struct property_contract_dto
+{
+    std::vector<std::byte> body;
+};
+template <> struct zlink::json::dto_traits<property_contract_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("body", &property_contract_dto::body, zlink::json::defaulted)};
+};
+void verify_payload_contract ()
+{
+    namespace p = zlink::detail::json_profile;
+    std::ifstream input (ZLINK_PAYLOAD_CONTRACT_PATH);
+    assert (input);
+    std::string line;
+    int failures = 0;
+    while (std::getline (input, line)) {
+        if (line.empty () || line[0] == '#')
+            continue;
+        const auto a = line.find ('\t');
+        const auto b = line.find ('\t', a + 1);
+        const auto c = line.find ('\t', b + 1);
+        const auto text = line.substr (c + 1);
+        const bool accepted =
+          line.substr (b + 1, c - b - 1) == "ctor"
+            ? p::try_decode<payload_contract_dto> (text.begin (), text.end ()).has_value ()
+            : p::try_decode<property_contract_dto> (text.begin (), text.end ()).has_value ();
+        const bool expected = line.substr (a + 1, b - a - 1) == "accept";
+        std::cout << "PAYLOAD_CONTRACT " << line.substr (0, a) << " accepted=" << accepted
+                  << " expected=" << expected << std::endl;
+        failures += accepted != expected;
+    }
+    assert (failures == 0);
+}
 int main ()
 {
+    verify_payload_contract ();
     verify_byte_sequence_wire ();
     verify_base64_padding ();
     verify_field_masks ();
