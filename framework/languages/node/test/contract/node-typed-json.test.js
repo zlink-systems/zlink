@@ -207,17 +207,29 @@ for (const size of [0, 1, 2, 3, 127, 128, 1024, 4096]) {
   });
 }
 
-test('Node bytes schema uses a native decoder after canonical validation', (t) => {
-  t.mock.method(globalThis, 'atob', () => {
-    throw new Error('portable decoder used');
+test('Node bytes schema uses a native decoder after canonical validation', () => {
+  // Node 20 exposes globalThis.atob as an accessor, which t.mock.method rejects;
+  // replace the property directly and restore the original descriptor.
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'atob');
+  Object.defineProperty(globalThis, 'atob', {
+    configurable: true,
+    writable: true,
+    value: () => {
+      throw new Error('portable decoder used');
+    }
   });
-  const decoded = json.parseFrameworkJsonV1('{"body":"AP8="}', {}, bytesSchema);
-  assert.deepEqual(decoded.body, Uint8Array.from([0, 255]));
-  const nestedSchema = { type: 'record', values: { type: 'nullable', value: { type: 'bytes' } } };
-  assert.deepEqual(json.parseFrameworkJsonV1('{"a":"AP8=","b":null}', {}, nestedSchema), {
-    a: Uint8Array.from([0, 255]),
-    b: null
-  });
+  try {
+    const decoded = json.parseFrameworkJsonV1('{"body":"AP8="}', {}, bytesSchema);
+    assert.deepEqual(decoded.body, Uint8Array.from([0, 255]));
+    const nestedSchema = { type: 'record', values: { type: 'nullable', value: { type: 'bytes' } } };
+    assert.deepEqual(json.parseFrameworkJsonV1('{"a":"AP8=","b":null}', {}, nestedSchema), {
+      a: Uint8Array.from([0, 255]),
+      b: null
+    });
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'atob', original);
+    else delete globalThis.atob;
+  }
 });
 
 test('native bytes decode owns exactly its storage, never a shared Buffer pool slice', () => {
