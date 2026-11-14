@@ -771,11 +771,11 @@ internal sealed record ZLinkRemoteActorJoinRequest(
     ulong TargetSpotGeneration = 0,
     ulong TargetAuthorityOwnerGeneration = 0,
     ulong TargetSpotAuthorityOwnerGeneration = 0,
-    string RelocationCoordinatorOwnerId = "",
+    string? RelocationCoordinatorOwnerId = "",
     ulong RelocationCoordinatorLeaseGeneration = 0,
     byte[]? RelocationCoordinatorNodeRid = null,
     ulong RelocationCoordinatorNodeGeneration = 0,
-    string RelocationCoordinatorExpectedAuthorityStoreVersion = "",
+    string? RelocationCoordinatorExpectedAuthorityStoreVersion = "",
     ulong ActorNodeGeneration = 0,
     ulong ExpectedOwnerLeaseGeneration = 0,
     ulong TargetAttemptGeneration = 0
@@ -823,9 +823,9 @@ internal sealed record ZLinkRemoteActorHandoffCompletionRequest(
     ulong BoundSessionAcceptedHighWater = 0,
     string? BoundSessionSessionOwnerId = null,
     ulong BoundSessionSessionOwnerLeaseGeneration = 0,
-    string RelocationCoordinatorOwnerId = "",
+    string? RelocationCoordinatorOwnerId = "",
     ulong RelocationCoordinatorLeaseGeneration = 0,
     byte[]? RelocationCoordinatorNodeRid = null,
     ulong RelocationCoordinatorNodeGeneration = 0,
-    string RelocationCoordinatorExpectedAuthorityStoreVersion = ""
+    string? RelocationCoordinatorExpectedAuthorityStoreVersion = ""
 );

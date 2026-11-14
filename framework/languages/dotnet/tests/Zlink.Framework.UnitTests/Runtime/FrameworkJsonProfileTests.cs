@@ -328,6 +328,127 @@ public sealed class FrameworkJsonProfileTests
         public Dictionary<string, int> Labels { get; init; } = [];
     }
 
+    [Fact]
+    public void Decoder_rejects_null_for_a_readonly_constructor_argument()
+    {
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<ReadOnlyBytes>(
+                Encoding.UTF8.GetBytes("{\"body\":null}")
+            )
+        );
+    }
+
+    [Fact]
+    public void Constructor_nullability_is_independent_of_default_presence()
+    {
+        Assert.Equal(
+            new DefaultedNullability(),
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<DefaultedNullability>(
+                Encoding.UTF8.GetBytes("{\"body\":null}")
+            )
+        );
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<DefaultedNullability>(
+                Encoding.UTF8.GetBytes("{\"label\":null}")
+            )
+        );
+    }
+
+    [Fact]
+    public void Decoder_preserves_declared_input_nullability_metadata()
+    {
+        var payload = Encoding.UTF8.GetBytes("{\"body\":null}");
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<SetterDisallowsNull>(payload)
+        );
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<ConstructorInput>(payload)
+        );
+        Assert.Null(ZLinkFrameworkJsonPayloadCodec.Deserialize<SetterAllowsNull>(payload)!.Body);
+    }
+
+    [Fact]
+    public void Decoder_preserves_the_deserialization_callback_after_null_validation()
+    {
+        Assert.Equal(
+            "ok!",
+            ZLinkFrameworkJsonPayloadCodec
+                .Deserialize<DeserializedCallback>(Encoding.UTF8.GetBytes("{\"label\":\"ok\"}"))!
+                .Label
+        );
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<DeserializedCallback>(
+                Encoding.UTF8.GetBytes("{\"label\":null}")
+            )
+        );
+    }
+
+    private sealed class DeserializedCallback : IJsonOnDeserialized
+    {
+        public string Label { get; set; } = "";
+
+        void IJsonOnDeserialized.OnDeserialized() => Label += "!";
+    }
+
+    [Fact]
+    public void Decoder_rejects_null_before_constructor_normalization()
+    {
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<NormalizingConstructor>(
+                Encoding.UTF8.GetBytes("{\"body\":null}")
+            )
+        );
+    }
+
+    [Fact]
+    public void Decoder_rejects_null_before_setter_normalization()
+    {
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<NormalizingSetter>(
+                Encoding.UTF8.GetBytes("{\"body\":null}")
+            )
+        );
+    }
+
+    private sealed class NormalizingConstructor(byte[] body)
+    {
+        public byte[] Body { get; } = body ?? [];
+    }
+
+    private sealed class NormalizingSetter
+    {
+        private byte[] _body = [];
+        public byte[] Body
+        {
+            get => _body;
+            set => _body = value ?? [];
+        }
+    }
+
+    private sealed class SetterDisallowsNull
+    {
+        [System.Diagnostics.CodeAnalysis.DisallowNull]
+        public byte[]? Body { get; init; } = [];
+    }
+
+    private sealed class SetterAllowsNull
+    {
+        [System.Diagnostics.CodeAnalysis.AllowNull]
+        public byte[] Body { get; init; } = [];
+    }
+
+    private sealed class ConstructorInput(byte[] body)
+    {
+        public byte[]? Body { get; } = body;
+    }
+
+    private sealed class ReadOnlyBytes(byte[] body)
+    {
+        public byte[] Body { get; } = body;
+    }
+
+    private sealed record DefaultedNullability(string Label = "default", byte[]? Body = null);
+
     private sealed class UnsupportedMessage
     {
         public Guid Id { get; init; }

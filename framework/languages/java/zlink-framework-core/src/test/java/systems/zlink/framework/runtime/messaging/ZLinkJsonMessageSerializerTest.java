@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -51,7 +53,7 @@ final class ZLinkJsonMessageSerializerTest {
     @Test
     void borrowedTypedJsonPreservesTheArrayDecoderResultsAndErrors() throws Exception {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
-        for (String json : List.of("{\"value\":\"한글😀\"}", "null", "{\"value\":\"first\"} {}")) {
+        for (String json : List.of("{\"value\":\"한글😀\"}", "null")) {
             try (Message payload = Message.from(json)) {
                 assertEquals(
                         ZLinkFrameworkJsonProfile.mapper()
@@ -60,7 +62,15 @@ final class ZLinkJsonMessageSerializerTest {
                         serializer.deserializeBorrowed(payload.dataBuffer(), ProfileReply.class));
             }
         }
-        for (String json : List.of("", "{", "{\"value\":", "{\"value\":[]}")) {
+        for (String json :
+                List.of(
+                        "",
+                        "{",
+                        "{\"value\":",
+                        "{\"value\":[]}",
+                        "{\"value\":null}",
+                        "{\"value\":\"first\"} {}",
+                        "{\"value\":\"first\",\"future\":{\"nested\":[1e400]}}")) {
             try (Message payload = Message.from(json)) {
                 assertThrows(
                         IllegalArgumentException.class,
@@ -442,7 +452,7 @@ final class ZLinkJsonMessageSerializerTest {
 
     record EnumPayload(ProfileReportReason reasonId) {}
 
-    record CourierActorFound(String courierId, ActorRefWire actor) {}
+    record CourierActorFound(String courierId, @JsonSetter(nulls = Nulls.SET) ActorRefWire actor) {}
 
     record ActorRefWire(String nodeRid, String actorId, long generation) {}
 
@@ -462,12 +472,12 @@ final class ZLinkJsonMessageSerializerTest {
             double ratio,
             GoldenState state,
             byte[] bytes,
-            Object nullable,
+            @JsonSetter(nulls = Nulls.SET) Object nullable,
             Map<String, Integer> labels) {}
 
     record RequiredPresenceRecord(
             @JsonProperty("code") String code,
-            String accessToken,
+            @JsonSetter(nulls = Nulls.SET) String accessToken,
             int accountId,
             @ZLinkJsonOptional int attempts) {}
 

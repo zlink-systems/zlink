@@ -1,0 +1,26 @@
+# id	expected	shape	json_utf8 (body: required non-nullable bytes; property shape has default empty bytes)
+valid-0	accept	ctor	{"body":""}
+valid-1	accept	ctor	{"body":"AA=="}
+valid-2	accept	ctor	{"body":"AAE="}
+valid-3	accept	ctor	{"body":"AAEC"}
+valid-escaped	accept	ctor	{"body":"\u0041A=="}
+unknown	accept	ctor	{"body":"AA==","future":{"x":[1,true,null]}}
+duplicate	reject	ctor	{"body":"AA==","body":"AA=="}
+nested-duplicate	reject	ctor	{"body":"AA==","future":{"x":1,"x":2}}
+escaped-duplicate	reject	ctor	{"body":"AA==","b\u006fdy":"AA=="}
+unknown-escaped-duplicate	reject	ctor	{"body":"AA==","future":{"x":1,"\u0078":2}}
+type-mismatch	reject	ctor	{"body":12}
+null-ctor	reject	ctor	{"body":null}
+null-property	reject	property	{"body":null}
+missing-required	reject	ctor	{}
+nonfinite	reject	ctor	{"body":"AA==","future":1e400}
+nan	reject	ctor	{"body":"AA==","future":NaN}
+bom	reject	ctor	﻿{"body":"AA=="}
+alphabet	reject	ctor	{"body":"!!!!"}
+padding-bits-1	reject	ctor	{"body":"AB=="}
+padding-bits-2	reject	ctor	{"body":"AAF="}
+whitespace	reject	ctor	{"body":" A A = = "}
+escaped-whitespace	reject	ctor	{"body":"AA==\n"}
+missing-padding	reject	ctor	{"body":"AA"}
+trailing	reject	ctor	{"body":"AA=="} {}
+syntax	reject	ctor	{"body":"AA==",}
