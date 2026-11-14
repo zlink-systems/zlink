@@ -137,7 +137,6 @@ internal static class ZLinkEnvelopeCodec
     private const int MaximumCorrelationIdBytes = 64;
     private const string JsonContentType = "application/json";
     private const int MaximumSimpleHeaderCacheEntries = 4096;
-    internal static readonly ZLinkStateLane CacheLane = new();
     private static HeaderPlanCache SimpleHeaderCache = new(
         ImmutableDictionary<SimpleHeaderKey, HeaderPlan>.Empty,
         ImmutableQueue<SimpleHeaderKey>.Empty
@@ -1432,31 +1431,36 @@ internal static class ZLinkEnvelopeCodec
         return null;
     }
 
-    private static void AddDecodedHeaderCacheEntry(byte[] copy, ZLinkEnvelopeHeader header) =>
-        AwaitStateLane(
-            CacheLane.RunAsync(() =>
+    // Publishes a new immutable snapshot with one compare-exchange; a lost race
+    // rebuilds from the latest snapshot, so no caller waits on another execution lane.
+    private static void AddDecodedHeaderCacheEntry(byte[] copy, ZLinkEnvelopeHeader header)
+    {
+        while (true)
+        {
+            var cache = Volatile.Read(ref DecodedHeaderCache);
+            foreach (var entry in cache)
             {
-                if (FindDecodedHeaderCacheEntry(copy) is not null)
+                if (entry.Bytes.AsSpan().SequenceEqual(copy))
                     return;
-                var cache = DecodedHeaderCache;
-                var next =
-                    cache.Length < 64
-                        ? new HeaderCacheEntry[cache.Length + 1]
-                        : new HeaderCacheEntry[cache.Length];
-                if (cache.Length == next.Length)
-                {
-                    Array.Copy(cache, 1, next, 0, next.Length - 1);
-                    next[^1] = new HeaderCacheEntry(copy, header);
-                }
-                else
-                {
-                    Array.Copy(cache, next, cache.Length);
-                    next[^1] = new HeaderCacheEntry(copy, header);
-                }
-
-                Volatile.Write(ref DecodedHeaderCache, next);
-            })
-        );
+            }
+            var next =
+                cache.Length < 64
+                    ? new HeaderCacheEntry[cache.Length + 1]
+                    : new HeaderCacheEntry[cache.Length];
+            if (cache.Length == next.Length)
+                Array.Copy(cache, 1, next, 0, next.Length - 1);
+            else
+                Array.Copy(cache, next, cache.Length);
+            next[^1] = new HeaderCacheEntry(copy, header);
+            if (
+                ReferenceEquals(
+                    Interlocked.CompareExchange(ref DecodedHeaderCache, next, cache),
+                    cache
+                )
+            )
+                return;
+        }
+    }
 
     private readonly record struct HeaderCacheEntry(byte[] Bytes, ZLinkEnvelopeHeader Header);
 }

@@ -6,60 +6,6 @@ namespace Zlink.Framework.UnitTests;
 public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
-    public async Task ColdHeaderEncodingInHandlerDoesNotWaitForCacheMutation()
-    {
-        if (
-            await IsolatedTestProcess.RunIsolatedAsync(
-                GetType(),
-                nameof(ColdHeaderEncodingInHandlerDoesNotWaitForCacheMutation)
-            )
-        )
-            return;
-        var header = Header($"cache-cold-{Guid.NewGuid():N}") with { FormatMarker = 242 };
-        var lane = ZLinkEnvelopeCodec.CacheLane;
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var holding = lane.RunAsync(async () =>
-        {
-            entered.SetResult();
-            await release.Task;
-        });
-        await entered.Task;
-        var lookup = Task.Factory.StartNew(
-            () =>
-            {
-                using var scope = ZLinkApplicationExecutionContext.Push(
-                    new("cache-handler", ZLinkUserSpotExecutionMode.SpotWide, null, false)
-                );
-                Assert.NotNull(ZLinkApplicationExecutionContext.Current);
-                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-                Assert.Equal(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(header), encoded.ToArray());
-            },
-            CancellationToken.None,
-            TaskCreationOptions.LongRunning,
-            TaskScheduler.Default
-        );
-        try
-        {
-            // A queued mutation proves the dependency without waiting for a time budget.
-            SpinWait.SpinUntil(() => lookup.IsCompleted || lane.QueuedWorkCount != 0);
-            output.WriteLine(
-                $"Lane held: encoding completed={lookup.IsCompleted}, queued mutations={lane.QueuedWorkCount}"
-            );
-            Assert.True(
-                lookup.IsCompleted,
-                "Cold handler encoding queued behind the held cache lane."
-            );
-        }
-        finally
-        {
-            release.TrySetResult();
-            await holding;
-            await lookup;
-        }
-    }
-
-    [Fact]
     public async Task ParallelMissesPublishEveryDistinctPlanOnce()
     {
         if (
@@ -218,52 +164,6 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             encodedBytes <= directBytes + iterations * 16L,
             $"Warm encoding allocated {encodedBytes} B per {iterations} calls; owned Message allocated {directBytes} B."
         );
-    }
-
-    [Fact]
-    public async Task WarmHeaderEncodingAndBothDecodersDoNotWaitForCacheMutation()
-    {
-        var header = Header("cache-hot");
-        using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-        var decoded = ZLinkEnvelopeCodec.DecodeHeader(encoded);
-        using var body = Message.From(new byte[] { 48 });
-        using var multipart = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
-            encoded,
-            body,
-        ]);
-        Assert.True(
-            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
-                multipart,
-                out var view
-            )
-        );
-        var lane = ZLinkEnvelopeCodec.CacheLane;
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = lane.RunAsync(async () =>
-        {
-            entered.SetResult();
-            await release.Task;
-        });
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        Task? lookup = null;
-        try
-        {
-            lookup = Task.Run(() =>
-            {
-                using var again = ZLinkEnvelopeCodec.EncodeHeader(header);
-                Assert.Equal(encoded.ToArray(), again.ToArray());
-                Assert.Same(decoded, ZLinkEnvelopeCodec.DecodeHeader(encoded));
-                Assert.Same(decoded, ZLinkEnvelopeCodec.DecodeHeader(view));
-            });
-            await lookup.WaitAsync(TimeSpan.FromSeconds(3));
-        }
-        finally
-        {
-            release.TrySetResult();
-            if (lookup is not null)
-                await lookup.WaitAsync(TimeSpan.FromSeconds(3));
-        }
     }
 
     [Fact]
