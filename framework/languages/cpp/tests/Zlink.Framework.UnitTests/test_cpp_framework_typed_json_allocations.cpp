@@ -49,8 +49,31 @@ template <> struct zlink::json::dto_traits<nested_allocation_dto_t>
                  zlink::json::field ("bytes", &nested_allocation_dto_t::bytes)};
 };
 
+void verify_byte_sequence_allocations ()
+{
+    using namespace zlink::detail::json_profile;
+    using zlink::framework::tests::count_allocations;
+    for (const auto size : {0, 1, 2, 3, 127, 128, 1024, 4096}) {
+        const std::vector<std::byte> input (size, std::byte{0xab});
+        std::string wire;
+        const auto enc = count_allocations ([&] { wire = encode (input); });
+        // The writer owns its initial buffer and at most one growth for this field.
+        assert (enc <= 2);
+        std::vector<std::byte> decoded;
+        const auto dec = count_allocations ([&] {
+            assert (decode_bytes (std::string_view (wire).substr (1, wire.size () - 2), decoded));
+        });
+        assert (decoded == input);
+        // The decoded size is known before any bytes are written.
+        assert (dec == (size == 0 ? 0u : 1u));
+        std::cout << "byte_sequence_size=" << size << " encode_new=" << enc
+                  << " base64_decode_new=" << dec << '\n';
+    }
+}
+
 int main (int argc, char **argv)
 {
+    verify_byte_sequence_allocations ();
     const std::string_view injection = argc > 1 ? argv[1] : "";
     const auto inject = [&] (std::string_view direction) {
         if (injection == direction) {
