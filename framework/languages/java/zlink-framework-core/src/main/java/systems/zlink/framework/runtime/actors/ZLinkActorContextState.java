@@ -297,12 +297,10 @@ final class ZLinkActorContextState {
     }
 
     CompletionStage<Void> disconnectBoundSessionForDestroy() {
-        // The owner's current binding record decides; a session object alone may be stale.
-        ZLinkBoundSession current = boundSession;
-        if (current == null || boundSessionRoute() == null) {
-            return CompletableFuture.completedFuture(null);
+        if (boundSession instanceof ZLinkSessionBoundSession current) {
+            return current.disconnectForDestroy();
         }
-        return current.disconnect();
+        return CompletableFuture.completedFuture(null);
     }
 
     void clearAfterDestroy() {
