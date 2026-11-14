@@ -440,9 +440,9 @@ internal sealed class ZLinkSpotNodeCatalog(
         {
             var spotId = activation.SpotId;
             var registration = await _lane
-                .RunAsync(() => RegisterCloseLocked(spotId, objectGeneration: null))
+                .RunAsync(() => RegisterCloseLocked(spotId, null, CancellationToken.None))
                 .ConfigureAwait(false);
-            if (registration.Transaction is not { } transaction)
+            if (registration.Owner is null && registration.Joined is null)
                 continue;
 
             await CaptureAsync(async () =>
@@ -450,15 +450,15 @@ internal sealed class ZLinkSpotNodeCatalog(
                     if (registration.Owner is { } owner)
                         _ = await ExecuteCloseTransactionAsync(
                                 spotId,
-                                owner,
-                                transaction,
+                                owner.Activation,
+                                owner.Transaction,
                                 ZLinkSpotCloseReason.HostShutdown,
                                 DateTimeOffset.UtcNow + activation.DefaultRequestTimeout,
                                 requireNoActors: false
                             )
                             .ConfigureAwait(false);
                     else
-                        _ = await transaction.Task.ConfigureAwait(false);
+                        _ = await registration.Joined!.ConfigureAwait(false);
                 })
                 .ConfigureAwait(false);
 
@@ -1575,6 +1575,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                                     RegisterCloseLocked(
                                         current.SpotId,
                                         current.ObjectGeneration,
+                                        cancellationToken,
                                         current
                                     )
                                 ),
@@ -1635,11 +1636,11 @@ internal sealed class ZLinkSpotNodeCatalog(
             fence
         );
 
-    // Owner: the activation whose Close this caller runs, or none. Transaction
-    // is that Close, or the Close in progress that this caller joins.
+    // The owner retains the shared transaction. A joining caller retains only
+    // its cancellable wait, established when the catalog decides the claim.
     private readonly record struct CloseRegistration(
-        ZLinkSpotActivation? Owner,
-        TaskCompletionSource<bool>? Transaction
+        (ZLinkSpotActivation Activation, TaskCompletionSource<bool> Transaction)? Owner,
+        Task<bool>? Joined
     );
 
     // Lookup reads the Spot's admission seal (spec 06 §7 step 2, §9); the seal,
@@ -1650,33 +1651,28 @@ internal sealed class ZLinkSpotNodeCatalog(
     private CloseRegistration RegisterCloseLocked(
         string spotId,
         ulong? objectGeneration,
+        CancellationToken cancellationToken,
         ZLinkSpotActivation? context = null
     )
     {
         var current = context;
         if (current is null)
             _spots.TryGetValue(spotId, out current);
-        if (objectGeneration is { } expected)
-        {
-            if (current is not null)
-                ThrowIfOtherIncarnation(spotId, expected, current.ObjectGeneration);
-            if (_closes.TryGetValue((spotId, expected), out var retained))
-                return new CloseRegistration(null, retained);
-        }
-        return current is null ? default : ClaimCloseLocked(current);
-    }
-
-    // The catalog lane owns every incarnation Close claim and release.
-    private CloseRegistration ClaimCloseLocked(ZLinkSpotActivation activation)
-    {
-        var key = (activation.SpotId, activation.ObjectGeneration);
-        if (_closes.TryGetValue(key, out var pending))
-            return new CloseRegistration(null, pending);
+        if (objectGeneration is { } expected && current is not null)
+            ThrowIfOtherIncarnation(spotId, expected, current.ObjectGeneration);
+        var generation = objectGeneration ?? current?.ObjectGeneration;
+        if (
+            generation is { } value
+            && _closes.TryGetValue((current?.SpotId ?? spotId, value), out var pending)
+        )
+            return new CloseRegistration(null, pending.Task.WaitAsync(cancellationToken));
+        if (current is null)
+            return default;
         var transaction = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        _closes.Add(key, transaction);
-        return new CloseRegistration(activation, transaction);
+        _closes.Add((current.SpotId, current.ObjectGeneration), transaction);
+        return new CloseRegistration((current, transaction), null);
     }
 
     private ValueTask ReleaseCloseAsync(
@@ -1717,22 +1713,23 @@ internal sealed class ZLinkSpotNodeCatalog(
         var (registration, attempt) = await _lane
             .RunAsync(() =>
             {
-                var claimed = RegisterCloseLocked(spotId, objectGeneration);
+                var claimed = RegisterCloseLocked(spotId, objectGeneration, cancellationToken);
                 var posted =
                     objectGeneration is not null && claimed.Owner is { } owner
                         ? ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-                            PostExplicitClose(owner, fence, deadline)
+                            PostExplicitClose(owner.Activation, fence, deadline)
                         )
                         : null;
                 return (claimed, posted);
             })
             .ConfigureAwait(false);
-        if (registration.Transaction is not { } transaction)
+        if (registration.Joined is { } joined)
+            return await joined.ConfigureAwait(false);
+        if (registration.Owner is not { } closeOwner)
             return objectGeneration is { } expectedGeneration
                 && await CloseWithoutActivationAsync(spotId, expectedGeneration, cancellationToken)
                     .ConfigureAwait(false);
-        if (registration.Owner is not { } activation)
-            return await transaction.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var (activation, transaction) = closeOwner;
 
         // A Close that names the incarnation is the Spot Close of spec §7;
         // any other Close is operational cleanup.
@@ -2046,12 +2043,11 @@ internal sealed class ZLinkSpotNodeCatalog(
             {
                 // Context claims are made by the record, including failed attempts.
                 claimed = getRegistration();
-                transaction = claimed.Transaction;
+                transaction = claimed.Owner?.Transaction;
             }
-            if (claimed.Owner is null)
-                return transaction is not null && await transaction.Task.ConfigureAwait(false);
-            if (transaction is null)
-                throw new InvalidOperationException("An owned Close requires its transaction.");
+            if (claimed.Owner is not { } owner)
+                return claimed.Joined is { } joined && await joined.ConfigureAwait(false);
+            transaction = owner.Transaction;
             if (outcome.Closed)
             {
                 await activation
