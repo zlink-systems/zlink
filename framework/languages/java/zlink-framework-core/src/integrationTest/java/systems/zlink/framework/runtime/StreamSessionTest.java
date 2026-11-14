@@ -158,6 +158,12 @@ final class StreamSessionTest {
             client.getOutputStream().flush();
             assertErrorReply(client.getInputStream(), 11L, "internal_failure", "public failure");
 
+            client.getOutputStream()
+                    .write(frame(requestHeader(13L, "MustFailFramework"), bytes("bad")));
+            client.getOutputStream().flush();
+            assertErrorReply(
+                    client.getInputStream(), 13L, "unavailable", "application framework failure");
+
             client.getOutputStream().write(frame(requestHeader(12L, "Ping"), bytes("again")));
             client.getOutputStream().flush();
             assertReply(client, 12L, "\"pong\"");
@@ -1083,6 +1089,11 @@ final class StreamSessionTest {
                 ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
             if ("MustFail".equals(dispatch.packetName())) {
                 throw new IllegalStateException("public failure");
+            }
+            if ("MustFailFramework".equals(dispatch.packetName())) {
+                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "application framework failure");
             }
             recovered.set(true);
             context.client().reply("pong").submit();
