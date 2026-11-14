@@ -84,10 +84,10 @@ interface PreparedChannelHeader {
   readonly flowOffset: number;
 }
 
-/** Per kind, deadline presence and flow origin (`undefined` when the header carries no flow). */
+/** The kind fixes deadline presence; only flow origin varies within each kind. */
 type PreparedHeaderVariants = Map<
   ZLinkChannelMessageKind,
-  Map<boolean, Map<ZLinkFlowOrigin | undefined, PreparedChannelHeader>>
+  Map<ZLinkFlowOrigin | undefined, PreparedChannelHeader>
 >;
 const preparedChannelHeaders = new WeakMap<
   ReadonlyMap<string, ZLinkMessageSerializer>,
@@ -677,11 +677,8 @@ function preparedChannelHeader(
   if (contentTypes === undefined) packets.set(messageName, (contentTypes = new Map()));
   let kinds = contentTypes.get(contentType);
   if (kinds === undefined) contentTypes.set(contentType, (kinds = new Map()));
-  let deadlines = kinds.get(kind);
-  if (deadlines === undefined) kinds.set(kind, (deadlines = new Map()));
-  const hasDeadline = deadline !== null;
-  let flows = deadlines.get(hasDeadline);
-  if (flows === undefined) deadlines.set(hasDeadline, (flows = new Map()));
+  let flows = kinds.get(kind);
+  if (flows === undefined) kinds.set(kind, (flows = new Map()));
   let prepared = flows.get(flowOrigin);
   if (prepared === undefined) {
     const bytes = encodeChannelHeader(
@@ -690,7 +687,7 @@ function preparedChannelHeader(
       messageName,
       contentType,
       correlationId === null ? null : PREPARED_CHANNEL_CORRELATION,
-      hasDeadline ? PREPARED_CHANNEL_DEADLINE : null,
+      deadline === null ? null : PREPARED_CHANNEL_DEADLINE,
       null,
       errorCode,
       errorMessage,
@@ -1674,9 +1671,9 @@ function correlationIdForOutboundKind(
   correlationId: string | null | undefined
 ): string | null {
   if (kind === ZLinkChannelMessageKind.Request) {
-    const selected = correlationId ?? newChannelCorrelationId();
-    validateCorrelationValue(selected);
-    return selected;
+    if (correlationId === undefined || correlationId === null) return newChannelCorrelationId();
+    validateCorrelationValue(correlationId);
+    return correlationId;
   }
   if (kind === ZLinkChannelMessageKind.Command || kind === ZLinkChannelMessageKind.Publish) {
     if (correlationId !== undefined && correlationId !== null) {
@@ -1717,12 +1714,14 @@ function validateCorrelationForKind(
 
 const MAXIMUM_CORRELATION_ID_BYTES = 64;
 
+const NON_ASCII_CORRELATION_ID = /[^\x00-\x7f]/;
+
 export function isValidChannelCorrelationId(value: string): boolean {
-  if (value.length < 1 || value.length > MAXIMUM_CORRELATION_ID_BYTES) return false;
-  for (let index = 0; index < value.length; index++) {
-    if (value.charCodeAt(index) > 0x7f) return false;
-  }
-  return true;
+  return (
+    value.length >= 1 &&
+    value.length <= MAXIMUM_CORRELATION_ID_BYTES &&
+    !NON_ASCII_CORRELATION_ID.test(value)
+  );
 }
 
 function validateCorrelationValue(correlationId: string): void {
