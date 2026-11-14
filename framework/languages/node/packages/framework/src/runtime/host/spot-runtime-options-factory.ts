@@ -3,7 +3,7 @@ import { routingIdsEqual } from '../routing-id';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from '../../contracts';
 import {
-  toFrameworkActorRef,
+  toFrameworkRoutingId,
   type DefaultZLinkActorManager,
   type ZLinkActorHandoffCoordinator
 } from '../actors';
@@ -307,24 +307,22 @@ export class ZLinkSpotRuntimeOptionsFactory {
       actorLifecycleResolver: (actorId) => this.options.actorManager()?.getState(actorId)?.actor,
       actorDispatchOwnerResolver: (actorId) => {
         const state = this.options.actorManager()?.getState(actorId);
-        const actorRef =
-          state?.nativeActorRef === undefined
-            ? undefined
-            : toFrameworkActorRef(state.nativeActorRef, state.meshName ?? '');
+        const nativeActorRef = state?.nativeActorRef;
         const localNodeRid =
           state?.meshName === undefined ? undefined : this.meshNodeRoutingId(state.meshName);
         if (
           state?.actor === undefined ||
           (state.remoteActorPacketTarget !== undefined &&
             !routingIdsEqual(state.remoteActorPacketTarget.targetNodeRid, localNodeRid)) ||
-          actorRef === undefined ||
+          nativeActorRef === undefined ||
           localNodeRid === undefined ||
-          !routingIdsEqual(actorRef.nodeRid, localNodeRid)
+          !routingIdsEqual(toFrameworkRoutingId(nativeActorRef.nodeRid), localNodeRid)
         ) {
           return {};
         }
         return {
-          actorRef,
+          nativeActorRef,
+          meshName: state.meshName,
           spotId: state.spotId
         };
       },
