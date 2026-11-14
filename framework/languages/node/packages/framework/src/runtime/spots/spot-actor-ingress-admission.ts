@@ -1,5 +1,6 @@
 import { actorMessageFollowContext } from '../actors/actor-message-follow-context';
-import type { ActorRef, ZLinkActor } from '../../contracts';
+import type { ActorRef, RoutingId, ZLinkActor } from '../../contracts';
+import { routingIdsEqual } from '../routing-id';
 import type { Message } from '../../contracts/Common/Message';
 import type {
   ZLinkActorPacketDelivery,
@@ -30,9 +31,18 @@ export type ZLinkRouteToActorJoinPrewarm = (
   }
 ) => 'parked' | 'not-found';
 
-export type ZLinkActorIngressRoute = (
-  delivery: ZLinkActorPacketDelivery
-) => { readonly handled: boolean; readonly response?: unknown } | undefined;
+export interface ZLinkActorDispatchOwner {
+  readonly actorRef?: ActorRef;
+  readonly spotId?: RoutingId;
+}
+
+export interface ZLinkActorIngressMembership {
+  readonly resolveOwner?: (actorId: string) => ZLinkActorDispatchOwner;
+  readonly dispatchToOwner?: (
+    spotId: RoutingId | undefined,
+    delivery: ZLinkActorPacketDelivery
+  ) => Promise<unknown>;
+}
 
 export type ZLinkActorIngressAdmission =
   | { readonly kind: 'local'; readonly actor: ZLinkActor }
@@ -45,9 +55,9 @@ export function resolveActorIngress(
   request: boolean,
   options: {
     readonly handoffRuntime?: ZLinkSpotActorHandoffRuntime;
-    readonly routeBeforeLocal?: ZLinkActorIngressRoute;
+    readonly spotId?: RoutingId;
+    readonly membership?: ZLinkActorIngressMembership;
     readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
-    readonly hasDepartedActor?: (actorId: string) => boolean;
     readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
   }
 ): ZLinkActorIngressAdmission {
@@ -62,12 +72,20 @@ export function resolveActorIngress(
     delivery.messageFollowOrigin
   );
   if (handoff !== undefined) return { kind: 'follow', terminal: handoff };
-  const route = options.routeBeforeLocal?.(delivery);
-  if (route?.handled === true) return { kind: 'follow', terminal: Promise.resolve(route.response) };
+  const membership = options.membership;
+  const owner = membership?.resolveOwner?.(delivery.actorId);
+  if (owner?.actorRef !== undefined && !routingIdsEqual(owner.spotId, options.spotId)) {
+    if (membership?.dispatchToOwner === undefined) {
+      throw new Error('Actor ingress requires the current membership dispatch port.');
+    }
+    // Transfer the accepted delivery before releasing the source FIFO claim.
+    // Its terminal is awaited outside that claim by dispatchActorPacketInMailbox.
+    return { kind: 'follow', terminal: membership.dispatchToOwner(owner.spotId, delivery) };
+  }
   const actor =
-    options.hasDepartedActor?.(delivery.actorId) === true
-      ? undefined
-      : options.resolveActor(delivery.actorId);
+    membership?.resolveOwner === undefined || owner?.actorRef !== undefined
+      ? options.resolveActor(delivery.actorId)
+      : undefined;
   if (actor !== undefined) return { kind: 'local', actor };
   if (
     options.routeToActorJoinPrewarm !== undefined &&

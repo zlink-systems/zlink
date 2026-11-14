@@ -25,6 +25,24 @@ const {
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const {
+  resolveActorIngress
+} = require('../../packages/framework/dist/runtime/spots/spot-actor-ingress-admission');
+
+function dispatchEntryIngress(
+  host, origin, actorId, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef
+) {
+  const admitted = resolveActorIngress(
+    { origin, actorId, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef },
+    true,
+    {
+      membership: host.entryActorRuntime.actorIngressMembership,
+      resolveActor: (id) => host.entryActorRuntime.resolveActor(id)
+    }
+  );
+  assert.equal(admitted.kind, 'follow');
+  return admitted.terminal;
+}
+const {
   createSessionDispatchContext
 } = require('../../packages/framework/dist/runtime/streams/session-context');
 const {
@@ -7682,9 +7700,7 @@ test('service-wire relocation replaces a learned source packet route before the 
   });
   Object.assign(targetHostMesh, {
     async dispatchEntryActorPacket(origin, actorId, parts, response, bound, ref) {
-      const result = await targetHost.entryActorRuntime.routePacket(actorId, parts, response, bound, ref, origin);
-      assert.equal(result.handled, true);
-      return result.response;
+      return dispatchEntryIngress(targetHost, origin, actorId, parts, response, bound, ref);
     },
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('target') })
@@ -7697,6 +7713,15 @@ test('service-wire relocation replaces a learned source packet route before the 
   });
   const targetRequestSequences = [];
   targetHost.setSpotManager({
+    get actorIngressMembership() {
+      return {
+        resolveOwner: () => ({ actorRef: targetRef, spotId: targetState.spotId }),
+        dispatchToOwner: (spotId, delivery) => this.dispatchRoutedActorPacket(
+          delivery.origin, spotId, delivery.actorId, delivery.parts, delivery.returnResponse,
+          delivery.remoteBoundSessionTarget, delivery.fallbackActorRef
+        )
+      };
+    },
     async dispatchRoutedActorPacket(
       _origin,
       spotId,
@@ -8026,6 +8051,15 @@ test('runtime host completes local bound actor request without native SessionRel
     hasActiveSpot(spotId) {
       return spotId === 'play-node';
     },
+    get actorIngressMembership() {
+      return {
+        resolveOwner: () => ({ actorRef, spotId: state.spotId }),
+        dispatchToOwner: (spotId, delivery) => this.dispatchRoutedActorPacket(
+          delivery.origin, spotId, delivery.actorId, delivery.parts, delivery.returnResponse,
+          delivery.remoteBoundSessionTarget, delivery.fallbackActorRef
+        )
+      };
+    },
     async dispatchRoutedActorPacket(_origin, spotId, actorId, parts, returnResponse) {
       dispatches.push({
         spotId,
@@ -8042,9 +8076,7 @@ test('runtime host completes local bound actor request without native SessionRel
   });
 
   host.spotNodeRuntime.dispatchEntryActorPacket = async (origin, actorId, parts, response, bound, ref) => {
-    const result = await host.entryActorRuntime.routePacket(actorId, parts, response, bound, ref, origin);
-    assert.equal(result.handled, true);
-    return result.response;
+    return dispatchEntryIngress(host, origin, actorId, parts, response, bound, ref);
   };
 
   const context = host.streamBindingRuntime.createSessionContext(stream);
