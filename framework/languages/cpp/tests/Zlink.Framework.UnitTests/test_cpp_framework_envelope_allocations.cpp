@@ -364,14 +364,12 @@ TEST (EnvelopeAllocations, CanonicalHeaderDecodeAddsNoStorageBeyondHeaderOwnersh
     EXPECT_EQ (decoded->value ().channel_name, "c");
     EXPECT_EQ (decoded->value ().message_name, "m");
     EXPECT_EQ (decoded->value ().content_type, "x/y");
-    // The SAX metadata owner, final header and result moves are required
-    // storage. MSVC allocates a head node even for an empty map. This also
-    // rejects a discarded JSON default without assuming string capacity.
+    // Only the final header and result moves own storage. MSVC allocates a
+    // head node even for an empty map, so the reference must not construct
+    // the SAX metadata owner on the canonical path.
     const auto reference = [] {
-        std::map<std::string, std::string> metadata;
         msg::envelope_header_t value{
           .channel_name = "c", .message_name = "m", .content_type = "x/y"};
-        value.metadata = std::move (metadata);
         return fw::result_t<msg::envelope_header_t>::success (std::move (value));
     };
     std::optional<decltype (warm)> reference_decoded;
@@ -1220,4 +1218,232 @@ TEST (EnvelopeL2Wire, TrailingNulKeepsFrozenBaselineOutcome)
         std::printf ("L2_BASELINE trailing-NUL accepted flow=%d\n", capture_flow);
     }
 }
+
+TEST (EnvelopeL2Wire, DirectCanonicalAndFallbackPreserveValuesErrorsAndRejectionContext)
+{
+    msg::envelope_codec_t codec;
+    auto full = l2_wire_fixture ();
+    full["correlationId"] = "id";
+    full["deadline"] = "2026-11-14T00:00:00Z";
+    full["topic"] = "topic-é";
+    full["source"] = "node";
+    full["errorCode"] = "internal_failure";
+    full["errorMessage"] = "line\nend";
+    full["metadata"] = {{"a", "first"}, {"z", "last"}};
+    full["flowId"] = "019a55d5-0000-7000-8000-000000000001";
+    full["flowOrigin"] = 3;
+    std::vector<std::string> inputs{l2_wire_fixture ().dump (), full.dump (),
+                                    node_ordered_header (full.dump ())};
+    for (const auto *field : {"kind", "channelName", "messageName", "contentType", "correlationId",
+                              "deadline", "topic", "errorCode", "errorMessage", "source", "flowId",
+                              "flowOrigin", "formatMarker", "metadata"}) {
+        for (const auto &value :
+             {nlohmann::json (true), nlohmann::json (1.5), nlohmann::json (2147483648ULL),
+              nlohmann::json::array (), nlohmann::json::object (), nlohmann::json (nullptr)}) {
+            auto changed = full;
+            changed[field] = value;
+            inputs.push_back (changed.dump ());
+        }
+        auto missing = full;
+        missing.erase (field);
+        inputs.push_back (missing.dump ());
+    }
+    for (const auto *field : {"kind", "formatMarker", "flowOrigin"}) {
+        for (const auto value : {-2147483648LL, -1LL, 0LL, 6LL, 2147483647LL, 2147483648LL}) {
+            auto changed = full;
+            changed[field] = value;
+            inputs.push_back (changed.dump ());
+        }
+    }
+    for (const auto *value : {"", "not-a-uuid"}) {
+        auto changed = full;
+        changed["flowId"] = value;
+        inputs.push_back (changed.dump ());
+    }
+    for (const auto &metadata :
+         {nlohmann::json{{"", "value"}}, nlohmann::json{{"key", std::string ("v\0", 2)}},
+          nlohmann::json{{"key", std::string (4096, 'v')}}, nlohmann::json{{"key", 1}}}) {
+        auto changed = full;
+        changed["metadata"] = metadata;
+        inputs.push_back (changed.dump ());
+    }
+    for (const auto &bad : {std::string ("\\q"), std::string ("\x80", 1)}) {
+        auto changed = full;
+        changed["channelName"] = "SENTINEL";
+        auto wire = changed.dump ();
+        wire.replace (wire.find ("SENTINEL"), 8, bad);
+        inputs.push_back (std::move (wire));
+    }
+    auto duplicate = full.dump ();
+    duplicate.insert (duplicate.find (",\"messageName\":"), ",\"kind\":1");
+    inputs.push_back (duplicate);
+    duplicate = full.dump ();
+    duplicate.replace (duplicate.find ("\"a\":\"first\""), 11, "\"a\":\"first\",\"a\":\"second\"");
+    inputs.push_back (duplicate);
+    for (const bool capture_flow : {false, true}) {
+        for (std::size_t index = 0; index < inputs.size (); ++index) {
+            SCOPED_TRACE (std::to_string (index) + " flow=" + std::to_string (capture_flow));
+            // A trailing space is legal JSON but never canonical. Keeping all
+            // preceding bytes fixes the parser's diagnostic byte positions.
+            const auto canonical = zlink::message_t::from (inputs[index]);
+            const auto fallback = zlink::message_t::from (inputs[index] + " ");
+            std::optional<msg::envelope_header_t> expected_context;
+            const auto expected = codec.decode_header (canonical, capture_flow, &expected_context);
+            for (const auto *wire : {&canonical, &fallback}) {
+                for (const bool borrow : {false, true}) {
+                    std::optional<msg::envelope_header_t> context;
+                    const auto actual = borrow
+                                          ? codec.decode_header_view (*wire, capture_flow, &context)
+                                          : codec.decode_header (*wire, capture_flow, &context);
+                    ASSERT_EQ (static_cast<bool> (actual), static_cast<bool> (expected));
+                    ASSERT_EQ (context.has_value (), expected_context.has_value ());
+                    if (context)
+                        expect_same_header (*context, *expected_context);
+                    if (actual) {
+                        expect_same_header (actual.value (), expected.value ());
+                    } else {
+                        EXPECT_EQ (actual.error_kind (), expected.error_kind ());
+                        EXPECT_STREQ (actual.error ()->what (), expected.error ()->what ());
+                    }
+                }
+            }
+            std::printf ("DIRECT_DIAG %zu %d %s\n", index, capture_flow,
+                         expected ? "accepted" : expected.error ()->what ());
+            const auto snapshot = [&] (const msg::envelope_header_t &header) {
+                nlohmann::json values{{"kind", static_cast<int> (header.kind)},
+                                      {"channelName", std::string (header.channel_name)},
+                                      {"messageName", std::string (header.message_name)},
+                                      {"contentType", std::string (header.content_type)},
+                                      {"correlationId", std::string (header.correlation_id)},
+                                      {"metadata", header.metadata}};
+                values["deadline"] = header.deadline
+                                       ? nlohmann::json (std::string (*header.deadline))
+                                       : nlohmann::json (nullptr);
+                const auto optional = [] (const std::optional<std::string> &value) {
+                    return value ? nlohmann::json (*value) : nlohmann::json (nullptr);
+                };
+                values["topic"] = optional (header.topic);
+                values["errorCode"] = optional (header.error_code);
+                values["errorMessage"] = optional (header.error_message);
+                values["source"] = optional (header.source);
+                values["flowId"] = optional (header.flow_id);
+                values["flowOrigin"] = header.flow_origin
+                                         ? nlohmann::json (static_cast<int> (*header.flow_origin))
+                                         : nlohmann::json (nullptr);
+                return values.dump ();
+            };
+            std::printf ("DIRECT_VALUE %zu %d %s\n", index, capture_flow,
+                         expected ? snapshot (expected.value ()).c_str () : "rejected");
+            std::printf ("DIRECT_CONTEXT %zu %d %s\n", index, capture_flow,
+                         expected_context ? snapshot (*expected_context).c_str () : "absent");
+        }
+    }
+}
+
+TEST (EnvelopeL2Wire, CanonicalAndFallbackRejectWithFrozenKindAndMessage)
+{
+    msg::envelope_codec_t codec;
+    const auto prefix = std::string ("invalid ZLink envelope header: ");
+    std::vector<std::pair<std::string, std::string>> cases;
+    const auto add_field = [&] (const char *field, nlohmann::json value, const char *reason) {
+        auto header = l2_wire_fixture ();
+        header[field] = std::move (value);
+        cases.emplace_back (header.dump (), prefix + reason);
+    };
+    add_field ("kind", true, "ZLink envelope header has invalid required fields");
+    add_field ("kind", 2147483648ULL, "ZLink envelope header has invalid required fields");
+    add_field ("kind", 0, "ZLink envelope header kind is invalid");
+    add_field ("contentType", false, "ZLink envelope header contentType is invalid");
+    add_field ("deadline", false, "ZLink envelope header has an invalid field type");
+    add_field ("flowId", false, "ZLink envelope header flow fields are invalid");
+    add_field ("metadata", false, "ZLink envelope header metadata must be an object");
+    add_field ("metadata", {{"key", false}}, "ZLink envelope header metadata value is invalid");
+    for (const auto *field : {"kind", "channelName", "messageName"}) {
+        auto header = l2_wire_fixture ();
+        header.erase (field);
+        cases.emplace_back (header.dump (),
+                            prefix + "ZLink envelope header has invalid required fields");
+    }
+    auto duplicate = l2_wire_fixture ().dump ();
+    duplicate.insert (duplicate.find (",\"messageName\":"), ",\"kind\":1");
+    cases.emplace_back (duplicate, prefix + "duplicate envelope header field");
+    auto metadata = l2_wire_fixture ();
+    metadata["metadata"] = {{"key", "value"}};
+    duplicate = metadata.dump ();
+    duplicate.insert (duplicate.find ("\"key\":"), "\"key\":\"first\",");
+    cases.emplace_back (duplicate, prefix + "duplicate envelope metadata key");
+    for (const auto &bad : {std::string ("\\q"), std::string ("\x80", 1)}) {
+        auto header = l2_wire_fixture ();
+        header["channelName"] = "SENTINEL";
+        auto input = header.dump ();
+        input.replace (input.find ("SENTINEL"), 8, bad);
+        try {
+            const auto parsed = nlohmann::json::parse (input);
+            FAIL () << "malformed fixture was accepted by the JSON reference parser: "
+                    << parsed.dump ();
+        }
+        catch (const nlohmann::json::parse_error &error) {
+            cases.emplace_back (input, prefix + error.what ());
+        }
+    }
+    for (const auto &[input, reason] : cases) {
+        for (const auto &bytes : {input, input + " "}) {
+            const auto wire = zlink::message_t::from (bytes);
+            for (const bool borrow : {false, true}) {
+                const auto decoded =
+                  borrow ? codec.decode_header_view (wire, true) : codec.decode_header (wire, true);
+                ASSERT_FALSE (decoded);
+                EXPECT_EQ (decoded.error_kind (), fw::framework_error_kind_t::protocol_error);
+                EXPECT_EQ (decoded.error ()->what (), reason);
+            }
+        }
+    }
+}
+
+TEST (EnvelopeL2Wire, DirectDecodePreservesEveryFieldAndBorrowLifetime)
+{
+    msg::envelope_codec_t codec;
+    msg::envelope_header_t expected{.kind = msg::message_kind_t::error,
+                                    .channel_name = "a-channel-with-a-long-name",
+                                    .message_name = "a-message-with-a-long-name",
+                                    .content_type = "application/x-protobuf",
+                                    .correlation_id = "correlation-id-with-a-long-value",
+                                    .deadline = "2026-11-14T00:00:00Z",
+                                    .topic = "topic-é",
+                                    .error_code = "internal_failure",
+                                    .error_message = "line\nend",
+                                    .source = "node",
+                                    .metadata = {{"a", "first"}, {"z", "last"}},
+                                    .flow_id = "019a55d5-0000-7000-8000-000000000001",
+                                    .flow_origin = fw::flow_origin_t::application};
+    const auto bytes = codec.encode_header (expected).to_string ();
+    for (const bool capture_flow : {true, false}) {
+        if (!capture_flow) {
+            expected.flow_id.reset ();
+            expected.flow_origin.reset ();
+        }
+        for (const auto &input : {bytes, bytes + " ", node_ordered_header (bytes)}) {
+            std::optional<msg::envelope_header_t> copy;
+            {
+                const auto wire = zlink::message_t::from (input);
+                for (const bool borrow : {false, true}) {
+                    const auto decoded = borrow ? codec.decode_header_view (wire, capture_flow)
+                                                : codec.decode_header (wire, capture_flow);
+                    ASSERT_TRUE (decoded);
+                    expect_same_header (decoded.value (), expected);
+                    const auto offset = bytes.find ("a-channel-with-a-long-name");
+                    if (borrow && input == bytes)
+                        EXPECT_EQ (decoded.value ().channel_name.data (),
+                                   reinterpret_cast<const char *> (wire.data ()) + offset);
+                    else
+                        EXPECT_NE (decoded.value ().channel_name.data (),
+                                   reinterpret_cast<const char *> (wire.data ()) + offset);
+                    copy = decoded.value ();
+                }
+            }
+            expect_same_header (*copy, expected);
+        }
+    }
+}
+
 } // namespace
