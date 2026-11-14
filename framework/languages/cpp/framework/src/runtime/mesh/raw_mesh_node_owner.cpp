@@ -2628,8 +2628,8 @@ task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
              != retired_session_owner_routing_id) {
         throw std::invalid_argument ("bound Session replacement source or target is inconsistent");
     }
-    co_return co_await send_header_only (retired_session_owner_routing_id,
-                                         protocol::encode_bound_session_replaced (record));
+    detail::backend::raw_message_t parts{protocol::encode_bound_session_replaced (record)};
+    co_return co_await send_control (retired_session_owner_routing_id, std::move (parts));
 }
 
 task_t<void>
@@ -3647,6 +3647,22 @@ raw_mesh_node_owner_t::admit_control (const service_node_descriptor_t &local,
                     return raw_mesh_pump_result_t::protocol_error;
                 break;
             }
+            case protocol::command::boundSessionReplaced: {
+                if (record.parts ().size () != 1)
+                    return raw_mesh_pump_result_t::protocol_error;
+                const auto replacement = protocol::decode_bound_session_replaced (
+                  protocol::message_bytes (record.parts ().front ()));
+                if (replacement.actor_authority.target_node_routing_id
+                      != actual_source.node_routing_id
+                    || replacement.actor_authority.target_node_generation
+                         != actual_source.lifecycle_generation
+                    || replacement.retired_session.session_owner_node_routing_id
+                         != local.node_routing_id
+                    || replacement.retired_session.session_owner_node_generation
+                         != local.lifecycle_generation)
+                    return raw_mesh_pump_result_t::protocol_error;
+                break;
+            }
             case protocol::command::sessionRelocationRoute: {
                 if (record.parts ().size () != 1)
                     return raw_mesh_pump_result_t::protocol_error;
@@ -3931,30 +3947,6 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
                                                      admitted->descriptor.lifecycle_generation),
                                      raw_mesh_pump_result_t::infrastructure);
         }
-        if (header.kind == protocol::command::boundSessionReplaced) {
-            if (header.flags != 0 || received->parts ().size () != 1 || received->reply_token ()) {
-                return reject ();
-            }
-            const auto replacement = protocol::decode_bound_session_replaced (
-              protocol::message_bytes (received->parts ().front ()));
-            const auto local = _topology.local_descriptor ();
-            if (replacement.actor_authority.target_node_routing_id != received->source_routing_id
-                || replacement.actor_authority.target_node_routing_id
-                     != admitted->descriptor.node_routing_id
-                || replacement.actor_authority.target_node_generation
-                     != admitted->descriptor.lifecycle_generation
-                || replacement.retired_session.session_owner_node_routing_id
-                     != local.node_routing_id
-                || replacement.retired_session.session_owner_node_generation
-                     != local.lifecycle_generation) {
-                return reject ();
-            }
-            return enqueue_received (route_received (owner_key (local.node_routing_id),
-                                                     service_mailbox_domain_t::infrastructure,
-                                                     std::nullopt,
-                                                     admitted->descriptor.lifecycle_generation),
-                                     raw_mesh_pump_result_t::infrastructure);
-        }
         if (header.kind == protocol::command::instanceSpot) {
             const auto activation = protocol::decode_instance_spot_activation_header (
               protocol::message_bytes (received->parts ().front ()));
@@ -4126,7 +4118,8 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
         }
         if (header.kind == protocol::command::replyRelay
             || header.kind == protocol::command::replyRelayAck
-            || header.kind == protocol::command::sessionRelocationRoute) {
+            || header.kind == protocol::command::sessionRelocationRoute
+            || header.kind == protocol::command::boundSessionReplaced) {
             const auto local = _topology.local_descriptor ();
             return admit_control (local, admitted->descriptor,
                                   route_received (owner_key (local.node_routing_id),

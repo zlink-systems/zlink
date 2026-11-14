@@ -3850,41 +3850,84 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
         auto output = completion->task ();
         auto admitted = co_await detail::request_admission_source_t{};
         detail::observe_request_failure (output, admitted);
-        const auto submitted = co_await _node->transport ().request_bound_session_bind (
-          actor_fence.target_node_routing_id,
-          runtime::protocol::bound_session_bind_t{
-            0,
-            actor_fence,
-            session_rid.to_bytes (),
-            {runtime::protocol::bound_session_binding_state_t::active, binding_generation}},
-          timeout,
-          [completion] (runtime::foundation::operation_terminal_t terminal,
-                        ::zlink::framework::result_t<zlink::message_t> completion_payload) {
-              auto payload = std::move (completion_payload.value ());
-              if (terminal != runtime::foundation::operation_terminal_t::completed) {
-                  const auto kind = terminal == runtime::foundation::operation_terminal_t::timed_out
-                                      ? framework_error_kind_t::deadline_exceeded
-                                      : framework_error_kind_t::unavailable;
-                  completion->complete (result_t<runtime::protocol::stream_bind_reply_t>::failure (
-                    kind, "Remote Actor session binding did not complete successfully"));
-                  return;
-              }
-              try {
-                  completion->complete (result_t<runtime::protocol::stream_bind_reply_t>::success (
-                    runtime::protocol::decode_stream_bind_reply (
-                      runtime::protocol::message_bytes (payload))));
-              }
-              catch (const runtime::protocol::service_wire_error_t &) {
-                  completion->complete (result_t<runtime::protocol::stream_bind_reply_t>::failure (
-                    framework_error_kind_t::protocol_error,
-                    "Remote Actor session binding reply decode failed"));
-              }
-          },
-          admitted);
-        if (!submitted) {
-            co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::failure (
-              framework_error_kind_t::not_configured,
-              "Remote Actor session binding was not accepted");
+        const runtime::protocol::bound_session_bind_t bind{
+          0,
+          actor_fence,
+          session_rid.to_bytes (),
+          {runtime::protocol::bound_session_binding_state_t::active, binding_generation}};
+        const auto local = _node->status ();
+        if (actor_fence.target_node_routing_id == local.routing_id ().to_bytes ()) {
+            const auto owner = session_route_owner ();
+            const auto current_actor = co_await _node->objects ().find_async (
+              runtime::stateful::object_kind_t::actor, actor_fence.actor_id);
+            if (!owner || !_bound_session_operations
+                || !runtime::host::bound_session_bind_actor_matches (
+                  actor_fence, current_actor, local.routing_id (), local.lifecycle_generation ())) {
+                co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::failure (
+                  framework_error_kind_t::unavailable,
+                  "Actor session binding authority is unavailable");
+            }
+            std::optional<runtime::protocol::stream_bind_reply_t> terminal_reply;
+            auto operation = _bound_session_operations->bind (
+              bind, local.routing_id (), local.lifecycle_generation (), *owner,
+              [&terminal_reply] (std::uint32_t terminal, std::uint32_t code,
+                                 std::optional<runtime::protocol::stream_bind_reply_tail_t> tail) {
+                  terminal_reply =
+                    runtime::protocol::stream_bind_reply_t{{0, terminal, code}, std::move (tail)};
+                  return true;
+              });
+            admitted->complete (result_t<void>::success ());
+            const auto accepted = co_await operation;
+            if (!terminal_reply) {
+                terminal_reply = runtime::protocol::stream_bind_reply_t{
+                  {0,
+                   accepted.terminal_result.value_or (static_cast<std::uint32_t> (
+                     runtime::protocol::request_terminal_result::internalError)),
+                   accepted.failure_code},
+                  accepted.reply_tail};
+            }
+            completion->complete (result_t<runtime::protocol::stream_bind_reply_t>::success (
+              std::move (*terminal_reply)));
+            if (accepted.replacement) {
+                (void) co_await _node->transport ().send_bound_session_replaced (
+                  accepted.replacement->retired_session.session_owner_node_routing_id,
+                  *accepted.replacement);
+            }
+        } else {
+            const auto submitted = co_await _node->transport ().request_bound_session_bind (
+              actor_fence.target_node_routing_id, bind, timeout,
+              [completion] (runtime::foundation::operation_terminal_t terminal,
+                            ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+                  auto payload = std::move (completion_payload.value ());
+                  if (terminal != runtime::foundation::operation_terminal_t::completed) {
+                      const auto kind =
+                        terminal == runtime::foundation::operation_terminal_t::timed_out
+                          ? framework_error_kind_t::deadline_exceeded
+                          : framework_error_kind_t::unavailable;
+                      completion->complete (
+                        result_t<runtime::protocol::stream_bind_reply_t>::failure (
+                          kind, "Remote Actor session binding did not complete successfully"));
+                      return;
+                  }
+                  try {
+                      completion->complete (
+                        result_t<runtime::protocol::stream_bind_reply_t>::success (
+                          runtime::protocol::decode_stream_bind_reply (
+                            runtime::protocol::message_bytes (payload))));
+                  }
+                  catch (const runtime::protocol::service_wire_error_t &) {
+                      completion->complete (
+                        result_t<runtime::protocol::stream_bind_reply_t>::failure (
+                          framework_error_kind_t::protocol_error,
+                          "Remote Actor session binding reply decode failed"));
+                  }
+              },
+              admitted);
+            if (!submitted) {
+                co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::failure (
+                  framework_error_kind_t::not_configured,
+                  "Remote Actor session binding was not accepted");
+            }
         }
         const auto reply = co_await output;
         if (reply.header.terminal_result == 0) {
