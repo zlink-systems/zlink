@@ -79,7 +79,7 @@ void wire_identity ()
                     fw::detail::channel_reply_writer_t writer;
                     auto expected = writer.reply_raw_envelope (
                       writer.create_reply_header (msg::message_kind_t::response, "bench", actual),
-                      ladder::message (encode_bench_payload (payload)));
+                      zlink_cpp_bench::encode_bench_payload_message (payload));
                     const auto items = std::move (expected).take_items ();
                     same (items[0].bytes (), reply[0].bytes ());
                     same (items[1].bytes (), reply[1].bytes ());
