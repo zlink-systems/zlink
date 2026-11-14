@@ -97,7 +97,7 @@ def heap_summary(directory,role,n):
  return dict(estimated_total_bytes=total,estimated_bytes_per_message=total/n,groups_bytes_per_message={k:v/n for k,v in groups.items()},sample_count=len(p.get('samples',[])),top_nodes=sorted(rows,key=lambda x:x['bytes'],reverse=True)[:45])
 
 summary=[]
-paths=[p for p in RAW.iterdir() if p.is_dir() and (p.name.startswith('final-audit-') or p.name.startswith('window-'))]
+paths=[p for p in RAW.iterdir() if p.is_dir() and (p.name.startswith('final-audit-') or p.name.startswith('window-') or p.name.startswith('permit-'))]
 if len(sys.argv)>1:paths=[RAW/sys.argv[1]]
 for d in sorted(paths):
  if not (d/'events.json').exists():continue

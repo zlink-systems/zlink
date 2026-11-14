@@ -1,7 +1,7 @@
 import json,pathlib,os
 J=pathlib.Path('/root/jobs/fx/cx/v21/s033/nbind');R=J/'raw';rows=[]
 for p in sorted(R.iterdir()):
- if not p.is_dir() or not (p.name.startswith('final-audit-') or p.name.startswith('window-')) or not (p/'events.json').exists():continue
+ if not p.is_dir() or not (p.name.startswith('final-audit-') or p.name.startswith('window-') or p.name.startswith('permit-')) or not (p/'events.json').exists():continue
  e=json.loads((p/'events.json').read_text())
  if not any(x['event']=='valid' for x in e):continue
  s=json.loads((p/'active-source.json').read_text());t=json.loads((p/'active-target.json').read_text());w=json.loads((p/'warmup-source.json').read_text());wt=json.loads((p/'warmup-target.json').read_text())

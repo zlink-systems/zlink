@@ -13,7 +13,7 @@ args=a.parse_args()
 out=JOB/'raw'/args.label
 out.mkdir(exist_ok=False)
 def git(*x):return subprocess.check_output(['git',*x],cwd=ROOT,text=True).strip()
-meta=dict(head=git('rev-parse','HEAD'),branch=git('branch','--show-current'),dirty=git('status','--short'),mode=args.mode,level=args.level,pattern=args.pattern,cpus=CPUS)
+meta=dict(head=git('rev-parse','HEAD'),branch=git('branch','--show-current'),dirty=git('status','--short'),mode=args.mode,level=args.level,pattern=args.pattern,cpus=CPUS,permit_all=os.environ.get('NBIND_PERMIT_ALL')=='1')
 (out/'build.json').write_text(json.dumps(meta,indent=2)+'\n')
 ports=[]
 for _ in range(7):
@@ -22,7 +22,7 @@ endpoint,command,target,trigger,source,tc,sc=ports
 url=lambda p:f'http://127.0.0.1:{p}'
 env={k:v for k,v in os.environ.items() if 'LADDER' not in k and k not in ['NODE_OPTIONS','LD_PRELOAD','ZLINK_LOCAL_PACKAGE_ROOT','ZLinkLocalPackageRoot']}
 env.update(NODE_PATH=str(ROOT/'framework/languages/node/node_modules'),ZLINK_LADDER_L0_SERVER='1',ZLINK_LADDER_L0_CLIENT='1',NBIND_MODE=args.mode,NBIND_OUT=str(out))
-if args.level=='L1':env.update(ZLINK_LADDER_L1_PERMIT='1')
+if args.level=='L1' or os.environ.get('NBIND_PERMIT_ALL')=='1':env.update(ZLINK_LADDER_L1_PERMIT='1')
 if args.level=='L2':env.update(ZLINK_LADDER_L2_ENVELOPE='1',ZLINK_LADDER_L2_CLIENT='1')
 if args.level=='L3':env.update(ZLINK_LADDER_L3_SERVICE_WIRE='1',ZLINK_LADDER_L3_CLIENT='1')
 if args.mode=='alloc':env.update(NBIND_ALLOC_DIR=str(out))
@@ -118,7 +118,7 @@ try:
     log=open(out/f'{role}-perf-{kind}.log','w');logs.append(log)
     ctlr,ctlw=os.pipe();ackr,ackw=os.pipe()
     cmd+=['--control',f'fd:{ctlr},{ackw}']
-    pp=subprocess.Popen(['taskset','-c',CPUS,*cmd],stdout=log,stderr=subprocess.STDOUT,pass_fds=(ctlr,ackw))
+    pp=subprocess.Popen(['taskset','-c',CPUS,*cmd],stdout=log,stderr=subprocess.STDOUT,pass_fds=(ctlr,ackw),env=dict(os.environ,DEBUGINFOD_URLS='',PERF_BUILDID_DIR=str(JOB/'raw/perf-symbols')))
     os.close(ctlr);os.close(ackw)
     perfprocs.append((role,kind,pp,ctlw,ackr))
  perf_control('disable',started+10.8)
