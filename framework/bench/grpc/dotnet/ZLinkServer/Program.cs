@@ -91,7 +91,7 @@ else
     var decodeServiceWire = ladderLevel is "L3" or "L4";
     var decodeTypedPayload = ladderLevel == "L4";
     ZLinkEnvelopeHeader? preparedReplyHeader = null;
-#if ZLINK_DOTNET_LADDER_L2
+#if ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
     var ladderCodecs = CreateLadderCodecs();
     preparedReplyHeader = ZLinkEnvelopeCodec.PrepareResponse(
         "bench",
@@ -168,7 +168,7 @@ static void ConfigureQuietLogging(WebApplicationBuilder builder)
     );
 }
 
-#if ZLINK_DOTNET_LADDER_L2
+#if ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
 static ZLinkCodecRegistryBuilder CreateLadderCodecs()
 {
     var codecs = new ZLinkCodecRegistryBuilder();
@@ -287,6 +287,7 @@ static async Task RunL1Owner(
                     received,
                     handler,
                     permit,
+                    preparedReplyHeader,
                     decodeTypedPayload
                 );
                 continue;
@@ -348,13 +349,7 @@ static void ReplyL2(
     ZLinkEnvelopeHeader preparedReplyHeader
 )
 {
-    var replyHeader = ZLinkChannelReplyWriter.CreateReplyHeader(
-        ZLinkMessageKind.Response,
-        requestHeader.ChannelName,
-        requestHeader,
-        preparedReplyHeader
-    );
-    var replyParts = ZLinkEnvelopeCodec.EncodeRawBodyParts(replyHeader, replyBody);
+    var replyParts = EncodeRawReplyParts(requestHeader, replyBody, preparedReplyHeader);
     try
     {
         received.Reply().Messages(replyParts).Submit();
@@ -363,6 +358,23 @@ static void ReplyL2(
     {
         replyParts[0].Dispose();
     }
+}
+#endif
+
+#if ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
+static IReadOnlyList<Message> EncodeRawReplyParts(
+    ZLinkEnvelopeHeader requestHeader,
+    Message replyBody,
+    ZLinkEnvelopeHeader preparedReplyHeader
+)
+{
+    var replyHeader = ZLinkChannelReplyWriter.CreateReplyHeader(
+        ZLinkMessageKind.Response,
+        requestHeader.ChannelName,
+        requestHeader,
+        preparedReplyHeader
+    );
+    return ZLinkEnvelopeCodec.EncodeRawBodyParts(replyHeader, replyBody);
 }
 #endif
 
@@ -376,6 +388,7 @@ static async Task HandleServiceWire(
     Received received,
     L0BenchHandler handler,
     ZLinkApplicationJobQueueLease permit,
+    ZLinkEnvelopeHeader? preparedReplyHeader,
     bool decodeTypedPayload
 )
 {
@@ -437,7 +450,11 @@ static async Task HandleServiceWire(
         framedReply = EncodeTypedReply(handler.HandleRequest(request), envelopeHeader);
     }
     else
-        framedReply = EncodeRawReply(handler.HandleRequest(envelopeParts.GetSpan(1)));
+        framedReply = EncodeRawReply(
+            handler.HandleRequest(envelopeParts.GetSpan(1)),
+            envelopeHeader,
+            preparedReplyHeader!
+        );
     using (framedReply)
     {
         using var serviceReply = Message.From(
@@ -447,16 +464,26 @@ static async Task HandleServiceWire(
     }
 }
 
-static Message EncodeRawReply(Message replyBody)
+static Message EncodeRawReply(
+    Message replyBody,
+    ZLinkEnvelopeHeader requestHeader,
+    ZLinkEnvelopeHeader preparedReplyHeader
+)
 {
     using (replyBody)
-    using (var responseHeader = Message.From(RawEnvelopeHeaders.Response))
-        return ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
-            [responseHeader, replyBody]
-        );
+    {
+        var replyParts = EncodeRawReplyParts(requestHeader, replyBody, preparedReplyHeader);
+        try
+        {
+            return ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(replyParts);
+        }
+        finally
+        {
+            replyParts[0].Dispose();
+        }
+    }
 }
 
-#if ZLINK_DOTNET_LADDER_L4
 static Message EncodeTypedReply(BenchTypedPayload reply, ZLinkEnvelopeHeader requestHeader)
 {
     var header = ZLinkChannelReplyWriter.CreateReplyHeader(
@@ -475,7 +502,6 @@ static Message EncodeTypedReply(BenchTypedPayload reply, ZLinkEnvelopeHeader req
             part.Dispose();
     }
 }
-#endif
 #endif
 
 internal sealed class EchoHandler(BenchServerMetrics metrics)

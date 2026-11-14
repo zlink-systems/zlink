@@ -632,17 +632,24 @@ internal sealed class RawBenchTransport : IBenchTransport
             if (encodeServiceWire)
             {
                 serviceCorrelation = NextServiceCorrelation();
-                var serviceHeader = Message.From(
-                    ZLinkServiceWireCodec.EncodeApplicationMessage(
-                        ServiceWireConstants.Command.ChannelRequest,
-                        serviceCorrelation,
-                        "bench",
-                        hasMetadata: false
-                    )
+                var serviceHeader = ZLinkServiceWireCodec.EncodeApplicationMessage(
+                    ServiceWireConstants.Command.ChannelRequest,
+                    serviceCorrelation,
+                    "bench",
+                    hasMetadata: false
                 );
-                var servicePayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
-                    [header, body]
-                );
+                Message servicePayload;
+                try
+                {
+                    servicePayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                        payloadParts
+                    );
+                }
+                catch
+                {
+                    serviceHeader.Dispose();
+                    throw;
+                }
                 header.Dispose();
                 body.Dispose();
                 header = serviceHeader;
@@ -700,17 +707,24 @@ internal sealed class RawBenchTransport : IBenchTransport
 #if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             if (encodeServiceWire)
             {
-                var serviceHeader = Message.From(
-                    ZLinkServiceWireCodec.EncodeApplicationMessage(
-                        ServiceWireConstants.Command.ChannelSend,
-                        0,
-                        "bench",
-                        hasMetadata: false
-                    )
+                var serviceHeader = ZLinkServiceWireCodec.EncodeApplicationMessage(
+                    ServiceWireConstants.Command.ChannelSend,
+                    0,
+                    "bench",
+                    hasMetadata: false
                 );
-                var servicePayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
-                    [header, body]
-                );
+                Message servicePayload;
+                try
+                {
+                    servicePayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                        payloadParts
+                    );
+                }
+                catch
+                {
+                    serviceHeader.Dispose();
+                    throw;
+                }
                 header.Dispose();
                 body.Dispose();
                 header = serviceHeader;
@@ -821,39 +835,33 @@ internal sealed class RawBenchTransport : IBenchTransport
                     || serviceReply.Correlation != serviceCorrelation
                     || serviceReply.TerminalResult != 0
                     || serviceReply.FailureCode != 0
-                    || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                    || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
                         parts[1],
                         out var replyParts
                     )
                 )
                     throw new InvalidOperationException("Service wire reply was invalid.");
-                try
-                {
-                    if (replyParts.Length != 2)
-                        throw new InvalidOperationException("Service wire reply payload was invalid.");
+                if (replyParts.Count != 2)
+                    throw new InvalidOperationException("Service wire reply payload was invalid.");
+                var replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
 #if ZLINK_DOTNET_LADDER_L4
-                    if (typedPayload)
-                    {
-                        var replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts[0]);
-                        if (
-                            replyHeader.Kind != ZLinkMessageKind.Response
-                            || replyHeader.ContentType != ZLinkEnvelopeCodec.DefaultContentType
-                        )
-                            throw new InvalidOperationException("Typed JSON reply envelope was invalid.");
-                        var typedReply = (BenchTypedPayload)ZLinkEnvelopeCodec.DecodeBody(
-                                replyParts,
-                                typeof(BenchTypedPayload)
-                            )!;
-                        return new BenchPayload { Body = ByteString.CopyFrom(typedReply.Body) };
-                    }
-#endif
-                    return RawWire.Decode(replyParts[^1].AsReadOnlySpan());
-                }
-                finally
+                if (typedPayload)
                 {
-                    foreach (var replyPart in replyParts)
-                        replyPart.Dispose();
+                    if (
+                        replyHeader.Kind != ZLinkMessageKind.Response
+                        || replyHeader.ContentType != ZLinkEnvelopeCodec.DefaultContentType
+                    )
+                        throw new InvalidOperationException("Typed JSON reply envelope was invalid.");
+                    var typedReply = (BenchTypedPayload)ZLinkEnvelopeCodec.DecodeBody(
+                            replyParts,
+                            typeof(BenchTypedPayload),
+                            replyHeader.ContentType,
+                            null
+                        )!;
+                    return new BenchPayload { Body = ByteString.CopyFrom(typedReply.Body) };
                 }
+#endif
+                return RawWire.Decode(replyParts.GetSpan(1));
             }
 #endif
             return RawWire.Decode(
