@@ -15,9 +15,9 @@
 | byte 결과 | J 전 `:269` → 후 `:273`: **1회/1,024 또는 4,096 B**, 결과 크기를 계산하고 직접 기록 | [JsonReaderHelper:295-319](raw/dotnet-stj-jsonreaderhelper.cs): pooled 2K/8K buffer에 decode → 결과 array로 **1,024/4,096 B copy 1회**. 결과 array **1회/1,048 또는 4,120 managed B** |
 | 수용 검증 | J 후 `:1111` BOM, `:932,305` escape/Unicode/UTF-8, `:1060` finite, `:754` typed range·enum·64-bit 문자열·Base64, `:1132` duplicate, `:730` required | `D/Shared/ZLinkFrameworkJsonDocument.cs:13-61` BOM/duplicate/finite; `D/Shared/ZLinkJsonSerializerOptions.cs:54-127,194-357` required/nullability/typed 값; STJ reader/byte converter 문법·Base64 |
 
-C++ 전 항목별 합계는 [c4json stack 재집계](raw/c4json-decode-costs.json), .NET 비교값은 **수정 전 STJ 8.0.31**의 [기존 raw](raw/dotnet-allocations-before.txt)다. .NET 총 decode는 1K **1,456 B**, 4K **4,528 B**이며 전체 allocation 회수는 계측하지 않았다. 이 버퍼·frame·HashSet/constructor 비용은 구현 선택이다.
+C++ 전 항목별 합계는 [c4json stack 재집계](raw/c4json-decode-costs.json), .NET 비교값은 **수정 전 STJ 8.0.31**의 [기존 raw](raw/dotnet-allocations-before.txt)다. .NET 총 decode는 1K **1,456 B**, 4K **4,528 B**이며 전체 allocation 회수는 계측하지 않았다. 이 버퍼·frame·HashSet/constructor 비용은 구현 선택이다. N 원문: [lexer](raw/nlohmann/detail/input/lexer.hpp)·[parser](raw/nlohmann/detail/input/parser.hpp).
 
-실제 L4 request/reply는 같은 `typed_payload_t`다([정의](raw/ladder_payload.hpp):15-22,37-38). Target request decode는 [ladder_wire.hpp](raw/ladder_wire.hpp):263-265, source reply decode는 `:347-348`에서 기본 registry를 쓴다. 따라서 위 1K/4K decode 비용이 양쪽에 각각 적용된다. 새 reply의 `set_body` copy(`:283-284`)는 codec 밖의 1K/4K copy 1회이며 유지했다.
+실제 L4 request/reply는 같은 `typed_payload_t`다([정의](raw/ladder_payload.hpp):13-21,30-33). Target request decode는 [ladder_wire.hpp](raw/ladder_wire.hpp):263-265, source reply decode는 `:347-348`에서 기본 registry를 쓴다. 따라서 위 1K/4K decode 비용이 양쪽에 각각 적용된다. 새 reply의 `set_body` copy(`:283-284`)는 codec 밖의 1K/4K copy 1회이며 유지했다.
 
 ## 후보·선택
 
@@ -52,4 +52,6 @@ B는 escape가 없는 token을 input view로 전달하고 escape에만 scratch�
 
 소유 계층: Framework 공통 typed JSON codec. Spec: message-model §5(`framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md:134-153`). 교차언어: .NET/JVM/Node의 기존 typed 표현과 공통 golden을 유지하며 C++ 기존 수용 집합도 보존한다([원문](raw/dotnet-profile-options.cs)·[JVM](raw/java-profile.java)·[Node](raw/node-profile.ts)). 분류 **B**.
 
-점검: token 저장 중복·parser 상태 중복·finite 검사 중복 **3건 수정**, execution gate 우회·Core/binding 결정 보상 **0건**, 이관 **0건**. 로컬 commit: **대기**. 남은 관련 실패는 없다.
+점검: token 저장 중복·parser 상태 중복·finite 검사 중복 **3건 수정**, execution gate 우회·Core/binding 결정 보상 **0건**, 이관 **0건**. 로컬 commit: **789c993e152eaff23a189d15b6c02ce8bcd39c55**. 남은 관련 실패는 없다.
+
+Raw와 binary/config/CTest log를 보존한 뒤 이 worktree의 `build-c4dec`, `build-c4dec-deps`만 정리했다. [artifact manifest](raw/artifact-manifest.json)·[최종 상태](raw/final-state.json). push·GitHub·sub-agent/다른 AI·internal-docs.sh·measure.lock 사용은 없다.

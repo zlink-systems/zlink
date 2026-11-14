@@ -1,6 +1,6 @@
 # .NET L2 header 비용 수정
 
-상태: 수정 완료, profile·최종 검증 진행 중. Branch `perf/4352-dotnet-l2-envelope`, baseline `6350275facc5`. Raw는 모두 보존한다.
+Branch `perf/4352-dotnet-l2-envelope`, baseline `6350275facc5`. Wire/API 동작을 유지한 production 수정이다. Raw는 모두 보존했다.
 
 ## serial 4K 판정
 
@@ -49,10 +49,32 @@ MemoryDiagnoser 방식의 동일 probe는4×5,000회 window 중 최솟값을 사
 
 일반 wire의 값 할당은 그대로이며 **escaped 이름의 임시 string13개·560B만 제거**했다. 일반 request/reply 한 왕복의 field-name UTF8→UTF16 복사는26→0, deadline 값 formatting2→1, protocol validation4→4다. Outbound prefix copy는 header당1→1, inbound whole-header byte copy0→0, L2가 더하는 body copy0→0이다. [코드·계수 근거](raw/diagnosis-before-implementation.md)
 
-최종 profile 수치 취합 중. Profile 전용 CPU6–7,14–15, process≤20s, measure.lock 미취득. Throughput/7% 예산의 재판정은 감독자 측정으로 남긴다.
+`69891f4446` ladder를 git archive로 추출하고 이 worktree의 production Release .NET을 연결했다. Binding/Core는 lad-dotnet과 같은 `/root/.nuget/packages/zlink/1.25.0`; native SHA256 `85f228638e89…`이다. Before binary와 source/hash는 [manifest](raw/before-built-manifest.json)에 고정했다. 다른 worktree/build output은 사용하지 않았다.
+
+Profile은 discarded warm cell 후 warmup3s+active4s, `dotnet-trace`8 cpu-sampling+GC AllocationTick이다. Trace는 warmup부터 수집하되 표는 active UTC window만 남겼다. **정식 측정의10s/5s와 구분한다**. 양쪽 모든 thread는 CPU6–7,14–15의 부분집합·SCHED_OTHER이고, 아래6개 유효 run은 lifecycle10.81–15.33s, 오류0·제출=완료=수신을 확인했다. measure.lock은 취득하지 않았다. [모든 counter·정책·lifecycle·sample raw](raw/profile-audit-final.json)
+
+| profile pattern | source L1 / L2 전→후: encode·reply decode samples | target L1 / L2 전→후: request decode·reply encode samples |
+|---|---|---|
+| request-serial4K | 0·0 /25·7→31·5 |0·0 /13·9→6·8|
+| request-backpressure1K |0·0 /381·169→319·277 |0·0 /86·178→108·118|
+
+L1에는 codec sample이 없고 L2에서 source 양 경로와 target 양 경로가 나타난다. **Serial 표본은 적으며 위 숫자를 CPU/throughput 개선률로 읽지 않는다.** 대기 thread를 포함한 전체 sample 대비 BP source codec 비중은1.48→2.54%, target1.13→1.06%였다. 이 짧은 실제 profile만으로 총 CPU 개선을 입증하지 않는다. [raw](raw/profile-audit-final.json)
+
+보조 probe는 tiered compilation을 끄고 before→after→after→before 순서로 각 연산20만 회의 process CPU를 비교했다. Request decode 평균870→710ms, reply decode785→635ms였고, reply encode control은280→285ms였다. 일반 header decode의 반복 변환 감소를 뒷받침한다. Request encode435→415ms는 control 변동도 있어 정밀한 개선률로 쓰지 않는다. **Throughput/7% 예산 재판정은 감독자 측정으로 남긴다.** [호출 수·모든 개별 raw](raw/cpu-stable-summary.json)
 
 ## 검증
 
 수정 전 golden request/reply bytes·decoded values2개, invalid Unicode2개 통과. Allocation 회귀2개는 escaped 이름 때문에368→928 B/header로 실패했다. [before](raw/regressions-before.log)
 
-최종 focused tests·format 결과와 local commit은 검증 후 기록한다. 변경 파일은 D와 `tests/Zlink.Framework.UnitTests/Runtime/EnvelopeHeaderCacheHotPathTests.cs` 두 개다.
+| 검증 | 최종 결과 |
+|---|---|
+| 관련 Framework tests |9개 class,279개 통과·실패/skip0. Golden bytes·값, escaped allocation2개, unknown Unicode/길이 경계, deadline fraction/offset, codec/flow/reply/error/handoff 포함. [raw](raw/focused-final.log)|
+| allocation 양방향 회귀 |동일 assertion: 이전2개 실패→최종2개 통과. 일반 wire 할당은 유지하고 escaped 이름의560B를 제거했다. [before](raw/regressions-before.log), [after](raw/focused-final.log)|
+| format |`scripts/format/format.sh --check dotnet`:1280개 통과. 최종 변경 후 재검사 진행 중. [첫 검사](raw/format-check.log), [최종 검사](raw/format-check-final.log)|
+| Release build / freshness |production DLL과 source timestamp, client/target에 복사한 Release DLL SHA256 일치. [build](raw/build-after.log), 각 profile fingerprint.json|
+
+변경 파일: D, `framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/EnvelopeHeaderCacheHotPathTests.cs`.
+
+리팩토링 점검: 중복 변환2건을 같은 수정에서 제거했다. Execution-gate 이중 판정·추가 동기화 발견0, 넘긴 항목0. 남은 test 실패0. 중간 신규 test의 C# 문법 오류는 최종 검사 전에 고쳤고 assertion은 완화하지 않았다. Profile 준비 실패·잘린 trace도 삭제하지 않고 판정에서 제외했다.
+
+로컬 commit: 검증 마무리 후 기록. Push·GitHub·sub-agent·internal-docs 사용 없음.
