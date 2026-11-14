@@ -1110,7 +1110,7 @@ int main (int argc, char **argv)
 #endif
         options.pattern = arg_value (argc, argv, "--pattern", "request-serial");
         options.payload_size = std::stoul (arg_value (argc, argv, "--payload-size", "1024"));
-        if (options.payload_size != 1024 && options.payload_size != 4096)
+        if (options.payload_size != 1024 && options.payload_size != 4096 && options.payload_size != 1376 && options.payload_size != 5472)
             throw std::runtime_error ("payload must be 1024 or 4096");
         const auto endpoint = arg_value (argc, argv, "--endpoint", "127.0.0.1:5282");
         options.grpc_endpoint = options.raw_request_endpoint = options.framework_endpoint =
