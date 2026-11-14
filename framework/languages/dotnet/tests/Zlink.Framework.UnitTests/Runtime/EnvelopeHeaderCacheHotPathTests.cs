@@ -378,6 +378,109 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
         );
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RequestAndReplyHeaderBytesAndValuesArePinned(bool response)
+    {
+        var header = new ZLinkEnvelopeHeader(
+            response ? ZLinkMessageKind.Response : ZLinkMessageKind.Request,
+            "bench",
+            response ? string.Empty : "BenchPayload",
+            "application/x-protobuf",
+            "abc123",
+            response ? null : new DateTimeOffset(2026, 11, 13, 12, 34, 56, TimeSpan.Zero),
+            null,
+            null,
+            null
+        );
+        var expected = response
+            ? """{"formatMarker":242,"kind":2,"channelName":"bench","messageName":"","contentType":"application/x-protobuf","correlationId":"abc123","deadline":null,"topic":null,"errorCode":null,"errorMessage":null,"source":null,"flowId":null,"flowOrigin":null}"""
+            : """{"formatMarker":242,"kind":1,"channelName":"bench","messageName":"BenchPayload","contentType":"application/x-protobuf","correlationId":"abc123","deadline":"2026-11-13T12:34:56+00:00","topic":null,"errorCode":null,"errorMessage":null,"source":null,"flowId":null,"flowOrigin":null}""";
+        using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(expected), encoded.ToArray());
+        Assert.Equal(header with { FormatMarker = 242 }, ZLinkEnvelopeCodec.DecodeHeader(encoded));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EscapedKnownHeaderNamesAllocateOnlyTheDecodedValues(bool response)
+    {
+        var header = Header("escaped-allocation") with
+        {
+            Kind = response ? ZLinkMessageKind.Response : ZLinkMessageKind.Request,
+            CorrelationId = "escaped-allocation-1",
+        };
+        using var plain = ZLinkEnvelopeCodec.EncodeHeader(header);
+        var escapedJson = System.Text.RegularExpressions.Regex.Replace(
+            plain.GetString(),
+            "\"([a-zA-Z]+)\":",
+            match =>
+                "\"" + string.Concat(match.Groups[1].Value.Select(c => $"\\u{(int)c:x4}")) + "\":"
+        );
+        using var escaped = Message.From(escapedJson);
+        Assert.Equal(
+            ZLinkEnvelopeCodec.DecodeHeader(plain),
+            ZLinkEnvelopeCodec.DecodeHeader(escaped)
+        );
+        const int calls = 1024;
+        var plainBytes = PerCallAllocation.MinWindow(
+            () => ZLinkEnvelopeCodec.DecodeHeader(plain),
+            calls
+        );
+        var escapedBytes = PerCallAllocation.MinWindow(
+            () => ZLinkEnvelopeCodec.DecodeHeader(escaped),
+            calls
+        );
+        output.WriteLine(
+            $"response={response}: plain={plainBytes / calls}, escaped={escapedBytes / calls} B/header"
+        );
+        Assert.True(
+            escapedBytes <= plainBytes + calls * 16L,
+            $"Escaped field names added {(escapedBytes - plainBytes) / calls} B/header."
+        );
+    }
+
+    [Theory]
+    [InlineData("\\uD800")]
+    [InlineData("\\uDC00")]
+    public void UnknownHeaderNamesStillRequireValidUnicode(string name)
+    {
+        using var encoded = Message.From("{\"formatMarker\":242,\"kind\":3,\"" + name + "\":null}");
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(encoded)
+        );
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(14)]
+    [InlineData(78)]
+    [InlineData(79)]
+    [InlineData(1024)]
+    public void UnknownHeaderNamesPreserveUnicodeValidationAcrossStackBufferBounds(int length)
+    {
+        var prefix = "{\"formatMarker\":242,\"kind\":3,\"" + new string('x', length);
+        using var valid = Message.From(prefix + "키\":null}");
+        Assert.Equal(ZLinkMessageKind.Command, ZLinkEnvelopeCodec.DecodeHeader(valid).Kind);
+        using var invalidEscape = Message.From(prefix + "\\uD800\":null}");
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(invalidEscape)
+        );
+        byte[] invalidBytes =
+        [
+            .. System.Text.Encoding.UTF8.GetBytes(prefix),
+            0xff,
+            .. "\":null}"u8.ToArray(),
+        ];
+        using var invalidUtf8 = Message.From(invalidBytes);
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(invalidUtf8)
+        );
+    }
+
     private static ZLinkEnvelopeHeader Header(string messageName) =>
         new(
             ZLinkMessageKind.Command,
