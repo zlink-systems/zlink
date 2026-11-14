@@ -2,9 +2,11 @@
 set -euo pipefail
 job=/root/jobs/fx/cx/v21/s033/lfx-java
 old=$1 new=$2 group=$3
+variant=${RUN_VARIANT:-attempt4}
 case "$group" in
   1) cells=("send-saturation 1024" "send-saturation 4096" "request-serial 1024");;
   2) cells=("request-serial 4096" "request-backpressure 1024" "request-backpressure 4096");;
+  all) cells=("send-saturation 1024" "send-saturation 4096" "request-serial 1024" "request-serial 4096" "request-backpressure 1024" "request-backpressure 4096");;
   *) echo 'group must be 1 or 2' >&2; exit 2;;
 esac
 if [[ "${LFX_HOLD_ACTIVE:-0}" != 1 ]]; then
@@ -30,18 +32,18 @@ printf -- '- hold C2·C3 verified disabled on CPU 0 and 8 at %s\n' "$(date -u +%
 for item in "${cells[@]}"; do
   read -r pattern size <<< "$item"
   for step in "$old" "$new"; do
-    RAW_VARIANT=attempt4 bash "$job/tools/run-one.sh" "$step" "$pattern" "$size" warm
-    RAW_VARIANT=attempt4 bash "$job/tools/run-one.sh" "$step" "$pattern" "$size" counted-1
+    RAW_VARIANT="$variant" bash "$job/tools/run-one.sh" "$step" "$pattern" "$size" warm
+    RAW_VARIANT="$variant" bash "$job/tools/run-one.sh" "$step" "$pattern" "$size" counted-1
   done
-  old_rate=$(awk -v o="$old" -v p="$pattern" -v s="$size" '$1==o && $2==p && $3==s && $4=="counted-1" && $5=="yes" {r=$6} END{print r}' "$job/raw/attempt4/index.tsv")
-  new_rate=$(awk -v o="$new" -v p="$pattern" -v s="$size" '$1==o && $2==p && $3==s && $4=="counted-1" && $5=="yes" {r=$6} END{print r}' "$job/raw/attempt4/index.tsv")
+  old_rate=$(awk -v o="$old" -v p="$pattern" -v s="$size" '$1==o && $2==p && $3==s && $4=="counted-1" && $5=="yes" {r=$6} END{print r}' "$job/raw/$variant/index.tsv")
+  new_rate=$(awk -v o="$new" -v p="$pattern" -v s="$size" '$1==o && $2==p && $3==s && $4=="counted-1" && $5=="yes" {r=$6} END{print r}' "$job/raw/$variant/index.tsv")
   loss=$(awk -v a="$old_rate" -v b="$new_rate" 'BEGIN{if(a>0) printf "%.6f",1-b/a; else print 99}')
   if awk -v x="$loss" 'BEGIN{exit !(x>=0.05 && x<=0.09)}'; then
     printf -- '- %s-%s %s-%s first-pair loss=%s%% in 5–9%% boundary; adding two counted pairs inside this hold\n' "$old" "$new" "$pattern" "$size" "$(awk -v x="$loss" 'BEGIN{printf "%.2f",x*100}')" >> "$job/progress.md"
     for n in 2 3; do
       for step in "$old" "$new"; do
-        RAW_VARIANT=attempt4 bash "$job/tools/run-one.sh" "$step" "$pattern" "$size" "warm-extra$n"
-        RAW_VARIANT=attempt4 bash "$job/tools/run-one.sh" "$step" "$pattern" "$size" "counted-$n"
+        RAW_VARIANT="$variant" bash "$job/tools/run-one.sh" "$step" "$pattern" "$size" "warm-extra$n"
+        RAW_VARIANT="$variant" bash "$job/tools/run-one.sh" "$step" "$pattern" "$size" "counted-$n"
       done
     done
   fi
