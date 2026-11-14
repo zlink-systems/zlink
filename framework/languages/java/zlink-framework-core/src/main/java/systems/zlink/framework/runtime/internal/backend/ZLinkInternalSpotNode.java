@@ -437,6 +437,23 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     default CompletionStage<Void> closeActorBoundSessionAsync(
             ZLinkBackendActorRef actor, Duration timeout) {
+        return closeActorBoundSessionAsync(
+                actor,
+                timeout,
+                () ->
+                        CompletableFuture.failedFuture(
+                                new systems.zlink.framework.errors.ZLinkFrameworkException(
+                                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                                .INVALID_OPERATION,
+                                        "No current session binding exists for Actor "
+                                                + actor.actorId())));
+    }
+
+    /** Reads and submits in the binding owner's turn; the caller owns the unbound result. */
+    default CompletionStage<Void> closeActorBoundSessionAsync(
+            ZLinkBackendActorRef actor,
+            Duration timeout,
+            Supplier<CompletionStage<Void>> whenUnbound) {
         return java.util.concurrent.CompletableFuture.failedFuture(
                 new UnsupportedOperationException("Session close is unavailable"));
     }

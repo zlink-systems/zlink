@@ -1375,14 +1375,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     @Override
     public CompletionStage<Void> closeActorBoundSessionAsync(
-            ZLinkBackendActorRef actor, Duration timeout) {
+            ZLinkBackendActorRef actor,
+            Duration timeout,
+            Supplier<CompletionStage<Void>> whenUnbound) {
         BindingEntry entry = actorBindings.get(actor.actorId());
-        if (entry == null || !entry.binding().actor().equals(actor))
-            return CompletableFuture.failedFuture(
-                    new systems.zlink.framework.errors.ZLinkFrameworkException(
-                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                                    .INVALID_OPERATION,
-                            "No current session binding exists for Actor " + actor.actorId()));
+        if (entry == null || !entry.binding().actor().equals(actor)) return whenUnbound.get();
         var binding = entry.binding();
         return owner.requestBoundSessionClose(
                 new ZLinkServiceM6BWireCodec.BoundSessionClose(
