@@ -1,12 +1,7 @@
 package systems.zlink.stream.connector;
 
-import java.net.ProxySelector;
-import java.net.http.HttpClient;
-import java.security.GeneralSecurityException;
-import java.security.SecureRandom;
 import java.security.cert.CertPathValidatorException;
 import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -23,10 +18,6 @@ import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
-
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 
 final class ZLinkStreamConnectionLifecycle {
     private final ZLinkStreamConnectorConfiguration configuration;
@@ -343,12 +334,9 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     private CompletionStage<ZLinkWebSocketTransportConnection> connectWebSocketStage() {
-        HttpClient.Builder clientBuilder = HttpClient.newBuilder().proxy(ProxySelector.of(null));
-        if (configuration.transport().skipServerCertificateValidation()) {
-            clientBuilder.sslContext(insecureSslContext());
-        }
         return ZLinkWebSocketTransportConnection.connectStage(
-                clientBuilder.build(),
+                ZLinkStreamExecutionResources.webSocketClient(
+                        configuration.transport().skipServerCertificateValidation()),
                 configuration.endpoint(),
                 configuration.limits().receivePayload());
     }
@@ -734,34 +722,6 @@ final class ZLinkStreamConnectionLifecycle {
         } catch (Throwable ex) {
             errorPublisher.accept(DefaultZLinkStreamConnector.userCallbackFailed(ex));
             return CompletableFuture.completedFuture(null);
-        }
-    }
-
-    private static SSLContext insecureSslContext() {
-        try {
-            TrustManager[] trustAllManagers =
-                    new TrustManager[] {
-                        new X509TrustManager() {
-                            @Override
-                            public void checkClientTrusted(
-                                    X509Certificate[] chain, String authType) {}
-
-                            @Override
-                            public void checkServerTrusted(
-                                    X509Certificate[] chain, String authType) {}
-
-                            @Override
-                            public X509Certificate[] getAcceptedIssuers() {
-                                return new X509Certificate[0];
-                            }
-                        }
-                    };
-            SSLContext context = SSLContext.getInstance("TLS");
-            context.init(null, trustAllManagers, new SecureRandom());
-            return context;
-        } catch (GeneralSecurityException ex) {
-            throw ZLinkStreamException.configurationError(
-                    "failed to create insecure TLS context", ex);
         }
     }
 
