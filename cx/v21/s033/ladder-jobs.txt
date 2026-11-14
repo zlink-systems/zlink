@@ -13,3 +13,4 @@ N2env|Node L2 envelope JS 비용 production 수정(sol)|n2env
 Nbench2|Node L1 permit 전 단계 production 예약 교정(sol)|nbench2
 Jbench2|Java L1 permit 전 단계 production 예약 교정(sol)|jbench2
 Cbench2|C++ L1 permit 전 단계 production 예약 교정(sol)|cbench2
+D1rx|.NET L0→L1 serial 1K receive 비용 진단·수정(sol)|d1rx
