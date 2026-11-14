@@ -143,16 +143,25 @@ class encoder_t
         if (_level >= 0 && _level < 2)
             return {message (request_envelope ()), std::move (body)};
         messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (
-          command ? messaging::message_kind_t::command : messaging::message_kind_t::request,
-          "bench", "BenchPayload", command ? std::chrono::milliseconds (0) : timeout, {}, {},
-          _type->content_type);
         auto encoded = fw::detail::encoded_payload_from_raw (std::move (body));
-        auto envelope = command
-          ? codec.encode_payload_parts (header, std::move (encoded), _type->content_type)
-          : (_level >= 3 || _level < 0)
-            ? codec.encode_service_payload_parts (std::move (header), std::move (encoded), _type, _channel)
-            : codec.encode_payload_parts (std::move (header), std::move (encoded), _type, _channel);
+        messaging::message_parts_t envelope;
+        if (command) {
+            // The production caller borrows names and moves the serializer's
+            // content type into the header in encode_node_send_parts.
+            envelope = codec.encode_node_send_parts (
+              _channel_name, _packet_name, _target, {}, _dispatch, _serializers,
+              [&] (fw::serializer_registry_t &) {
+                  return fw::serialized_payload_t{std::move (encoded), _type->content_type};
+              });
+        } else {
+            // route_client_t::submit_request_reply_message_erased leaves names
+            // and content type in the prepared plans, which outlive encoding.
+            auto header = codec.create_envelope (
+              messaging::message_kind_t::request, {}, {}, timeout, {}, {}, {});
+            envelope = (_level >= 3 || _level < 0)
+              ? codec.encode_service_payload_parts (std::move (header), std::move (encoded), _type, _channel)
+              : codec.encode_payload_parts (std::move (header), std::move (encoded), _type, _channel);
+        }
         if (_level >= 3 || _level < 0) {
             auto application = std::move (envelope).take_application_payload ();
             return {command ? protocol::encode_node_send_header_message ()
@@ -166,6 +175,11 @@ class encoder_t
     int _level;
     std::shared_ptr<const fw::detail::request_type_plan_t> _type;
     std::shared_ptr<const fw::detail::prepared_header_fragment_t> _channel;
+    const std::string _channel_name = "bench";
+    const std::string _packet_name = "BenchPayload";
+    const zlink::routing_id_t _target = zlink::routing_id_t::from ("bench-server");
+    const fw::dispatch_options_t _dispatch;
+    fw::serializer_registry_t _serializers;
 };
 
 inline std::vector<std::span<const std::byte>> application_views (
@@ -337,7 +351,8 @@ Payload decode_reply (const std::vector<zlink::message_t> &parts, int level,
     if (views.size () != 2)
         throw std::runtime_error ("ladder reply must have two application parts");
     if (level >= 2 || level < 0) {
-        auto decoded = messaging::envelope_codec_t{}.decode_header (views[0], false);
+        auto decoded = messaging::envelope_codec_t{}.decode_header_view (
+          messaging::message_parts_t::borrow (views), false);
         const auto &header = decoded.value ();
         if (header.kind == messaging::message_kind_t::error)
             throw messaging::request_failure_mapper_t{}.error_header_exception (

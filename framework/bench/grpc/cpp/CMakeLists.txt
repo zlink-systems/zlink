@@ -189,6 +189,11 @@ target_link_libraries(bench_cpp_submit_threads_test PRIVATE zlink::framework_cod
 add_test(NAME bench_cpp_submit_threads COMMAND bench_cpp_submit_threads_test)
 
 if(ZLINK_CPP_ABLATION_LADDER)
+  add_executable(bench_cpp_ladder_wire_identity_test tests/ladder_wire_identity_test.cpp ${BENCH_PROTO_CC})
+  bench_target(bench_cpp_ladder_wire_identity_test)
+  target_include_directories(bench_cpp_ladder_wire_identity_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+  target_link_libraries(bench_cpp_ladder_wire_identity_test PRIVATE zlink::framework_codec_protobuf)
+  add_test(NAME bench_cpp_ladder_wire_identity COMMAND bench_cpp_ladder_wire_identity_test)
   add_executable(bench_cpp_ladder_contract_test tests/ladder_contract_test.cpp ${BENCH_PROTO_CC})
   bench_target(bench_cpp_ladder_contract_test)
   target_include_directories(bench_cpp_ladder_contract_test PRIVATE ${BENCH_PROTO_GEN_DIR})
@@ -207,7 +212,8 @@ if(ZLINK_CPP_ABLATION_LADDER)
   set_tests_properties(bench_cpp_ladder_L5_7 PROPERTIES
     ENVIRONMENT "ZLINK_CPP_LADDER_LEVEL=7" TIMEOUT 30)
   foreach(target IN ITEMS bench_cpp_framework_server bench_cpp_client bench_cpp_submit_threads_test
-                          bench_cpp_ladder_contract_test bench_cpp_ladder_route_contract_test)
+                          bench_cpp_ladder_contract_test bench_cpp_ladder_route_contract_test
+                          bench_cpp_ladder_wire_identity_test)
     target_include_directories(${target} PRIVATE
       "${BENCH_REPO_ROOT}/framework/languages/cpp/framework/src"
       "${BENCH_REPO_ROOT}/framework/runtime/protocol/generated/cpp")
