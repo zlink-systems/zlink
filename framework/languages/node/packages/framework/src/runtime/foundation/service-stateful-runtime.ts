@@ -1883,8 +1883,10 @@ export class ServiceStatefulRuntime {
     this.submitRequest(
       pending,
       targetNodeRid,
-      // A lookup asks a Node address where an Actor is, like a Node request: no G.
-      undefined,
+      // #4462: lookup keeps its current target selection until the stream route comes from
+      // Location Store authority.
+      this.raw.peerLifecycleGeneration(targetNodeRid) ??
+        this.raw.topology.admittedPeer(targetNodeRid)?.descriptor.lifecycleGeneration,
       [encodeActorLookupHeader(pending.id, actorId)],
       timeoutMs,
       'actorLookup'
@@ -5960,11 +5962,9 @@ export class ServiceStatefulRuntime {
   }
 
   private ingressSourceGeneration(ingress: RawServiceIngressRecord): bigint {
+    if (ingress.sourceNodeGeneration !== undefined) return ingress.sourceNodeGeneration;
     if (ingress.sourceRoutingId === this.nodeRid) return this.nodeGeneration;
-    if (ingress.sourceNodeGeneration === undefined) {
-      throw requestSourceUnavailable(ingress.sourceRoutingId);
-    }
-    return ingress.sourceNodeGeneration;
+    throw requestSourceUnavailable(ingress.sourceRoutingId);
   }
 
   private commitJoinedActor(

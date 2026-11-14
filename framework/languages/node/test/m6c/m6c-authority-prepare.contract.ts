@@ -113,8 +113,16 @@ async function fixture() {
     'admitted'
   );
   raw.connectPeerByRoutingId('inproc://target', 'target', 'default', 11n);
-  const backend = Object.create(ZLinkNodeRawMeshBackend.prototype) as ZLinkNodeRawMeshBackend;
-  Object.defineProperty(backend, 'requireRuntime', { value: () => raw });
+  const backend = new ZLinkNodeRawMeshBackend(
+    'authority',
+    'source',
+    {} as never,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { raw }
+  );
   const requests = new RequestRuntime();
   const host = new ZLinkHostServiceRelocationRuntime({
     requests,

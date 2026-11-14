@@ -21,6 +21,13 @@ import {
 } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
 import type { ServiceNodeDescriptor } from '../../packages/framework/src/runtime/foundation/service-topology-registry';
 import type { RawServiceIngressRecord } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
+import {
+  encodeActorCreateHeader,
+  encodeBoundSessionBindHeader,
+  encodeBoundSessionReplacedHeader,
+  M6bServiceWireCommand
+} from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
+import type { ServiceMailboxRecord } from '../../packages/framework/src/runtime/foundation/service-mailbox';
 
 const payload = {
   packetName: 'Authority',
@@ -89,6 +96,12 @@ async function fixture(discovery: 'newer' | 'older' | 'absent' = 'newer') {
   assert.equal(await raw.pumpOne(), 'infrastructure');
   if (discovery === 'newer')
     raw.connectPeerByRoutingId('inproc://target', 'target', 'default', 11n);
+  let ingress!: Parameters<RawServiceMeshRuntime['setServiceIngress']>[0];
+  const setServiceIngress = raw.setServiceIngress.bind(raw);
+  raw.setServiceIngress = (handler, accepts) => {
+    ingress = handler;
+    setServiceIngress(handler, accepts);
+  };
   const runtime = new ServiceStatefulRuntime(raw, 'source', 7n);
   const spot = {
     spot: { spotId: 'room', generation: 3n },
@@ -135,6 +148,7 @@ async function fixture(discovery: 'newer' | 'older' | 'absent' = 'newer') {
     actor,
     instance,
     reservation,
+    ingress: (record: RawServiceIngressRecord) => ingress(record),
     start(path: string, timeoutMs: number): Promise<unknown> {
       if (path === 'Spot')
         return runtime.requestToSpot('source-room', spot, payload, timeoutMs).promise;
@@ -331,12 +345,14 @@ for (const discovery of ['absent', 'newer'] as const) {
           sourceNodeGeneration: senderGeneration,
           requestSequence: 1n,
           reply() {},
-          parts: [],
+          command: M6bServiceWireCommand.actorCreate,
+          flags: 0,
+          parts: [encodeActorCreateHeader(record)],
           applicationJobOwner: owner
         } as unknown as RawServiceIngressRecord;
         try {
           assert.equal(
-            f.runtime['handleUserSpotOperation'](ingress, record),
+            await f.ingress(ingress),
             senderGeneration === 7n ? 'infrastructure' : 'protocolError'
           );
           await turn();
@@ -359,10 +375,13 @@ test('request source acceptance uses ingress G and local runtime G', async () =>
       return { nodeRid, nodeGeneration, ownerId: 'owner', leaseGeneration: 1n };
     });
     for (const sourceRoutingId of ['target', 'source']) {
-      f.runtime['acceptRequestSource']({
-        sourceRoutingId,
-        sourceNodeGeneration: 8n
-      } as RawServiceIngressRecord);
+      await f.runtime.prepareDispatch(
+        {
+          ingress: { sourceRoutingId, sourceNodeGeneration: 8n },
+          stateful: {}
+        } as ServiceMailboxRecord,
+        new AbortController().signal
+      );
     }
     assert.deepEqual(seen, [8n, 7n]);
   } finally {
@@ -381,17 +400,27 @@ test('active bind resolves the received sender G without a discovery expectation
         return undefined;
       }
     });
-    await f.runtime['replySessionBind'](
-      {
-        sourceRoutingId: 'target',
-        sourceNodeGeneration: 8n,
-        requestSequence: 1n,
-        reply() {}
-      } as unknown as RawServiceIngressRecord,
-      { binding: { state: 'active', generation: 1n }, correlation: 1n } as Parameters<
-        ServiceStatefulRuntime['replySessionBind']
-      >[1]
-    );
+    await f.ingress({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'target',
+      sourceNodeGeneration: 8n,
+      requestSequence: 1n,
+      reply() {},
+      parts: [
+        encodeBoundSessionBindHeader(
+          1n,
+          {
+            actor: f.actor,
+            targetNodeGeneration: 7n,
+            authorityOwnerGeneration: 5n,
+            ownerLeaseGeneration: 13n
+          },
+          'session',
+          { state: 'active', generation: 1n }
+        )
+      ]
+    } as RawServiceIngressRecord);
     assert.equal(seen, 8n);
   } finally {
     f.close();
@@ -410,15 +439,30 @@ for (const senderGeneration of [7n, 8n]) {
         },
         peer: async () => undefined
       });
-      f.runtime['handleBoundSessionReplaced'](
-        {
-          sourceRoutingId: 'target',
-          sourceNodeGeneration: senderGeneration
-        } as RawServiceIngressRecord,
-        { actorAuthority: { actor: f.actor, targetNodeGeneration: 7n } } as Parameters<
-          ServiceStatefulRuntime['handleBoundSessionReplaced']
-        >[1]
-      );
+      await f.ingress({
+        command: M6bServiceWireCommand.boundSessionReplaced,
+        flags: 0,
+        sourceRoutingId: 'target',
+        sourceNodeGeneration: senderGeneration,
+        parts: [
+          encodeBoundSessionReplacedHeader(
+            {
+              actor: f.actor,
+              targetNodeGeneration: 7n,
+              authorityOwnerGeneration: 5n,
+              ownerLeaseGeneration: 13n
+            },
+            {
+              sessionOwnerNodeRid: 'source',
+              sessionOwnerNodeGeneration: 7n,
+              sessionOwnerId: 'owner',
+              sessionOwnerLeaseGeneration: 1n,
+              sessionRid: 'session',
+              retiredBindingGeneration: 3n
+            }
+          )
+        ]
+      } as RawServiceIngressRecord);
       assert.equal(accepted, senderGeneration === 7n);
     } finally {
       f.close();
@@ -429,34 +473,52 @@ for (const senderGeneration of [7n, 8n]) {
     const f = await fixture('absent');
     try {
       let accepted = false;
+      const localActor = f.runtime.createActor('actor').ref;
       Object.defineProperty(f.runtime.registry, 'binding', {
         value: () => ({
+          actor: localActor,
           bindingGeneration: 3n,
           sessionRid: 'session',
           sessionOwnerNodeRid: 'target',
-          sessionOwnerNodeGeneration: 7n
+          sessionOwnerNodeGeneration: 7n,
+          sessionOwnerId: 'owner',
+          sessionOwnerLeaseGeneration: 1n
         })
       });
-      Object.defineProperty(f.runtime, 'enqueueSessionBindingRetirement', {
-        value: () => {
+      const owner = await f.raw.reserveLocalIngress();
+      Object.defineProperty(f.raw.mailbox, 'tryEnqueue', {
+        value: (record: ServiceMailboxRecord) => {
           accepted = true;
+          record.applicationJob?.close();
           return true;
         }
       });
-      f.runtime['enqueueSessionBindingTombstone'](
-        {
+      try {
+        await f.ingress({
+          command: M6bServiceWireCommand.boundSessionBind,
+          flags: 0,
           sourceRoutingId: 'target',
           sourceNodeGeneration: senderGeneration,
           requestSequence: 1n,
-          reply() {}
-        } as unknown as RawServiceIngressRecord,
-        {
-          actor: { actor: f.actor },
-          binding: { state: 'tombstone', retiredGeneration: 3n },
-          sessionRid: 'session',
-          correlation: 1n
-        } as Parameters<ServiceStatefulRuntime['enqueueSessionBindingTombstone']>[1]
-      );
+          reply() {},
+          applicationJobOwner: owner,
+          parts: [
+            encodeBoundSessionBindHeader(
+              1n,
+              {
+                actor: localActor,
+                targetNodeGeneration: 7n,
+                authorityOwnerGeneration: 1n,
+                ownerLeaseGeneration: 1n
+              },
+              'session',
+              { state: 'tombstone', retiredGeneration: 3n }
+            )
+          ]
+        } as RawServiceIngressRecord);
+      } finally {
+        owner.close();
+      }
       assert.equal(accepted, senderGeneration === 7n);
     } finally {
       f.close();
