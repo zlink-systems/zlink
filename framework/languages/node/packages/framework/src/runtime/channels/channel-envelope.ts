@@ -10,6 +10,7 @@ import {
   type ZLinkFlowOrigin
 } from '../../contracts';
 import { borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
+import { allocatePayloadBytes } from '../../contracts/Common/payload-slab';
 import {
   isZLinkMessage,
   materializeZLinkMessageValue,
@@ -496,16 +497,17 @@ function encodePayload(
       value = value.decode();
     }
     const selected = selectSerializerWithContentType(value, codecs, declaredType);
-    if (
-      selected !== undefined &&
-      !(Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value))
-    ) {
+    contentType = contentTypeOf(value);
+    if (selected !== undefined && contentType !== BINARY_CONTENT_TYPE) {
       const payload = selected.serializer.serialize(value);
       contentType = selected.contentType;
       message = borrowEncodedPayload(payload) ?? payload.data();
     } else {
-      contentType = contentTypeOf(value);
-      message = toMessageLike(value, readZLinkPacketJsonContract(packetName)?.[contractPart]);
+      message = toMessageLike(
+        value,
+        contentType,
+        readZLinkPacketJsonContract(packetName)?.[contractPart]
+      );
     }
   }
   const flow = request ?? (createFlow ? currentOrCreateFlow('Application') : undefined);
@@ -532,9 +534,9 @@ function encodePayload(
   ];
 }
 
-function toMessageLike(value: unknown, schema?: ZLinkJsonSchema): MessageLike {
-  if (Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value)) {
-    return value;
+function toMessageLike(value: unknown, contentType: string, schema?: ZLinkJsonSchema): MessageLike {
+  if (contentType === BINARY_CONTENT_TYPE) {
+    return value as MessageLike;
   }
   return encodeJsonText(value, schema);
 }
@@ -634,7 +636,7 @@ function encodeChannelHeader(
     flowId,
     flowOrigin
   );
-  const result = Buffer.alloc(measure.byteLength);
+  const result = allocatePayloadBytes(measure.byteLength);
   const writer = new ChannelHeaderWriter(result);
   writeChannelHeader(
     writer,
@@ -706,7 +708,7 @@ function preparedChannelHeader(
     flows.set(flowOrigin, prepared);
   }
   if (correlationId === null && flowId === undefined) return prepared.bytes;
-  const bytes = Buffer.allocUnsafe(prepared.bytes.byteLength);
+  const bytes = allocatePayloadBytes(prepared.bytes.byteLength);
   prepared.bytes.copy(bytes);
   if (correlationId !== null)
     bytes.write(
