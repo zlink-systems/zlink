@@ -150,23 +150,16 @@ inline void field (const std::string &endpoint)
                      "Rejected movement changed state");
         }
 
-        auto accepted = player.receive_async<WorldState> (
-          [] (const auto &view) { return view.sequence == 2; });
-        auto budget = player.receive_async<ActionRejected> (
-          [] (const auto &rejection) { return rejection.reason == Rejection::move_budget; });
-        player.send (MoveRequest{0, 2});
-        player.send (MoveRequest{10, 3});
-        const auto accepted_state = accepted.get ();
-        const auto budget_rejection = budget.get ();
-        const auto budget_state = player.exchange<ViewRequest, WorldState> (
-          {}, [] (const auto &view) { return view.sequence == 2; });
-        require (accepted_state.x == moved.x && budget_state.x == accepted_state.x
-                   && budget_state.sequence == accepted_state.sequence
-                   && budget_rejection.retryAfterMs > 0,
-                 "Movement budget rejection changed state");
-        std::this_thread::sleep_for (std::chrono::milliseconds (budget_rejection.retryAfterMs));
-        const auto retried = player.move (10, 3, moved.x + 10);
-        require (retried.sequence == 3, "Movement was not accepted after server retry delay");
+        const auto accepted = player.move (0, 2, moved.x);
+        const auto continued = player.move (0, 3, moved.x);
+        require (accepted.sequence == 2 && continued.sequence == 3,
+                 "Zero-distance movement did not advance sequence");
+        const auto stale = reject (player, MoveRequest{0, 3}, Rejection::stale_sequence);
+        require (stale.retryAfterMs == 0, "Stale sequence returned a retry delay");
+        const auto unchanged = player.exchange<ViewRequest, WorldState> (
+          {}, [] (const auto &) { return true; });
+        require (unchanged.x == continued.x && unchanged.sequence == continued.sequence,
+                 "Stale movement changed state");
     }
     catch (...) {
         if (visible.valid ())

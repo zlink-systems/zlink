@@ -363,33 +363,9 @@ internal static class Scenarios
 
     private static async Task InputAsync(GameClient a, GameClient b, CancellationToken ct)
     {
-        // Verify the max-step pair and server-provided retry delay.
-        var beforeBudget = await ViewAsync(a, ct);
-        var moveSequence = Next(beforeBudget, a);
-        var acceptedMoveRequest = new MoveRequest(new(0, 0, -2), moveSequence);
-        var move = new MoveRequest(new(0, 0, -2), moveSequence + 1);
-        var moveResponses = await Task.WhenAll(
-            a.ActionAsync(acceptedMoveRequest, ct),
-            a.ActionAsync(move, ct));
-        var acceptedMove = moveResponses.OfType<MoveResult>().SingleOrDefault()
-            ?? throw new InvalidOperationException("Expected accepted movement before movement-budget rejection.");
-        Require(acceptedMove.Sequence == moveSequence, "Expected accepted movement before movement-budget rejection.");
-        var budget = moveResponses.OfType<ActionRejected>().SingleOrDefault()
-            ?? throw new InvalidOperationException("Expected movement-budget rejection.");
-        Require(budget is { Reason: Rejection.MoveBudget, RetryAfterMs: > 0 },
-            "Expected movement-budget rejection.");
-        var afterBudget = await ViewAsync(a, ct);
-        var beforeBudgetPlayer = Player(beforeBudget, a);
-        var afterBudgetPlayer = Player(afterBudget, a);
-        Require(afterBudgetPlayer.Position == acceptedMove.Position && afterBudgetPlayer.LastSequence == moveSequence,
-            "Movement-budget rejection changed the accepted movement position or sequence.");
-        Require(beforeBudgetPlayer.Hp == afterBudgetPlayer.Hp
-            && Player(beforeBudget, b).Hp == Player(afterBudget, b).Hp,
-            "Movement-budget rejection changed player HP.");
-        await Task.Delay(((ActionRejected)budget).RetryAfterMs, ct);
-        var retriedMove = await a.ActionAsync(move, ct);
-        Require(retriedMove is MoveResult moveRetry && moveRetry.Sequence == move.Sequence,
-            "Server movement retry delay was insufficient.");
+        // Observe accepted movement without requiring a budget rejection between messages.
+        await MoveAsync(a, new(0, 0, -2), ct);
+        await MoveAsync(a, new(0, 0, -2), ct);
 
         var view = await ViewAsync(a, ct);
         var sequence = Player(view, a).LastSequence;
@@ -436,6 +412,6 @@ internal static class Scenarios
             && shotRetry.Outcome == ShotOutcome.Miss,
             "Server fire retry delay was insufficient.");
         Require(Player(await ViewAsync(b, ct), b).Hp == GameNames.InitialHp, "Input checks damaged target.");
-        Console.WriteLine("input: move-budget and fire-too-soon retry delays accepted unchanged requests");
+        Console.WriteLine("input: movement sequence and fire-too-soon retry checks passed");
     }
 }

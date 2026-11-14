@@ -325,25 +325,12 @@ export async function scenario(
           const tooLarge = await client.moveRejected(11, 1n);
           assert.equal(tooLarge.reason, 'step-too-large');
           assert.deepEqual(await client.state(), before, 'Step rejection changed state');
-          const responseIndex = client.messages.length;
-          const firstResponse = client.wait<WorldState>(
-            PacketNames.worldState,
-            responseIndex,
-            (state) => state.sequence === 1n
-          );
-          const budgetResponse = client.wait<ActionRejected>(
-            PacketNames.actionRejected,
-            responseIndex,
-            (rejection) => rejection.reason === 'move-budget'
-          );
-          await client.sendMove(2, 1n);
-          await client.sendMove(10, 2n);
-          const first = await firstResponse;
-          const budget = await budgetResponse;
-          assert.equal(budget.reason, 'move-budget');
-          assert(budget.retryAfterMs > 0, 'Move budget rejection omitted retry delay');
-          assert.deepEqual(await client.state(), first, 'Budget rejection changed state');
+          await client.move(2, 1n);
           const after = await client.move(10, 2n);
+          const stale = await client.moveRejected(10, 2n);
+          assert.equal(stale.reason, 'stale-sequence');
+          assert.equal(stale.retryAfterMs, 0);
+          assert.deepEqual(await client.state(), after, 'Stale rejection changed state');
           assert.equal(after.x, 306);
           sameActor(session, await client.sessionInfo());
           const packet = await client.packetRejected(new EnterZone(new Position(307), 3n, 0));

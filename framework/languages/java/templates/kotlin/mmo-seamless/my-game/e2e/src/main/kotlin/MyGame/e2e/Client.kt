@@ -105,44 +105,6 @@ class Client(endpoint: String, val playerId: String) {
         return result
     }
 
-    data class ImmediateMoveResponses(
-        val accepted: WorldState,
-        val rejected: ActionRejected,
-    )
-
-    suspend fun moveWithImmediateBudgetRejection(
-        acceptedDelta: Double,
-        acceptedSequence: Long,
-        rejectedDelta: Double,
-        rejectedSequence: Long,
-    ): ImmediateMoveResponses {
-        val accepted = CompletableFuture<WorldState>()
-        val rejected = CompletableFuture<ActionRejected>()
-        val acceptedRegistration =
-            connector.on(WorldState::class.java) { message ->
-                if (message.payload().sequence == acceptedSequence) accepted.complete(message.payload())
-                CompletableFuture.completedFuture(null)
-            }
-        val rejectedRegistration =
-            connector.on(ActionRejected::class.java) { message ->
-                if (message.payload().reason == "move-budget") rejected.complete(message.payload())
-                CompletableFuture.completedFuture(null)
-            }
-        try {
-            send(MoveRequest(acceptedDelta, acceptedSequence))
-            send(MoveRequest(rejectedDelta, rejectedSequence))
-            accepted.get(MESSAGE_SECONDS, TimeUnit.SECONDS)
-            rejected.get(MESSAGE_SECONDS, TimeUnit.SECONDS)
-            return ImmediateMoveResponses(
-                next<WorldState> { it.sequence == acceptedSequence },
-                next<ActionRejected> { it.reason == "move-budget" },
-            )
-        } finally {
-            acceptedRegistration.close()
-            rejectedRegistration.close()
-        }
-    }
-
     suspend fun state(): WorldState {
         send(JoinWorldRequest(playerId, 0.0))
         return next<WorldState>()

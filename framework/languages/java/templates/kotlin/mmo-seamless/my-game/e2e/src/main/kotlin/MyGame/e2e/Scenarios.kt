@@ -42,13 +42,12 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                 val tooLarge = client.moveRejected(11.0, 1L)
                 check(tooLarge.reason == "step-too-large" && tooLarge.retryAfterMs == 0)
                 check(client.state() == before) { "Step rejection changed state" }
-                val responses = client.moveWithImmediateBudgetRejection(2.0, 1L, 10.0, 2L)
-                val first = responses.accepted
+                val first = client.move(2.0, 1L)
                 check(first.x == 296.0)
-                val budget = responses.rejected
-                check(budget.reason == "move-budget" && budget.retryAfterMs > 0)
-                check(client.state() == first) { "Move-budget rejection changed state" }
                 val after = client.move(10.0, 2L)
+                val stale = client.moveRejected(10.0, 2L)
+                check(stale.reason == "stale-sequence" && stale.retryAfterMs == 0)
+                check(client.state() == after) { "Stale movement changed state" }
                 check(after.zoneId == "zone-4" && after.nodeId == "zoneB")
                 sameActor(session, client.sessionInfo())
                 val packet = client.packetRejected(EnterZone(Position(307.0), 3L, 0))

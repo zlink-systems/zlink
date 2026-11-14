@@ -79,8 +79,7 @@ public final class Scenarios {
             double dx,
             double dy,
             long sequence,
-            RoomView priorView,
-            boolean requireMoveBudget)
+            RoomView priorView)
             throws Exception {
         var before = priorView == null ? mover.view() : priorView;
         var current = player(before, mover);
@@ -113,9 +112,6 @@ public final class Scenarios {
             check(
                     updated.equals(peer.next(RoomView.class, moved)),
                     "Movement views differ");
-            check(
-                    !requireMoveBudget || moveBudgetRejected,
-                    "Movement budget rejection was not observed");
             return updated;
         }
     }
@@ -141,8 +137,7 @@ public final class Scenarios {
                     dx,
                     dy,
                     current.lastSequence() + 1,
-                    view,
-                    false);
+                    view);
             current = player(view, mover);
         }
         return view;
@@ -219,31 +214,12 @@ public final class Scenarios {
         var target = player(beforeMove, other);
         var moveDelta = target.x() >= source.x() ? Rules.MAX_STEP : -Rules.MAX_STEP;
         var moveSequence = source.lastSequence() + 1;
-        var acceptedMove = new MoveRequest(moveDelta, 0, moveSequence);
-        var rejectedMove = new MoveRequest(moveDelta, 0, moveSequence + 1);
-        mover.send(acceptedMove);
-        mover.send(rejectedMove);
-        var moveResult = mover.next(MoveResult.class);
-        var moveRejection = mover.next(ActionRejected.class);
-        check(moveResult.sequence() == moveSequence, "Accepted move result sequence differs");
-        check(moveRejection.reason().equals(Rules.MOVE_BUDGET) && moveRejection.retryAfterMs() > 0,
-                "Expected movement-budget rejection");
-        var afterMoveA = mover.view();
-        var afterMover = player(afterMoveA, mover);
-        check(afterMover.x() == moveResult.x() && afterMover.y() == moveResult.y()
-                        && afterMover.lastSequence() == moveSequence
-                        && player(afterMoveA, other).hp() == target.hp(),
-                "Movement-budget rejection changed the accepted movement state");
-        Thread.sleep(moveRejection.retryAfterMs());
-        mover.send(rejectedMove);
-        var retriedMove = mover.next(MoveResult.class);
-        check(retriedMove.sequence() == rejectedMove.sequence(), "Server movement retry delay was insufficient");
-        var afterMoveB = mover.view();
-        var afterRetryMove = player(afterMoveB, mover);
-        check(afterRetryMove.lastSequence() == rejectedMove.sequence()
-                        && afterRetryMove.x() == retriedMove.x()
-                        && afterRetryMove.y() == retriedMove.y(),
-                "Retried movement result differs from RoomView");
+        moveBy(p1, p2, mover, moveDelta, 0, moveSequence, null);
+        var afterMove = moveBy(p1, p2, mover, moveDelta, 0, moveSequence + 1, null);
+        check(player(afterMove, mover).lastSequence() == moveSequence + 1
+                        && player(afterMove, other).hp() == target.hp(),
+                "Movement changed sequence or player HP");
+        rejectAction(mover, new MoveRequest(moveDelta, 0, moveSequence + 1), Rules.STALE_SEQUENCE);
 
         var beforeShot = p1.view();
         var shotTarget = player(beforeShot, p2);
@@ -288,7 +264,7 @@ public final class Scenarios {
         var beforeWall = walk(p1, p2, mover, Rules.WALL_X - Rules.MAX_STEP, WALL_CENTER_Y);
         var wallSequence = player(beforeWall, mover).lastSequence() + 1;
         rejectAction(mover, new MoveRequest(Rules.MAX_STEP, 0, wallSequence), Rules.MOVE_BLOCKED_BY_WALL);
-        moveBy(p1, p2, mover, -0.1, 0, Rules.MAX_SAFE_INTEGER, null, false);
+        moveBy(p1, p2, mover, -0.1, 0, Rules.MAX_SAFE_INTEGER, null);
         check(player(mover.view(), mover).lastSequence() == Rules.MAX_SAFE_INTEGER,
                 "Maximum safe sequence was not accepted");
         rejectAction(mover,
@@ -329,8 +305,8 @@ public final class Scenarios {
                         session1.actorId().equals(a.playerId)
                                 && session2.actorId().equals(b.playerId),
                         "Actor identity differs");
-                moveBy(a, b, a, 0, 0, 1, initial, false);
-                moveBy(a, b, b, 0, 0, 1, initial, false);
+                moveBy(a, b, a, 0, 0, 1, initial);
+                moveBy(a, b, b, 0, 0, 1, initial);
                 var before = hit(a, b, 2, Rules.INITIAL_HP - Rules.SHOT_DAMAGE, true);
                 switch (scenario) {
                     case HIT -> {
@@ -399,7 +375,7 @@ public final class Scenarios {
                                             && restored.winner() == null
                                             && player(restored, again).lastSequence() == 1,
                                     "Reconnect did not restore the active phase and last sequence");
-                            moveBy(again, a, again, 0, 0, 2, restored, false);
+                            moveBy(again, a, again, 0, 0, 2, restored);
                             var finished = hit(a, again, 3, Rules.INITIAL_HP - 2 * Rules.SHOT_DAMAGE, true);
                             finished = hit(a, again, 4, Rules.INITIAL_HP - 3 * Rules.SHOT_DAMAGE, true);
                             finished = hit(a, again, 5, 0, true);

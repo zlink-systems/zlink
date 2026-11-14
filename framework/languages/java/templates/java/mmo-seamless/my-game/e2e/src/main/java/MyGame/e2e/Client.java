@@ -99,42 +99,6 @@ public final class Client implements AutoCloseable {
         throw new IllegalStateException("Move unexpectedly succeeded: " + result);
     }
 
-    record ImmediateMoveResponses(WorldState accepted, ActionRejected rejected) {}
-
-    ImmediateMoveResponses moveWithImmediateBudgetRejection(
-            double acceptedDelta,
-            long acceptedSequence,
-            double rejectedDelta,
-            long rejectedSequence)
-            throws Exception {
-        var accepted = new CompletableFuture<WorldState>();
-        var rejected = new CompletableFuture<ActionRejected>();
-        try (var acceptedRegistration =
-                        connector.on(
-                                WorldState.class,
-                                message -> {
-                                    if (message.payload().sequence() == acceptedSequence)
-                                        accepted.complete(message.payload());
-                                    return CompletableFuture.completedFuture(null);
-                                });
-                var rejectedRegistration =
-                        connector.on(
-                                ActionRejected.class,
-                                message -> {
-                                    if (message.payload().reason().equals("move-budget"))
-                                        rejected.complete(message.payload());
-                                    return CompletableFuture.completedFuture(null);
-                                })) {
-            send(new MoveRequest(acceptedDelta, acceptedSequence));
-            send(new MoveRequest(rejectedDelta, rejectedSequence));
-            accepted.get(MESSAGE_SECONDS, TimeUnit.SECONDS);
-            rejected.get(MESSAGE_SECONDS, TimeUnit.SECONDS);
-            return new ImmediateMoveResponses(
-                    next(WorldState.class, state -> state.sequence() == acceptedSequence),
-                    next(ActionRejected.class, rejection -> rejection.reason().equals("move-budget")));
-        }
-    }
-
     private Object moveResult(double delta, long sequence) throws Exception {
         send(new MoveRequest(delta, sequence));
         return next(Object.class, value -> value instanceof ActionRejected

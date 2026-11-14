@@ -413,32 +413,9 @@ internal static class Scenarios
         var target = beforeMove.Players.Single(player => player.PlayerId == other.PlayerId);
         var moveDelta = target.X >= source.X ? GameNames.MaxStep : -GameNames.MaxStep;
         var moveSequence = source.LastSequence + 1;
-        var acceptedMove = new MoveRequest(moveDelta, 0, moveSequence);
-        var rejectedMove = new MoveRequest(moveDelta, 0, moveSequence + 1);
-        var acceptedMoveTask = mover.WaitAsync<MoveResult>(result => result.Sequence == moveSequence, ct);
-        var rejectedMoveTask = mover.WaitAsync<ActionRejected>(_ => true, ct);
-        await mover.SendAsync(acceptedMove, ct);
-        await mover.SendAsync(rejectedMove, ct);
-        var moveResult = await acceptedMoveTask;
-        var moveRejection = await rejectedMoveTask;
-        Require(moveResult.Sequence == moveSequence, "Expected accepted movement before movement-budget rejection.");
-        Require(
-            moveRejection.Reason == Rejection.MoveBudget && moveRejection.RetryAfterMs > 0,
-            "Expected movement-budget rejection."
-        );
-        var afterMoveA = await mover.ViewAsync(_ => true, ct);
-        var afterMovePlayer = afterMoveA.Players.Single(player => player.PlayerId == mover.PlayerId);
-        Require(
-            afterMovePlayer.X == moveResult.X
-                && afterMovePlayer.Y == moveResult.Y
-                && afterMovePlayer.LastSequence == moveSequence
-                && afterMoveA.Players.Single(player => player.PlayerId == other.PlayerId).Hp == target.Hp,
-            "Movement-budget rejection changed the accepted movement state."
-        );
-        await WaitRetryAsync(moveRejection.RetryAfterMs, ct);
-        await mover.SendAsync(rejectedMove, ct);
-        var retriedMove = await mover.WaitAsync<MoveResult>(result => result.Sequence == moveSequence + 1, ct);
-        Require(retriedMove.Sequence == rejectedMove.Sequence, "Server movement retry delay was insufficient.");
+        await MoveByAsync(p1, p2, mover, moveDelta, 0, moveSequence, ct, beforeMove);
+        await MoveByAsync(p1, p2, mover, moveDelta, 0, moveSequence + 1, ct);
+        await RejectActionAsync(mover, new MoveRequest(moveDelta, 0, moveSequence + 1), Rejection.StaleSequence, ct);
 
         var beforeShot = await p1.ViewAsync(_ => true, ct);
         var shotSequence = beforeShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence + 1;

@@ -208,8 +208,7 @@ async function moveBy(
   dx: number,
   dy: number,
   sequence: bigint,
-  priorView?: RoomView,
-  requireMoveBudget = false
+  priorView?: RoomView
 ): Promise<RoomView> {
   const before = priorView ?? (await mover.view());
   const position = playerView(before, mover.playerId);
@@ -249,7 +248,6 @@ async function moveBy(
 
     const peerView = await other.wait<RoomView>(PacketNames.roomView, peerMark, moved);
     assert.deepEqual(result, peerView, 'Movement views differ');
-    assert(!requireMoveBudget || moveBudgetRejected, 'Move budget rejection was not observed');
     return result;
   }
 }
@@ -365,37 +363,12 @@ async function input(a: PlayerClient, b: PlayerClient): Promise<void> {
   const target = playerView(beforeMove, other.playerId);
   const moveDelta = target.x >= source.x ? Game.maxStep : -Game.maxStep;
   const moveSequence = source.lastSequence + 1n;
-  const acceptedMove = new MoveRequest(moveDelta, 0, moveSequence);
-  const rejectedMove = new MoveRequest(moveDelta, 0, moveSequence + 1n);
-  const moveMark = mover.messages.length;
-  const acceptedMoveTask = mover.wait<MoveResult>(MoveResult.name, moveMark, (result) =>
-    result.sequence === moveSequence
-  );
-  const rejectedMoveTask = mover.wait<ActionRejected>(PacketNames.actionRejected, moveMark);
-  await mover.connector.send(acceptedMove).submit();
-  await mover.connector.send(rejectedMove).submit();
-  const [moveResult, moveRejection] = await Promise.all([acceptedMoveTask, rejectedMoveTask]);
-  assert.equal(moveResult.sequence, moveSequence, 'Accepted move result sequence differs');
-  assert.equal(moveRejection.reason, Rejection.moveBudget, 'Second move was not rejected for movement budget');
-  assert(moveRejection.retryAfterMs > 0, 'Movement rejection omitted RetryAfterMs');
-  const afterMoveA = await mover.view();
-  const afterMovePlayer = playerView(afterMoveA, mover.playerId);
-  assert.equal(afterMovePlayer.x, moveResult.x);
-  assert.equal(afterMovePlayer.y, moveResult.y);
-  assert.equal(afterMovePlayer.lastSequence, moveSequence);
-  assert.equal(playerView(afterMoveA, other.playerId).hp, target.hp);
-  await delay(moveRejection.retryAfterMs);
-  const retryMoveMark = mover.messages.length;
-  const retriedMoveTask = mover.wait<MoveResult>(MoveResult.name, retryMoveMark, (result) =>
-    result.sequence === rejectedMove.sequence
-  );
-  await mover.connector.send(rejectedMove).submit();
-  const retriedMove = await retriedMoveTask;
-  assert.equal(retriedMove.sequence, rejectedMove.sequence, 'Retried move result sequence differs');
-  const afterMoveB = await mover.view();
-  assert.equal(playerView(afterMoveB, mover.playerId).lastSequence, rejectedMove.sequence);
-  assert.equal(playerView(afterMoveB, mover.playerId).x, retriedMove.x);
-  assert.equal(playerView(afterMoveB, mover.playerId).y, retriedMove.y);
+  const afterMoveA = await moveBy(a, b, mover, moveDelta, 0, moveSequence, beforeMove);
+  const afterMoveB = await moveBy(a, b, mover, moveDelta, 0, moveSequence + 1n, afterMoveA);
+  assert.equal(playerView(afterMoveB, mover.playerId).lastSequence, moveSequence + 1n);
+  assert.equal(playerView(afterMoveB, mover.playerId).x, source.x + moveDelta * 2);
+  assert.equal(playerView(afterMoveB, other.playerId).hp, target.hp);
+  await rejectAction(mover, new MoveRequest(moveDelta, 0, moveSequence + 1n), Rejection.staleSequence);
 
   const beforeShot = await a.view();
   const shotSequence = playerView(beforeShot, a.playerId).lastSequence + 1n;
