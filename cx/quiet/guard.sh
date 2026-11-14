@@ -46,6 +46,9 @@ while :; do
     a=$h; while [ -n "$a" ] && [ "$a" -gt 1 ]; do mine[$a]=1; a=$(awk '{print $4}' /proc/$a/stat 2>/dev/null); done
     while read -r pid args; do
       [ -n "${mine[$pid]}" ] && continue
+      # forked after mine was built (a hold's own sha256sum/find, 11-14 03:58 cab): never stop
+      # anything under the holder — the hold would wait on its own paused helper.
+      a=$pid; u=0; while [ -n "$a" ] && [ "$a" -gt 1 ]; do [ "$a" = "$h" ] && { u=1; break; }; a=$(awk '{print $4}' /proc/$a/stat 2>/dev/null); done; ((u)) && continue
       if [[ " ${stopped[*]} " != *" $pid "* ]] && kill -STOP $pid 2>/dev/null; then stopped+=($pid); echo "$(date -u +%FT%TZ) holder=$h stop $pid ${args:0:120}" >> $LOG; fi
     done < <(ps -eo pid=,args= | grep -E "$BUILD" | grep -vE 'grep|guard\.sh|flock |dc\.ts|dchat ')
     for root in $(ps -eo pid=,args= | grep -E "$AGENTS" | grep -v grep | awk '{print $1}'); do
