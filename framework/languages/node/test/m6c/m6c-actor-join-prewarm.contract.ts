@@ -32,7 +32,6 @@ import {
 } from '../../packages/framework/src/runtime/actors/actor-message-follow-context';
 import {
   ZLinkSpotActorPacketDispatch,
-  type ZLinkActorPacketDelivery,
   type ZLinkActorRequestTerminal
 } from '../../packages/framework/src/runtime/spots/spot-actor-packet-dispatch';
 import { ZLinkSpotActorHandlerRegistryRuntime } from '../../packages/framework/src/runtime/actors/spot-actor-dispatch';
@@ -477,7 +476,7 @@ test('committed Join replay retention starts at the attempt terminal', (t) => {
 /**
  * `dispatch()` yields at least one microtask tick before reaching the
  * missing-actor/park branch (its production code awaits an optional
- * `routeBeforeLocal` hook even when none is configured). A parked Request's
+ * current membership dispatch port even when none is configured). A parked Request's
  * own returned Promise cannot be awaited directly to observe that the park
  * happened — it stays pending until the real reply goes out, which is
  * exactly what this mechanism defers until migration. Flushing the
@@ -641,10 +640,12 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
     registry: new ZLinkSpotActorHandlerRegistryRuntime(),
     resolveActor: () => (actorReady ? ({ context: { actorId: ACTOR_ID } } as never) : undefined),
     onDisconnectActor: async () => undefined,
-    routeBeforeLocal: (delivery: ZLinkActorPacketDelivery) => {
-      if (!actorReady) return undefined;
-      delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
-      return { handled: true, response: 'ok' };
+    membership: {
+      resolveOwner: () => (actorReady ? { actorRef: fallbackRef(), spotId: 'current-target' } : {}),
+      dispatchToOwner: async (_spotId, delivery) => {
+        delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
+        return 'ok';
+      }
     },
     routeToActorJoinPrewarm: (actorId, objectGeneration, arrival) =>
       registry.routeIngress(actorId, objectGeneration, arrival)
@@ -724,10 +725,12 @@ test('command 28 registers prewarm before Store validation so early Send and Req
     registry: new ZLinkSpotActorHandlerRegistryRuntime(),
     resolveActor: () => (actorReady ? ({ context: { actorId: ACTOR_ID } } as never) : undefined),
     onDisconnectActor: async () => undefined,
-    routeBeforeLocal: (delivery: ZLinkActorPacketDelivery) => {
-      if (!actorReady) return undefined;
-      delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
-      return { handled: true, response: 'ok' };
+    membership: {
+      resolveOwner: () => (actorReady ? { actorRef: fallbackRef(), spotId: 'current-target' } : {}),
+      dispatchToOwner: async (_spotId, delivery) => {
+        delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
+        return 'ok';
+      }
     },
     routeToActorJoinPrewarm: (actorId, objectGeneration, arrival) =>
       harness.registry.routeIngress(actorId, objectGeneration, arrival)
@@ -899,10 +902,12 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
     registry: new ZLinkSpotActorHandlerRegistryRuntime(),
     resolveActor: () => (actorReady ? ({ context: { actorId: ACTOR_ID } } as never) : undefined),
     onDisconnectActor: async () => undefined,
-    routeBeforeLocal: (delivery: ZLinkActorPacketDelivery) => {
-      if (!actorReady) return undefined;
-      delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
-      return { handled: true, response: 'ok' };
+    membership: {
+      resolveOwner: () => (actorReady ? { actorRef: fallbackRef(), spotId: 'current-target' } : {}),
+      dispatchToOwner: async (_spotId, delivery) => {
+        delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
+        return 'ok';
+      }
     },
     routeToActorJoinPrewarm: (actorId, objectGeneration, arrival) =>
       registry.routeIngress(actorId, objectGeneration, arrival)
@@ -1094,10 +1099,12 @@ test('disabling the ingress prewarm consult reproduces the pre-fix silent drop',
     registry: new ZLinkSpotActorHandlerRegistryRuntime(),
     resolveActor: () => (actorReady ? ({ context: { actorId: ACTOR_ID } } as never) : undefined),
     onDisconnectActor: async () => undefined,
-    routeBeforeLocal: (delivery: ZLinkActorPacketDelivery) => {
-      if (!actorReady) return undefined;
-      delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
-      return { handled: true, response: 'ok' };
+    membership: {
+      resolveOwner: () => (actorReady ? { actorRef: fallbackRef(), spotId: 'current-target' } : {}),
+      dispatchToOwner: async (_spotId, delivery) => {
+        delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
+        return 'ok';
+      }
     }
   });
 

@@ -20,8 +20,10 @@ import type {
   ZLinkRoutedActorTransferProvider
 } from './spot-remote-codec';
 import type { ZLinkBackendSpotNode } from '../backend/contracts';
+import type { ZLinkActorIngressMembership } from './spot-actor-ingress-admission';
 
 export interface ZLinkEntryActorRuntime {
+  readonly actorIngressMembership?: ZLinkActorIngressMembership;
   releaseMembers?(meshName: string): Promise<void>;
   resolveActor(actorId: string): ZLinkActor | undefined;
   commitActorTransaction(actor: ZLinkActor, onJoined: () => Promise<void>): Promise<void>;
@@ -31,16 +33,6 @@ export interface ZLinkEntryActorRuntime {
     actor: ZLinkActor,
     signal?: AbortSignal
   ): Promise<void>;
-  routePacket(
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse?: boolean,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef,
-    origin?: ApplicationJobOrigin,
-    requestTerminal?: import('./spot-actor-packet-dispatch').ZLinkActorRequestTerminal,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin
-  ): { readonly handled: boolean; readonly response?: unknown };
 }
 
 export interface ZLinkSpotActorTransferRuntime {
