@@ -1307,35 +1307,6 @@ TEST (EnvelopeL2Wire, DirectCanonicalAndFallbackPreserveValuesErrorsAndRejection
                     }
                 }
             }
-            std::printf ("DIRECT_DIAG %zu %d %s\n", index, capture_flow,
-                         expected ? "accepted" : expected.error ()->what ());
-            const auto snapshot = [&] (const msg::envelope_header_t &header) {
-                nlohmann::json values{{"kind", static_cast<int> (header.kind)},
-                                      {"channelName", std::string (header.channel_name)},
-                                      {"messageName", std::string (header.message_name)},
-                                      {"contentType", std::string (header.content_type)},
-                                      {"correlationId", std::string (header.correlation_id)},
-                                      {"metadata", header.metadata}};
-                values["deadline"] = header.deadline
-                                       ? nlohmann::json (std::string (*header.deadline))
-                                       : nlohmann::json (nullptr);
-                const auto optional = [] (const std::optional<std::string> &value) {
-                    return value ? nlohmann::json (*value) : nlohmann::json (nullptr);
-                };
-                values["topic"] = optional (header.topic);
-                values["errorCode"] = optional (header.error_code);
-                values["errorMessage"] = optional (header.error_message);
-                values["source"] = optional (header.source);
-                values["flowId"] = optional (header.flow_id);
-                values["flowOrigin"] = header.flow_origin
-                                         ? nlohmann::json (static_cast<int> (*header.flow_origin))
-                                         : nlohmann::json (nullptr);
-                return values.dump ();
-            };
-            std::printf ("DIRECT_VALUE %zu %d %s\n", index, capture_flow,
-                         expected ? snapshot (expected.value ()).c_str () : "rejected");
-            std::printf ("DIRECT_CONTEXT %zu %d %s\n", index, capture_flow,
-                         expected_context ? snapshot (*expected_context).c_str () : "absent");
         }
     }
 }
