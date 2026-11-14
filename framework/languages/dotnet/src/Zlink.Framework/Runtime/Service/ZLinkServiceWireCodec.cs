@@ -176,9 +176,9 @@ internal static partial class ZLinkServiceWireCodec
         bool hasMetadata
     )
     {
-        var channel = PrepareApplication(command, correlation, channelName);
-        var bytes = new byte[ApplicationLength(correlation, channel)];
-        WriteApplication(bytes, command, correlation, channel, hasMetadata);
+        var channelLength = PrepareApplication(command, correlation, channelName);
+        var bytes = new byte[ApplicationLength(correlation, channelLength)];
+        WriteApplication(bytes, command, correlation, channelName, channelLength, hasMetadata);
         return bytes;
     }
 
@@ -189,11 +189,18 @@ internal static partial class ZLinkServiceWireCodec
         bool hasMetadata
     )
     {
-        var channel = PrepareApplication(command, correlation, channelName);
-        var message = Message.Allocate(ApplicationLength(correlation, channel));
+        var channelLength = PrepareApplication(command, correlation, channelName);
+        var message = Message.Allocate(ApplicationLength(correlation, channelLength));
         try
         {
-            WriteApplication(message.AsSpan(), command, correlation, channel, hasMetadata);
+            WriteApplication(
+                message.AsSpan(),
+                command,
+                correlation,
+                channelName,
+                channelLength,
+                hasMetadata
+            );
             return message;
         }
         catch
@@ -203,7 +210,7 @@ internal static partial class ZLinkServiceWireCodec
         }
     }
 
-    private static byte[] PrepareApplication(
+    private static int PrepareApplication(
         ServiceWireConstants.Command command,
         ulong correlation,
         string? channelName
@@ -230,20 +237,20 @@ internal static partial class ZLinkServiceWireCodec
         if (request != (correlation != 0))
             throw new ArgumentOutOfRangeException(nameof(correlation));
 
-        var encodedChannel = channel
-            ? EncodeText(channelName ?? throw new ArgumentNullException(nameof(channelName)))
-            : Array.Empty<byte>();
-        return encodedChannel;
+        return channel
+            ? TextLength(channelName ?? throw new ArgumentNullException(nameof(channelName)))
+            : 0;
     }
 
-    private static int ApplicationLength(ulong correlation, byte[] channel) =>
-        5 + (correlation != 0 ? sizeof(ulong) : 0) + channel.Length;
+    private static int ApplicationLength(ulong correlation, int channelLength) =>
+        5 + (correlation != 0 ? sizeof(ulong) : 0) + channelLength;
 
     private static void WriteApplication(
         Span<byte> bytes,
         ServiceWireConstants.Command command,
         ulong correlation,
-        byte[] channel,
+        string? channelName,
+        int channelLength,
         bool hasMetadata
     )
     {
@@ -258,7 +265,8 @@ internal static partial class ZLinkServiceWireCodec
             BinaryPrimitives.WriteUInt64BigEndian(bytes[offset..], correlation);
             offset += sizeof(ulong);
         }
-        channel.CopyTo(bytes[offset..]);
+        if (channelLength != 0)
+            WriteText(bytes.Slice(offset, channelLength), channelName!);
     }
 
     internal static bool TryDecodeApplication(
@@ -440,6 +448,40 @@ internal static partial class ZLinkServiceWireCodec
         ReadOnlySpan<byte> tail = default
     )
     {
+        var bytes = new byte[PrepareReply(correlation, terminalResult, failureCode, tail.Length)];
+        WriteReply(bytes, correlation, terminalResult, failureCode, tail);
+        return bytes;
+    }
+
+    internal static Message EncodeReplyMessage(
+        ulong correlation,
+        int terminalResult,
+        uint failureCode,
+        ReadOnlySpan<byte> tail = default
+    )
+    {
+        var message = Message.Allocate(
+            PrepareReply(correlation, terminalResult, failureCode, tail.Length)
+        );
+        try
+        {
+            WriteReply(message.AsSpan(), correlation, terminalResult, failureCode, tail);
+            return message;
+        }
+        catch
+        {
+            message.Dispose();
+            throw;
+        }
+    }
+
+    private static int PrepareReply(
+        ulong correlation,
+        int terminalResult,
+        uint failureCode,
+        int tailLength
+    )
+    {
         if (correlation == 0)
             throw new ArgumentOutOfRangeException(nameof(correlation));
         //  Schema terminal-failure-integrity (service-wire-v1.schema.json):
@@ -454,23 +496,29 @@ internal static partial class ZLinkServiceWireCodec
                 nameof(failureCode)
             );
 
+        return checked(5 + sizeof(ulong) + sizeof(uint) + sizeof(uint) + tailLength);
+    }
+
+    private static void WriteReply(
+        Span<byte> bytes,
+        ulong correlation,
+        int terminalResult,
+        uint failureCode,
+        ReadOnlySpan<byte> tail
+    )
+    {
         //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,
         //  a conditional-union with NO `bodyLengthType`, so the selected case's
         //  fields are written INLINE right after failureCode. There is no u16
         //  tail length on the wire; an empty tail yields exactly 21 bytes.
         //  (Contrast `actor-join-reply-tail` / `actor-create-terminal`, which do
         //  declare `bodyLengthType: u16` and carry their own inner prefix.)
-        var bytes = Prefix(
-            ServiceWireConstants.Command.Reply,
-            ServiceWireConstants.Flag.None,
-            sizeof(ulong) + sizeof(uint) + sizeof(uint) + tail.Length
-        );
-        var span = bytes.AsSpan(5);
+        WritePrefix(bytes, ServiceWireConstants.Command.Reply, ServiceWireConstants.Flag.None);
+        var span = bytes[5..];
         BinaryPrimitives.WriteUInt64BigEndian(span, correlation);
         BinaryPrimitives.WriteInt32BigEndian(span[8..], terminalResult);
         BinaryPrimitives.WriteUInt32BigEndian(span[12..], failureCode);
         tail.CopyTo(span[16..]);
-        return bytes;
     }
 
     internal static bool TryDecodeReply(
@@ -2288,17 +2336,26 @@ internal static partial class ZLinkServiceWireCodec
 
     internal static byte[] EncodeText(string value)
     {
+        var bytes = new byte[TextLength(value)];
+        WriteText(bytes, value);
+        return bytes;
+    }
+
+    private static int TextLength(string value)
+    {
         ArgumentException.ThrowIfNullOrEmpty(value);
         if (value.Contains('\0'))
             throw new ArgumentException("Text must not contain NUL.", nameof(value));
         var count = StrictUtf8.GetByteCount(value);
         if (count is 0 or > byte.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(value));
+        return count + 1;
+    }
 
-        var bytes = new byte[count + 1];
-        bytes[0] = (byte)count;
-        StrictUtf8.GetBytes(value, bytes.AsSpan(1));
-        return bytes;
+    private static void WriteText(Span<byte> bytes, string value)
+    {
+        bytes[0] = checked((byte)(bytes.Length - 1));
+        StrictUtf8.GetBytes(value, bytes[1..]);
     }
 
     private static void ValidateOperationIdentity(
