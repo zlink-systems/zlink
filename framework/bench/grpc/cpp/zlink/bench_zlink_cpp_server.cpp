@@ -7,6 +7,7 @@
 // separate sockets so a command measurement never has echo replies mixed into
 // it.
 #include "../common/bench_common.hpp"
+#include "../common/binding_wire.hpp"
 #include "../common/bench_stats_server.hpp"
 
 #include <zlink.hpp>
@@ -60,9 +61,7 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
               std::span<const char> (envelope, std::strlen (envelope))));
             zlink::framework::bench::withgrpc::BenchPayload reply;
             reply.set_body (payload.body ());
-            const std::string encoded = zlink_cpp_bench::encode_bench_payload (reply);
-            zlink::message_t echo = zlink::message_t::from (
-              std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));
+            zlink::message_t echo = zlink_cpp_bench::encode_bench_payload_message (reply);
             if (received.reply_token ())
                 received.reply ().message (header).message (echo).submit ();
             else

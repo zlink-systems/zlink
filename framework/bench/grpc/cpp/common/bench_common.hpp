@@ -156,15 +156,6 @@ inline bool decode_payload (const void *payload, size_t payload_size, decoded_he
 
 // The raw transport serializes the same typed payload as gRPC and Framework.
 // Envelope headers below remain protocol constants.
-inline std::string
-encode_bench_payload (const zlink::framework::bench::withgrpc::BenchPayload &payload)
-{
-    std::string encoded;
-    if (!payload.SerializeToString (&encoded))
-        throw std::runtime_error ("cannot serialize BenchPayload");
-    return encoded;
-}
-
 // ---------------------------------------------------------------------------
 // envelope headers (spec 3: header part + protobuf part, byte-identical to the
 // C bench so that formula 1 divides two runs of the same experiment)
