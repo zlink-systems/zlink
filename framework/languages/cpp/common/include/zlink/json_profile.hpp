@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <cmath>
+#include <bit>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -266,37 +267,41 @@ inline constexpr auto base64_values = [] {
         values[static_cast<unsigned char> (base64_alphabet[i])] = static_cast<unsigned char> (i);
     return values;
 }();
+}
+#include "zlink/detail/json_profile/byte_blocks.hpp"
+#include "zlink/detail/json_profile/token_reader.hpp"
+namespace zlink::detail::json_profile {
 inline bool decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
 {
-    if (text.size () % 4)
-        return false;
+    if (text.size () % 4) return false;
     bytes.clear ();
-    if (text.empty ())
-        return true;
-    const std::size_t padding = (text.back () == '=') + (text[text.size () - 2] == '=');
-    bytes.resize (text.size () / 4 * 3 - padding);
-    auto *destination = bytes.data ();
-    for (std::size_t i = 0; i < text.size (); i += 4) {
-        const unsigned a = base64_values[static_cast<unsigned char> (text[i])];
-        const unsigned b = base64_values[static_cast<unsigned char> (text[i + 1])];
-        const unsigned c =
-          text[i + 2] == '=' ? 0 : base64_values[static_cast<unsigned char> (text[i + 2])];
-        const unsigned d =
-          text[i + 3] == '=' ? 0 : base64_values[static_cast<unsigned char> (text[i + 3])];
-        if ((a | b | c | d) >= 64)
-            return false;
-        if (text[i + 2] == '=' && (text[i + 3] != '=' || (b & 15) != 0))
-            return false;
-        if (text[i + 3] == '=' && ((c & 3) != 0 || i + 4 != text.size ()))
-            return false;
-        *destination++ = std::byte ((a << 2) | (b >> 4));
-        if (text[i + 2] != '=')
-            *destination++ = std::byte ((b << 4) | (c >> 2));
-        if (text[i + 3] != '=')
-            *destination++ = std::byte ((c << 6) | d);
+    if (text.empty ()) return true;
+    // Canonical length/padding/unused-bit decisions have one owner, before block conversion.
+    const size_t n=text.size(),tail=n-4;
+    const unsigned a=base64_values[static_cast<unsigned char>(text[tail])];
+    const unsigned b=base64_values[static_cast<unsigned char>(text[tail+1])];
+    const unsigned c=text[n-2]=='='?0:base64_values[static_cast<unsigned char>(text[n-2])];
+    const unsigned d=text[n-1]=='='?0:base64_values[static_cast<unsigned char>(text[n-1])];
+    if((a|b|c|d)>=64) return false;
+    if(text[n-2]=='=' && (text[n-1]!='=' || (b&15))) return false;
+    if(text[n-1]=='=' && (c&3)) return false;
+    const size_t padding=(text[n-1]=='=')+(text[n-2]=='=');
+    bytes.resize(n/4*3-padding);auto*dst=bytes.data();size_t i=0;
+    if(byte_blocks::available()){
+        if(!byte_blocks::decode_blocks(text.data(),tail,reinterpret_cast<unsigned char*>(dst),i))return false;
+        dst+=i/4*3;
     }
+    for(;i<tail;i+=4){
+        const unsigned x=base64_values[static_cast<unsigned char>(text[i])],y=base64_values[static_cast<unsigned char>(text[i+1])],z=base64_values[static_cast<unsigned char>(text[i+2])],w=base64_values[static_cast<unsigned char>(text[i+3])];
+        if((x|y|z|w)>=64)return false;
+        *dst++=std::byte((x<<2)|(y>>4));*dst++=std::byte((y<<4)|(z>>2));*dst++=std::byte((z<<6)|w);
+    }
+    *dst++=std::byte((a<<2)|(b>>4));
+    if(padding<2)*dst++=std::byte((b<<4)|(c>>2));
+    if(padding==0)*dst=std::byte((c<<6)|d);
     return true;
 }
+
 
 inline bool valid_utf8 (std::string_view text)
 {
@@ -379,6 +384,10 @@ template <typename Output> void write_bytes (const std::vector<std::byte> &bytes
     auto *text = out.data () + start;
     *text++ = '"';
     std::size_t i = 0;
+    if (byte_blocks::available()) {
+        i=byte_blocks::encode_blocks(reinterpret_cast<const unsigned char*>(bytes.data()),bytes.size(),reinterpret_cast<char*>(text));
+        text+=i/3*4;
+    }
     for (; bytes.size () - i >= 3; i += 3) {
         const unsigned a = std::to_integer<unsigned> (bytes[i]);
         const unsigned b = std::to_integer<unsigned> (bytes[i + 1]);
@@ -641,7 +650,7 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         destination (*child) (frame &);
         bool (*finish) (typed_sax &, frame &);
         std::vector<std::string> keys;
-        bool pending_key = false;
+        json_phase phase = json_phase::first;
         bool (*key) (frame &, std::string_view) = &remember_key;
         destination next{nullptr, &skip_value};
         std::uint64_t seen = 0;
@@ -702,25 +711,27 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             return parent.next;
         }
     }
-    static bool remember_key (frame &parent, std::string_view key)
+    static bool remember_key (frame &parent, std::string_view key, std::size_t index)
     {
-        if (std::find (parent.keys.begin (), parent.keys.end (), key) != parent.keys.end ())
-            return false;
-        parent.keys.emplace_back (key);
+        const bool known = index != std::numeric_limits<std::size_t>::max();
+        auto *word = known ? &parent.seen_word(index / field_mask_bits) : nullptr;
+        const auto bit = std::uint64_t{1} << (index % field_mask_bits);
+        const bool duplicate = known ? ((*word & bit) != 0)
+          : std::find(parent.keys.begin(),parent.keys.end(),key) != parent.keys.end();
+        if(duplicate) return false;
+        if(known) *word |= bit; else parent.keys.emplace_back(key);
         return true;
+    }
+    static bool remember_key(frame &parent,std::string_view key) {
+        return remember_key(parent,key,std::numeric_limits<std::size_t>::max());
     }
     template <typename T> static bool dto_key (frame &parent, std::string_view key)
     {
         using layout = dto_layout<T>;
         const auto index = layout::find (key);
         parent.next = {nullptr, &skip_value};
-        if (index == layout::count)
-            return remember_key (parent, key);
-        auto &word = parent.seen_word (index / field_mask_bits);
-        const auto bit = std::uint64_t{1} << (index % field_mask_bits);
-        if (word & bit)
-            return false;
-        word |= bit;
+        if(!remember_key(parent,key,index==layout::count ? std::numeric_limits<std::size_t>::max() : index))return false;
+        if (index == layout::count) return true;
         using select = destination (*) (T &);
         static constexpr auto targets = []<std::size_t... I> (std::index_sequence<I...>) {
             return std::array<select, layout::count>{
@@ -857,16 +868,10 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             return false;
         destination next = root;
         if (frames.empty ()) {
-            if (started)
-                return reject ("trailing JSON value");
             started = true;
         } else {
             auto &parent = frames.back ();
-            if (parent.kind == sax_kind::object) {
-                if (!parent.pending_key)
-                    return reject ("missing property name");
-                parent.pending_key = false;
-            }
+            parent.phase = json_phase::comma;
             next = parent.child (parent);
         }
         return next.accept (*this, next.value, event);
@@ -888,6 +893,7 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         frames.reserve (initial_frame_capacity);
     }
     bool complete () const { return healthy && started && frames.empty (); }
+    bool syntax_error () { return !healthy ? false : reject("invalid JSON"); }
     bool null () override { return dispatch ({sax_kind::null}); }
     bool boolean (bool value) override
     {
@@ -915,6 +921,33 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         e.floating = value;
         return dispatch (e);
     }
+    json_turn next_turn() const {
+        if(frames.empty())return started?json_turn::done:json_turn::root;
+        const auto&p=frames.back();
+        if(p.phase==json_phase::value)return json_turn::value;
+        if(p.phase==json_phase::first)return p.kind==sax_kind::object?json_turn::object_first:json_turn::array_first;
+        if(p.phase==json_phase::key)return json_turn::object_key;
+        return p.kind==sax_kind::object?json_turn::object_comma:json_turn::array_comma;
+    }
+    void after_comma() {
+        auto&p=frames.back();p.phase=p.kind==sax_kind::object?json_phase::key:json_phase::value;
+    }
+    bool expects_bytes() const {
+        if(frames.empty())return !started && root.accept == &accept<std::vector<std::byte>>;
+        const auto&parent=frames.back();
+        return parent.kind==sax_kind::object && parent.phase==json_phase::value
+          && parent.next.accept==&accept<std::vector<std::byte>>;
+    }
+    bool borrowed_string (std::string_view value)
+    {
+        sax_event e{sax_kind::string};
+        e.text = value;
+        return dispatch (e);
+    }
+    bool borrowed_key (std::string_view value)
+    {
+        return key_view(value);
+    }
     bool string (string_t &value) override
     {
         sax_event e{sax_kind::string};
@@ -923,14 +956,15 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
     }
     bool binary (binary_t &) override { return reject ("expected JSON value"); }
     bool start_object (std::size_t) override { return dispatch ({sax_kind::object}); }
-    bool key (string_t &value) override
+    bool key (string_t &value) override { return key_view(value); }
+    bool key_view (std::string_view value)
     {
         if (frames.empty () || frames.back ().kind != sax_kind::object)
             return reject ("unexpected property name");
         auto &parent = frames.back ();
         if (!parent.key (parent, value))
             return reject ("framework-json-v1 rejects duplicate properties");
-        parent.pending_key = true;
+        parent.phase = json_phase::value;
         return true;
     }
     bool end_object () override { return end (sax_kind::object); }
@@ -938,14 +972,25 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
     bool end_array () override { return end (sax_kind::array); }
     bool parse_error (std::size_t, const std::string &, const nlohmann::json::exception &) override
     {
-        return reject ("invalid JSON");
+        return syntax_error ();
     }
 };
+// A capacity estimate has no wire or validation authority; the existing writer owns both.
+template<typename T> std::size_t output_capacity_hint(const T&value) {
+    if constexpr(std::is_same_v<T,std::vector<std::byte>>)
+        return (value.size()/3+(value.size()%3!=0))*4+2;
+    else if constexpr(std::is_same_v<T,std::string>)return value.size()+2;
+    else if constexpr(optional_type<T>::value)return value?output_capacity_hint(*value):4;
+    else if constexpr(has_dto<T>)return 2+std::apply([&](auto...field){
+        return (std::size_t{0}+...+(field.name.size()+4+output_capacity_hint(value.*(field.member))));
+    },dto_layout<T>::fields);
+    else return 0;
+}
 template <typename T>
 std::optional<std::string> try_encode (const T &value, std::string *error = nullptr)
 {
     std::string out;
-    out.reserve (initial_output_capacity);
+    out.reserve (std::max(initial_output_capacity,output_capacity_hint(value)));
     if (!write_value (value, out, error))
         return std::nullopt;
     return out;
@@ -964,8 +1009,10 @@ std::optional<T> try_decode (Iterator begin, Iterator end, std::string *error)
     }
     T value{};
     typed_sax handler (value, error);
-    if (!nlohmann::json::sax_parse (begin, end, &handler) || !handler.complete ())
+    if (!token_reader(reinterpret_cast<const char*>(std::to_address(begin)), reinterpret_cast<const char*>(std::to_address(end))).parse(handler) || !handler.complete ()) {
+        handler.syntax_error();
         return std::nullopt;
+    }
     return value;
 }
 

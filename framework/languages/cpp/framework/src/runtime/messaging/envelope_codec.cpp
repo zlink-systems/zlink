@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include <zlink/detail/json_profile/ascii_prefix.hpp>
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include "runtime/diagnostics/flow_context.hpp"
@@ -733,8 +734,6 @@ template <bool Borrow> class canonical_header_reader_t
             // Full words and the space-padded tail use the same byte predicate.
             // Stop before control, quote, backslash or non-ASCII bytes; their
             // validation and decoding remain with the handlers below.
-            constexpr std::uint64_t high_bits = 0x8080808080808080ULL;
-            constexpr std::uint64_t ones = 0x0101010101010101ULL;
             constexpr std::uint64_t spaces = 0x2020202020202020ULL;
             const auto remaining = _remaining.size () - index;
             std::uint64_t word = spaces;
@@ -746,15 +745,7 @@ template <bool Borrow> class canonical_header_reader_t
                 std::memcpy (&word, _remaining.data () + index, remaining);
                 count = remaining;
             }
-            const auto quotes = word ^ 0x2222222222222222ULL;
-            const auto slashes = word ^ 0x5c5c5c5c5c5c5c5cULL;
-            const std::uint64_t special = (word & high_bits) | ((word - spaces) & ~word & high_bits)
-                                          | ((quotes - ones) & ~quotes & high_bits)
-                                          | ((slashes - ones) & ~slashes & high_bits);
-            const auto leading = std::endian::native == std::endian::little
-                                   ? std::countr_zero (special)
-                                   : std::countl_zero (special);
-            const auto plain = std::min (count, static_cast<std::size_t> (leading / 8));
+            const auto plain=std::min(count,::zlink::detail::json_profile::plain_ascii_prefix(word));
             if (plain != 0) {
                 index += plain;
                 decoded_size += plain;
