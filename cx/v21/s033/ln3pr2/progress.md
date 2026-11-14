@@ -10,3 +10,6 @@
 
 아직 측정값 없음. 첫 측정 전에 해당 셀의 binding/L-step receive·reply 호출 위치와 per-message waits/allocations/atomics/copies를 각 실행마다 아래 기록에 덧붙인다.
 - 2026-11-14T01:04:28Z build-process wait started under BUILDS BETWEEN HOLDS; at the 10-minute limit, take the blocking exclusive measure lock even if unrelated builds remain. No lock is held by this job.
+- 2026-11-14T01:14:28Z ten-minute build wait completed; unrelated build processes remain. Beginning the required blocking exclusive lock request.
+- 2026-11-14T01:15:44Z first blocking hold acquired, but measurement did not start: helper exited 126 (execute permission missing). No raw result exists. Corrected helper executable bits; restarting pre-hold build check.
+- 2026-11-14T01:16:05Z second pre-hold build wait started; unrelated R/S builds remain.

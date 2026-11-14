@@ -5,13 +5,23 @@ TOOLS="$JOB/tools/node"
 PROGRESS="$JOB/progress.md"
 started=$SECONDS
 run_one() {
-  local variant="$1" step="$2" pattern="$3" payload="$4" attempt="${5:-1}"
+  local variant="$1" step="$2" pattern="$3" payload="$4" attempt="${5:-1}" rc try
   if (( SECONDS - started >= 470 )); then
     printf -- '- %s stop-before-run elapsed=%ss; remaining measurements continue in a later hold.\n' "$(date -u +%FT%TZ)" "$((SECONDS-started))" >> "$PROGRESS"
     return 75
   fi
-  "$TOOLS/measure-one.sh" "$variant" "$step" "$pattern" "$payload" "$attempt"
-  sleep 3
+  for try in 1 2 3 4 5; do
+    set +e
+    "$TOOLS/measure-one.sh" "$variant" "$step" "$pattern" "$payload" "$attempt"
+    rc=$?
+    set -e
+    [[ "$rc" == 0 ]] && { sleep 3; return 0; }
+    printf -- '- %s INVALID %s-%s %s-%s attempt=%s rc=%s; raw retained under raw/%s-%s/%s-%s/counted/attempt%s; retry if hold budget permits.\n' \
+      "$(date -u +%FT%TZ)" "$variant" "$step" "$pattern" "$payload" "$attempt" "$rc" "$pattern" "$payload" "$variant" "$step" "$attempt" >> "$PROGRESS"
+    attempt=$((attempt+1))
+    if (( SECONDS - started >= 470 )); then return 75; fi
+  done
+  return "$rc"
 }
 for pair in 'send-saturation 1024' 'send-saturation 4096' 'request-serial 1024' 'request-serial 4096' 'request-backpressure 1024' 'request-backpressure 4096'; do
   read -r pattern payload <<< "$pair"

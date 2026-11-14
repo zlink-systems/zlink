@@ -3,7 +3,7 @@ job=pathlib.Path('/root/jobs/fx/cx/v21/s033/d3l3');scratch=pathlib.Path('/root/w
 label,level,pattern,size=sys.argv[1:];size=int(size);bench=scratch/'bin'/level
 out=job/'raw'/label;out.mkdir(parents=True,exist_ok=False)
 os.sched_setaffinity(0,{6,7,14,15})
-env=os.environ.copy();env.update(ZLINK_DOTNET_LADDER_LEVEL=level,ZLINK_DOTNET_LADDER_CLIENT='raw',ZLINK_DOTNET_RAW_TARGET='framework',DOTNET_gcServer='0')
+env=os.environ.copy();env.update(DOTNET_PerfMapEnabled='1',ZLINK_DOTNET_LADDER_LEVEL=level,ZLINK_DOTNET_LADDER_CLIENT='raw',ZLINK_DOTNET_RAW_TARGET='framework',DOTNET_gcServer='0')
 procs=[];logs=[];timers=[];starts={}
 def dump(name,value):(out/name).write_text(json.dumps(value,indent=2))
 def spawn(cmd,name):
@@ -57,9 +57,13 @@ starttime=time.monotonic();failure=None
 try:
  target=spawn(['dotnet',str(bench/'ZLinkServer/Zlink.Framework.UnitTests.dll'),'--endpoint','tcp://127.0.0.1:5444','--metrics-url','http://127.0.0.1:5445'],'target')
  ready(5445,starttime+8)
- source=spawn(['dotnet',str(bench/'Client/Zlink.Framework.UnitTests.dll'),'--implementation','zlink-dotnet','--scenario',pattern,'--payload-size',str(size),'--request-window','100','--submit-concurrency','8','--warmup-seconds','1','--trigger-url','http://127.0.0.1:5435','--stats-url','http://127.0.0.1:5436','--target-endpoint','tcp://127.0.0.1:5444','--target-command-endpoint','tcp://127.0.0.1:5444','--target-stats-url','http://127.0.0.1:5445','--raw-socket','router','--output',str(out),'--configuration','Release','--timeout-seconds','18','--drain-bound-ms','2000'],'source')
+ source=spawn(['dotnet',str((scratch/'experiments/no-clone/Client/bin/Release/net8.0/Zlink.Framework.UnitTests.dll') if label.startswith('exp-no-clone') else bench/'Client/Zlink.Framework.UnitTests.dll'),'--implementation','zlink-dotnet','--scenario',pattern,'--payload-size',str(size),'--request-window','100','--submit-concurrency','8','--warmup-seconds','1','--trigger-url','http://127.0.0.1:5435','--stats-url','http://127.0.0.1:5436','--target-endpoint','tcp://127.0.0.1:5444','--target-command-endpoint','tcp://127.0.0.1:5444','--target-stats-url','http://127.0.0.1:5445','--raw-socket','router','--output',str(out),'--configuration','Release','--timeout-seconds','18','--drain-bound-ms','2000'],'source')
  ready(5436,starttime+10);dump('pids.json',dict(source=source.pid,target=target.pid));snapshot('start')
- for role,p in [('source',source),('target',target)]:spawn(['/root/jobs/fx/cx/v21/s033/d2l2/tools/dotnet8/dotnet-trace','collect','--process-id',str(p.pid),'--profile','cpu-sampling','--providers','Microsoft-Windows-DotNETRuntime:0x1:5','--duration','00:00:09','--output',str(out/(role+'.nettrace'))],role+'-trace')
+ for role,p in [('source',source),('target',target)]:
+  if 'perf-' in label:
+   spawn(['perf','record','-e','cpu-clock:u','-F','199','--call-graph','dwarf,8192','-p',str(p.pid),'-o',str(out/(role+'.perf.data')),'--','sleep','9'],role+'-perf')
+  else:
+   spawn(['/root/jobs/fx/cx/v21/s033/d2l2/tools/dotnet8/dotnet-trace','collect','--process-id',str(p.pid),'--profile','cpu-sampling','--providers','Microsoft-Windows-DotNETRuntime:0x1:5','--duration','00:00:09','--output',str(out/(role+'.nettrace'))],role+'-trace')
  time.sleep(.6)
  dump('warmup-trigger.json',start('warmup',1));dump('warmup-stats.json',done(starttime+14))
  before=snapshot('before-active');ack=start('active',5);dump('active-trigger.json',ack)
