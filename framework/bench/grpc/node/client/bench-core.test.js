@@ -114,7 +114,7 @@ test('send rate and latency use the target snapshot before worker drain', async 
   assert.equal(result.completed, 2);
 });
 
-test('request-backpressure pumps completions and observes admission without awaiting it', async (t) => {
+test('one blocked stream leaves the shared completion poll nonblocking for runnable streams', async (t) => {
   installTargetStats(t);
   const replies = [];
   let resolveAdmission;
@@ -164,10 +164,10 @@ test('request-backpressure pumps completions and observes admission without awai
   assert.ok(submissions > 1, 'submission resumed after the separately observed admission');
   assert.deepEqual([...streams].sort(), [0, 1], 'each logical stream submits independently');
   assert.ok(
-    pollTimeouts.some((timeoutMs) => timeoutMs > 0),
-    'blocked turn waited for completion'
+    pollTimeouts.every((timeoutMs) => timeoutMs === 0),
+    'one blocked stream must not stall the runnable stream'
   );
-  assert.ok(pollTimeouts.length >= submissions, 'every submit turn advanced the completion pump');
+  assert.ok(pollTimeouts.length < submissions, 'all streams share one completion poll per sweep');
   assert.equal(result.abandoned, 0);
 });
 
@@ -228,7 +228,6 @@ test('send-saturation yields so every logical stream starts work', async (t) => 
   const streams = new Set();
   const transport = {
     backpressuredResult: 'backpressured',
-    awaitSendCompletion: (admitted) => admitted,
     sendSubmission(stream) {
       streams.add(stream);
       return { result: 'accepted', admitted: Promise.resolve() };
@@ -329,4 +328,72 @@ test('warmup receipts advance only all-phase stats and reset together', () => {
   assert.equal(metrics.snapshot().received, 0);
   metrics.reset();
   assert.equal(metrics.snapshot().allPhaseMessages, 0);
+});
+
+
+test('eight logical request streams share exactly one completion poll per sweep', async (t) => {
+  installTargetStats(t);
+  let submitsSincePoll = 0;
+  let polls = 0;
+  const groups = [];
+  const transport = {
+    backpressuredResult: 'backpressured',
+    requestSubmission(_stream, payload) {
+      submitsSincePoll++;
+      return { result: 'accepted', admitted: Promise.resolve(), reply: Promise.resolve(payload) };
+    },
+    requestCompletionPump: {
+      poll(timeoutMs) {
+        assert.equal(timeoutMs, 0);
+        if (polls === 0) assert.equal(submitsSincePoll, 8, 'complete the first eight-stream sweep before polling');
+        groups.push(submitsSincePoll);
+        submitsSincePoll = 0;
+        polls++;
+      }
+    }
+  };
+  const metrics = new core.SourceMetrics(100);
+  const result = await core.runActive(transport, metrics, options,
+    activeTrigger('request-backpressure', { submitConcurrency: 8 }));
+  assert.ok(polls > 0);
+  assert.ok(groups.slice(0, -1).every(count => count === 8));
+  assert.ok(groups.at(-1) <= 8, 'only the deadline may end a partial final sweep');
+  assert.equal(result.submitted, groups.reduce((sum, count) => sum + count, 0));
+  assert.equal(result.errors, 0);
+});
+
+test('an entirely backpressured sweep waits once and resumes every stream', async (t) => {
+  installTargetStats(t);
+  const admissions = [];
+  const replies = [];
+  let submissions = 0;
+  let firstWait = true;
+  const transport = {
+    backpressuredResult: 'backpressured',
+    requestSubmission(_stream, payload) {
+      submissions++;
+      let resolveReply;
+      const reply = new Promise(resolve => { resolveReply = () => resolve(payload); });
+      replies.push(resolveReply);
+      const admitted = new Promise(resolve => admissions.push(resolve));
+      return { result: 'backpressured', admitted, reply };
+    },
+    requestCompletionPump: {
+      poll(timeoutMs) {
+        if (firstWait) {
+          assert.equal(submissions, 8, 'all runnable streams submit before the first wait');
+          assert.ok(timeoutMs > 0);
+          firstWait = false;
+        }
+        admissions.splice(0).forEach(resolve => resolve());
+        replies.splice(0).forEach(resolve => resolve());
+      }
+    }
+  };
+  const metrics = new core.SourceMetrics(100);
+  const result = await core.runActive(transport, metrics, options,
+    activeTrigger('request-backpressure', { submitConcurrency: 8 }));
+  assert.ok(submissions >= 8);
+  assert.equal(result.errors, 0);
+  assert.equal(result.abandoned, 0);
 });

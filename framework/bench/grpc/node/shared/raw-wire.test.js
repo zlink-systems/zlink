@@ -179,3 +179,13 @@ for (const size of [127, 128, 1024, 4096]) {
     }
   });
 }
+
+
+test('the bench protobuf decoder borrows encoded storage without adding a reply-body copy', () => {
+  const payload = Buffer.from(bodyHex, 'hex');
+  const encoded = createBenchPayloadSerializer().serialize(new BenchPayload(payload));
+  encoded.data = () => { throw new Error('L2 must not copy the body through data()'); };
+  const decoded = createBenchPayloadSerializer().deserialize(encoded);
+  assert.deepEqual(decoded.body, payload);
+  assert.equal(decoded.body.buffer, encoded.view().buffer);
+});

@@ -3,7 +3,6 @@
 
 const path = require('node:path');
 const protoLoader = require('@grpc/proto-loader');
-const zlink = require('@zlink-systems/zlink');
 const { BenchPayload } = require('./framework-bench-contract');
 
 // Wire shape of the `zlink-<lang>` raw row.

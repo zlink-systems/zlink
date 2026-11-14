@@ -55,6 +55,9 @@ function tryRecv(socket, received) {
 
 function bodyPart(received) {
   const parts = received.parts;
+  // A terminal reader consumes every part. Reading the envelope bytes also
+  // lets the binding reuse its managed receive storage on the next record.
+  for (let index = 0; index + 1 < parts.length; index++) parts[index].data();
   return parts.length === 0 ? null : parts[parts.length - 1];
 }
 

@@ -247,6 +247,7 @@ async function runActive(transport, metrics, options, trigger) {
       trigger.submitConcurrency,
       transport,
       metrics,
+      options,
       trigger,
       runId,
       nextSequence,
@@ -318,91 +319,65 @@ async function requestBackpressure(
   nextSequence,
   deadline
 ) {
-  await Promise.all(Array.from({ length: count }, (_, stream) =>
-    requestBackpressureStream(
-      stream,
-      transport,
-      metrics,
-      options,
-      trigger,
-      runId,
-      nextSequence,
-      deadline
-    )
-  ));
-}
-
-async function requestBackpressureStream(
-  stream,
-  transport,
-  metrics,
-  options,
-  trigger,
-  runId,
-  nextSequence,
-  deadline
-) {
-  if (typeof transport.requestSubmission === 'function') {
-    const pending = new Set();
-    const completionPump = transport.requestCompletionPump;
-    let blocked = null;
-    while (header.nowNs() < deadline) {
-      // A backpressured socket skips this sweep only. Its admission task is
-      // observed separately so the completion pump and other event-loop work
-      // continue to make progress.
-      if (blocked === null) {
-        const sequence = nextSequence();
-        const payload = header.createPayloadBytes(
-          trigger.payloadBytes,
-          runId,
-          metrics.phase,
-          sequence
-        );
-        const started = metrics.begin(stream);
-        let submission;
-        try {
-          submission = transport.requestSubmission(stream, payload);
-        } catch (error) {
-          metrics.complete(started, false, error, stream);
-        }
-        if (submission !== undefined) {
-          const reply = (async () => {
-            try {
-              const value = await submission.reply;
-              validateReply(value, runId, metrics.phase, trigger.payloadBytes, sequence);
-              metrics.complete(started, true, null, stream);
-            } catch (error) {
-              metrics.complete(started, false, error, stream);
-            }
-          })();
-          pending.add(reply);
-          reply.finally(() => pending.delete(reply));
-          if (completionPump === undefined || submission.result === transport.backpressuredResult) {
-            blocked = submission.admitted.catch(() => {});
-            blocked.finally(() => {
-              blocked = null;
-            });
-          }
-        }
-      }
-      if (completionPump !== undefined) {
-        completionPump.poll(
-          blocked === null ? 0 : pollTimeoutUntil(deadline, COMPLETION_POLL_INTERVAL_MS)
-        );
-        await sleepImmediate();
-      } else if (blocked !== null) {
-        await blocked;
-      }
-    }
-
-    const drainDeadline = header.nowNs() + BigInt(options.drainBoundMs) * 1_000_000n;
-    while ((pending.size > 0 || blocked !== null) && header.nowNs() < drainDeadline) {
-      completionPump?.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
-      await sleepImmediate();
-    }
+  if (typeof transport.requestSubmission !== 'function') {
+    await Promise.all(Array.from({ length: count }, (_, stream) =>
+      requestBackpressureStream(stream, transport, metrics, options, trigger, runId, nextSequence, deadline)
+    ));
     return;
   }
 
+  const pending = new Set();
+  const blocked = new Map();
+  const completionPump = transport.requestCompletionPump;
+  while (header.nowNs() < deadline) {
+    for (let stream = 0; stream < count && header.nowNs() < deadline; stream++) {
+      if (blocked.has(stream)) continue;
+      const sequence = nextSequence();
+      const payload = header.createPayloadBytes(trigger.payloadBytes, runId, metrics.phase, sequence);
+      const started = metrics.begin(stream);
+      let submission;
+      try {
+        submission = transport.requestSubmission(stream, payload);
+      } catch (error) {
+        metrics.complete(started, false, error, stream);
+        continue;
+      }
+      const reply = (async () => {
+        try {
+          const value = await submission.reply;
+          validateReply(value, runId, metrics.phase, trigger.payloadBytes, sequence);
+          metrics.complete(started, true, null, stream);
+        } catch (error) {
+          metrics.complete(started, false, error, stream);
+        }
+      })();
+      pending.add(reply);
+      reply.finally(() => pending.delete(reply));
+      if (completionPump === undefined || submission.result === transport.backpressuredResult) {
+        const admission = submission.admitted.catch(() => {}).finally(() => blocked.delete(stream));
+        blocked.set(stream, admission);
+      }
+    }
+    // All logical streams share one socket and one completion poller. Only a
+    // completely blocked sweep may wait; runnable streams must keep submitting.
+    completionPump?.poll(blocked.size === count
+      ? pollTimeoutUntil(deadline, COMPLETION_POLL_INTERVAL_MS) : 0);
+    if (completionPump === undefined && blocked.size === count) {
+      await Promise.race(blocked.values());
+    } else {
+      await sleepImmediate();
+    }
+  }
+  const drainDeadline = header.nowNs() + BigInt(options.drainBoundMs) * 1_000_000n;
+  while ((pending.size > 0 || blocked.size > 0) && header.nowNs() < drainDeadline) {
+    completionPump?.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
+    await sleepImmediate();
+  }
+}
+
+async function requestBackpressureStream(
+  stream, transport, metrics, options, trigger, runId, nextSequence, deadline
+) {
   const pending = new Set();
   let issuedSinceYield = 0;
   while (header.nowNs() < deadline) {
@@ -419,7 +394,44 @@ async function requestBackpressureStream(
   await Promise.race([Promise.all([...pending]), delay(options.drainBoundMs)]);
 }
 
-async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
+async function sendWorkers(count, transport, metrics, options, trigger, runId, nextSequence, deadline) {
+  if (typeof transport.sendSubmission === 'function') {
+    const pending = new Set();
+    const blocked = new Set();
+    while (header.nowNs() < deadline) {
+      for (let stream = 0; stream < count && header.nowNs() < deadline; stream++) {
+        if (blocked.has(stream)) continue;
+        const payload = header.createPayloadBytes(
+          trigger.payloadBytes, runId, metrics.phase, nextSequence());
+        const started = metrics.begin(stream);
+        try {
+          const submission = transport.sendSubmission(stream, payload);
+          if (submission.result === transport.backpressuredResult) {
+            const completion = submission.admitted.then(
+              () => metrics.complete(started, true, null, stream),
+              (error) => metrics.complete(started, false, error, stream)
+            ).finally(() => blocked.delete(stream));
+            blocked.add(stream);
+            pending.add(completion);
+            completion.finally(() => pending.delete(completion));
+          } else {
+            metrics.complete(started, true, null, stream);
+          }
+        } catch (error) {
+          metrics.complete(started, false, error, stream);
+        }
+      }
+      if (blocked.size > 0) transport.sendCompletionPump?.poll(blocked.size === count
+        ? pollTimeoutUntil(deadline, COMPLETION_POLL_INTERVAL_MS) : 0);
+      await sleepImmediate();
+    }
+    const drainDeadline = header.nowNs() + BigInt(options.drainBoundMs) * 1_000_000n;
+    while (pending.size > 0 && header.nowNs() < drainDeadline) {
+      transport.sendCompletionPump?.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
+      await sleepImmediate();
+    }
+    return;
+  }
   const workers = Array.from({ length: count }, (_, stream) =>
     (async () => {
       while (header.nowNs() < deadline) {
@@ -432,14 +444,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
         );
         const started = metrics.begin(stream);
         try {
-          if (typeof transport.sendSubmission === 'function') {
-            const submission = transport.sendSubmission(stream, payload);
-            if (submission.result === transport.backpressuredResult) {
-              await transport.awaitSendCompletion(submission.admitted);
-            }
-          } else {
-            await transport.send(stream, payload);
-          }
+          await transport.send(stream, payload);
           metrics.complete(started, true, null, stream);
         } catch (error) {
           metrics.complete(started, false, error, stream);

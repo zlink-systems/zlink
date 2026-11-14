@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 'use strict';
 
-// raw-service-mesh-runtime.ts: RAW_MESH_RECEIVE_RECORD_BUDGET / receiveBatch.
-const RECEIVE_RECORD_BUDGET = 64;
+// The caller owns the raw bench drain limit; the permit layer only adds admission.
 
-function createReceivePermitPump(queue, receive, processMessage, onError, signal) {
+function createReceivePermitPump(queue, receive, processMessage, onError, signal, receiveBudget) {
   let rotation;
   let receivePermit;
   let receiveAcquisition;
@@ -39,11 +38,11 @@ function createReceivePermitPump(queue, receive, processMessage, onError, signal
   }
 
   return function pump() {
-    rotation ??= queue.createReceiveRotation(RECEIVE_RECORD_BUDGET, 'remote');
+    rotation ??= queue.createReceiveRotation(receiveBudget, 'remote');
     rotation.reserve();
     let handled = 0;
     try {
-      while (handled < RECEIVE_RECORD_BUDGET) {
+      while (handled < receiveBudget) {
         let permit = receivePermit;
         receivePermit = undefined;
         permit ??= rotation.take();
@@ -80,4 +79,4 @@ function createReceivePermitPump(queue, receive, processMessage, onError, signal
   };
 }
 
-module.exports = { createReceivePermitPump, RECEIVE_RECORD_BUDGET };
+module.exports = { createReceivePermitPump };

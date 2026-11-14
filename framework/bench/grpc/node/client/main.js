@@ -331,7 +331,7 @@ function createRawTransport(options) {
     },
     requestSubmission: (_stream, payload) => submitRequest(payload),
     requestCompletionPump,
-    awaitSendCompletion: (promise) => awaitCompletion(sendCompletionPump, promise),
+    sendCompletionPump,
     send: async (stream, payload) => {
       const submission = submitSend(stream, payload);
       if (submission.result === zlink.SubmitResult.Backpressured) {
