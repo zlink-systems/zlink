@@ -109,6 +109,113 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InstanceSpotRequest_OtherGenerationAdmittedPeerWaitsForTargetGeneration(
+        bool authorityChanged
+    )
+    {
+        var time = new ControllableTimeProvider();
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            deadlineTimeProvider: time,
+            receivePollerFactory: () =>
+                new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                    Systems.Zlink.Zlink.CreatePoller()
+                )
+        );
+        source.SetRoutingId(RoutingId.From("instance-authority-source"));
+        var target = RoutingId.From("instance-authority-target");
+        var endpoint = $"inproc://instance-authority-{Guid.NewGuid():N}";
+        const ulong olderGeneration = 7;
+        const ulong targetGeneration = 11;
+        source.SetPeerExpectation(
+            target,
+            endpoint,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            targetGeneration
+        );
+        var completed = new TaskCompletionSource<MeshReceiveRecord>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        source.SetCompletionHandlerCore(
+            (record, parts) =>
+            {
+                Assert.Empty(parts);
+                completed.TrySetResult(record);
+                return true;
+            }
+        );
+        source.Start();
+        await source._lane.RunAsync(() =>
+            source._peersByRid.Add(
+                target,
+                new ZLinkMeshPeer(1)
+                {
+                    RoutingId = target,
+                    LifecycleGeneration = olderGeneration,
+                    Admitted = true,
+                    State = MeshPeerState.Admitted,
+                }
+            )
+        );
+        var activation = new InstanceSpotActivationTarget(
+            "mesh",
+            target,
+            targetGeneration,
+            "instance-spot",
+            "sample",
+            "descriptor"
+        );
+        using var first = Message.From(new byte[] { 1 });
+        var timeout = TimeSpan.FromSeconds(2);
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.ActivateInstanceSpot(
+                activation,
+                "caller",
+                [first],
+                true,
+                out var operation,
+                checked((ulong)DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds()),
+                timeout
+            )
+        );
+        Assert.False(completed.Task.IsCompleted);
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        Assert.Equal(1, source.PendingOperationCount);
+        using var sendPart = Message.From(new byte[] { 2 });
+        Assert.Equal(
+            SubmitResult.NotConnected,
+            source.ActivateInstanceSpot(
+                activation,
+                "caller",
+                [sendPart],
+                false,
+                out _,
+                checked((ulong)DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds())
+            )
+        );
+        if (authorityChanged)
+            source.RemovePeerExpectation(target, endpoint);
+        else
+            time.AdvanceMonotonic(timeout);
+        var completion = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(operation, completion.OperationId);
+        Assert.Equal(
+            (int)(authorityChanged ? RequestResult.NotConnected : RequestResult.TimedOut),
+            completion.TerminalResult
+        );
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        Assert.Equal(0, source.PendingOperationCount);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(true, true)]

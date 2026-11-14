@@ -3717,6 +3717,44 @@ void verify_authority_generation_request (std::string_view path, bool invalidate
         assert (!result.ready && !result.failed);
         if (invalidated)
             assert (await_task (source.expire_requests (deadline + 1s)) == 0);
+    } else if (path == "actor-create" || path == "instance") {
+        std::promise<foundation::operation_terminal_t> promise;
+        auto terminal = promise.get_future ();
+        auto callback = [&promise] (auto result, auto) { promise.set_value (result); };
+        const auto local = source.topology ().local_descriptor ();
+        task_t<bool> pending =
+          path == "actor-create"
+            ? source.request_actor_create (remote.node_routing_id,
+                                           actor_create_request (local, remote, "authority-actor"),
+                                           2s, callback)
+            : source.request_instance_spot_activation (
+                remote.node_routing_id,
+                protocol::instance_spot_activation_header_t{
+                  {remote.node_routing_id, remote.lifecycle_generation, "instance-1", "admission",
+                   "room", "descriptor-1",
+                   static_cast<std::uint64_t> (
+                     std::chrono::duration_cast<std::chrono::milliseconds> (
+                       (std::chrono::system_clock::now () + 2s).time_since_epoch ())
+                       .count ())},
+                  local.lifecycle_generation,
+                  local.node_routing_id,
+                  std::string ("source-spot"),
+                  true,
+                  {local.lifecycle_generation, 91},
+                  0,
+                  false},
+                std::nullopt,
+                protocol::application_payload_t{"AuthorityGeneration", "application/json", {}}, 2s,
+                callback);
+        end_wait ();
+        assert (terminal.wait_for (250ms) == std::future_status::ready);
+        assert (terminal.get ()
+                == (invalidated ? foundation::operation_terminal_t::route_unavailable
+                                : foundation::operation_terminal_t::timed_out));
+        const auto submitted = pending.result ();
+        std::fprintf (stderr, "authority-generation %s submitted=%d value=%d\n",
+                      std::string (path).c_str (), static_cast<int> (static_cast<bool> (submitted)),
+                      submitted ? static_cast<int> (submitted.value ()) : -1);
     } else {
         assert (path == "spot" || path == "actor");
         std::promise<foundation::operation_terminal_t> promise;
@@ -5115,7 +5153,7 @@ int main (int argc, char **argv)
     verify_actor_join_rejected_reply_completes_typed_failure ();
     verify_actor_join_wrong_source_generation_is_fenced ();
     verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ();
-    for (const auto path : {"join", "prepare", "spot", "actor"})
+    for (const auto path : {"join", "prepare", "spot", "actor", "actor-create", "instance"})
         for (const bool invalidated : {false, true})
             verify_authority_generation_request (path, invalidated);
     verify_actor_join_target_fence_reaches_admission ();
