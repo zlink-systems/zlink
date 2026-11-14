@@ -233,8 +233,8 @@ function withTestSessionOwners(runtime: ServiceStatefulRuntime): ServiceStateful
   return runtime;
 }
 
-function withIngressOwner<T>(record: T): T {
-  return { ...record, applicationJobOwner: testIngressJobOwner() } as T;
+function withIngressOwner<T>(record: T, sourceNodeGeneration?: bigint): T {
+  return { sourceNodeGeneration, ...record, applicationJobOwner: testIngressJobOwner() } as T;
 }
 
 function hostApplicationJobQueue(): ApplicationJobQueue {
@@ -811,7 +811,13 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     },
     replyService: (_record: unknown, parts: readonly Buffer[]) => {
       replies.push(parts);
@@ -933,7 +939,13 @@ test('remote User Spot target executes once and rewrites correlation on terminal
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     },
     replyService: (_record: unknown, parts: readonly Buffer[]) => {
       replies.push(parts);
@@ -1183,7 +1195,13 @@ test('remote User Spot command 48 close replays one terminal without closing twi
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     },
     replyService: (_record: unknown, parts: readonly Buffer[]) => {
       replies.push(parts);
@@ -1546,6 +1564,8 @@ test('outbound stateful routes use resolved authority generations and never obje
     peerLifecycleGeneration(this: RawServiceMeshRuntime, nodeRid: string) {
       return this.topology.peer(nodeRid)?.descriptor.lifecycleGeneration;
     },
+    isPeerRouteReady: (_nodeRid: string, lifecycleGeneration?: bigint) =>
+      lifecycleGeneration === undefined || lifecycleGeneration === 7n,
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
@@ -1594,17 +1614,6 @@ test('outbound stateful routes use resolved authority generations and never obje
     authorityOwnerGeneration: route.authorityOwnerGeneration,
     ownerLeaseGeneration: route.ownerLeaseGeneration
   });
-  assert.equal(
-    await runtime.sendToSpot(
-      'source',
-      {
-        ...firstRoute,
-        targetNodeGeneration: 8n
-      },
-      payload
-    ),
-    SubmitResult.NotFound
-  );
   assert.equal(await runtime.sendToSpot('source', firstRoute, payload), SubmitResult.Ok);
   const firstSpotHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(firstSpotHeader.kind, 'spotSend');
@@ -1658,6 +1667,54 @@ test('outbound stateful routes use resolved authority generations and never obje
     assert.equal(successorHeader.target.targetNodeRid, 'node-c');
     assert.deepEqual(successorHeader.target, wireRoute(successorRoute));
   }
+  runtime.close();
+});
+
+// Spec 01-submit §5:205: authority for G without a route to G is NotConnected.
+// The newer authority stays observed, so an older node generation is stale.
+test('a newer authority generation without its route is NotConnected and makes the older route stale', async () => {
+  const sent: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
+  const raw = {
+    topology: {
+      peer: (nodeRid: string) =>
+        nodeRid === 'node-b' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
+    },
+    peerLifecycleGeneration(this: RawServiceMeshRuntime, nodeRid: string) {
+      return this.topology.peer(nodeRid)?.descriptor.lifecycleGeneration;
+    },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
+    setServiceIngress: () => {},
+    sendService: async (target: string, parts: readonly Buffer[]) => {
+      sent.push({ target, parts });
+      return true;
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
+  const payload = {
+    packetName: 'AuthorityFence',
+    contentType: 'application/octet-stream',
+    payload: Buffer.from('payload')
+  };
+  const olderRoute = {
+    spot: { spotId: 'spot-a', generation: 6n },
+    targetNodeRid: 'node-b',
+    targetNodeGeneration: 7n,
+    authorityOwnerGeneration: 13n,
+    ownerLeaseGeneration: 17n,
+    storeVersion: 'store-v1'
+  };
+  assert.equal(
+    await runtime.sendToSpot('source', { ...olderRoute, targetNodeGeneration: 8n }, payload),
+    SubmitResult.NotConnected
+  );
+  await assert.rejects(runtime.sendToSpot('source', olderRoute, payload), {
+    name: 'ServiceStaleGenerationError'
+  });
+  assert.equal(sent.length, 0);
   runtime.close();
 });
 
@@ -3371,7 +3428,13 @@ test('target-owned Instance activation reserves before factory, commits before o
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3488,7 +3551,13 @@ test('durable missing Instance authority discards a materialized orphan before r
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3622,7 +3691,13 @@ test('Instance activation joins a Creating authority when local materialization 
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3738,7 +3813,13 @@ test('Instance activation joins a Creating authority after local materialization
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3856,7 +3937,13 @@ test('Ready Instance route rematerializes a missing application before admission
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -4409,7 +4496,13 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -4515,7 +4608,13 @@ test('Promise authority resumes the retained activation envelope after Store com
       return () => {};
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -5215,7 +5314,9 @@ test('a Node Actor owner stores the Session owner descriptor identity at bind an
       observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved: () => () => {},
       setServiceIngress(handler: (record: RawServiceIngressRecord) => unknown) {
-        ingresses.set(nodeRid, (record) => handler(withIngressOwner(record)));
+        ingresses.set(nodeRid, (record) =>
+          handler(withIngressOwner(record, generations.get(record.sourceRoutingId)))
+        );
       },
       async sendService(target: string, parts: readonly Buffer[]) {
         const result = await ingresses.get(target)?.({
@@ -5409,7 +5510,8 @@ test('bound-session replacement is one-way, does not retry admission, and fences
         return () => {};
       },
       setServiceIngress(handler: (record: RawServiceIngressRecord) => unknown) {
-        state.ingress = (record) => handler!(withIngressOwner(record));
+        state.ingress = (record) =>
+          handler!(withIngressOwner(record, nodes.has(record.sourceRoutingId) ? 3n : undefined));
       },
       async sendService(targetNodeRid: string, parts: readonly Buffer[]) {
         if (rejectSendOnce.delete(`${nodeRid}->${targetNodeRid}`)) return false;
@@ -5638,7 +5740,13 @@ test('mailbox saturation reports dropped actor binding control records', async (
       return () => {};
     },
     setServiceIngress(handler: typeof ingress) {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     },
     replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
       replies.push([...parts]);
@@ -5704,7 +5812,13 @@ test('active session bind replies only after the Actor binding control turn', as
       return () => {};
     },
     setServiceIngress(handler: typeof ingress) {
-      ingress = (record) => handler!(withIngressOwner(record));
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     },
     replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
       replies.push([...parts]);
@@ -5948,6 +6062,8 @@ test('remote Session bind publishes its exact Location fence for the first Actor
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => true },
+    isPeerRouteReady: (nodeRid: string, generation?: bigint) =>
+      nodeRid === 'actor-node' && (generation === undefined || generation === 3n),
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
@@ -8055,7 +8171,13 @@ function readyInstanceIngressHarness(
       return () => {};
     },
     setServiceIngress: (handler: typeof ingressHandler) => {
-      ingressHandler = (record) => handler!(withIngressOwner(record));
+      ingressHandler = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
     },
     replyService: (_ingress: RawServiceIngressRecord, parts: readonly Buffer[]) => {
       replies.push(parts);

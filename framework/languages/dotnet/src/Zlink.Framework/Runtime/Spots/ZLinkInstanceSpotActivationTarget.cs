@@ -638,7 +638,11 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     .TryGetInstanceActivationAsync(
                         existing.SpotId,
                         existing.StableType,
-                        saved.Snapshot.ObjectGeneration
+                        // Ready Instance intent belongs to the owner queue; Close
+                        // transfers accepted messages to its current incarnation.
+                        existing.State == ZLinkInstanceSpotAuthorityState.Ready
+                            ? null
+                            : saved.Snapshot.ObjectGeneration
                     )
                     .ConfigureAwait(false);
                 if (activation is not null)

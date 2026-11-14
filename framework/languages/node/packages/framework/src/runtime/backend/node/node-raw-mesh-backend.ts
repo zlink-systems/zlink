@@ -779,6 +779,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     frames: readonly Uint8Array[],
     options?: {
       readonly timeoutMs?: number;
+      readonly targetNodeGeneration?: bigint;
       readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
@@ -796,7 +797,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         pending,
         'relocation control',
         options.signal,
-        options.onSubmitted
+        options.onSubmitted,
+        undefined,
+        options.targetNodeGeneration
       );
     }
     const completed = (reply: readonly Buffer[]) => {
@@ -812,7 +815,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       pending,
       'relocation control',
       options?.signal,
-      options?.onSubmitted
+      options?.onSubmitted,
+      undefined,
+      options?.targetNodeGeneration
     ).then(completed, failed);
     return pending.promise as Promise<readonly Uint8Array[]>;
   }
