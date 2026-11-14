@@ -303,7 +303,149 @@ external edge.
 Server-to-server communication and a real-time state server are this framework's territory.
 Policy for an edge exposed directly to the internet is owned by whatever sits in front of it.
 
-## 10. Related Documents
+## 10. Stateful Game Nodes and the HTTP Lobby
+
+A game server built with ZLink contains two kinds of code with different natures. Before writing code, decide which kind you are writing. Most mistakes AI tools make come from building game node code like a web server.
+
+| | Game node | HTTP lobby |
+|---|---|---|
+| What it does | Holds room, round and player state and processes messages in order | Short requests and responses such as login, matchmaking and room assignment |
+| State | In memory. Its owner is one Spot or Actor | None (stateless) |
+| Database | Read on connect, write only results | May read and write per request |
+| Template examples | The Room, Table, Field and Channel nodes of every template | The Lobby of `match-http-lobby` and `fps-http-lobby` |
+| Do not | A REST-style structure that reads the database per request | Keep game state (round progress, balance changes) in the lobby |
+
+The HTTP lobby may be built like an ordinary web server. From the moment it takes over game state, however, it follows the game node rules. The lobby only sends requests to game nodes; it never changes a game node's values directly.
+
+The "common mistake" columns below come from code that AI tools wrote during real game development.
+
+### 10.1 A Game Node Is Not a REST Server
+
+| Rule | Common mistake |
+|---|---|
+| A player's state is owned by one player Actor bound to the session. Read it once on connect and keep it in memory; do not read the database while handling a request | Every slot spin re-read balance, missions and VIP from the database and wrote about seven small transactions. On an 8 vCPU server only two cores were busy, yet 1,800 players saturated it at p95 1.3 s. Every request SELECTed the account and sanctions, and every broadcast SELECTed each recipient's balance |
+| Write only results to the database. Write the result of one round (one transaction) once, in one transaction | Each move waited for a resend-check SELECT and a record UPDATE before replying: about five database round trips per request |
+| Check for duplicate requests in Spot or Actor memory (recent request IDs) as well | Same as above |
+| A value many players see (ticker, jackpot news) is held by one node-memory copy or the one Spot that owns it, and refreshed periodically | Each player read the database every few seconds: about 400 queries per second at 1,800 players |
+| When many requests update the same row, the one Spot that owns the value batches them | Every round UPDATEd a single jackpot-pool row and queued on its row lock |
+| A process that does not own a value never writes it; it sends a request to the owner Actor | An operations process updated wallet rows directly, so the game service could not trust its in-memory values |
+| While a game is running, a Spot handler never awaits a remote request or a database reply. An await inside a handler holds the turn, so every message and timer of that Spot stops | (design rule) |
+| Do not write round results per Actor. When a round ends, the Spot writes the results of every Actor in that round in one transaction, then tells each Actor after the commit so their memory matches | (design rule) |
+
+"The one Spot that owns the value" means a SpotWide Spot that holds state. A `PerActor` Spot keeps no state, so values several Actors change together go to an external store as [Execution model §4](32-execution-model.en.md#4-peractor-one-lane-each) describes, protected by conditional updates.
+
+AI tools build it this way because common examples (Spring, NestJS and the like) are stateless REST: "load from repository → modify → save". When you see that shape in game node code, stop and move it to Actor and Spot ownership.
+
+Exceptions and cautions for round settlement:
+
+- The settlement unit is a round, not a whole game. A long game that writes only at its end loses all progress if the process dies. For slots, one spin is one round.
+- Each game decides whether a player who leaves mid-round is settled at the end of the round or on leaving, without overlapping the next round or a move to another game.
+- Money that must be final at that moment, such as buy-ins and in-game purchases, is not deferred to the end of the round. The player Actor handles it, not the Spot.
+- Waiting for round-end settlement inside a Spot turn also stops the Spot. Keep the Spot in a state that accepts no new round during settlement, or, for a SpotWide User Spot or Instance Spot, release the gate with `Yield` and re-check state after resuming.
+- If player data is sharded so that one transaction is impossible, use idempotent writes keyed by the round ID.
+
+### 10.2 Do Not Rebuild Execution Order
+
+| Rule | Common mistake |
+|---|---|
+| Spots and Actors process one message at a time. Do not guard their state again with locks, semaphores or mutexes. Do not keep state in process-wide static stores serialized by per-key locks | Matchmaking and participation state lived in a process-wide static dictionary, serialized with a semaphore per key. With two nodes, memory diverges. A mutex on player state guarded the Actor's execution order a second time |
+| The writer of a value updates memory itself after the commit. Do not update in-memory stores from database commit hooks (interceptors) | A hook scanned changed entities on every transaction commit to update the in-memory store. Changes that bypass the commit were missed, and every transaction paid the cost |
+| Values changed elsewhere are announced to the owner Actor or Spot with a message | (the fixed shape of the two mistakes above) |
+
+### 10.3 In-Memory State and Failures
+
+- When you create in-memory state, decide at the same time what remains in the database if the process dies now, and how a restart cleans it up. Example: on start, cancel rounds that were in progress and refund their stakes.
+- ZLink guarantees one owner per Actor, but not that a previous node's late database write cannot land, nor business-level exactly-once. Protect game data with unique request IDs, conditional updates and generation tokens. ObjectGeneration is not a write-permission token.
+- Location Store records persist over time and across restarts. Give finished players' Actors and personal Spots a cleanup owner from the start. Without cleanup, records pile up and read cost grows even with zero players online. Tests compare only "the records this test created".
+- Send money or reward results to players only after the database commit.
+- When Actor shutdown and a request cross, retry only on the "being removed" reply and the error kind that means it. Calling destroy on a timeout or handler error removes an Actor that is alive and may be connected. Return every other failure to the caller.
+- When an outside write makes a read model stale, mark only the changed part stale and re-read only for requests that read it. Marking the whole read model stale after every game result makes the next request re-run dozens of statements.
+
+### 10.4 Actor Moves and State
+
+An Actor moves to another node when it joins a Spot and when it is relocated. Everything that must survive the move has to be carried by the relocation adapter. For the per-language names of the policy and the adapter, follow each language's Actor guide.
+
+- Register a stateful Actor with the state-preserving relocation policy (.NET `PreserveStateWith`). The recreating policy (.NET `RecreateOnRelocation`) builds a new Actor and discards application state.
+- Gather an Actor's mutable fields into one state record. The adapter saves and restores the whole record instead of picking fields one by one. Keep recomputable caches outside the record, with a comment that they are rebuilt after restore.
+- Test: fill every field of an Actor with non-default values, save and restore it, and compare the whole record. Make the test fail for a newly added field until that field is compared too.
+
+### 10.5 Data a Spot Needs When Players Enter
+
+Decide in this order:
+
+1. A player's data (deck, gear, balance) is player Actor state. When the Actor joins a Spot it arrives on that node with its state, so the Spot asks the Actor on the same node. No remote request is needed.
+2. Room-wide data (game settings, table rules) is Spot state. Read it once when the Spot is created.
+3. Large data used only by the Spot, which Actors do not normally hold, is rare. Only when it is truly needed:
+   - Do not request it per player. Before the game starts, the Spot fetches it for all participants in one request (the same shape as round settlement).
+   - Meanwhile the Spot stays in a "preparing" state and keeps handling enter and leave messages. The game starts after the data arrives. A SpotWide User Spot or Instance Spot waits with `Yield` and re-checks the participant list after resuming.
+   - Register the Join itself with `defer()`. `defer()` postpones the Join until the handler ends, so the Spot does not stop waiting for the Join. It does not load data.
+
+### 10.6 Code Structure — Light Hexagonal
+
+Add layers only to separate rules from external technology. If the game rules are simple or there is only one external connection, do not add layers.
+
+| Role | What it does in a game node | What it does not do |
+|---|---|---|
+| domain | Pure rules and state transitions such as round progress and settlement math. Synchronous functions | ZLink, database or network calls, async |
+| Spot and Actor handlers | Own the state. Receive messages, call the domain, and call ports only on connect and at round end | Generic database reads, creating another state owner |
+| port | One capability the game needs: `loadPlayer`, `commitRound`, `settleBuyIn` | A generic `Repository<T>` with read and save CRUD |
+| adapter | Implements a port with a database or external API, translating external field names into game terms | Game rule decisions |
+
+- Separate the domain model. Keep game state types such as rounds, hands and wallets apart from message DTOs and database row types, and convert once at the handler and adapter boundary. Game rule code must not change when a message or database schema changes.
+- Do not add pass-through layers. If `Handler → Service → DomainService → Entity` only forwards the same call, merge the layers.
+- Do not add an application service outside Spots and Actors; it would create a second state owner.
+- The HTTP lobby is stateless, so the usual hexagonal layout is fine there. Its ports are still defined per capability.
+
+### 10.7 Sessions and Login
+
+- Handle one player's logins in one order (that player's Actor or a per-player queue). Do not put an await between "check" and "register" on a shared map outside an Actor. Two simultaneous first logins both bind and break duplicate-login protection.
+- If the login reply has a game to return to (resume), go to that game, not the lobby.
+- Clean up only with the ActorRef found during cleanup, inside that player's order. An ActorRef's generation tells creation incarnations apart and carries no binding.
+
+### 10.8 Handlers and Execution Order
+
+- Do not block in handlers or HTTP threads. Do not do other work while holding a transaction open (blocking bridge calls, idle in transaction).
+- Do not await your own Spot's or Actor's lifecycle operations (close, destroy) inside a handler. They wait on the same execution order and stall.
+- Do not send a request to another Actor or Spot and await its reply inside a turn. If the other side sends a request back, both wait until timeout, and other players' requests to the same Spot are blocked meanwhile. Send state notifications with send (no reply awaited) and let the state owner decide.
+- Propagating a versioned value such as a balance needs only send. If the other Actor does not exist, do not create it; it reads the database when it is next created.
+- The Spot class a handler targets must be exactly the actual Spot class. A handler targeting a base class does not receive messages for a derived Spot.
+- Tell acceptance replies from completion notices apart. An OK reply does not mean the work that starts afterwards has finished.
+- Do not bump the revision of public state with a private acknowledgement message (such as READY). Other participants' READY messages are then rejected with a stale revision.
+
+### 10.9 How to Use ZLink
+
+- The Framework waits for remote request connections to become ready. Do not add sleeps, retries or longer timeouts in game code.
+- Do not paper over Framework defects in application code. Build a minimal reproduction that uses only the public API and file a ZLink issue.
+- One composition root decides startup order: ZLink first, application second. Otherwise the application stops after the runtime on shutdown.
+- Before comparing versions, check the Framework and Core versions actually loaded.
+- Location Store keys use NUL as the separator, which looks like a space in logs. Do not build keys as strings yourself and compare them.
+
+### 10.10 Design and Testing Habits
+
+- One decision, one place that decides it. Before adding a decision, find the place that already makes it. When several places decide the same thing (such as choosing the dealer) differently, results diverge from round to round.
+- Observation has one source. Do not mix query replies and notifications to judge state.
+- Take test expectations from the spec, not from the implementation. Check random outcomes exactly in unit tests with fixed inputs.
+
+### 10.11 Checklist — Before Merging Game Node Code
+
+- [ ] No database reads while handling a request
+- [ ] One database write transaction per round (per transaction)
+- [ ] No Spot handler awaits a remote request or database reply during a game
+- [ ] Round results are written per round in one transaction, not per Actor, and Actors are told after the commit
+- [ ] Values many players see are held by node memory or one owning Spot
+- [ ] Exactly one process writes each value
+- [ ] No locks, semaphores or static stores guard Spot or Actor state (Spots and Actors serialize)
+- [ ] No cycle of Actors or Spots awaiting requests to each other
+- [ ] What remains if the process dies now, and the restart cleanup, are decided
+- [ ] Retries happen only on "being removed"; other failures go back to the caller
+- [ ] Finished players' Actors and personal Spots have a cleanup owner
+- [ ] Stateful Actors use the state-preserving relocation policy and have a save/restore test with every field filled
+- [ ] No per-player remote requests on Spot entry
+- [ ] No blocking waits, sleeps or retries in handlers
+- [ ] Money and reward notices are sent after the commit
+- [ ] Game rules are tested without ZLink or a database; the database is reached through capability ports, with no generic CRUD repository
+
+## 11. Related Documents
 
 - Full usage of request/send/pub-sub, writing a handler, and the `async` execution model:
   [Channel Messaging](20-channel-messaging.en.md)
