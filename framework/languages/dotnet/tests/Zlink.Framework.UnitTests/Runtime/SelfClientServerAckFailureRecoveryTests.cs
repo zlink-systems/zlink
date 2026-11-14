@@ -44,6 +44,8 @@ public sealed class SelfClientServerAckFailureRecoveryTests
             : new StreamWriter($"{directory}/{label}.log") { AutoFlush = true };
         var time = new ControllableTimeProvider();
         var services = new ServiceCollection();
+        var backend = new PauseObservingBackendFactory();
+        services.AddSingleton<IZLinkBackendAdapterFactory>(backend);
         services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
@@ -94,6 +96,12 @@ public sealed class SelfClientServerAckFailureRecoveryTests
             if (expireServer)
             {
                 router.SetReceiveFlowState(ReceiveFlowState.Paused);
+                // PAUSE returns before the client applies it; observe the existing monitor
+                // before advancing time so no new HELLO can renew the server's last-seen.
+                await WaitUntilAsync(() =>
+                    backend.ClientMonitor.Status().FlowPausedConnections == 1
+                );
+                log?.WriteLine("pause-applied connections=1");
                 time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(16));
                 if (expireClient)
                 {
@@ -208,6 +216,29 @@ public sealed class SelfClientServerAckFailureRecoveryTests
             IZLinkMessageContext context,
             CancellationToken cancellationToken
         ) => ValueTask.FromResult(new EchoReply(request.Value));
+    }
+
+    private sealed class PauseObservingBackendFactory
+        : IZLinkBackendAdapterFactory,
+            IZLinkMonitoringBackendAdapter
+    {
+        private readonly ZLinkDotNetBackendAdapterFactory _inner = new();
+
+        internal ISocketMonitor ClientMonitor { get; private set; } = null!;
+
+        public IZLinkBackendRuntimeContext CreateRuntimeContext() => _inner.CreateRuntimeContext();
+
+        public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() => this;
+
+        public IZLinkBackendSocketMonitor OpenSocketMonitor(IAsyncDisposable socket)
+        {
+            if (socket is not IDealerSocket dealer)
+                return _inner.CreateMonitoringAdapter().OpenSocketMonitor(socket);
+
+            // Keep the runtime's sole monitor; its wrapper still owns polling and disposal.
+            ClientMonitor = dealer.MonitorOpen();
+            return new ZLinkBackendSocketMonitorWrapper(ClientMonitor);
+        }
     }
 
     private sealed class IdleReceiveTurn : IZLinkBackendSocketPoller
