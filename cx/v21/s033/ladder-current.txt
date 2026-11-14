@@ -1,4 +1,4 @@
-C++: 현재 L2 · 손실 send1K 12.6 / serial1K 11.2 / bp 14.0·12.3% · 수정: L2는 PM(perf/4352-cpp-l2-envelope), L4 c4json pre-pr · c4dec 진행
-.NET: 현재 L2 · 손실(main+#4418) serial 1K 7.1 / 4K 6.3%(흩어짐 5%) · send·bp 통과 · 수정: d2l2(L2, sol) 진행, #4418 재리뷰 요청
-Java: 현재 L1 확인 → L2 · L2 손실 bp 21.9·16.3% · 수정: #4414(L2)·#4419(L4 queue) — lfx-java(L2→L4) 측정 중, j57 pre-pr
-Node: 현재 L2 · 손실(#4414+#4415+#4416) bp 30.6·23.3 / serial 9.1·12.0% · 수정: n2hdr(header native 쓰기, sol) 진행, ln3pr2(#4415 A/B) lock 대기
+C++: 현재 L2 · 이전 손실 send1K 12.6 / serial1K 11.2 / bp 14.0·12.3% · 수정: PM b5afcf4c55 — lfx-cpp가 L1→L2 측정용 빌드 중 · #4420 수정(c4420) · c4dec 검토 끝
+.NET: L2 6칸 통과(serial 1K 6.8% 경계) → L3 · dl3(L2→L3 6칸) hold 진행 · d2l2 진행, #4418 재리뷰 대기
+Java: L1 통과(PM) → L2 · 손실 send 9.9·7.4 / serial 8.3·8.2 / bp 22.9·9.6% (1초 warmup) · 수정: j2l2(sol) 진행
+Node: 현재 L2 · 손실 bp 30.6·23.3 / serial 9.1·12.0% · 수정: n2hdr(header native 쓰기, sol) 진행, ln3pr2(#4415 A/B) lock 대기

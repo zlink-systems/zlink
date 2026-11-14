@@ -25,8 +25,9 @@ resume() {
   [ -f /root/jobs/fx/cx/quiet/isolate-state.json ] && echo "$(date -u +%FT%TZ) $(python3 -I /root/jobs/fx/cx/quiet/isolate.py restore)" >> $LOG
 }
 trap 'resume; exit 0' TERM INT
-# The guard and everything it forks run SCHED_IDLE: it must never preempt a measured thread.
-chrt -a -i -p 0 $$
+# The guard runs SCHED_OTHER pinned to the housekeeping CPUs 6-7,14-15: it never competes with the
+# measured CPUs 0-5/8-13. (SCHED_IDLE starved it under load: 11-14 00:53 a hold ran with builds unpaused.)
+taskset -a -cp 6-7,14-15 $$ >/dev/null; chrt -a -o -p 0 $$
 while :; do
   # queued measurements too: a waiter forked by an idled agent would start its runs SCHED_IDLE
   for w in $(awk '$2=="->" && $5=="WRITE" && $7 ~ /:1237411609$/ {print $6}' /proc/locks); do for p in $(desc $w); do chrt -a -o -p 0 $p 2>/dev/null; done; done

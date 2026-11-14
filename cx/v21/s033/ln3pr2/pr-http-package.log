@@ -1,1 +1,58 @@
-bash: scripts/local-package/http-client/build-wsl.sh: No such file or directory
+
+added 7 packages in 3s
+npm notice
+npm notice 📦  @zlink-systems/http-client@0.32.0
+npm notice Tarball Contents
+npm notice 11.4kB LICENSE
+npm notice 71.7kB dist/.tsbuildinfo
+npm notice 3.1kB dist/client.d.ts
+npm notice 8.9kB dist/client.js
+npm notice 313B dist/index.d.ts
+npm notice 733B dist/index.js
+npm notice 3.0kB dist/request-builder.d.ts
+npm notice 12.5kB dist/request-builder.js
+npm notice 248B dist/runtime/bounded-response-body.d.ts
+npm notice 622B dist/runtime/bounded-response-body.js
+npm notice 497B dist/runtime/browser-runtime.d.ts
+npm notice 7.5kB dist/runtime/browser-runtime.js
+npm notice 1.0kB dist/runtime/compression.d.ts
+npm notice 2.9kB dist/runtime/compression.js
+npm notice 189B dist/runtime/cookie-jar.d.ts
+npm notice 3.2kB dist/runtime/cookie-jar.js
+npm notice 338B dist/runtime/http-client-errors.d.ts
+npm notice 901B dist/runtime/http-client-errors.js
+npm notice 846B dist/runtime/options.d.ts
+npm notice 119B dist/runtime/options.js
+npm notice 679B dist/runtime/redirect-policy.d.ts
+npm notice 2.3kB dist/runtime/redirect-policy.js
+npm notice 1.5kB dist/runtime/request-performer.d.ts
+npm notice 8.8kB dist/runtime/request-performer.js
+npm notice 937B dist/runtime/response-body-reader.d.ts
+npm notice 3.2kB dist/runtime/response-body-reader.js
+npm notice 1.1kB dist/runtime/retry-policy.d.ts
+npm notice 3.6kB dist/runtime/retry-policy.js
+npm notice 744B dist/runtime/runtime.d.ts
+npm notice 1.4kB dist/runtime/runtime.js
+npm notice 891B dist/runtime/text.d.ts
+npm notice 2.5kB dist/runtime/text.js
+npm notice 572B dist/runtime/transport-factory.d.ts
+npm notice 1.8kB dist/runtime/transport-factory.js
+npm notice 50B dist/runtime/version.d.ts
+npm notice 601B dist/runtime/version.js
+npm notice 1.8kB dist/types.d.ts
+npm notice 119B dist/types.js
+npm notice 641B package.json
+npm notice Tarball Details
+npm notice name: @zlink-systems/http-client
+npm notice version: 0.32.0
+npm notice filename: zlink-systems-http-client-0.32.0.tgz
+npm notice package size: 41.8 kB
+npm notice unpacked size: 163.2 kB
+npm notice shasum: 7e64e5dd192bf27fd2cd44034bb5824a19a9b9ed
+npm notice integrity: sha512-jehFmQ+TAIJNB[...]r2SqZx9/rRmrQ==
+npm notice total files: 39
+npm notice
+zlink-systems-http-client-0.32.0.tgz
+Materialized local HTTP client package /root/worktree/zlink-v21-s033/ln3-pr/.artifacts/node-install/npm/zlink-systems-http-client-0.32.0.tgz
+-- http-client Node tarball output: /root/worktree/zlink-v21-s033/ln3-pr/.artifacts/wsl/npm
+-- http-client local packages are under /root/worktree/zlink-v21-s033/ln3-pr/.artifacts/wsl

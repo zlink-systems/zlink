@@ -76,3 +76,5 @@
 - profile before-L2-serial4K-v6-warm: HEAD=6350275facc547759c9e143cc2515f3f528c776e dirty=True base=6350275facc547759c9e143cc2515f3f528c776e. Binary hashes: raw/before-L2-serial4K-v6-warm/fingerprint.json. Receive/reply parity: call-shape.md; L1=permit+raw header, L2=같은 경로+요청/응답 header. Body encode/copy·wait·metrics 동일.
 
 - profile before-L2-serial4K-v6: HEAD=6350275facc547759c9e143cc2515f3f528c776e dirty=True base=6350275facc547759c9e143cc2515f3f528c776e. Binary hashes: raw/before-L2-serial4K-v6/fingerprint.json. Receive/reply parity: call-shape.md; L1=permit+raw header, L2=같은 경로+요청/응답 header. Body encode/copy·wait·metrics 동일.
+
+- 완료: local commit 69fdc06610ace2153804831a19ce8fbff8eec26f, source/test2개 일치·clean. Focused279/279, 최종 format1280개 통과. 유효 profile6개: errors0·제출=완료=수신·warmup drain완료·양쪽 thread SCHED_OTHER·허용CPU subset·lifecycle<20s·trace collector exit0. raw/profile-audit-final.json과 raw/final-verification.json. 전체 loss/7% 재측정은 수행하지 않았다.

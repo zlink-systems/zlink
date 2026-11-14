@@ -31,7 +31,10 @@ Payload 증가에 따른 추가 복사는 확인되지 않았다. L2−L1 alloca
 - D:1203: 기존 deadline formatter를 두 pass 밖으로 옮겨 한 번 계산한다. Writer 안의 stack buffer를 호출자로 옮겼으며 새 timestamp 알고리즘·flag·queue·lock·cache는 없다.
 - 대안인 known-name14번 `ValueTextEquals` 순회는 escaped 이름을 반복 처리해 기각했다. [대안](raw/fieldprobe.json), [선택안](raw/fieldprobe-v3.json). 이 작은 probe의 시간은 처리량 판정에 쓰지 않는다.
 
-소유 계층: Framework envelope codec. Spec: ClientServer §5.3, messaging-hot-path §3 E1 / §4.1 I3 / §4.3 W4. 교차언어: C++/Node/Java·Kotlin의 UTF8 이름 처리와 준비된 deadline을 대조했으며 공통 동작 변경 없음. 분류 **B(기존 내부 비용)**. [구현 전 결정 소유 표](raw/diagnosis-before-implementation.md)
+- 소유 계층: Framework envelope codec.
+- 스펙: ClientServer §5.3, messaging-hot-path §3 E1 / §4.1 I3 / §4.3 W4.
+- 교차언어 대조: C++/Node/Java·Kotlin의 UTF8 이름 처리와 준비된 deadline을 확인했으며 공통 동작 변경 없음.
+- 변경 분류: **B(기존 내부 비용)**. [구현 전 결정 소유 표](raw/diagnosis-before-implementation.md)
 
 규칙 수(판정 위치): field mapping1→1, 이름 Unicode/unescape1→1, protocol validation1→1, deadline formatting1→1, 합계 **4→4**. 기존 cache·gate·completion 소유자는 그대로다.
 
@@ -70,11 +73,13 @@ L1에는 codec sample이 없고 L2에서 source 양 경로와 target 양 경로�
 |---|---|
 | 관련 Framework tests |9개 class,279개 통과·실패/skip0. Golden bytes·값, escaped allocation2개, unknown Unicode/길이 경계, deadline fraction/offset, codec/flow/reply/error/handoff 포함. [raw](raw/focused-final.log)|
 | allocation 양방향 회귀 |동일 assertion: 이전2개 실패→최종2개 통과. 일반 wire 할당은 유지하고 escaped 이름의560B를 제거했다. [before](raw/regressions-before.log), [after](raw/focused-final.log)|
-| format |`scripts/format/format.sh --check dotnet`:1280개 통과. 최종 변경 후 재검사 진행 중. [첫 검사](raw/format-check.log), [최종 검사](raw/format-check-final.log)|
+| format |`scripts/format/format.sh --check dotnet`: 최종1280개 통과. [raw](raw/format-check-final.log)|
 | Release build / freshness |production DLL과 source timestamp, client/target에 복사한 Release DLL SHA256 일치. [build](raw/build-after.log), 각 profile fingerprint.json|
 
 변경 파일: D, `framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/EnvelopeHeaderCacheHotPathTests.cs`.
 
 리팩토링 점검: 중복 변환2건을 같은 수정에서 제거했다. Execution-gate 이중 판정·추가 동기화 발견0, 넘긴 항목0. 남은 test 실패0. 중간 신규 test의 C# 문법 오류는 최종 검사 전에 고쳤고 assertion은 완화하지 않았다. Profile 준비 실패·잘린 trace도 삭제하지 않고 판정에서 제외했다.
 
-로컬 commit: 검증 마무리 후 기록. Push·GitHub·sub-agent·internal-docs 사용 없음.
+로컬 commit: **69fdc06610ace2153804831a19ce8fbff8eec26f**. Worktree clean, source/test가 commit과 일치하고 profile/bench 잔여 process0이다. [최종 확인](raw/final-verification.json)
+
+Push·GitHub·sub-agent·internal-docs 사용 없음. Raw·scratch는 보존했다.

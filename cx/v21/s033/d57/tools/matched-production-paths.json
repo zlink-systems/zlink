@@ -1,0 +1,7 @@
+[
+  "framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkStateLane.cs",
+  "framework/languages/dotnet/src/Zlink.Framework/Runtime/Handlers/ZLinkHandlerInvocationEngine.cs",
+  "framework/languages/dotnet/src/Zlink.Framework/Runtime/Handlers/ZLinkHandlerMethodInvoker.cs",
+  "framework/languages/dotnet/src/Zlink.Framework/Runtime/Handlers/ZLinkHandlerResultAwaiter.cs",
+  "framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/FrameworkServiceTypes.cs"
+]

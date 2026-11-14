@@ -1,0 +1,22 @@
+hold start 2026-11-14T00:53:36Z HEAD=4bd6102170ad5ff405cab7bccc74113aa71b4ea1 dirty=0
+00:58:42 L2 send-saturation-1024 INVALID() /root/jobs/fx/cx/v21/s033/dl3/raw/L2/send-saturation-1024
+00:58:56 L3 send-saturation-1024 295954.4 /root/jobs/fx/cx/v21/s033/dl3/raw/L3/send-saturation-1024
+00:59:10 L2 send-saturation-4096 149976.8 /root/jobs/fx/cx/v21/s033/dl3/raw/L2/send-saturation-4096
+00:59:23 L3 send-saturation-4096 142659.8 /root/jobs/fx/cx/v21/s033/dl3/raw/L3/send-saturation-4096
+00:59:37 L2 request-serial-1024 7899.4 /root/jobs/fx/cx/v21/s033/dl3/raw/L2/request-serial-1024
+00:59:50 L3 request-serial-1024 7786.4 /root/jobs/fx/cx/v21/s033/dl3/raw/L3/request-serial-1024
+01:00:03 L2 request-serial-4096 7576.2 /root/jobs/fx/cx/v21/s033/dl3/raw/L2/request-serial-4096
+01:00:17 L3 request-serial-4096 7398.6 /root/jobs/fx/cx/v21/s033/dl3/raw/L3/request-serial-4096
+01:00:31 L2 request-backpressure-1024 62962.6 /root/jobs/fx/cx/v21/s033/dl3/raw/L2/request-backpressure-1024
+01:00:44 L3 request-backpressure-1024 61082.6 /root/jobs/fx/cx/v21/s033/dl3/raw/L3/request-backpressure-1024
+01:00:58 L2 request-backpressure-4096 76223.6 /root/jobs/fx/cx/v21/s033/dl3/raw/L2/request-backpressure-4096
+01:01:11 L3 request-backpressure-4096 67657.2 /root/jobs/fx/cx/v21/s033/dl3/raw/L3/request-backpressure-4096
+hold end 2026-11-14T01:01:14Z
+hold start 2026-11-14T01:01:24Z HEAD=4bd6102170ad5ff405cab7bccc74113aa71b4ea1 dirty=0
+01:01:35 L2 send-saturation-1024 373658.2 /root/jobs/fx/cx/v21/s033/dl3/raw/rerun/L2/send-saturation-1024-010124
+01:01:49 L3 send-saturation-1024 303213.2 /root/jobs/fx/cx/v21/s033/dl3/raw/rerun/L3/send-saturation-1024-010138
+01:02:03 L2 request-backpressure-4096 67808.8 /root/jobs/fx/cx/v21/s033/dl3/raw/rerun/L2/request-backpressure-4096-010152
+01:02:16 L3 request-backpressure-4096 65133.6 /root/jobs/fx/cx/v21/s033/dl3/raw/rerun/L3/request-backpressure-4096-010206
+01:02:30 L2 request-backpressure-4096 73073 /root/jobs/fx/cx/v21/s033/dl3/raw/rerun/L2/request-backpressure-4096-010219
+01:02:43 L3 request-backpressure-4096 66485 /root/jobs/fx/cx/v21/s033/dl3/raw/rerun/L3/request-backpressure-4096-010233
+hold end 2026-11-14T01:02:46Z

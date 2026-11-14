@@ -11,7 +11,7 @@ a.add_argument('--duration', type=float, default=5)
 a.add_argument('--warmup', type=float, default=1)
 a.add_argument('--profile', action='store_true')
 args = a.parse_args()
-root = Path('/root/worktree/zlink-v21-s033/n2net-scratch')
+root = Path('/root/worktree/zlink-v21-s033/n2hdr-scratch')
 bench = root / 'framework/bench/grpc' / args.language
 out = P / 'raw' / args.language / args.label
 out.mkdir(parents=True, exist_ok=False)
@@ -44,6 +44,7 @@ else:
         cmd = ['node']
         if args.profile: cmd += ['--cpu-prof', '--cpu-prof-interval=500', '--cpu-prof-dir=' + str(out),
                                 '--require=' + str(P / 'tools/event-loop.cjs'), '--require=' + str(P / 'tools/heap-sampling.cjs')]
+        if os.environ.get('HEADER_AUDIT'): cmd += ['--require=' + str(P / 'tools/header-audit.cjs')]
         cmd += [str(bench / ('client/main.js' if role == 'source' else 'zlink-framework-server/main.js'))]
         return cmd
 subprocess.run(['taskset','-c',CPUS,'python3',str(P/'tools/fingerprint.py'),args.label],check=True)

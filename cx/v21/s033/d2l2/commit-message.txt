@@ -1,0 +1,12 @@
+perf(dotnet): avoid repeated envelope header conversions
+
+Compare known header names directly in UTF-8 and unescape only when needed.
+Preserve Unicode validation for unknown names and format each deadline once
+for both header writer passes. Wire bytes and decoded values stay unchanged.
+
+Pin request/reply bytes and values, preserve Unicode rejection at buffer
+boundaries, and prevent temporary allocations for escaped known names.
+
+Validation: 279 related Framework tests; dotnet format check on 1280 files.
+The new allocation regression fails on the baseline and passes after the fix.
+Local profiles use CPUs 6-7,14-15 and make no throughput-budget claim.

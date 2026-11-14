@@ -1,0 +1,15 @@
+perf(dotnet): reuse prepared results and synchronous lane turns
+
+Compile handler result adapters into the typed invoker to avoid boxing
+ValueTask results twice. Share synchronous StateLane claim/inline/enqueue
+logic so idle posts avoid PostWork allocation while queued/self posts retain
+FIFO. Restore the complete caller context through the method builder,
+including suppressed flow, and preserve faulted cancellation results.
+
+Transfer receive-batch fields in place instead of copying the record tuple.
+Keep handler scopes, payload ownership and independent completion dispatch.
+
+Validation: allocation regressions fail on original code and pass after;
+69 focused and 271 related Framework tests pass; .NET format checks 1280
+files. Short source/target CPU and allocation profiles are in the d57 job
+report. No throughput-budget conclusion is drawn from diagnostic runs.

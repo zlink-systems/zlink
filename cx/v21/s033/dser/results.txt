@@ -1,0 +1,14 @@
+hold start 2026-11-14T00:47:30Z HEAD=4bd6102170ad5ff405cab7bccc74113aa71b4ea1 dirty=0
+00:47:40 L1 serial-1024 pair1 8382.2 /root/jobs/fx/cx/v21/s033/dser/raw/L1/serial-1024/pair1
+00:47:55 L2 serial-1024 pair1 7498.2 /root/jobs/fx/cx/v21/s033/dser/raw/L2/serial-1024/pair1
+00:48:08 L1 serial-1024 pair2 8421 /root/jobs/fx/cx/v21/s033/dser/raw/L1/serial-1024/pair2
+00:48:22 L2 serial-1024 pair2 7851.8 /root/jobs/fx/cx/v21/s033/dser/raw/L2/serial-1024/pair2
+00:48:35 L1 serial-1024 pair3 8588.8 /root/jobs/fx/cx/v21/s033/dser/raw/L1/serial-1024/pair3
+00:48:48 L2 serial-1024 pair3 8013.4 /root/jobs/fx/cx/v21/s033/dser/raw/L2/serial-1024/pair3
+00:49:02 L1 serial-4096 pair1 6816 /root/jobs/fx/cx/v21/s033/dser/raw/L1/serial-4096/pair1
+00:49:16 L2 serial-4096 pair1 6681 /root/jobs/fx/cx/v21/s033/dser/raw/L2/serial-4096/pair1
+00:49:30 L1 serial-4096 pair2 7210.6 /root/jobs/fx/cx/v21/s033/dser/raw/L1/serial-4096/pair2
+00:49:44 L2 serial-4096 pair2 7381.2 /root/jobs/fx/cx/v21/s033/dser/raw/L2/serial-4096/pair2
+00:49:58 L1 serial-4096 pair3 8428.8 /root/jobs/fx/cx/v21/s033/dser/raw/L1/serial-4096/pair3
+00:50:11 L2 serial-4096 pair3 7449.8 /root/jobs/fx/cx/v21/s033/dser/raw/L2/serial-4096/pair3
+hold end 2026-11-14T00:50:14Z
