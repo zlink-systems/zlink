@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.messaging;
 
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
@@ -29,7 +30,38 @@ public final class ZLinkFrameworkErrorOrigin {
 
     public static ZLinkFrameworkException framework(
             ZLinkFrameworkErrorKind kind, String message, Throwable cause) {
+        if ((message == null || message.isBlank())
+                && cause instanceof ZlinkSubmitException submit) {
+            message = submitFailureMessage(submit);
+        }
         return new ZLinkFrameworkException(kind, message, cause, FRAMEWORK_METADATA);
+    }
+
+    private static String submitFailureMessage(ZlinkSubmitException submit) {
+        String reason =
+                switch (submit.getResult()) {
+                    case NOT_CONNECTED -> "failed because the target route is not connected.";
+                    case NOT_FOUND -> "failed because the target was not found.";
+                    case BACKPRESSURED -> "failed because submission capacity is unavailable.";
+                    case NOT_ADMITTED -> "failed because the target did not admit the operation.";
+                    case TERMINATED -> "failed because the runtime is shutting down.";
+                    case INVALID_STATE ->
+                            "failed because the operation is invalid in the current state.";
+                    case INVALID_ARGUMENT -> "failed because an argument is invalid.";
+                    case INVALID_HANDLE -> "failed because the handle is invalid.";
+                    case THREAD_VIOLATION ->
+                            "failed because the operation violates thread ownership.";
+                    case NOT_SUPPORTED -> "failed because the operation is not supported.";
+                    case OUT_OF_MEMORY -> "failed because memory is unavailable.";
+                    case SEQ_EXHAUSTED -> "failed because the sequence is exhausted.";
+                    case INTERNAL_ERROR -> "failed because of an internal binding error.";
+                    case OK -> "the binding reported success on a failed submission.";
+                };
+        return "Submission failed with result "
+                + submit.getResult()
+                + (submit.getNativeErrno() == 0 ? "" : " (errno=" + submit.getNativeErrno() + ")")
+                + ": "
+                + reason;
     }
 
     public static ZLinkFrameworkException framework(

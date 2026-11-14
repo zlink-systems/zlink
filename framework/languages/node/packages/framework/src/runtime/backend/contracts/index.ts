@@ -253,6 +253,7 @@ export interface ZLinkBackendMeshNode {
     frames: readonly Uint8Array[],
     options?: {
       readonly timeoutMs?: number;
+      readonly targetNodeGeneration?: bigint;
       readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;

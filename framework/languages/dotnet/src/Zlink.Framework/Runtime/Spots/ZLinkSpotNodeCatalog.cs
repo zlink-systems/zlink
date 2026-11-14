@@ -1402,7 +1402,7 @@ internal sealed class ZLinkSpotNodeCatalog(
     internal ValueTask<ZLinkSpotActivation?> TryGetInstanceActivationAsync(
         string spotId,
         string stableType,
-        ulong objectGeneration
+        ulong? objectGeneration
     ) =>
         _lane.RunAsync(() =>
         {
@@ -1410,7 +1410,10 @@ internal sealed class ZLinkSpotNodeCatalog(
                 _spots.TryGetValue(spotId, out var existing)
                 && _instanceSpotTypes.TryGetValue(spotId, out var existingStableType)
                 && string.Equals(existingStableType, stableType, StringComparison.Ordinal)
-                && existing.NativeSpot.LifecycleGeneration == objectGeneration
+                && (
+                    objectGeneration is null
+                    || existing.NativeSpot.LifecycleGeneration == objectGeneration
+                )
                 && registration.InstanceSpotFactories.TryGetValue(stableType, out var factory)
                 && factory.SpotType.IsInstanceOfType(existing.Spot)
             )

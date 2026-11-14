@@ -440,6 +440,7 @@ for (const local of [false, true]) {
       } else {
         const ingress = {
           sourceRoutingId: 'A',
+          sourceNodeGeneration: 7n,
           requestSequence: 500n,
           command: wire.M6bServiceWireCommand.actorRequest,
           flags: 0,

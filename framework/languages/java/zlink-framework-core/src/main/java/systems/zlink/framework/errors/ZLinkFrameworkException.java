@@ -28,6 +28,16 @@ public class ZLinkFrameworkException extends RuntimeException {
         return kind;
     }
 
+    @Override
+    public String toString() {
+        String description = getLocalizedMessage();
+        if ((description == null || description.isBlank()) && getCause() != null) {
+            description = "caused by " + getCause();
+        }
+        String name = getClass().getName() + " [" + kind + "]";
+        return description == null || description.isBlank() ? name : name + ": " + description;
+    }
+
     /**
      * Framework-owned reply metadata carried with the error. Framework-generated errors mark their
      * origin here ({@code zlink.origin=framework}); errors an application handler raised never
