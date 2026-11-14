@@ -8,6 +8,7 @@
 - 빌드 성공: Node HTTP client local package, `npm ci`, cached binding selection, `npm run build`; production TS 출력 424개 최신.
 - [zlink.node SHA-256](/root/worktree/zlink-v21-s033/lfx-node/framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node) `ed260e4bb579df207784f76ed5e518d214f4baf1bcf485d9f303b917c23dbe05`.
 - [Framework artifact SHA-256](/root/worktree/zlink-v21-s033/lfx-node/framework/languages/node/packages/framework/dist/runtime/channels/channel-dispatchers.js) `2eb493e44a2738fe318252cfd07fc0861ecadb6dc335f8104f0d6bcbb3a82f0f`.
+- Build inputs: cached Core binding tgz SHA-256 `c38fb5ff4dd4e8014ec6e54f9a0f3004e4c04bf2c6e12042d11c25184fb2e7c5`; worktree-built HTTP client tgz SHA-256 `5a3524d9747723ecae58c24a64ccb915a21ad8281e249b390f92fa6a988e1018`.
 - HTTP client `packages/http-client/dist/index.js`: `64c839a760746f100af6668ed69f720f415cdb8c276769e73a8c5bfde843da89`; stream-wire `packages/stream-wire/dist/index.js`: `64002b54142361b539753a79bef34e49eece83067c1eb73e077df7acd2ebe619`.
 
 ## L2 vs L1
@@ -23,6 +24,13 @@
 
 12개 counted run 모두 errors=0, submitted=completed=received였고, 모든 thread가 run 시작·mid-active에 SCHED_OTHER 및 source 0–5 / target 8–13이었다. 5–9% 추가 확인 구간에 든 셀은 없었다(9.07%는 구간 밖).
 
-**중단:** L2에서 4/6 셀이 7% 예산을 초과해 L3·L4는 측정하지 않았다. L2 정의에 따라 요청/응답 envelope header encode와 parse가 추가된다. 보조 profile 결과는 진행 중.
+**중단:** L2에서 4/6 셀이 7% 예산을 초과해 L3·L4는 측정하지 않았다. L2 정의에 따라 요청/응답 envelope header encode와 parse가 추가된다. L2 profile 진단은 아래에 기록했다.
 
 Raw warm run도 모두 보존했다. [진행 기록](progress.md) · [call shape / per-message 비용](call-shape.md).
+
+
+## 짧은 profile 진단
+
+- request-serial-4K L2를 lock 없이 source CPU 6–7 / target CPU 14–15에서 1초 warmup·3초 active로 수집했다. 결과는 errors=0, submitted=completed=received=481이며, start·mid-active 모든 thread가 SCHED_OTHER와 지정 CPU affinity였다. [결과](/root/jobs/fx/cx/v21/s033/lfx-node/raw/profile-bench/L2-request-serial-4096/run1/zlink-framework-node-request-serial-4096/results.json) · [scheduling](/root/jobs/fx/cx/v21/s033/lfx-node/raw/profile-bench/L2-request-serial-4096/run1/zlink-framework-node-request-serial-4096/scheduling.txt) · [target CPU profile](/root/jobs/fx/cx/v21/s033/lfx-node/raw/profile/L2-request-serial-4096/CPU.20261114.092055.2367625.0.001.cpuprofile) · [source CPU profile](/root/jobs/fx/cx/v21/s033/lfx-node/raw/profile/L2-request-serial-4096/CPU.20261114.092055.2367678.0.001.cpuprofile).
+- profile에서 target `recv`가 294 samples, buffer `allocUnsafe`가 32 samples였고 source는 event poller가 가장 많이 잡혔다. L2는 정의상 request/reply envelope encode와 header parse를 추가한다. 짧은 profile은 header 비용을 별도 계량하지 못하므로 이 샘플만으로 손실 원인을 단정하지 않는다.
+- request-backpressure-1K L2 profile 시도는 20초 제한에 걸려 target profile 일부만 남았고 유효 진단으로 해석하지 않았다. [driver log](/root/jobs/fx/cx/v21/s033/lfx-node/raw/profile-L2-driver.log) · [partial target profile](/root/jobs/fx/cx/v21/s033/lfx-node/raw/profile/L2-request-backpressure-1024/CPU.20261114.091944.2357998.0.001.cpuprofile).
