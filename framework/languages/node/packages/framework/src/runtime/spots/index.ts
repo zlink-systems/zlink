@@ -11,6 +11,7 @@ import type {
   ZLinkActorIngressMembership
 } from './spot-actor-ingress-admission';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
+import { toFrameworkActorRef } from '../actors';
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
   ActorRef,
@@ -1741,14 +1742,14 @@ export class DefaultZLinkSpotManager {
     records: readonly ZLinkActorHandoffPrefixRecord[]
   ): ZLinkActorHandoffPrefixAdmission {
     const owner = this.options.actorDispatchOwnerResolver?.(actorId);
-    if (owner?.actorRef === undefined) {
+    if (owner?.nativeActorRef === undefined) {
       throw new ZLinkConfigurationException(`Actor '${actorId}' has no local FIFO owner.`);
     }
     if (owner.spotId === undefined) {
       if (this.options.admitEntryActorPacketPrefix === undefined) {
         throw new ZLinkConfigurationException(`Actor '${actorId}' has no Entry FIFO port.`);
       }
-      return this.options.admitEntryActorPacketPrefix(owner.actorRef.meshName, actorId, records);
+      return this.options.admitEntryActorPacketPrefix(owner.meshName, actorId, records);
     }
     return this.admitRoutedActorPacketPrefix(owner.spotId, actorId, records);
   }
@@ -2202,14 +2203,19 @@ export class DefaultZLinkSpotManager {
     const request = record.kind === ReceiveKind.ActorRequest;
     const nativeTarget = record.messageFollowOrigin?.target;
     const ingressActor = nativeTarget?.actor ?? actor;
-    const resolvedActorRef = (nativeTarget === undefined
-      ? this.options.actorDispatchOwnerResolver?.(actor.actorId).actorRef
-      : undefined) ?? {
-      actorId: ingressActor.actorId,
-      objectGeneration: ingressActor.generation,
-      meshName,
-      nodeRid: ingressActor.nodeRid
-    };
+    const dispatchOwner =
+      nativeTarget === undefined
+        ? this.options.actorDispatchOwnerResolver?.(actor.actorId)
+        : undefined;
+    const resolvedActorRef: ActorRef =
+      dispatchOwner?.nativeActorRef === undefined
+        ? {
+            actorId: ingressActor.actorId,
+            objectGeneration: ingressActor.generation,
+            meshName,
+            nodeRid: ingressActor.nodeRid
+          }
+        : toFrameworkActorRef(dispatchOwner.nativeActorRef, dispatchOwner.meshName);
     const responseActorRef =
       record.sourceBindingGeneration > 0n
         ? ({
