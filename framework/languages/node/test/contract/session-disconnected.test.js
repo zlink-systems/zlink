@@ -95,9 +95,12 @@ for (const transport of ['mesh', 'no-bind']) {
         spotId: () => 'entry',
         registry: {},
         resolveActor: () => ({ context: new DefaultZLinkActorContext(state) }),
-        routeBeforeLocal: scenario === 'followed' ? () => {
-          forwarded++;
-          return { handled: true, response: framework.ZLinkMessage.fromEncoded(framework.ZLinkEncodedPayload.fromOwned(Buffer.alloc(0))) };
+        membership: scenario === 'followed' ? {
+          resolveOwner: () => ({ actorRef: { actorId: 'actor' }, spotId: 'target' }),
+          dispatchToOwner: async () => {
+            forwarded++;
+            return framework.ZLinkMessage.fromEncoded(framework.ZLinkEncodedPayload.fromOwned(Buffer.alloc(0)));
+          }
         } : undefined,
         onDisconnectActor: async () => {
           callbacks++;
