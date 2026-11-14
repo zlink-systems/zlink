@@ -13,6 +13,8 @@ dependencies {
     api("io.grpc:grpc-stub:1.72.0")
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
     api(zlinkLibs.zlink.bindings)
+    implementation("systems.zlink:zlink-framework-core:0.10.0")
+    implementation("systems.zlink:zlink-framework-codec-protobuf:0.10.0")
 }
 
 sourceSets {

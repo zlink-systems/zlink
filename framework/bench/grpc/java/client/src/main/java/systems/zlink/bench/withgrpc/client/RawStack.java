@@ -10,6 +10,7 @@ import java.util.concurrent.ExecutionException;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.BenchTypedPayload;
 import systems.zlink.bench.withgrpc.shared.RawWire;
+import systems.zlink.bench.withgrpc.shared.LadderProtobuf;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -104,8 +105,7 @@ public final class RawStack implements AutoCloseable {
             @Override
             public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
                 var operation = router.request(peer);
-                var body = ZLinkFrameworkMultipartView.owned(
-                        RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
+                var body = LadderProtobuf.encode(payloadSize, runId, phase, sequence);
                 List<Message> envelope;
                 try {
                     envelope = envelopeFactory.encode(kind, body);
@@ -295,8 +295,7 @@ public final class RawStack implements AutoCloseable {
 
         @Override
         public PreparedSend prepareRaw(int payloadSize, byte phase, long sequence) {
-            var body = ZLinkFrameworkMultipartView.owned(
-                    RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
+            var body = LadderProtobuf.encode(payloadSize, runId, phase, sequence);
             List<Message> parts;
             try {
                 parts = envelopeFactory.encode(kind, body);
@@ -425,7 +424,7 @@ public final class RawStack implements AutoCloseable {
                 || parts.size() != 2) {
             throw new IllegalStateException("raw request returned an invalid reply envelope");
         }
-        ByteBuffer body = RawWire.decodeBenchPayloadBody(parts.get(1).dataBuffer());
+        ByteBuffer body = RawWire.decodeBenchPayloadBody(ZLinkFrameworkMultipartView.buffer(parts, 1));
         BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(body);
         if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
             throw new IllegalStateException("raw reply header mismatch");
@@ -451,8 +450,7 @@ public final class RawStack implements AutoCloseable {
     private static ZLinkFrameworkMultipartView payloadView(
             int payloadSize, int runId, byte phase, long sequence, boolean typedJson) {
         if (!typedJson) {
-            return ZLinkFrameworkMultipartView.owned(
-                    RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
+            return LadderProtobuf.encode(payloadSize, runId, phase, sequence);
         }
         return ZLinkPayloadEncoding.encodeMessage(
                 TypedJsonHolder.SERIALIZER,
@@ -468,7 +466,7 @@ public final class RawStack implements AutoCloseable {
         }
         var payload = ZLinkMessagePayloads.deserialize(
                 TypedJsonHolder.SERIALIZER,
-                parts.getLast().dataBuffer(),
+                ZLinkFrameworkMultipartView.buffer(parts, 1),
                 BenchTypedPayload.class);
         BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(payload.body());
         if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {

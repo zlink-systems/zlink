@@ -13,6 +13,8 @@ import systems.zlink.bench.withgrpc.shared.BenchTypedPayload;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
 import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
 import systems.zlink.bench.withgrpc.shared.RawWire;
+import systems.zlink.bench.withgrpc.shared.LadderProtobuf;
+import systems.zlink.bench.withgrpc.proto.BenchPayload;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -218,6 +220,8 @@ public class ZLinkFrameworkBenchServer {
             return;
         }
         ZLinkChannelEnvelope.Header requestHeader = null;
+        BenchPayload payload = null;
+        ByteBuffer body;
         if (System.getenv("ZLINK_BENCH_LADDER_L2") != null) {
             requestHeader = ZLinkChannelEnvelope.decodeHeader(
                     parts.getFirst().dataBuffer(), false);
@@ -231,8 +235,11 @@ public class ZLinkFrameworkBenchServer {
                 metrics.recordError();
                 return;
             }
+            payload = LadderProtobuf.decode(parts.getLast().dataBuffer());
+            body = payload.getBody().asReadOnlyByteBuffer();
+        } else {
+            body = RawWire.decodeBenchPayloadBody(parts.getLast().dataBuffer());
         }
-        var body = RawWire.decodeBenchPayloadBody(parts.getLast().dataBuffer());
         if (body == null) {
             metrics.recordError();
             return;
@@ -240,7 +247,7 @@ public class ZLinkFrameworkBenchServer {
         metrics.record(body);
         if (received.replyToken().isPresent()) {
             if (requestHeader != null) {
-                replyLadderL2(received, requestHeader, body);
+                replyLadderL2(received, requestHeader, payload);
             } else {
                 try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
                         Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
@@ -251,9 +258,8 @@ public class ZLinkFrameworkBenchServer {
     }
 
     private static void replyLadderL2(
-            Received received, ZLinkChannelEnvelope.Header requestHeader, ByteBuffer body) {
-        var replyBody = ZLinkFrameworkMultipartView.owned(
-                RawWire.encodeBenchPayloadMessage(body));
+            Received received, ZLinkChannelEnvelope.Header requestHeader, BenchPayload payload) {
+        var replyBody = LadderProtobuf.encode(payload);
         java.util.List<Message> replyParts;
         try {
             replyParts = ZLinkChannelEnvelope.encode(
@@ -305,7 +311,8 @@ public class ZLinkFrameworkBenchServer {
                 metrics.recordError();
                 return;
             }
-            var header = ZLinkChannelEnvelope.decodeHeader(parts.getFirst().dataBuffer(), false);
+            var header = ZLinkChannelEnvelope.decodeHeader(
+                    ZLinkFrameworkMultipartView.buffer(parts, 0), false);
             int expectedKind = received.replyToken().isPresent()
                     ? ZLinkChannelEnvelope.KIND_REQUEST
                     : ZLinkChannelEnvelope.KIND_COMMAND;
@@ -318,7 +325,7 @@ public class ZLinkFrameworkBenchServer {
             }
             BenchTypedPayload payload = ZLinkMessagePayloads.deserialize(
                     TypedJsonHolder.SERIALIZER,
-                    parts.getLast().dataBuffer(), BenchTypedPayload.class);
+                    ZLinkFrameworkMultipartView.buffer(parts, 1), BenchTypedPayload.class);
             if (payload.body() == null) {
                 metrics.recordError();
                 return;
@@ -384,7 +391,8 @@ public class ZLinkFrameworkBenchServer {
                 metrics.recordError();
                 return;
             }
-            var header = ZLinkChannelEnvelope.decodeHeader(parts.getFirst().dataBuffer(), false);
+            var header = ZLinkChannelEnvelope.decodeHeader(
+                    ZLinkFrameworkMultipartView.buffer(parts, 0), false);
             int expectedKind = received.replyToken().isPresent()
                     ? ZLinkChannelEnvelope.KIND_REQUEST
                     : ZLinkChannelEnvelope.KIND_COMMAND;
@@ -395,15 +403,11 @@ public class ZLinkFrameworkBenchServer {
                 metrics.recordError();
                 return;
             }
-            var body = RawWire.decodeBenchPayloadBody(parts.getLast().dataBuffer());
-            if (body == null) {
-                metrics.recordError();
-                return;
-            }
+            var payload = LadderProtobuf.decode(ZLinkFrameworkMultipartView.buffer(parts, 1));
+            var body = payload.getBody().asReadOnlyByteBuffer();
             metrics.record(body);
             if (received.replyToken().isPresent()) {
-                var responseBody = ZLinkFrameworkMultipartView.owned(
-                        RawWire.encodeBenchPayloadMessage(body));
+                var responseBody = LadderProtobuf.encode(payload);
                 java.util.List<Message> responseParts;
                 try {
                     responseParts = ZLinkChannelEnvelope.encode(

@@ -37,6 +37,15 @@ val ladderTypedPayloadTest by tasks.registering(JavaExec::class) {
 }
 tasks.check { dependsOn(ladderTypedPayloadTest) }
 
+val ladderWireIdentityTest by tasks.registering(JavaExec::class) {
+    description = "Compare L2/L3/L4 frames against the 52c1761ab0 encoding path"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.LadderWireIdentityTest")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(ladderWireIdentityTest) }
+
 val activeBoundaryTest by tasks.registering(JavaExec::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("systems.zlink.bench.withgrpc.client.ActiveBoundaryTest")
