@@ -9,6 +9,7 @@ dependencies {
     // spec section 3: gRPC and the ZLink framework carry the same protobuf DTO, and the
     // raw row puts the same encoded BenchPayload on the wire (FB-024).
     api("com.google.protobuf:protobuf-java:4.30.2")
+    api("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     api("io.grpc:grpc-protobuf:1.72.0")
     api("io.grpc:grpc-stub:1.72.0")
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
