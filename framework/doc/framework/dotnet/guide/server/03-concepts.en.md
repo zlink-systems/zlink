@@ -425,6 +425,7 @@ Start small, but split roles so the game can scale out from the beginning. ZLink
 
 - Handle one player's logins in one order (that player's Actor or a per-player queue). Do not put an await between "check" and "register" on a shared map outside an Actor. Two simultaneous first logins both bind and break duplicate-login protection.
 - A player's Actor exists in exactly one place in the whole mesh. A duplicate login (the same Actor in two places) is a defect in the Framework or in login handling; fix its cause. Re-syncing the balance from the database before a game starts is only a stopgap until that fix.
+- The player's Actor decides the order between reconnecting and cleaning up a finished player. A login notifies the Actor before binding (marked as connecting in the Actor's turn), binds after the reply, and notifies again after binding. Cleanup is refused in the Actor's turn while the player is connecting or connected. If the Actor is notified only after binding, cleanup can arrive first in between.
 - If the login reply has a game to return to (resume), go to that game, not the lobby.
 - Clean up only with the ActorRef found during cleanup, inside that player's order. An ActorRef's generation tells creation incarnations apart and carries no binding.
 
