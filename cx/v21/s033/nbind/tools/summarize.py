@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import collections,json,pathlib,re,subprocess,sys
+import collections,json,pathlib,re,subprocess,sys,os
 JOB=pathlib.Path('/root/jobs/fx/cx/v21/s033/nbind')
 RAW=JOB/'raw'
 header=re.compile(r'^(\d+)/(\d+)\s+(\d+\.\d+):\s*(\d+)')
@@ -16,13 +16,13 @@ def parse_perf(directory,role,n):
  p=directory/f'{role}-perf-script.txt'
  if not p.exists():
   with p.open('w') as out,(directory/f'{role}-perf-script.log').open('w') as err:
-   subprocess.run(['taskset','-c','6-7,14-15','perf','script','-i',str(directory/f'{role}.perf.data'),'-F','pid,tid,time,period,ip,sym,dso','--ns'],stdout=out,stderr=err,check=True)
+   subprocess.run(['taskset','-c','6-7,14-15','perf','script','-i',str(directory/f'{role}.perf.data'),'-F','pid,tid,time,period,ip,sym,dso','--ns','--no-inline'],stdout=out,stderr=err,check=True,env=dict(os.environ,DEBUGINFOD_URLS='',PERF_BUILDID_DIR=str(RAW/'perf-symbols')))
  task_ms=None
  for line in (directory/f'{role}-perf-stat.txt').read_text().splitlines():
   v=line.split(';')
   if len(v)>2 and v[2]=='task-clock':task_ms=float(v[0])
  assert task_ms is not None
- buckets=collections.Counter();sub=collections.Counter();visible=collections.Counter();leafs=collections.Counter();cpu_threads=collections.Counter();export=collections.Counter();counts=collections.Counter();unknown=0
+ buckets=collections.Counter();sub=collections.Counter();visible=collections.Counter();leafs=collections.Counter();cpu_threads=collections.Counter();export=collections.Counter();api=collections.Counter();counts=collections.Counter();unknown=0
  current=None;frames=[];sample_count=0
  def flush():
   nonlocal current,frames,sample_count,unknown
@@ -42,6 +42,9 @@ def parse_perf(directory,role,n):
   leafs[frames[0][0]+' ('+frames[0][1]+')']+=weight
   if all(dso=='[unknown]' for _,dso in frames):unknown+=weight
   text='\n'.join(sym+' '+dso for sym,dso in frames)
+  api_names=[('submit','socket_submit_send('),('submit','socket_submit_request('),('receive','router_try_recv_message('),('receive','router_recv_message('),('reply_submit','socket_reply('),('completion_receive','socket_completion_recv('),('body_from','message_from_buffer('),('data_view','message_frame_data('),('data_copy','message_frame_copy_data('),('message_close','message_frame_close('),('poll_wait','poller_wait_into(')]
+  for key,needle in api_names:
+   if needle in text:api[key]+=weight;break
   for key,needle in [('envelope','channel-envelope.js'),('service_wire','service-wire-m6a-codec.js'),('binding_js','/dist/zlink/'),('protobuf','protobufjs'),('gc','GarbageCollector')]:
    if needle in text:visible[key]+=weight
   if owner=='JS_runtime':
@@ -74,7 +77,7 @@ def parse_perf(directory,role,n):
  def times(c):return {k:dict(weight_ns=v,percent=100*v/total,us_per_message=us*v/total) for k,v in c.items()}
  return dict(messages=n,task_clock_ms=task_ms,total_us_per_message=us,sample_count=sample_count,weighted_sample_ns=total,unknown_percent=unknown/total*100,
              split=times(buckets),js_exclusive=times(sub),visible_inclusive=times(visible),addon_inclusive_frames=times(export),
-             category_samples=dict(counts),threads=times(cpu_threads),top_leaf=[dict(frame=k,percent=100*v/total,us_per_message=us*v/total) for k,v in leafs.most_common(45)])
+             api_inclusive=times(api),category_samples=dict(counts),threads=times(cpu_threads),top_leaf=[dict(frame=k,percent=100*v/total,us_per_message=us*v/total) for k,v in leafs.most_common(45)])
 
 def heap_summary(directory,role,n):
  p=loads(directory/f'{role}.heapprofile');rows=[];total=0;groups=collections.Counter()

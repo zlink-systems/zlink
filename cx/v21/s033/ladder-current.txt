@@ -1,4 +1,4 @@
-C++: 현재 L2 · 손실(PM b5afcf4c55) send1K 12.3 / serial1K 18.8 / bp 17.6·21.5% · 수정: PM L2 다음 수정 대기 · #4420(c4420) 진행 · #4427 typed JSON 승인·queue
-.NET: L2 통과 → L3 · 손실 send1K 18.9 / bp4K 9.0% · d3l3 진단: 사다리 bench 결함 4·production 3 → d3fix(sol) 수정·dbench(sol) bench L3 교정 진행, baudit 네 언어 bench 대조 · d2l2·d57 끝(PR 대기)
+C++: 현재 L2 · 손실(PM b5afcf4c55) send1K 12.3 / serial1K 18.8 / bp 17.6·21.5% · c2prof: L2 bench가 PM 수정(b5afcf4c55) 경로 우회 확인, bench 교정 결정 대기 · #4420(c4420) 진행 · #4427 typed JSON 승인·queue
+.NET: L2 통과 → L3 · 손실 send1K 18.9 / bp4K 9.0% · d3l3 진단: 사다리 bench 결함 4·production 3 → bench L3 교정(41dcc0f810) 반영, L2→L3 재측정(dl3b) 중 · d3fix(sol) production 수정 진행, baudit 네 언어 bench 대조 · d2l2·d57 끝(PR 대기)
 Java: L1 통과(PM) → L2 · 손실 send 9.9·7.4 / serial 8.3·8.2 / bp 22.9·9.6% (1초 warmup) · 수정: j2l2(sol) 진행
 Node: 현재 L2 · 손실 bp 30.6·23.3 / serial 9.1·12.0% · #4415 A/B 이득 없음(send1K −9.9%) → 닫기 제안 · n2hdr A/B 이득 없음(접음) · nbind(binding 비용 진단) 진행
