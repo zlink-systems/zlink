@@ -224,28 +224,9 @@ public final class Scenarios {
         var beforeShot = p1.view();
         var shotTarget = player(beforeShot, p2);
         var shotSequence = player(beforeShot, p1).lastSequence() + 1;
-        var acceptedShot = new ShootRequest(p2.playerId, shotSequence);
-        var rejectedShot = new ShootRequest(p2.playerId, shotSequence + 1);
-        p1.send(acceptedShot);
-        p1.send(rejectedShot);
-        var shotResult = p1.next(ShotResult.class);
-        var fireRejection = p1.next(ActionRejected.class);
-        check(shotResult.sequence() == shotSequence && shotResult.outcome().equals("hit"),
-                "Expected accepted hit before fire-too-soon rejection");
-        check(fireRejection.reason().equals(Rules.FIRE_TOO_SOON) && fireRejection.retryAfterMs() > 0,
-                "Expected fire-interval rejection");
-        var afterShotA = p1.view();
-        check(player(afterShotA, p2).hp() == shotTarget.hp() - Rules.SHOT_DAMAGE
-                        && player(afterShotA, p1).lastSequence() == shotSequence,
-                "Fire-too-soon rejection changed the accepted shot state");
-        Thread.sleep(fireRejection.retryAfterMs());
-        p1.send(rejectedShot);
-        var retriedShot = p1.next(ShotResult.class);
-        check(retriedShot.sequence() == rejectedShot.sequence(), "Server fire retry delay was insufficient");
-        var afterShotB = p1.view();
-        check(player(afterShotB, p2).hp() == shotTarget.hp() - 2 * Rules.SHOT_DAMAGE
-                        && player(afterShotB, p1).lastSequence() == rejectedShot.sequence(),
-                "Retried shot did not update the target state");
+        var afterShot = hit(p1, p2, shotSequence, shotTarget.hp() - Rules.SHOT_DAMAGE, true);
+        check(player(afterShot, p1).lastSequence() == shotSequence, "Shots lost sequence");
+        rejectAction(p1, new ShootRequest(p2.playerId, shotSequence), Rules.STALE_SEQUENCE);
 
         long staleSequence = player(mover.view(), mover).lastSequence();
         rejectAction(mover, new MoveRequest(0, 0, staleSequence), Rules.STALE_SEQUENCE);

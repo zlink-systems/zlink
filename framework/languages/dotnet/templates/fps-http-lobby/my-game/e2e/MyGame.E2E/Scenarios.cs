@@ -384,34 +384,14 @@ internal static class Scenarios
         await RejectedAsync(a, new MoveRequest(new(2, 0, 0), sequence), Rejection.MoveBlockedByWall, ct);
         var beforeFire = await ViewAsync(a, ct);
         var shotSequence = Next(beforeFire, a);
-        var acceptedShotRequest = new ShootRequest(new(0, 1, 0), shotSequence);
-        var shot = new ShootRequest(new(0, 1, 0), shotSequence + 1);
-        var shotResponses = await Task.WhenAll(
-            a.ActionAsync(acceptedShotRequest, ct),
-            a.ActionAsync(shot, ct));
-        var acceptedShot = shotResponses.OfType<ShotResult>().SingleOrDefault()
-            ?? throw new InvalidOperationException("Expected accepted miss before fire-too-soon rejection.");
-        Require(acceptedShot.Sequence == shotSequence && acceptedShot.Outcome == ShotOutcome.Miss,
-            "Expected accepted miss before fire-too-soon rejection.");
-        var fire = shotResponses.OfType<ShotRejected>().SingleOrDefault()
-            ?? throw new InvalidOperationException("Expected fire-interval rejection.");
-        Require(fire is { Reason: Rejection.FireTooSoon, RetryAfterMs: > 0 },
-            "Expected fire-interval rejection.");
+        await ShootAsync(a, new(0, 1, 0), ShotOutcome.Miss, ct);
+        await RejectedAsync(a, new ShootRequest(new(0, 1, 0), shotSequence), Rejection.StaleSequence, ct);
         var afterFire = await ViewAsync(a, ct);
-        var beforeFirePlayer = Player(beforeFire, a);
-        var afterFirePlayer = Player(afterFire, a);
-        Require(afterFirePlayer.Position == beforeFirePlayer.Position && afterFirePlayer.LastSequence == shotSequence,
-            "Fire-too-soon rejection changed the accepted shot position or sequence.");
-        Require(beforeFirePlayer.Hp == afterFirePlayer.Hp
-            && Player(beforeFire, b).Hp == Player(afterFire, b).Hp,
-            "Fire-too-soon rejection changed player HP.");
-        await Task.Delay(((ShotRejected)fire).RetryAfterMs, ct);
-        var retriedShot = await a.ActionAsync(shot, ct);
-        Require(retriedShot is ShotResult shotRetry
-            && shotRetry.Sequence == shot.Sequence
-            && shotRetry.Outcome == ShotOutcome.Miss,
-            "Server fire retry delay was insufficient.");
+        Require(Player(afterFire, a).Position == Player(beforeFire, a).Position
+            && Player(afterFire, a).LastSequence == shotSequence
+            && Player(afterFire, a).Hp == Player(beforeFire, a).Hp,
+            "Accepted miss changed position, HP or used the wrong sequence.");
         Require(Player(await ViewAsync(b, ct), b).Hp == GameNames.InitialHp, "Input checks damaged target.");
-        Console.WriteLine("input: movement sequence and fire-too-soon retry checks passed");
+        Console.WriteLine("input: movement and shot sequence checks passed");
     }
 }

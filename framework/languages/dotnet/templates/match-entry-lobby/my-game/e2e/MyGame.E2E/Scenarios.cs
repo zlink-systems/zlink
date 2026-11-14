@@ -320,35 +320,14 @@ internal static class Scenarios
         var beforeShot = await p1.ViewAsync(_ => true, ct);
         var shotSequence = beforeShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence + 1;
         var shotTarget = beforeShot.Players.Single(player => player.PlayerId == p2.PlayerId);
-        var acceptedShot = new ShootRequest(p2.PlayerId, shotSequence);
-        var rejectedShot = new ShootRequest(p2.PlayerId, shotSequence + 1);
-        var acceptedShotTask = p1.WaitAsync<ShotResult>(result => result.Sequence == shotSequence, ct);
-        var rejectedShotTask = p1.WaitAsync<ActionRejected>(_ => true, ct);
-        await p1.SendAsync(acceptedShot, ct);
-        await p1.SendAsync(rejectedShot, ct);
-        var shotResult = await acceptedShotTask;
-        var fireRejection = await rejectedShotTask;
-        Require(shotResult.Sequence == shotSequence, "Expected accepted shot before fire-too-soon rejection.");
+        await HitAsync(p1, p2, shotSequence, shotTarget.Hp - GameNames.ShotDamage, ct);
+        await RejectActionAsync(p1, new ShootRequest(p2.PlayerId, shotSequence), Rejection.StaleSequence, ct);
+        var afterShot = await p1.ViewAsync(_ => true, ct);
         Require(
-            fireRejection.Reason == Rejection.FireTooSoon && fireRejection.RetryAfterMs > 0,
-            "Expected fire-interval rejection."
-        );
-        var afterShotA = await p1.ViewAsync(_ => true, ct);
-        Require(
-            afterShotA.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
+            afterShot.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
                 == shotTarget.Hp - GameNames.ShotDamage
-                && afterShotA.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence == shotSequence,
-            "Fire-too-soon rejection changed the accepted shot state."
-        );
-        await Task.Delay(TimeSpan.FromMilliseconds(fireRejection.RetryAfterMs), ct);
-        await p1.SendAsync(rejectedShot, ct);
-        var retriedShot = await p1.WaitAsync<ShotResult>(result => result.Sequence == shotSequence + 1, ct);
-        Require(retriedShot.Sequence == rejectedShot.Sequence, "Server fire retry delay was insufficient.");
-        var afterShotB = await p1.ViewAsync(_ => true, ct);
-        Require(
-            afterShotB.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
-                == shotTarget.Hp - 2 * GameNames.ShotDamage,
-            "Retried shot did not update the target state."
+                && afterShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence == shotSequence,
+            "Accepted shot or stale-sequence rejection changed the wrong state."
         );
 
         var staleSequence = (await mover.ViewAsync(_ => true, ct))

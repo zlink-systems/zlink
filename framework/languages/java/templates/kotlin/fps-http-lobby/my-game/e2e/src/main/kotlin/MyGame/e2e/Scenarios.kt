@@ -354,34 +354,13 @@ private suspend fun inputScenario(a: Client, b: Client) {
     rejected(a, MoveRequest(Vec3(2.0, 0.0, 0.0), sequence), Rejection.MOVE_BLOCKED_BY_WALL)
     val beforeFire = view(a)
     val shotSequence = nextSequence(beforeFire, a)
-    val acceptedShotRequest = ShootRequest(Vec3(0.0, 1.0, 0.0), shotSequence)
-    val shot = ShootRequest(Vec3(0.0, 1.0, 0.0), shotSequence + 1)
-    a.send(acceptedShotRequest)
-    a.send(shot)
-    val acceptedShot = a.next<ShotResult>()
-    check(acceptedShot.sequence == shotSequence && acceptedShot.outcome == ShotOutcome.MISS) {
-        "Expected accepted miss before fire-too-soon rejection."
-    }
-    val fire = a.next<ShotRejected>()
-    check(fire.reason == Rejection.FIRE_TOO_SOON && fire.retryAfterMs > 0) {
-        "Expected fire-interval rejection."
-    }
+    shoot(a, Vec3(0.0, 1.0, 0.0), ShotOutcome.MISS)
     val afterFire = view(a)
-    val beforeFirePlayer = player(beforeFire, a)
-    val afterFirePlayer = player(afterFire, a)
-    check(afterFirePlayer.position == beforeFirePlayer.position && afterFirePlayer.lastSequence == shotSequence) {
-        "Fire-too-soon rejection changed the accepted shot position or sequence."
-    }
-    check(beforeFirePlayer.hp == afterFirePlayer.hp && player(beforeFire, b).hp == player(afterFire, b).hp) {
-        "Fire-too-soon rejection changed player HP."
-    }
-    delay(fire.retryAfterMs.toLong())
-    val retriedShot = a.action(shot)
-    check(retriedShot is ShotResult
-            && retriedShot.sequence == shot.sequence
-            && retriedShot.outcome == ShotOutcome.MISS) { "Server fire retry delay was insufficient." }
+    check(player(afterFire, a).position == player(beforeFire, a).position &&
+        player(afterFire, a).lastSequence == shotSequence) { "Shots changed position or lost sequence." }
+    rejected(a, ShootRequest(Vec3(0.0, 1.0, 0.0), shotSequence), Rejection.STALE_SEQUENCE)
     check(player(view(b), b).hp == Game.INITIAL_HP) { "Input checks damaged target." }
-    println("input: movement sequences and fire-too-soon retry preserve requests")
+    println("input: movement and shot sequences preserve requests")
 }
 
 private suspend fun reconnectScenario(

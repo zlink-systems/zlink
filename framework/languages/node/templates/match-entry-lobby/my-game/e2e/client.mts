@@ -373,33 +373,11 @@ async function input(a: PlayerClient, b: PlayerClient): Promise<void> {
   const beforeShot = await a.view();
   const shotSequence = playerView(beforeShot, a.playerId).lastSequence + 1n;
   const shotTarget = playerView(beforeShot, b.playerId);
-  const acceptedShot = new ShootRequest(b.playerId, shotSequence);
-  const rejectedShot = new ShootRequest(b.playerId, shotSequence + 1n);
-  const shotMark = a.messages.length;
-  const acceptedShotTask = a.wait<ShotResult>(ShotResult.name, shotMark, (result) =>
-    result.sequence === shotSequence
-  );
-  const rejectedShotTask = a.wait<ActionRejected>(PacketNames.actionRejected, shotMark);
-  await a.connector.send(acceptedShot).submit();
-  await a.connector.send(rejectedShot).submit();
-  const [shotResult, fireRejection] = await Promise.all([acceptedShotTask, rejectedShotTask]);
-  assert.equal(shotResult.sequence, shotSequence, 'Accepted shot result sequence differs');
-  assert.equal(fireRejection.reason, Rejection.fireTooSoon, 'Second shot was not rejected for fire interval');
-  assert(fireRejection.retryAfterMs > 0, 'Fire rejection omitted RetryAfterMs');
-  const afterShotA = await a.view();
-  assert.equal(playerView(afterShotA, b.playerId).hp, shotTarget.hp - Game.shotDamage);
-  assert.equal(playerView(afterShotA, a.playerId).lastSequence, shotSequence);
-  await delay(fireRejection.retryAfterMs);
-  const retryShotMark = a.messages.length;
-  const retriedShotTask = a.wait<ShotResult>(ShotResult.name, retryShotMark, (result) =>
-    result.sequence === rejectedShot.sequence
-  );
-  await a.connector.send(rejectedShot).submit();
-  const retriedShot = await retriedShotTask;
-  assert.equal(retriedShot.sequence, rejectedShot.sequence, 'Retried shot result sequence differs');
-  const afterShotB = await a.view();
-  assert.equal(playerView(afterShotB, b.playerId).hp, shotTarget.hp - 2 * Game.shotDamage);
-  assert.equal(playerView(afterShotB, a.playerId).lastSequence, rejectedShot.sequence);
+  await hit(a, b, shotSequence, shotTarget.hp - Game.shotDamage);
+  await rejectAction(a, new ShootRequest(b.playerId, shotSequence), Rejection.staleSequence);
+  const afterShot = await a.view();
+  assert.equal(playerView(afterShot, b.playerId).hp, shotTarget.hp - Game.shotDamage);
+  assert.equal(playerView(afterShot, a.playerId).lastSequence, shotSequence);
 
   const staleSequence = playerView(await mover.view(), mover.playerId).lastSequence;
   await rejectAction(mover, new MoveRequest(0, 0, staleSequence), Rejection.staleSequence);

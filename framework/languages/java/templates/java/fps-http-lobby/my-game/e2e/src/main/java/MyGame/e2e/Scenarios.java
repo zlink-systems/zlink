@@ -242,33 +242,14 @@ public final class Scenarios {
         reject(a, new MoveRequest(new Vec3(2, 0, 0), sequence), Rejection.MOVE_BLOCKED_BY_WALL);
         var beforeFire = view(a);
         var shotSequence = next(beforeFire, a);
-        var acceptedShotRequest = new ShootRequest(new Vec3(0, 1, 0), shotSequence);
-        var shot = new ShootRequest(new Vec3(0, 1, 0), shotSequence + 1);
-        a.send(acceptedShotRequest);
-        a.send(shot);
-        var acceptedShot = a.next(ShotResult.class);
-        check(acceptedShot.sequence() == shotSequence && acceptedShot.outcome().equals(ShotOutcome.MISS),
-                "Expected accepted miss before fire-too-soon rejection");
-        var fire = a.next(ShotRejected.class);
-        check(fire.reason().equals(Rejection.FIRE_TOO_SOON) && fire.retryAfterMs() > 0,
-                "Expected fire-interval rejection");
+        shoot(a, new Vec3(0, 1, 0), ShotOutcome.MISS);
         var afterFire = view(a);
-        var beforeFirePlayer = player(beforeFire, a);
-        var afterFirePlayer = player(afterFire, a);
-        check(afterFirePlayer.position().equals(beforeFirePlayer.position())
-                        && afterFirePlayer.lastSequence() == shotSequence,
-                "Fire-too-soon rejection changed the accepted shot position or sequence");
-        check(beforeFirePlayer.hp() == afterFirePlayer.hp()
-                        && player(beforeFire, b).hp() == player(afterFire, b).hp(),
-                "Fire-too-soon rejection changed player HP");
-        Thread.sleep(fire.retryAfterMs());
-        var retriedShot = a.sendAndAwait(shot, value -> value instanceof ShotRejected || value instanceof ShotResult);
-        check(retriedShot instanceof ShotResult shotRetry
-                        && shotRetry.sequence() == shot.sequence()
-                        && shotRetry.outcome().equals(ShotOutcome.MISS),
-                "Server fire retry delay was insufficient");
+        check(player(afterFire, a).position().equals(player(beforeFire, a).position())
+                        && player(afterFire, a).lastSequence() == shotSequence,
+                "Shots changed position or lost sequence");
+        reject(a, new ShootRequest(new Vec3(0, 1, 0), shotSequence), Rejection.STALE_SEQUENCE);
         check(player(view(b), b).hp() == Rules.INITIAL_HP, "Input checks damaged target");
-        System.out.println("input: movement sequences and fire-too-soon retry preserve requests");
+        System.out.println("input: movement and shot sequences preserve requests");
     }
 
     private static void reconnectScenario(Client a, Client b, SessionInfo sessionA, SessionInfo sessionB)

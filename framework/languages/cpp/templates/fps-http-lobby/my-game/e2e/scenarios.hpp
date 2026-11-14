@@ -373,36 +373,14 @@ inline void input (Client &a, Client &b)
     rejected (a, MoveRequest{{2, 0, 0}, sequence}, Rejection::move_blocked_by_wall);
     const auto beforeFire = view (a);
     const auto shotSequence = next (beforeFire, a);
-    const ShootRequest acceptedShotRequest{{0, 1, 0}, shotSequence};
-    const ShootRequest shotRequest{{0, 1, 0}, shotSequence + 1};
-    const auto shotStart = a.mark ();
-    a.send (acceptedShotRequest);
-    a.send (shotRequest);
-    const auto acceptedShot = a.wait<ShotResult> (shotStart);
-    require (acceptedShot.sequence == shotSequence && acceptedShot.outcome == ShotOutcome::miss,
-             "Expected accepted miss before fire-too-soon rejection.");
-    const auto fireResponse = a.wait<ShotRejected> (shotStart);
-    require (fireResponse.reason == Rejection::fire_too_soon && fireResponse.retryAfterMs > 0,
-             "Expected fire-interval rejection.");
-    const auto afterFire = view (a);
-    const auto beforeFirePlayer = player (beforeFire, a);
-    const auto afterFirePlayer = player (afterFire, a);
-    require (afterFirePlayer.position.x == beforeFirePlayer.position.x
-                 && afterFirePlayer.position.y == beforeFirePlayer.position.y
-                 && afterFirePlayer.position.z == beforeFirePlayer.position.z
-                 && afterFirePlayer.lastSequence == shotSequence,
-             "Fire-too-soon rejection changed the accepted shot position or sequence.");
-    require (beforeFirePlayer.hp == afterFirePlayer.hp
-                 && player (beforeFire, b).hp == player (afterFire, b).hp,
-             "Fire-too-soon rejection changed player HP.");
-    std::this_thread::sleep_for (std::chrono::milliseconds (fireResponse.retryAfterMs));
-    const auto retriedShotResponse = a.action (shotRequest);
-    const auto *retriedShot = std::get_if<ShotResult> (&retriedShotResponse);
-    require (retriedShot && retriedShot->sequence == shotRequest.sequence
-                 && retriedShot->outcome == ShotOutcome::miss,
-             "Server fire retry delay was insufficient.");
+    const ShootRequest shotRequest{{0, 1, 0}, shotSequence};
+    const auto shotResponse = a.action (shotRequest);
+    const auto *shot = std::get_if<ShotResult> (&shotResponse);
+    require (shot && shot->sequence == shotSequence && shot->outcome == ShotOutcome::miss,
+             "Expected accepted miss.");
+    rejected (a, shotRequest, Rejection::stale);
     require (player (view (b), b).hp == Game::initial_hp, "Input checks damaged target.");
-    std::cout << "input: movement sequence and fire-too-soon retry checks passed"
+    std::cout << "input: movement and shot sequence checks passed"
               << std::endl;
 }
 

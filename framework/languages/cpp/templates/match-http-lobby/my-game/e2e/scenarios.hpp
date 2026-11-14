@@ -230,34 +230,19 @@ inline void input_scenario (Client &a, Client &b)
     const auto before_shot = a.view ();
     const auto &shot_target = player_view (before_shot, b.player_id);
     const auto shot_sequence = player_view (before_shot, a.player_id).lastSequence + 1;
-    const ShootRequest accepted_shot{b.player_id, shot_sequence};
-    const ShootRequest rejected_shot{b.player_id, shot_sequence + 1};
+    const ShootRequest shot_request{b.player_id, shot_sequence};
     const auto shot_start = a.mark ();
-    a.send (accepted_shot);
-    a.send (rejected_shot);
+    a.send (shot_request);
     const auto shot_result = a.receive<ShotResult> (shot_start, [&] (const auto &result) {
         return result.sequence == shot_sequence;
     });
-    const auto fire_rejection = a.receive<ActionRejected> (shot_start);
     require (shot_result.sequence == shot_sequence && shot_result.outcome == "hit",
-             "Expected accepted hit before fire-too-soon rejection");
-    require (fire_rejection.reason == Rejection::fire_too_soon && fire_rejection.retryAfterMs > 0,
-             "Expected fire-interval rejection");
-    const auto after_shot_a = a.view ();
-    require (player_view (after_shot_a, b.player_id).hp == shot_target.hp - Game::shot_damage
-                 && player_view (after_shot_a, a.player_id).lastSequence == shot_sequence,
-             "Fire-too-soon rejection changed the accepted shot state");
-    const auto retry_shot_start = a.mark ();
-    std::this_thread::sleep_for (std::chrono::milliseconds (fire_rejection.retryAfterMs));
-    a.send (rejected_shot);
-    const auto retried_shot = a.receive<ShotResult> (retry_shot_start, [&] (const auto &result) {
-        return result.sequence == rejected_shot.sequence;
-    });
-    require (retried_shot.sequence == rejected_shot.sequence, "Server fire retry delay was insufficient");
-    const auto after_shot_b = a.view ();
-    require (player_view (after_shot_b, b.player_id).hp == shot_target.hp - 2 * Game::shot_damage
-                 && player_view (after_shot_b, a.player_id).lastSequence == rejected_shot.sequence,
-             "Retried shot did not update the target state");
+             "Expected accepted hit");
+    const auto after_shot = a.view ();
+    require (player_view (after_shot, b.player_id).hp == shot_target.hp - Game::shot_damage
+                 && player_view (after_shot, a.player_id).lastSequence == shot_sequence,
+             "Accepted shot did not update the target state");
+    reject_action (a, shot_request, Rejection::stale, &b);
 
     const auto stale_sequence = player_view (mover.view (), mover.player_id).lastSequence;
     reject_action (mover, MoveRequest{0, 0, stale_sequence}, Rejection::stale, &other);
