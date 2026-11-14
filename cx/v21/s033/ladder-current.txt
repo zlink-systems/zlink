@@ -1,4 +1,4 @@
 .NET: L3 통과(옛 L1 기준) → L1 permit 교정(dbench2) 뒤 L0→L1·L1→L2·L2→L3 재측정 · d3fix PR 준비 · d2l2·d57 PR 대기
 Node: 현재 L2 · L0→L1 6칸 통과(교정 bench e5e287ac5c) · L1→L2 손실 bp 30.6·27.0 / serial 9.3·10.8% (n2env 진행) · send L2가 L1보다 13~32% 빠른 이상값 → nsend로 bench 차이 추적 · L2→L3 13~44%
-C++: 현재 L2 · A/B(3회 중앙값): b5afcf4c55 순효과 없음(−3.0~+0.8%), 0c19ec1b39 bp4K +9.7%·bp1K +3.4% → 함께 PR 추천 · cbench2(L1 permit 교정, 검토 완료) + 0c19ec1b39로 L0~L2 재측정 빌드 중 · #4439(#4420) queue · #4427 queue
 Java: 현재 L2 · L0→L1 통과 · L1→L2 손실 serial 11.1·10.0 / bp 28.4·10.6% · j2rd2(겹친 검증 제거) 순효과 없음(+0.6%)으로 닫음 · L2 차이 ≈ JSON header codec 자체(요청당 ~2.8 µs) → lspec 스펙 후보로 · correlation PR 준비(pre-pr 중)
+C++: 현재 L2 · 교정 bench(cbench2 permit)+#4443: L0→L1 통과 · L1→L2 손실 send1K 9.1 / serial1K 7.1 / bp 15.3·16.9% (send4K·serial4K 통과) → c3prof(남은 L2 비용 profile) · #4443 queue · #4439(#4420) queue
