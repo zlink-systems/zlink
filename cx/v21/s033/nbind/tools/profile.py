@@ -29,7 +29,7 @@ if args.mode=='alloc':env.update(NBIND_ALLOC_DIR=str(out))
 procs=[];perfprocs=[];logs=[];timers=[];events=[]
 started=time.monotonic()
 def event(name,**v):events.append(dict(event=name,monotonic_us=time.monotonic_ns()//1000,epoch_ms=time.time()*1000,**v))
-def request(port,route='/bench/stats',body=None,timeout=.7):
+def request(port,route='/bench/stats',body=None,timeout=2):
  req=urllib.request.Request(url(port)+route,data=None if body is None else json.dumps(body).encode(),headers={'content-type':'application/json'})
  with urllib.request.urlopen(req,timeout=timeout) as r:return json.load(r)
 def spawn(role,cmd,control):
@@ -69,6 +69,14 @@ def alloc_snapshot(tag):
   assert magic==0x435050414c4c4f43 and version==1
   all[role]=[dict(zip(['tid','malloc','calloc','realloc','free','bytes'],struct.unpack_from('QQQQQQ',buf,4096+64*i))) for i in range(min(n,4096))]
  (out/f'alloc-{tag}.json').write_text(json.dumps(all,indent=2)+'\n')
+def perf_control(command, deadline):
+ if not perfprocs:return
+ for role,kind,pp,ctl,ack in perfprocs:os.write(ctl,(command+'\n').encode())
+ for role,kind,pp,ctl,ack in perfprocs:
+  if not select.select([ack],[],[],max(.01,deadline-time.monotonic()))[0]:raise RuntimeError('perf '+command+' ack lifecycle deadline: '+role+' '+kind)
+  answer=os.read(ack,100)
+  if answer.replace(b'\x00',b'').strip()!=b'ack':raise RuntimeError('perf '+command+' bad ack '+repr(answer))
+ event('perf-control-'+command)
 def phase(name,duration):
  event(name+'-begin')
  ack=request(trigger,'/bench/start',dict(runId=args.label,cellId=args.label,pattern=args.pattern,payloadBytes=1024,phase=name,durationMs=duration,requestWindow=100,submitConcurrency=8))
@@ -113,19 +121,14 @@ try:
     pp=subprocess.Popen(['taskset','-c',CPUS,*cmd],stdout=log,stderr=subprocess.STDOUT,pass_fds=(ctlr,ackw))
     os.close(ctlr);os.close(ackw)
     perfprocs.append((role,kind,pp,ctlw,ackr))
+ perf_control('disable',started+10.8)
  for port in [tc,sc]:request(port,'/begin',timeout=2)
  alloc_snapshot('start');threads('active-start')
- for role,kind,pp,ctl,ack in perfprocs:
-  os.write(ctl,b'enable\n')
-  if not select.select([ack],[],[],2)[0]:raise RuntimeError('perf enable ack timeout')
-  assert os.read(ack,100).replace(b'\x00',b'').strip()==b'ack'
+ perf_control('enable',started+11)
  event('measurement-enabled')
  phase_start=time.monotonic();stats=phase('active',5000)
  alloc_snapshot('end')
- for role,kind,pp,ctl,ack in perfprocs:
-  os.write(ctl,b'disable\n')
-  if not select.select([ack],[],[],2)[0]:raise RuntimeError('perf disable ack timeout')
-  assert os.read(ack,100).replace(b'\x00',b'').strip()==b'ack'
+ perf_control('disable',started+18)
  event('measurement-disabled')
  for port in [sc,tc]:request(port,'/end',timeout=2)
  for role,kind,pp,ctl,ack in perfprocs:
