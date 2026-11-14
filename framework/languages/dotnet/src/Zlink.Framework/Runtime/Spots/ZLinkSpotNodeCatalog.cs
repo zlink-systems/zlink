@@ -1549,23 +1549,57 @@ internal sealed class ZLinkSpotNodeCatalog(
             objectGeneration
         );
 
-    // A handler or timer Close of its own incarnation. It claims and posts
-    // within the call, so the Close is the next lifecycle item of that
-    // incarnation before the turn ends (spec 06 §7 step 1).
+    // Register on the current Spot gate before host admission or catalog work
+    // can suspend the caller (spec 06 §7 step 1). The catalog still owns claims.
     internal ValueTask<bool> CloseFromContextAsync(
         ZLinkSpotActivation activation,
         CancellationToken cancellationToken
-    ) =>
-        CloseCoreAsync(
-            activation.SpotId,
-            null,
-            releaseLocation: true,
-            requireNoActors: true,
-            ZLinkSpotCloseReason.ExplicitClose,
-            cancellationToken,
-            activation.ObjectGeneration,
-            context: activation
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CloseRegistration claimed = default;
+        var attempt = activation.PostLifecycleOperation(
+            async (current, ct) =>
+            {
+                var turn = ZLinkSerialTurn.Current!;
+                await current.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    using var operation = (
+                        await turn.YieldFrameworkCallAsync(_ => runtime.AdmitOperationAsync(), ct)
+                            .ConfigureAwait(false)
+                    ).Enter();
+                    claimed = await turn.YieldFrameworkCallAsync(
+                            _ =>
+                                _lane.RunAsync(() =>
+                                    RegisterCloseLocked(
+                                        current.SpotId,
+                                        current.ObjectGeneration,
+                                        current
+                                    )
+                                ),
+                            ct
+                        )
+                        .ConfigureAwait(false);
+                    return claimed.Owner is null
+                        ? default
+                        : await CloseOnLifecycleLaneAsync(current, null, null, ct)
+                            .ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (claimed.Owner is null)
+                        current.AbortCloseBoundary();
+                }
+            }
         );
+        if (attempt is null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                $"Spot '{activation.SpotId}' no longer admits lifecycle work."
+            );
+        return CompleteExplicitCloseAsync(activation, () => claimed, attempt);
+    }
 
     internal async ValueTask<bool> CloseAsync(
         string spotId,
@@ -1666,14 +1700,12 @@ internal sealed class ZLinkSpotNodeCatalog(
         ZLinkSpotCloseReason reason,
         CancellationToken cancellationToken,
         ulong? objectGeneration = null,
-        UserSpotCloseFence? fence = null,
-        ZLinkSpotActivation? context = null
+        UserSpotCloseFence? fence = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (
-            context is null
-            && objectGeneration is not null
+            objectGeneration is not null
             && ZLinkSpotAmbientContext.CurrentOrDefault is { } caller
             && caller.SpotId == spotId
         )
@@ -1681,18 +1713,15 @@ internal sealed class ZLinkSpotNodeCatalog(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Spot '{spotId}' closes itself through its context Close."
             );
-        // Context Close submits this turn asynchronously. Claim and lifecycle
-        // posting stay ordered on the catalog lane without blocking its caller.
+        // External Close resolves its exact incarnation and claims on the catalog lane.
         var (registration, attempt) = await _lane
             .RunAsync(() =>
             {
-                var claimed = RegisterCloseLocked(spotId, objectGeneration, context);
+                var claimed = RegisterCloseLocked(spotId, objectGeneration);
                 var posted =
-                    objectGeneration is not null
-                    && claimed.Owner is { } owner
-                    && claimed.Transaction is { } ownedTransaction
+                    objectGeneration is not null && claimed.Owner is { } owner
                         ? ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-                            PostExplicitClose(spotId, owner, ownedTransaction, fence, deadline)
+                            PostExplicitClose(owner, fence, deadline)
                         )
                         : null;
                 return (claimed, posted);
@@ -1730,7 +1759,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             _ = transaction.Task.Exception;
             throw closedLane;
         }
-        return await CompleteExplicitCloseAsync(spotId, activation, transaction, attempt)
+        return await CompleteExplicitCloseAsync(activation, () => registration, attempt)
             .ConfigureAwait(false);
     }
 
@@ -1895,15 +1924,17 @@ internal sealed class ZLinkSpotNodeCatalog(
         ZLinkAuthoritySnapshot? Authority,
         ZLinkFrameworkException? IntentFailure
     )>? PostExplicitClose(
-        string spotId,
         ZLinkSpotActivation activation,
-        TaskCompletionSource<bool> transaction,
         UserSpotCloseFence? fence,
         DateTimeOffset? deadline
     ) =>
         activation.PostLifecycleOperation(
-            (current, ct) =>
-                CloseOnLifecycleLaneAsync(spotId, current, transaction, fence, deadline, ct)
+            async (current, ct) =>
+            {
+                await current.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);
+                return await CloseOnLifecycleLaneAsync(current, fence, deadline, ct)
+                    .ConfigureAwait(false);
+            }
         );
 
     private async ValueTask<(
@@ -1912,9 +1943,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         ZLinkAuthoritySnapshot? Authority,
         ZLinkFrameworkException? IntentFailure
     )> CloseOnLifecycleLaneAsync(
-        string spotId,
         ZLinkSpotActivation activation,
-        TaskCompletionSource<bool> transaction,
         UserSpotCloseFence? fence,
         DateTimeOffset? deadline,
         CancellationToken cancellationToken
@@ -1929,7 +1958,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         // Closing is committed, every outcome leaves authority and admission as
         // they were and drops this Close registration.
         CloseAuthority authority;
-        await activation.BeginCloseBoundaryAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             authority =
@@ -1990,9 +2018,8 @@ internal sealed class ZLinkSpotNodeCatalog(
     }
 
     private async ValueTask<bool> CompleteExplicitCloseAsync(
-        string spotId,
         ZLinkSpotActivation activation,
-        TaskCompletionSource<bool> transaction,
+        Func<CloseRegistration> getRegistration,
         Task<(
             bool Closed,
             ZLinkSpotActivation? Successor,
@@ -2007,9 +2034,24 @@ internal sealed class ZLinkSpotNodeCatalog(
             ZLinkAuthoritySnapshot? Authority,
             ZLinkFrameworkException? IntentFailure
         ) outcome = default;
+        CloseRegistration claimed = default;
+        TaskCompletionSource<bool>? transaction = null;
         try
         {
-            outcome = await attempt.ConfigureAwait(false);
+            try
+            {
+                outcome = await attempt.ConfigureAwait(false);
+            }
+            finally
+            {
+                // Context claims are made by the record, including failed attempts.
+                claimed = getRegistration();
+                transaction = claimed.Transaction;
+            }
+            if (claimed.Owner is null)
+                return transaction is not null && await transaction.Task.ConfigureAwait(false);
+            if (transaction is null)
+                throw new InvalidOperationException("An owned Close requires its transaction.");
             if (outcome.Closed)
             {
                 await activation
@@ -2037,6 +2079,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
         catch (Exception exception)
         {
+            if (claimed.Owner is null || transaction is null)
+                throw;
             var failures = new ZLinkFailureCollector(exception);
             if (activation.HasCommittedClose)
             {

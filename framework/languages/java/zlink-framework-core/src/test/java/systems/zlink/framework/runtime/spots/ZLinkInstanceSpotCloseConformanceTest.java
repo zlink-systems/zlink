@@ -507,6 +507,78 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         }
     }
 
+    static void runSuccessorClose(JsonNode scenario) throws Exception {
+        assertEquals("successor-context-close-retains-next-intent", scenario.path("name").asText());
+        String spotId = "java-successor-close-" + UUID.randomUUID();
+        Observation observation = new Observation(false, false);
+        current = observation;
+        var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
+        options.addLocationStore(new ObservedStore(spotId, observation));
+        options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        options.addRouteMesh(MESH)
+                .listen("inproc://" + spotId)
+                .setRoutingId(RoutingId.from(spotId))
+                .objects()
+                .server()
+                .addEntrySpot(Entry.class)
+                .addInstanceSpotFactory(
+                        TYPE, Instance.class, factory -> factory.disableRelocation());
+        try (ArrivalLog flow = new ArrivalLog(spotId);
+                var runtime =
+                        ZLinkFrameworkRuntimeTestAccess.start(
+                                options, new ZLinkJavaBackendAdapterFactory())) {
+            try {
+                awaitServing(runtime);
+                runtime.route()
+                        .requestToSpot(spotId, new InitialProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .timeout(WAIT)
+                        .submit(Reply.class)
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                runtime.route()
+                        .sendToSpot(spotId, new CloseProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                observation.closingEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                var first = pending(runtime, spotId, true, new PendingProbe("close"));
+                flow.ownerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                var second = pending(runtime, spotId, true);
+                flow.secondOwnerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                observation.closingRelease.complete(null);
+                Reply firstReply = first.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                Reply secondReply = second.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                var expected = scenario.path("expect");
+                List<Integer> incarnations =
+                        List.of(
+                                observation.initializations.indexOf(firstReply.generation()) + 1,
+                                observation.initializations.indexOf(secondReply.generation()) + 1);
+                assertEquals(
+                        expected.path("handlerIncarnations").get(0).asInt(), incarnations.get(0));
+                assertEquals(
+                        expected.path("handlerIncarnations").get(1).asInt(), incarnations.get(1));
+                assertEquals(
+                        expected.path("closeResults").get(0).asBoolean(),
+                        observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                assertEquals(
+                        expected.path("closeResults").get(1).asBoolean(),
+                        observation.successorClose.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                assertEquals(2, observation.terminals.get());
+                assertEquals(2, observation.closingCalls.get());
+                assertEquals("durable-state", firstReply.restored());
+                assertEquals("durable-state", secondReply.restored());
+            } finally {
+                observation.closingRelease.complete(null);
+            }
+        }
+    }
+
     static void runBranch(JsonNode branch) throws Exception {
         String name = branch.path("name").asText();
         assertTrue(BRANCHES.contains(name), "unknown close branch " + name);
@@ -1151,11 +1223,12 @@ final class ZLinkInstanceSpotCloseConformanceTest {
 
     private static CompletableFuture<Reply> pending(
             ZLinkFrameworkRuntime runtime, String spotId, boolean intent) {
-        var request =
-                runtime.route()
-                        .requestToSpot(spotId, new PendingProbe())
-                        .inMesh(MESH)
-                        .timeout(WAIT);
+        return pending(runtime, spotId, intent, new PendingProbe());
+    }
+
+    private static CompletableFuture<Reply> pending(
+            ZLinkFrameworkRuntime runtime, String spotId, boolean intent, PendingProbe probe) {
+        var request = runtime.route().requestToSpot(spotId, probe).inMesh(MESH).timeout(WAIT);
         if (intent) request = request.instanceSpot(TYPE);
         Observation observation = current;
         return request.submit(Reply.class)
@@ -1365,6 +1438,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         public CompletionStage<Reply> handle(Instance spot, PendingProbe request) {
             spot.observation.pendingGenerations.add(spot.context.objectGeneration());
             spot.observation.events.add("pendingIntentMessagesExecuted");
+            if (request.value().equals("close"))
+                spot.observation.successorClose = spot.context.close().toCompletableFuture();
             return CompletableFuture.completedFuture(
                     new Reply(spot.context.objectGeneration(), spot.restored));
         }
@@ -1484,6 +1559,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         final CompletableFuture<Void> closingRelease = new CompletableFuture<>();
         CompletableFuture<Void> hostCloseRelease = CompletableFuture.completedFuture(null);
         final CompletableFuture<Boolean> closeResult = new CompletableFuture<>();
+        volatile CompletableFuture<Boolean> successorClose;
         volatile String durableState;
         volatile ZLinkTimer oldTimer;
         volatile long deletedGeneration;
@@ -1672,6 +1748,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         private final Logger logger = Logger.getLogger(FLOW_LOGGER);
         private final String spotId;
         final CompletableFuture<String> ownerArrival = new CompletableFuture<>();
+        final CompletableFuture<String> secondOwnerArrival = new CompletableFuture<>();
         final CompletableFuture<Void> sendArrival = new CompletableFuture<>();
         final CompletableFuture<String> sendDropped = new CompletableFuture<>();
         final AtomicInteger sendDiagnosticCount = new AtomicInteger();
@@ -1701,7 +1778,10 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     && spotId.equals(fields.get("spot"))
                     && PendingProbe.class.getSimpleName().equals(fields.get("packet"))
                     && fields.containsKey("corr")) {
-                ownerArrival.complete(fields.get("corr"));
+                String correlation = fields.get("corr");
+                if (!ownerArrival.complete(correlation)
+                        && !Objects.equals(ownerArrival.getNow(null), correlation))
+                    secondOwnerArrival.complete(correlation);
             }
             if ("received".equals(fields.get("phase"))
                     && spotId.equals(fields.get("spot"))

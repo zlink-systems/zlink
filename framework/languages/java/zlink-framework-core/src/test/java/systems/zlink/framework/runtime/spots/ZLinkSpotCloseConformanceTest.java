@@ -528,6 +528,10 @@ final class ZLinkSpotCloseConformanceTest {
             ranBranches.add(name);
         }
         assertEquals(ZLinkInstanceSpotCloseConformanceTest.BRANCHES, Set.copyOf(ranBranches));
+        assertFalse(fixture.path("successorCloseCases").isEmpty());
+        for (JsonNode scenario : fixture.path("successorCloseCases")) {
+            ZLinkInstanceSpotCloseConformanceTest.runSuccessorClose(scenario);
+        }
         for (JsonNode routeCase : fixture.path("readyRouteCases")) {
             try {
                 ZLinkInstanceSpotCloseConformanceTest.runReadyRouteCase(routeCase);

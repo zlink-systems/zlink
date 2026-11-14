@@ -48,6 +48,7 @@ constexpr std::size_t runtime_observer_capacity = 1;
 enum class branch_t
 {
     replay,
+    successor_close,
     initialization_failure,
     draining,
     relocating,
@@ -181,6 +182,8 @@ struct evidence_t
     std::optional<std::promise<void>> draining_observed{std::in_place};
     std::string intent_flow;
     std::optional<zf::task_t<bool>> close_completion;
+    std::optional<zf::task_t<bool>> successor_close_completion;
+    std::vector<std::uint64_t> initialized_generations;
     std::vector<std::string> order;
     std::vector<std::uint64_t> business_generations;
     std::vector<std::string> business_packets;
@@ -436,6 +439,7 @@ class reincarnating_spot_t final : public zf::instance_spot_t
         {
             std::lock_guard lock (_evidence->mutex);
             _projection = _evidence->durable_value;
+            _evidence->initialized_generations.push_back (_context.object_generation ());
             if (recreating) {
                 _evidence->order.push_back ("newIncarnationInitialized");
                 _evidence->order.push_back ("storedStateRestored");
@@ -452,8 +456,11 @@ class reincarnating_spot_t final : public zf::instance_spot_t
             std::lock_guard lock (_evidence->mutex);
             if (_evidence->committed.empty ())
                 throw std::runtime_error ("OnClosing has no initial Store incarnation evidence");
-            if (_context.object_generation () != _evidence->committed.front ().object_generation)
+            if (_context.object_generation () != _evidence->committed.front ().object_generation) {
+                if (_evidence->branch == branch_t::successor_close)
+                    ++_evidence->closing_calls;
                 co_return;
+            }
             ++_evidence->closing_calls;
             _evidence->order.push_back ("onClosing");
             _evidence->factory_calls_at_close = _evidence->factory_calls;
@@ -471,7 +478,13 @@ class reincarnating_spot_t final : public zf::instance_spot_t
     }
     reply_t intent (const intent_request_t &)
     {
-        return business_reply (intent_request_t::packet_name);
+        auto response = business_reply (intent_request_t::packet_name);
+        if (_evidence->branch == branch_t::successor_close) {
+            auto operation = _context.close ();
+            std::lock_guard lock (_evidence->mutex);
+            _evidence->successor_close_completion.emplace (std::move (operation));
+        }
+        return response;
     }
     void send_intent (const intent_send_t &) { (void) business_reply (intent_send_t::packet_name); }
     reply_t followup (const followup_intent_request_t &)
@@ -644,6 +657,7 @@ class exercise_t final : public zf::hosted_service_t
     bool journal_present_at_clear = false;
     std::optional<reply_t> clear_marker_reply;
     std::optional<zf::result_t<bool>> close_result;
+    std::optional<zf::result_t<bool>> successor_close_result;
     bool close_pending_during_initializer = false;
     bool intent_retained_during_cleanup = false;
     bool intent_terminal_during_cleanup = true;
@@ -1025,6 +1039,24 @@ class exercise_t final : public zf::hosted_service_t
                     throw std::runtime_error (
                       "operational admission seal did not match fixture phase");
             }
+            if (_evidence->branch == branch_t::successor_close) {
+                std::future<void> arrived;
+                {
+                    std::lock_guard lock (_evidence->mutex);
+                    arrived = _evidence->followup_arrived->get_future ();
+                }
+                followup = std::async (std::launch::async, [&] {
+                    auto task =
+                      route.request_to_spot (zf::spot_id_t (spot_id), followup_intent_request_t{})
+                        .instance_spot (stable_type)
+                        .timeout (request_timeout)
+                        .async<reply_t> ();
+                    return count_completion (std::move (task), _evidence,
+                                             followup_intent_request_t::packet_name)
+                      .result ();
+                });
+                require_ready (arrived, "second retained intent did not reach the Closing owner");
+            }
             _evidence->closing_release.complete (zf::result_t<void>::success ());
             if (cleanup_release) {
                 require_ready (cleanup_entered, "failed initializer cleanup did not start");
@@ -1107,6 +1139,9 @@ class exercise_t final : public zf::hosted_service_t
         if (followup.valid ())
             followup_result.emplace (followup.get ());
         const auto closed = _evidence->close_completion->result ();
+        close_result.emplace (closed);
+        if (_evidence->branch == branch_t::successor_close)
+            successor_close_result.emplace (_evidence->successor_close_completion->result ());
         if (!initializer_fails (_evidence->branch) && (!closed || !closed.value ()))
             throw std::runtime_error ("Close did not complete successfully");
         const auto final = _store->inspect_authority ().result ().value ();
@@ -1126,7 +1161,7 @@ class exercise_t final : public zf::hosted_service_t
     std::shared_ptr<observed_store_t> _store;
 };
 
-const nlohmann::json &branch_fixture (const char *name)
+const nlohmann::json &close_fixture ()
 {
     static const auto fixture = [] {
         std::ifstream stream (ZLINK_SPOT_CLOSE_CONFORMANCE_PATH);
@@ -1134,7 +1169,12 @@ const nlohmann::json &branch_fixture (const char *name)
             throw std::runtime_error ("Close fixture could not be opened");
         return nlohmann::json::parse (stream);
     }();
-    for (const auto &branch : fixture.at ("closeBranches"))
+    return fixture;
+}
+
+const nlohmann::json &branch_fixture (const char *name)
+{
+    for (const auto &branch : close_fixture ().at ("closeBranches"))
         if (branch.at ("name") == name)
             return branch;
     throw std::runtime_error ("Close branch is missing from fixture");
@@ -1546,6 +1586,43 @@ void check_pending_initializer_two_requests (branch_t kind)
 TEST (ZLinkFrameworkSpotReincarnateConformance, ClosingIntentReplaysOnSameOwner)
 {
     check_branch (branch_t::replay, "reincarnate-pending-intent");
+}
+TEST (ZLinkFrameworkSpotReincarnateConformance, SuccessorContextCloseRetainsNextIntent)
+{
+    const auto &cases = close_fixture ().at ("successorCloseCases");
+    ASSERT_FALSE (cases.empty ());
+    for (const auto &scenario : cases) {
+        SCOPED_TRACE (scenario.at ("name").get<std::string> ());
+        ASSERT_EQ ("successor-context-close-retains-next-intent", scenario.at ("name"));
+        auto evidence = std::make_shared<evidence_t> (branch_t::successor_close);
+        auto store = std::make_shared<observed_store_t> (evidence);
+        auto relocations = std::make_shared<zf::runtime::in_memory_relocation_store_t> ();
+        auto app = zf::app_t::create ();
+        configure_app (app, evidence, store, relocations);
+        auto runner = std::make_unique<exercise_t> (app, evidence, store);
+        auto *exercise = runner.get ();
+        app.add_hosted_service (std::move (runner));
+        (void) app.run (0, nullptr);
+        ASSERT_TRUE (exercise->failure.empty ()) << exercise->failure;
+        ASSERT_TRUE (exercise->intent_result && *exercise->intent_result);
+        ASSERT_TRUE (exercise->followup_result && *exercise->followup_result);
+        ASSERT_TRUE (exercise->close_result && *exercise->close_result);
+        ASSERT_TRUE (exercise->successor_close_result && *exercise->successor_close_result);
+        const auto &expected = scenario.at ("expect");
+        EXPECT_EQ (expected.at ("closeResults").at (0), exercise->close_result->value ());
+        EXPECT_EQ (expected.at ("closeResults").at (1), exercise->successor_close_result->value ());
+        std::vector<int> incarnations;
+        for (auto generation : evidence->business_generations) {
+            const auto found = std::find (evidence->initialized_generations.begin (),
+                                          evidence->initialized_generations.end (), generation);
+            incarnations.push_back (
+              static_cast<int> (found - evidence->initialized_generations.begin ()) + 1);
+        }
+        EXPECT_EQ (expected.at ("handlerIncarnations").get<std::vector<int>> (), incarnations);
+        EXPECT_EQ (2, evidence->closing_calls);
+        EXPECT_EQ (1, evidence->terminals[intent_request_t::packet_name]);
+        EXPECT_EQ (1, evidence->terminals[followup_intent_request_t::packet_name]);
+    }
 }
 TEST (ZLinkFrameworkSpotReincarnateConformance, FailedInitializationDeletesNewGeneration)
 {
