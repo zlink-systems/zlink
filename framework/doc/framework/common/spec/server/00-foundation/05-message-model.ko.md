@@ -154,13 +154,13 @@ public codec 계약이다.
 - Date, decimal, UUID와 언어별 custom type은 암묵적으로 변환하지 않고 계약이 정한 string
   또는 DTO로 표현한다.
 
-| 언어 표현 | Required | 누락 허용 |
-|---|---|---|
-| C++ `dto_traits` | 선언한 field. `std::optional<T>`도 nullable일 뿐 required 판정은 바꾸지 않는다 | DTO의 기본 생성 값이 기본값인 field를 `zlink::json::field(..., zlink::json::defaulted)`로 표시한다 |
-| C# | 기본값이 없는 생성자 parameter | 기본값을 선언한 생성자 parameter |
-| Java record | 모든 component | `@ZLinkJsonOptional`로 표시한 component |
-| Kotlin | 기본값이 없는 primary-constructor property | 기본값을 선언한 property |
-| TypeScript | `?`가 없는 property. definite-assignment `!`도 required다 | `?`가 있는 property |
+| 언어 표현 | Required | 누락 허용 | Nullable |
+|---|---|---|---|
+| C++ `dto_traits` | 선언한 field. `std::optional<T>`도 nullable일 뿐 required 판정은 바꾸지 않는다 | DTO의 기본 생성 값이 기본값인 field를 `zlink::json::field(..., zlink::json::defaulted)`로 표시한다 | `std::optional<T>` field |
+| C# | 기본값이 없는 생성자 parameter | 기본값을 선언한 생성자 parameter | NRT `?`를 붙인 reference 또는 `Nullable<T>` |
+| Java record | 모든 component | `@ZLinkJsonOptional`로 표시한 component | 이름이 `Nullable`인 annotation(JSpecify type-use, JSR 305·Jakarta declaration)을 붙인 reference component. Primitive는 nullable이 아니다 |
+| Kotlin | 기본값이 없는 primary-constructor property | 기본값을 선언한 property | `?`를 붙인 type |
+| TypeScript | `?`가 없는 property. definite-assignment `!`도 required다 | `?`가 있는 property | Packet에 등록한 JSON schema의 `{ type: 'nullable', value }`. `?`는 누락 허용만 정한다 |
 
 Required 여부와 nullable 여부는 독립적이다. 기본값이 있는 non-nullable property는 누락될 때
 기본값을 사용하고 명시적 `null`은 거부한다. 기본값이 없는 nullable property는 `null`을 허용하고

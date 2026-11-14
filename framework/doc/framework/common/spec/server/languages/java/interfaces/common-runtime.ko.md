@@ -300,7 +300,7 @@ Java record component는 기본적으로 required며, Framework의 `@ZLinkJsonOp
 `@JsonProperty`로 wire 이름을 정해도 required 판정은 바뀌지 않는다.
 선택 component가 누락되면 primitive는 Java 기본값을 사용하고 reference는 `null`을 받는다.
 Kotlin primary-constructor property는 기본값이 없으면 required이고, 기본값을 선언하면 누락될 수 있다.
-Required nullable property는 명시적 `null`을 허용하고 누락은 거부한다.
+Nullable 선언은 [§5 표](../../../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)를 따른다.
 
 | JVM DTO 선언 | Required 판정 |
 |---|---|
