@@ -1,5 +1,7 @@
 C4420|#4420 C++ run 실패 뒤 shutdown 수정(sol)|c4420
 J2l2|Java L2 header 손실 원인·수정(.NET 대조, sol)|j2l2
-D3l3|.NET L3 send 1K 18.9% 원인·수정안(sol, 진단만)|d3l3
+D3fix|.NET L3 A안 production 수정(sol)|d3fix
 Nbind|Node binding 메시지당 제출 비용 L1·L2·L3(sol, 진단)|nbind
 C2prof|C++ L2 남은 비용 profile(PM 수정용, sol)|c2prof
+Dbench|.NET ladder bench L3 교정(sol)|dbench
+Baudit|네 언어 bench·production 경로 대조(sol, C++ 먼저)|baudit

@@ -44,3 +44,11 @@
 - 수정 후 빌드 rc 0. raw/build-after-meta.json에서 binary 최신성을 확인했다.
 - 신규 6개 모두 rc 0: raw/test-after-results.json 및 test-after-*.log. 수정 전 -11 4개도 모두 통과했고 정상 종료 대조 2개도 유지됐다.
 - 기존 CTest 34개와 bench_cpp_client를 같은 worktree build-c4420에서 빌드 중이다. bench target만 raw/bench-*.cmake로 추가했으며 bench source는 HEAD와 동일하다. 최종 CTest 발견 결과도 동일한 34개다.
+
+## 완료
+
+- 기존 테스트·bench 빌드 rc 0, 실행 파일 17개 최신성 확인.
+- 기존 CTest 34/34 통과(19.14초), 신규 6/6 통과.
+- main bench source의 stats 점유 재현 10/10 exit 2. SIGSEGV 없음. 각 로그의 bind 실패 포트와 host rc=1 확인.
+- 전체 C++ format check rc 0, diff check 통과. 빌드 크기 6.2GB(25GB 이하).
+- 로컬 커밋 bc1d62e53a582c4d2a8aa141e83c1d5a0a62e6ce. working tree clean. 최종 결과와 로그 경로는 report.md 및 raw/final-validation.json.

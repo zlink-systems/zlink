@@ -1,6 +1,6 @@
 # #4420 C++ run 종료 후 종료 요청
 
-- 원인(기준 6350275fac): `framework/languages/cpp/framework/src/runtime/host/app.cpp:3462-3474,3480-3486`에서 자원을 닫아도 termination operation은 미완료였다. 이후 `:4387-4404`가 새 worker를 만들고 `:4514`가 닫힌 channel runtime을 읽어 SIGSEGV가 발생했다. 기존 stack: `/root/jobs/fx/cx/v21/s033/cbind2/raw/gdb-run-01.log`.
+- 원인(기준 6350275fac): `framework/languages/cpp/framework/src/runtime/host/app.cpp:3462-3474,3494-3518`에서 자원을 닫아도 termination operation은 미완료였다. 이후 `:4387-4404`가 새 worker를 만들고 `:4514`가 닫힌 channel runtime을 읽어 SIGSEGV가 발생했다. 기존 stack: `/root/jobs/fx/cx/v21/s033/cbind2/raw/gdb-run-01.log`.
 - 변경: `app.cpp:573`의 공통 함수로 terminal/result/waiter 게시를 모았다. `:3492-3516`에서 기존 `started`로 teardown을 예약하고 정상·실패 teardown을 통합했다. 먼저 시작된 worker는 자원 접근 완료를 기다린 뒤 teardown하고 join한다. `shutdown()` 본문과 bench source는 변경하지 않았다. 변경 파일은 app.cpp와 `tests/Zlink.Framework.UnitTests/test_cpp_framework_http_startup.cpp` 두 개다.
 - .NET 동작: `framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkFrameworkHostRuntimeCoordinator.cs:114-133`은 일반 시작 실패 후 자원을 닫는다. 같은 디렉터리 `ZLinkFrameworkRuntime.cs:323-327,365-381,455-462,1476-1480`은 이미 닫힌 runtime의 drain/stop을 완료로 처리한다. `ZLinkFrameworkMaintenanceRuntime.cs:573-590`에 따라 결과는 `Stopped/None`이며 `:310-313,333-334`처럼 완료 결과를 재사용한다.
 - 소유 계층: Framework Host의 `termination_operation`이 종료 operation과 terminal 결과를 소유한다. `run_active/teardown_complete`는 기존 teardown barrier로만 사용한다.
@@ -18,8 +18,8 @@
 
 - 수정 전: Release, binding source ON, Core 1.25.0, -j3, CPU 6-7,14-15. 빌드 rc 0 및 binary가 두 source보다 최신임을 확인했다. [빌드](raw/build-before.log), [검증 기록](raw/build-before-meta.json).
 - 신규 테스트 수정 전: 6개 중 request_stop, stop, shutdown 두 번, 실패 teardown 중 shutdown은 모두 `-11`; 정상 종료 후 재호출과 worker 선행 경합은 통과했다. [집계](raw/test-before-results.json), [요청한 첫 재현 로그](raw/test-before-RequestStopAfterFailedRunReturnsCompletedShutdown.log).
-- 신규 테스트 수정 후: **6/6 통과**. 수정 전 SIGSEGV 4개와 대조 2개가 모두 rc 0이다. [빌드](raw/build-after-focused.log), [최신성](raw/build-after-meta.json), [테스트 집계](raw/test-after-results.json). 기존 테스트와 bench 빌드는 진행 중이다.
-- 기존 테스트 예정: `ctest -R '[Hh]ttp|[Ss]hutdown|[Tt]ermination|[Ll]ifecycle|[Aa]pp|[Hh]ost'`, 34개. 전체 이름과 command는 [목록](raw/selected-tests.json)에 기록했다.
-- bench 수정 전: stats 점유 `-11` 10/10. 원본 `/root/jobs/fx/cx/v21/s033/cbind2/raw/before-stats-results.json`; [집계](raw/bench-before-summary.json). 수정 후 10회 실행은 대기 중이다.
-- format: 최종 테스트 후 실행 예정. `git diff --check`는 통과했다.
-- 로컬 커밋: 검증 완료 후 생성 예정. push/GitHub/internal-docs/fetch/pull/다른 worktree 변경은 수행하지 않았다.
+- 신규 테스트 수정 후: **6/6 통과**. 수정 전 SIGSEGV 4개와 대조 2개가 모두 rc 0이다. [빌드](raw/build-after-focused.log), [최신성](raw/build-after-meta.json), [테스트 집계](raw/test-after-results.json). 기존 테스트·bench 빌드도 rc 0이며, [실행 파일 17개 최신성](raw/selected-binary-meta.json)을 확인했다. [전체 빌드](raw/build-selected.log).
+- 기존 테스트: `ctest -R '[Hh]ttp|[Ss]hutdown|[Tt]ermination|[Ll]ifecycle|[Aa]pp|[Hh]ost'`로 **34/34 통과**, 19.14초. [실행 로그](raw/ctest-selected.log), [실행한 전체 이름·command](raw/selected-tests.json).
+- bench 수정 전: stats 점유 `-11` 10/10. 원본 `/root/jobs/fx/cx/v21/s033/cbind2/raw/before-stats-results.json`; [집계](raw/bench-before-summary.json). 수정 후 main bench source 그대로 같은 인자·CPU affinity로 stats를 점유한 **10/10회가 정상적인 비제로 종료 2**, SIGSEGV 0회였다. 각 로그에서 해당 포트 bind 실패와 host rc=1도 확인했다. [후 집계](raw/bench-after-summary.json), [개별 command·로그](raw/bench-after-stats-results.json).
+- format: worktree root에서 `bash scripts/format/format.sh --check cpp` **rc 0**. [로그](raw/format-check.log), [종료 코드](raw/format-check-rc.txt). `git diff --check`도 통과했다.
+- 로컬 커밋: `bc1d62e53a582c4d2a8aa141e83c1d5a0a62e6ce` — `fix(framework-cpp): run 종료 뒤 종료 결과를 재사용한다 (#4420)`. [커밋 기록](raw/commit.log). push/GitHub/internal-docs/fetch/pull/다른 worktree 변경은 수행하지 않았다. 수정 후 남은 실패는 없다.

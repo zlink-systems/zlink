@@ -31,10 +31,10 @@ def resolve_map(path):
  return resolve
 out={}
 for d in sorted(R.glob('alloc-*')):
- if not d.is_dir() or not(d/'validated.json').exists():continue
+ if '-v2-' not in d.name or not d.is_dir() or not(d/'validated.json').exists():continue
  counts=json.loads((d/'validated.json').read_text());before=json.loads((d/'before.json').read_text());after=json.loads((d/'after.json').read_text());roles={}
  for side in ['source','target']:
-  messages=counts['window_source_completed'];buf=(d/(side+'.counter')).read_bytes();enabled,n=struct.unpack_from('<II',buf);threads={};total=Counter()
+  messages=counts['window_source_completed' if side=='source' else 'window_target_received'];buf=(d/(side+'.counter')).read_bytes();enabled,n=struct.unpack_from('<II',buf);threads={};total=Counter()
   for i in range(n):
    tid,ma,ca,re_,fr,by,_,_=struct.unpack_from('<8Q',buf,64+i*64)
    name=after['processes'][side]['threads'].get(str(tid),before['processes'][side]['threads'].get(str(tid),{})).get('comm','transient HTTP')

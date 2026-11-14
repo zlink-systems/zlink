@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, hashlib, json, mmap, os, pathlib, signal, socket, struct, subprocess, threading, time, urllib.request
+import argparse, hashlib, json, mmap, os, pathlib, signal, socket, struct, subprocess, select, threading, time, urllib.request
 ROOT=pathlib.Path('/root/worktree/zlink-v21-s033/nbind')
 JOB=pathlib.Path('/root/jobs/fx/cx/v21/s033/nbind')
 BENCH=ROOT/'framework/bench/grpc/node'
@@ -84,6 +84,16 @@ def phase(name,duration):
  event(name+'-end')
  (out/f'{name}-source.json').write_text(json.dumps(stats,indent=2)+'\n')
  ts=request(target)
+ drain_start=time.monotonic()
+ target_key='allPhaseMessages' if name=='warmup' else 'received'
+ with (out/f'{name}-drain.jsonl').open('w') as f:
+  while True:
+   f.write(json.dumps(dict(elapsed_s=time.monotonic()-drain_start,**ts))+'\n');f.flush()
+   if ts[target_key]==stats['submitted']:break
+   if ts[target_key]>stats['submitted']:raise RuntimeError('target count exceeds source')
+   if time.monotonic()-started>17.5:raise TimeoutError('target drain lifecycle deadline')
+   time.sleep(.06);ts=request(target)
+ event(name+'-drained',drain_s=time.monotonic()-drain_start)
  (out/f'{name}-target.json').write_text(json.dumps(ts,indent=2)+'\n')
  assert stats['errors']==ts['errors']==0,(stats,ts)
  assert stats['submitted']==stats['completed']==ts['allPhaseMessages' if name=='warmup' else 'received'],(stats,ts)
@@ -96,19 +106,31 @@ try:
  request(target,'/bench/reset',{})
  for role,p,_ in procs:
   if args.mode=='cpu':
-   for kind,cmd in [('stat',['perf','stat','-e','task-clock','-x',';','-o',str(out/f'{role}-perf-stat.txt'),'-p',str(p.pid)]),('record',['perf','record','-e','cpu-clock','-F','399','--call-graph','dwarf,8192','-o',str(out/f'{role}.perf.data'),'-p',str(p.pid)])]:
+   for kind,cmd in [('stat',['perf','stat','-e','task-clock','-x',';','-o',str(out/f'{role}-perf-stat.txt'),'-D','-1','-p',str(p.pid)]),('record',['perf','record','-e','cpu-clock','-F','399','--call-graph','dwarf,8192','--clockid','mono','-D','-1','-o',str(out/f'{role}.perf.data'),'-p',str(p.pid)])]:
     log=open(out/f'{role}-perf-{kind}.log','w');logs.append(log)
-    pp=subprocess.Popen(['taskset','-c',CPUS,*cmd],stdout=log,stderr=subprocess.STDOUT)
-    perfprocs.append((role,kind,pp))
- time.sleep(.12 if args.mode=='cpu' else .01)
+    ctlr,ctlw=os.pipe();ackr,ackw=os.pipe()
+    cmd+=['--control',f'fd:{ctlr},{ackw}']
+    pp=subprocess.Popen(['taskset','-c',CPUS,*cmd],stdout=log,stderr=subprocess.STDOUT,pass_fds=(ctlr,ackw))
+    os.close(ctlr);os.close(ackw)
+    perfprocs.append((role,kind,pp,ctlw,ackr))
  for port in [tc,sc]:request(port,'/begin',timeout=2)
  alloc_snapshot('start');threads('active-start')
+ for role,kind,pp,ctl,ack in perfprocs:
+  os.write(ctl,b'enable\n')
+  if not select.select([ack],[],[],2)[0]:raise RuntimeError('perf enable ack timeout')
+  assert os.read(ack,100).replace(b'\x00',b'').strip()==b'ack'
+ event('measurement-enabled')
  phase_start=time.monotonic();stats=phase('active',5000)
  alloc_snapshot('end')
+ for role,kind,pp,ctl,ack in perfprocs:
+  os.write(ctl,b'disable\n')
+  if not select.select([ack],[],[],2)[0]:raise RuntimeError('perf disable ack timeout')
+  assert os.read(ack,100).replace(b'\x00',b'').strip()==b'ack'
+ event('measurement-disabled')
  for port in [sc,tc]:request(port,'/end',timeout=2)
- for role,kind,pp in perfprocs:
+ for role,kind,pp,ctl,ack in perfprocs:
   if pp.poll() is None:pp.send_signal(signal.SIGINT)
- for role,kind,pp in perfprocs:pp.wait(timeout=2)
+ for role,kind,pp,ctl,ack in perfprocs:pp.wait(timeout=2)
  for role,p,_ in procs:
   (out/f'{role}-maps.txt').write_text(pathlib.Path(f'/proc/{p.pid}/maps').read_text())
   m=pathlib.Path(f'/tmp/perf-{p.pid}.map')
@@ -117,7 +139,7 @@ try:
 except Exception as e:
  event('failure',error=repr(e));raise
 finally:
- for _,_,pp in perfprocs:
+ for _,_,pp,ctl,ack in perfprocs:
   if pp.poll() is None:pp.send_signal(signal.SIGINT)
  for role,p,born in reversed(procs):
   if p.poll() is None:p.terminate()
