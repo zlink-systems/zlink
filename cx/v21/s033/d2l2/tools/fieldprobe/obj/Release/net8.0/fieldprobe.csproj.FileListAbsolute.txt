@@ -1,0 +1,14 @@
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/bin/Release/net8.0/fieldprobe
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/bin/Release/net8.0/fieldprobe.deps.json
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/bin/Release/net8.0/fieldprobe.runtimeconfig.json
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/bin/Release/net8.0/fieldprobe.dll
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/bin/Release/net8.0/fieldprobe.pdb
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/fieldprobe.GeneratedMSBuildEditorConfig.editorconfig
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/fieldprobe.AssemblyInfoInputs.cache
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/fieldprobe.AssemblyInfo.cs
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/fieldprobe.csproj.CoreCompileInputs.cache
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/fieldprobe.dll
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/refint/fieldprobe.dll
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/fieldprobe.pdb
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/fieldprobe.genruntimeconfig.cache
+/root/jobs/fx/cx/v21/s033/d2l2/tools/fieldprobe/obj/Release/net8.0/ref/fieldprobe.dll

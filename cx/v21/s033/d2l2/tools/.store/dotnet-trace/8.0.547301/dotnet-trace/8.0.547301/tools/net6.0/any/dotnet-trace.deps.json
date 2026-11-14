@@ -1,0 +1,425 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v6.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v6.0": {
+      "dotnet-trace/8.0.547301": {
+        "dependencies": {
+          "Microsoft.CodeAnalysis.CSharp.CodeStyle": "4.8.0",
+          "Microsoft.CodeAnalysis.NetAnalyzers": "8.0.0-preview.23420.2",
+          "Microsoft.DiaSymReader.Pdb2Pdb": "1.1.0-beta2-19575-01",
+          "Microsoft.Diagnostics.Monitoring.EventPipe": "8.0.547301",
+          "Microsoft.Diagnostics.NETCore.Client": "0.2.547301",
+          "Microsoft.Diagnostics.Tracing.TraceEvent": "3.0.7",
+          "Microsoft.DotNet.CodeAnalysis": "10.0.0-beta.24463.4",
+          "StyleCop.Analyzers": "1.2.0-beta.406",
+          "System.CommandLine": "2.0.0-beta1.20468.1",
+          "System.CommandLine.Rendering": "2.0.0-beta1.20074.1"
+        },
+        "runtime": {
+          "dotnet-trace.dll": {}
+        }
+      },
+      "Microsoft.Bcl.AsyncInterfaces/6.0.0": {
+        "runtime": {
+          "lib/netstandard2.1/Microsoft.Bcl.AsyncInterfaces.dll": {
+            "assemblyVersion": "6.0.0.0",
+            "fileVersion": "6.0.21.52210"
+          }
+        }
+      },
+      "Microsoft.CodeAnalysis.CSharp.CodeStyle/4.8.0": {},
+      "Microsoft.CodeAnalysis.NetAnalyzers/8.0.0-preview.23420.2": {},
+      "Microsoft.CSharp/4.4.1": {},
+      "Microsoft.Diagnostics.Tracing.TraceEvent/3.0.7": {
+        "dependencies": {
+          "System.Runtime.CompilerServices.Unsafe": "6.0.0"
+        },
+        "runtime": {
+          "lib/netstandard2.0/Dia2Lib.dll": {
+            "assemblyVersion": "2.0.0.0",
+            "fileVersion": "2.0.0.0"
+          },
+          "lib/netstandard2.0/Microsoft.Diagnostics.FastSerialization.dll": {
+            "assemblyVersion": "3.0.7.0",
+            "fileVersion": "3.0.7.0"
+          },
+          "lib/netstandard2.0/Microsoft.Diagnostics.Tracing.TraceEvent.dll": {
+            "assemblyVersion": "3.0.7.0",
+            "fileVersion": "3.0.7.0"
+          },
+          "lib/netstandard2.0/OSExtensions.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          },
+          "lib/netstandard2.0/TraceReloggerLib.dll": {
+            "assemblyVersion": "0.0.0.0",
+            "fileVersion": "0.0.0.0"
+          }
+        }
+      },
+      "Microsoft.DiaSymReader.Pdb2Pdb/1.1.0-beta2-19575-01": {},
+      "Microsoft.DotNet.CodeAnalysis/10.0.0-beta.24463.4": {},
+      "Microsoft.Extensions.DependencyInjection/6.0.0": {
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "6.0.0",
+          "System.Runtime.CompilerServices.Unsafe": "6.0.0"
+        },
+        "runtime": {
+          "lib/net6.0/Microsoft.Extensions.DependencyInjection.dll": {
+            "assemblyVersion": "6.0.0.0",
+            "fileVersion": "6.0.21.52210"
+          }
+        }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions/6.0.0": {
+        "runtime": {
+          "lib/net6.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll": {
+            "assemblyVersion": "6.0.0.0",
+            "fileVersion": "6.0.21.52210"
+          }
+        }
+      },
+      "Microsoft.Extensions.Logging/6.0.0": {
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection": "6.0.0",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "6.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "6.0.4",
+          "Microsoft.Extensions.Options": "6.0.0",
+          "System.Diagnostics.DiagnosticSource": "6.0.0"
+        },
+        "runtime": {
+          "lib/netstandard2.1/Microsoft.Extensions.Logging.dll": {
+            "assemblyVersion": "6.0.0.0",
+            "fileVersion": "6.0.21.52210"
+          }
+        }
+      },
+      "Microsoft.Extensions.Logging.Abstractions/6.0.4": {
+        "runtime": {
+          "lib/net6.0/Microsoft.Extensions.Logging.Abstractions.dll": {
+            "assemblyVersion": "6.0.0.0",
+            "fileVersion": "6.0.1823.26907"
+          }
+        }
+      },
+      "Microsoft.Extensions.Options/6.0.0": {
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "6.0.0",
+          "Microsoft.Extensions.Primitives": "6.0.0"
+        },
+        "runtime": {
+          "lib/netstandard2.1/Microsoft.Extensions.Options.dll": {
+            "assemblyVersion": "6.0.0.0",
+            "fileVersion": "6.0.21.52210"
+          }
+        }
+      },
+      "Microsoft.Extensions.Primitives/6.0.0": {
+        "dependencies": {
+          "System.Runtime.CompilerServices.Unsafe": "6.0.0"
+        },
+        "runtime": {
+          "lib/net6.0/Microsoft.Extensions.Primitives.dll": {
+            "assemblyVersion": "6.0.0.0",
+            "fileVersion": "6.0.21.52210"
+          }
+        }
+      },
+      "StyleCop.Analyzers/1.2.0-beta.406": {
+        "dependencies": {
+          "StyleCop.Analyzers.Unstable": "1.2.0.406"
+        }
+      },
+      "StyleCop.Analyzers.Unstable/1.2.0.406": {},
+      "System.CommandLine/2.0.0-beta1.20468.1": {
+        "dependencies": {
+          "Microsoft.CSharp": "4.4.1",
+          "System.Memory": "4.5.4"
+        },
+        "runtime": {
+          "lib/netstandard2.0/System.CommandLine.dll": {
+            "assemblyVersion": "2.0.0.0",
+            "fileVersion": "2.0.20.46801"
+          }
+        }
+      },
+      "System.CommandLine.Rendering/2.0.0-beta1.20074.1": {
+        "dependencies": {
+          "System.CommandLine": "2.0.0-beta1.20468.1"
+        },
+        "runtime": {
+          "lib/netstandard2.0/System.CommandLine.Rendering.dll": {
+            "assemblyVersion": "2.0.0.0",
+            "fileVersion": "2.0.20.7401"
+          }
+        }
+      },
+      "System.ComponentModel.Annotations/5.0.0": {},
+      "System.Diagnostics.DiagnosticSource/6.0.0": {
+        "dependencies": {
+          "System.Runtime.CompilerServices.Unsafe": "6.0.0"
+        }
+      },
+      "System.Memory/4.5.4": {},
+      "System.Runtime.CompilerServices.Unsafe/6.0.0": {},
+      "System.Text.Encodings.Web/8.0.0": {
+        "dependencies": {
+          "System.Runtime.CompilerServices.Unsafe": "6.0.0"
+        },
+        "runtime": {
+          "lib/net6.0/System.Text.Encodings.Web.dll": {
+            "assemblyVersion": "8.0.0.0",
+            "fileVersion": "8.0.23.53103"
+          }
+        },
+        "runtimeTargets": {
+          "runtimes/browser/lib/net6.0/System.Text.Encodings.Web.dll": {
+            "rid": "browser",
+            "assetType": "runtime",
+            "assemblyVersion": "8.0.0.0",
+            "fileVersion": "8.0.23.53103"
+          }
+        }
+      },
+      "System.Text.Json/8.0.4": {
+        "dependencies": {
+          "System.Runtime.CompilerServices.Unsafe": "6.0.0",
+          "System.Text.Encodings.Web": "8.0.0"
+        },
+        "runtime": {
+          "lib/net6.0/System.Text.Json.dll": {
+            "assemblyVersion": "8.0.0.0",
+            "fileVersion": "8.0.724.31311"
+          }
+        }
+      },
+      "Microsoft.Diagnostics.Monitoring/8.0.547301": {
+        "dependencies": {
+          "Microsoft.Bcl.AsyncInterfaces": "6.0.0",
+          "Microsoft.Diagnostics.NETCore.Client": "0.2.547301"
+        },
+        "runtime": {
+          "Microsoft.Diagnostics.Monitoring.dll": {
+            "assemblyVersion": "8.0.547301",
+            "fileVersion": "8.0.10.47301"
+          }
+        }
+      },
+      "Microsoft.Diagnostics.Monitoring.EventPipe/8.0.547301": {
+        "dependencies": {
+          "Microsoft.Diagnostics.Monitoring": "8.0.547301",
+          "Microsoft.Diagnostics.NETCore.Client": "0.2.547301",
+          "Microsoft.Diagnostics.Tracing.TraceEvent": "3.0.7",
+          "Microsoft.Extensions.Logging": "6.0.0",
+          "System.ComponentModel.Annotations": "5.0.0",
+          "System.Text.Encodings.Web": "8.0.0",
+          "System.Text.Json": "8.0.4"
+        },
+        "runtime": {
+          "Microsoft.Diagnostics.Monitoring.EventPipe.dll": {
+            "assemblyVersion": "8.0.547301",
+            "fileVersion": "8.0.10.47301"
+          }
+        }
+      },
+      "Microsoft.Diagnostics.NETCore.Client/0.2.547301": {
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "6.0.4"
+        },
+        "runtime": {
+          "Microsoft.Diagnostics.NETCore.Client.dll": {
+            "assemblyVersion": "0.2.547301",
+            "fileVersion": "0.2.10.47301"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "dotnet-trace/8.0.547301": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Microsoft.Bcl.AsyncInterfaces/6.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-UcSjPsst+DfAdJGVDsu346FX0ci0ah+lw3WRtn18NUwEqRt70HaOQ7lI72vy3+1LxtqI3T5GWwV39rQSrCzAeg==",
+      "path": "microsoft.bcl.asyncinterfaces/6.0.0",
+      "hashPath": "microsoft.bcl.asyncinterfaces.6.0.0.nupkg.sha512"
+    },
+    "Microsoft.CodeAnalysis.CSharp.CodeStyle/4.8.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-2pncXyyEtesl8EzmDfT7lKeOQoiuW+30zy3EozCFb4CMnGGsTe3COoRRCk3tqVk27LfRjCdJv+zK+JTEMmF3lw==",
+      "path": "microsoft.codeanalysis.csharp.codestyle/4.8.0",
+      "hashPath": "microsoft.codeanalysis.csharp.codestyle.4.8.0.nupkg.sha512"
+    },
+    "Microsoft.CodeAnalysis.NetAnalyzers/8.0.0-preview.23420.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-mCll3jiIY+QKxxfW5a1Z/IyYyGiyjqbCvTL24Tr6ISaas57iv4ZUWmWEDuXsWNB1c3RFjVesmS5PjG+uincdXg==",
+      "path": "microsoft.codeanalysis.netanalyzers/8.0.0-preview.23420.2",
+      "hashPath": "microsoft.codeanalysis.netanalyzers.8.0.0-preview.23420.2.nupkg.sha512"
+    },
+    "Microsoft.CSharp/4.4.1": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-A5hI3gk6WpcBI0QGZY6/d5CCaYUxJgi7iENn1uYEng+Olo8RfI5ReGVkjXjeu3VR3srLvVYREATXa2M0X7FYJA==",
+      "path": "microsoft.csharp/4.4.1",
+      "hashPath": "microsoft.csharp.4.4.1.nupkg.sha512"
+    },
+    "Microsoft.Diagnostics.Tracing.TraceEvent/3.0.7": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-3JVNrt2i62P0QJSNI4QwtaZLnjpkeTJXmpxsmmJchuzMTYpy7bq/+wqMABrOY5er7LFBalYU0mouzHO3GYYUIw==",
+      "path": "microsoft.diagnostics.tracing.traceevent/3.0.7",
+      "hashPath": "microsoft.diagnostics.tracing.traceevent.3.0.7.nupkg.sha512"
+    },
+    "Microsoft.DiaSymReader.Pdb2Pdb/1.1.0-beta2-19575-01": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-kY6eTNkeWLHvfOjg97Q7tgQKrPpX+Y3fR6fS4nyfpgFLHBxHriLBR4v3e9t71it91gIMEeKUqOqrFJ7Pj48eHA==",
+      "path": "microsoft.diasymreader.pdb2pdb/1.1.0-beta2-19575-01",
+      "hashPath": "microsoft.diasymreader.pdb2pdb.1.1.0-beta2-19575-01.nupkg.sha512"
+    },
+    "Microsoft.DotNet.CodeAnalysis/10.0.0-beta.24463.4": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-7yM9bssU/JyyYdye6Edf9IUOzs1FUGmX8a7iJ1vQBpCdm/H/2hYb09YuIFCiKbnXw9xeE6t1Q2NfVcx+RwNp9g==",
+      "path": "microsoft.dotnet.codeanalysis/10.0.0-beta.24463.4",
+      "hashPath": "microsoft.dotnet.codeanalysis.10.0.0-beta.24463.4.nupkg.sha512"
+    },
+    "Microsoft.Extensions.DependencyInjection/6.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-k6PWQMuoBDGGHOQTtyois2u4AwyVcIwL2LaSLlTZQm2CYcJ1pxbt6jfAnpWmzENA/wfrYRI/X9DTLoUkE4AsLw==",
+      "path": "microsoft.extensions.dependencyinjection/6.0.0",
+      "hashPath": "microsoft.extensions.dependencyinjection.6.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.DependencyInjection.Abstractions/6.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-xlzi2IYREJH3/m6+lUrQlujzX8wDitm4QGnUu6kUXTQAWPuZY8i+ticFJbzfqaetLA6KR/rO6Ew/HuYD+bxifg==",
+      "path": "microsoft.extensions.dependencyinjection.abstractions/6.0.0",
+      "hashPath": "microsoft.extensions.dependencyinjection.abstractions.6.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.Logging/6.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-eIbyj40QDg1NDz0HBW0S5f3wrLVnKWnDJ/JtZ+yJDFnDj90VoPuoPmFkeaXrtu+0cKm5GRAwoDf+dBWXK0TUdg==",
+      "path": "microsoft.extensions.logging/6.0.0",
+      "hashPath": "microsoft.extensions.logging.6.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.Logging.Abstractions/6.0.4": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-K14wYgwOfKVELrUh5eBqlC8Wvo9vvhS3ZhIvcswV2uS/ubkTRPSQsN557EZiYUSSoZNxizG+alN4wjtdyLdcyw==",
+      "path": "microsoft.extensions.logging.abstractions/6.0.4",
+      "hashPath": "microsoft.extensions.logging.abstractions.6.0.4.nupkg.sha512"
+    },
+    "Microsoft.Extensions.Options/6.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-dzXN0+V1AyjOe2xcJ86Qbo233KHuLEY0njf/P2Kw8SfJU+d45HNS2ctJdnEnrWbM9Ye2eFgaC5Mj9otRMU6IsQ==",
+      "path": "microsoft.extensions.options/6.0.0",
+      "hashPath": "microsoft.extensions.options.6.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.Primitives/6.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-9+PnzmQFfEFNR9J2aDTfJGGupShHjOuGw4VUv+JB044biSHrnmCIMD+mJHmb2H7YryrfBEXDurxQ47gJZdCKNQ==",
+      "path": "microsoft.extensions.primitives/6.0.0",
+      "hashPath": "microsoft.extensions.primitives.6.0.0.nupkg.sha512"
+    },
+    "StyleCop.Analyzers/1.2.0-beta.406": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-YbsYoczQPZyz+4nmQ7bBiU9uQkk7Q2KUizQWEv01S4/ImCdJFiHvJfm8HAINNS0cvSLOA7xM9Y+KWQ2FOYjgkA==",
+      "path": "stylecop.analyzers/1.2.0-beta.406",
+      "hashPath": "stylecop.analyzers.1.2.0-beta.406.nupkg.sha512"
+    },
+    "StyleCop.Analyzers.Unstable/1.2.0.406": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-FclNdBR81ynIo9l1QNlo+l0I/PaFIYaPQPlMram8XVIMh6G6G43KTa1aCxfwTj13uKlAJS/LhLy6KjOPOeAU4w==",
+      "path": "stylecop.analyzers.unstable/1.2.0.406",
+      "hashPath": "stylecop.analyzers.unstable.1.2.0.406.nupkg.sha512"
+    },
+    "System.CommandLine/2.0.0-beta1.20468.1": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-hhwPjxMHf1t7CLC6e+bODJBU8c37ZoDLXJqKM/QA/8xElUFszHuhznmgmEUeuBRhF9NeR142t3kXM9SfuSkfNA==",
+      "path": "system.commandline/2.0.0-beta1.20468.1",
+      "hashPath": "system.commandline.2.0.0-beta1.20468.1.nupkg.sha512"
+    },
+    "System.CommandLine.Rendering/2.0.0-beta1.20074.1": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-hAxZAdk2DXC6b6M9bXyTShDFOpXQtGuEyWdxpg0BSCL7iIDk5FjieDsm77PcqUM6utKfh+NuAqiSBZWeVOiF9Q==",
+      "path": "system.commandline.rendering/2.0.0-beta1.20074.1",
+      "hashPath": "system.commandline.rendering.2.0.0-beta1.20074.1.nupkg.sha512"
+    },
+    "System.ComponentModel.Annotations/5.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-dMkqfy2el8A8/I76n2Hi1oBFEbG1SfxD2l5nhwXV3XjlnOmwxJlQbYpJH4W51odnU9sARCSAgv7S3CyAFMkpYg==",
+      "path": "system.componentmodel.annotations/5.0.0",
+      "hashPath": "system.componentmodel.annotations.5.0.0.nupkg.sha512"
+    },
+    "System.Diagnostics.DiagnosticSource/6.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-frQDfv0rl209cKm1lnwTgFPzNigy2EKk1BS3uAvHvlBVKe5cymGyHO+Sj+NLv5VF/AhHsqPIUUwya5oV4CHMUw==",
+      "path": "system.diagnostics.diagnosticsource/6.0.0",
+      "hashPath": "system.diagnostics.diagnosticsource.6.0.0.nupkg.sha512"
+    },
+    "System.Memory/4.5.4": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-1MbJTHS1lZ4bS4FmsJjnuGJOu88ZzTT2rLvrhW7Ygic+pC0NWA+3hgAen0HRdsocuQXCkUTdFn9yHJJhsijDXw==",
+      "path": "system.memory/4.5.4",
+      "hashPath": "system.memory.4.5.4.nupkg.sha512"
+    },
+    "System.Runtime.CompilerServices.Unsafe/6.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-/iUeP3tq1S0XdNNoMz5C9twLSrM/TH+qElHkXWaPvuNOt+99G75NrV0OS2EqHx5wMN7popYjpc8oTjC1y16DLg==",
+      "path": "system.runtime.compilerservices.unsafe/6.0.0",
+      "hashPath": "system.runtime.compilerservices.unsafe.6.0.0.nupkg.sha512"
+    },
+    "System.Text.Encodings.Web/8.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-yev/k9GHAEGx2Rg3/tU6MQh4HGBXJs70y7j1LaM1i/ER9po+6nnQ6RRqTJn1E7Xu0fbIFK80Nh5EoODxrbxwBQ==",
+      "path": "system.text.encodings.web/8.0.0",
+      "hashPath": "system.text.encodings.web.8.0.0.nupkg.sha512"
+    },
+    "System.Text.Json/8.0.4": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-bAkhgDJ88XTsqczoxEMliSrpijKZHhbJQldhAmObj/RbrN3sU5dcokuXmWJWsdQAhiMJ9bTayWsL1C9fbbCRhw==",
+      "path": "system.text.json/8.0.4",
+      "hashPath": "system.text.json.8.0.4.nupkg.sha512"
+    },
+    "Microsoft.Diagnostics.Monitoring/8.0.547301": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Microsoft.Diagnostics.Monitoring.EventPipe/8.0.547301": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Microsoft.Diagnostics.NETCore.Client/0.2.547301": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

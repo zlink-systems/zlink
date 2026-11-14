@@ -1,0 +1,62 @@
+{
+  "version": 3,
+  "targets": {
+    "net10.0/ubuntu.24.04-x64": {
+      "dotnet-trace/8.0.547301": {
+        "type": "package",
+        "tools": {
+          "tools/net6.0/any/Dia2Lib.dll": {},
+          "tools/net6.0/any/DotnetToolSettings.xml": {},
+          "tools/net6.0/any/Microsoft.Bcl.AsyncInterfaces.dll": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.FastSerialization.dll": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.Monitoring.EventPipe.dll": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.Monitoring.EventPipe.pdb": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.Monitoring.dll": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.Monitoring.pdb": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.NETCore.Client.dll": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.NETCore.Client.pdb": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.NETCore.Client.xml": {},
+          "tools/net6.0/any/Microsoft.Diagnostics.Tracing.TraceEvent.dll": {},
+          "tools/net6.0/any/Microsoft.Extensions.DependencyInjection.Abstractions.dll": {},
+          "tools/net6.0/any/Microsoft.Extensions.DependencyInjection.dll": {},
+          "tools/net6.0/any/Microsoft.Extensions.Logging.Abstractions.dll": {},
+          "tools/net6.0/any/Microsoft.Extensions.Logging.dll": {},
+          "tools/net6.0/any/Microsoft.Extensions.Options.dll": {},
+          "tools/net6.0/any/Microsoft.Extensions.Primitives.dll": {},
+          "tools/net6.0/any/OSExtensions.dll": {},
+          "tools/net6.0/any/System.CommandLine.Rendering.dll": {},
+          "tools/net6.0/any/System.CommandLine.dll": {},
+          "tools/net6.0/any/System.Text.Encodings.Web.dll": {},
+          "tools/net6.0/any/System.Text.Json.dll": {},
+          "tools/net6.0/any/TraceReloggerLib.dll": {},
+          "tools/net6.0/any/amd64/KernelTraceControl.dll": {},
+          "tools/net6.0/any/amd64/msdia140.dll": {},
+          "tools/net6.0/any/amd64/msvcp140.dll": {},
+          "tools/net6.0/any/amd64/vcruntime140.dll": {},
+          "tools/net6.0/any/amd64/vcruntime140_1.dll": {},
+          "tools/net6.0/any/arm64/KernelTraceControl.dll": {},
+          "tools/net6.0/any/arm64/msdia140.dll": {},
+          "tools/net6.0/any/arm64/msvcp140.dll": {},
+          "tools/net6.0/any/arm64/vcruntime140.dll": {},
+          "tools/net6.0/any/arm64/vcruntime140_1.dll": {},
+          "tools/net6.0/any/dotnet-trace.deps.json": {},
+          "tools/net6.0/any/dotnet-trace.dll": {},
+          "tools/net6.0/any/dotnet-trace.pdb": {},
+          "tools/net6.0/any/dotnet-trace.runtimeconfig.json": {},
+          "tools/net6.0/any/runtimes/browser/lib/net6.0/System.Text.Encodings.Web.dll": {},
+          "tools/net6.0/any/shims/osx-x64/dotnet-trace": {},
+          "tools/net6.0/any/shims/win-arm/dotnet-trace.exe": {},
+          "tools/net6.0/any/shims/win-x64/dotnet-trace.exe": {},
+          "tools/net6.0/any/shims/win-x86/dotnet-trace.exe": {},
+          "tools/net6.0/any/x86/KernelTraceControl.Win61.dll": {},
+          "tools/net6.0/any/x86/KernelTraceControl.dll": {},
+          "tools/net6.0/any/x86/msdia140.dll": {},
+          "tools/net6.0/any/x86/msvcp140.dll": {},
+          "tools/net6.0/any/x86/vcruntime140.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {},
+  "projectFileDependencyGroups": {}
+}
