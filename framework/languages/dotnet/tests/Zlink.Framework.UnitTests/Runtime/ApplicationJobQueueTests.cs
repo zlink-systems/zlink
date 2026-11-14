@@ -2,6 +2,7 @@ using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Service;
 
@@ -9,6 +10,59 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ApplicationJobQueueContractTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public void ReceiveRotation_AllocatesOnlyItsClaimedLease()
+    {
+        const int iterations = 1000;
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 4000, 1, 4000)
+        );
+        for (var index = 0; index < 128; index++)
+        {
+            ReceiveRotation(index);
+            AcquireOne(index);
+        }
+
+        var (rotation, single) = PerCallAllocation.MinWindowPair(
+            ReceiveRotation,
+            AcquireOne,
+            iterations
+        );
+        output.WriteLine(
+            $"receive rotation={rotation / iterations} B/message; single lease={single / iterations} B/message; excess={(rotation - single) / iterations} B/message"
+        );
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+        Assert.Equal(single, rotation);
+
+        void ReceiveRotation(int _)
+        {
+            var reservation = new ZLinkApplicationJobQueueReservation(
+                queue,
+                ZLinkApplicationJobOrigin.Remote,
+                null
+            );
+            try
+            {
+                reservation.ReserveAvailable(ZLinkReceiveBatchBudget.MaximumRecords);
+                using var lease = reservation.Claim()!;
+                lease.ReleaseForHandlerStartAsync().GetAwaiter().GetResult();
+            }
+            finally
+            {
+                reservation.Dispose();
+            }
+        }
+
+        void AcquireOne(int _)
+        {
+            using var lease = queue
+                .TryAcquireAsync(ZLinkApplicationJobOrigin.Remote)
+                .GetAwaiter()
+                .GetResult()!;
+            lease.ReleaseForHandlerStartAsync().GetAwaiter().GetResult();
+        }
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -163,6 +217,265 @@ public sealed class ApplicationJobQueueContractTests(Xunit.Abstractions.ITestOut
 
 public sealed class ApplicationJobQueueTests
 {
+    [Fact]
+    public async Task ConcurrentGrants_PostLocalPublicationsInFifoOrder()
+    {
+        using var queue = CreateQueue(limit: 8);
+        await using var destination = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blocked = destination.RunAsync(
+            (Func<ValueTask>)(
+                async () =>
+                {
+                    entered.SetResult();
+                    await resume.Task;
+                }
+            )
+        );
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var holders = new ZLinkApplicationJobQueueLease[8];
+        for (var index = 0; index < holders.Length; index++)
+            holders[index] = await queue.AcquireAsync(
+                CancellationToken.None,
+                ZLinkApplicationJobOrigin.Remote
+            );
+        var published = new List<int>();
+        var pending = Enumerable
+            .Range(0, 64)
+            .Select(index =>
+                queue.AcquireAndPostAsync(
+                    CancellationToken.None,
+                    destination,
+                    lease =>
+                    {
+                        published.Add(index);
+                        lease.Dispose();
+                    },
+                    ZLinkApplicationJobOrigin.Local
+                )
+            )
+            .ToArray();
+        using var start = new Barrier(holders.Length);
+        try
+        {
+            var releases = holders
+                .Select(lease =>
+                    RunOnDedicatedThread(() =>
+                    {
+                        start.SignalAndWait();
+                        lease.Dispose();
+                    })
+                )
+                .ToArray();
+            await Task.WhenAll(releases).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(56UL, queue.GetStatus().CapacityWaiters);
+        }
+        finally
+        {
+            resume.TrySetResult();
+            foreach (var holder in holders)
+                holder.Dispose();
+        }
+        await blocked;
+        await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(Enumerable.Range(0, pending.Length), published);
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ClosedPublicationDestination_ReturnsItsGrantWithoutCallingUserCode(
+        bool waiting
+    )
+    {
+        using var queue = CreateQueue(limit: 1);
+        await using var destination = new ZLinkStateLane();
+        using var holder = waiting
+            ? await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            : null;
+        if (!waiting)
+            await destination.DisposeAsync();
+        var calls = 0;
+        var publication = queue.AcquireAndPostAsync(
+            CancellationToken.None,
+            destination,
+            _ => calls++,
+            ZLinkApplicationJobOrigin.Local
+        );
+        if (waiting)
+        {
+            Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
+            await destination.DisposeAsync();
+            holder!.Dispose();
+        }
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            publication.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(0, calls);
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+        Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+    }
+
+    [Fact]
+    public async Task ContendedWaiters_KeepFifoAdmissionWhileNewCallersCannotBarge()
+    {
+        using var queue = CreateQueue(limit: 1);
+        var held = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var waiters = Enumerable
+            .Range(0, 64)
+            .Select(_ =>
+                queue
+                    .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+                    .AsTask()
+            )
+            .ToArray();
+        using var stop = new CancellationTokenSource();
+        using var started = new CountdownEvent(8);
+        var barged = 0;
+        var contenders = Enumerable
+            .Range(0, 8)
+            .Select(_ =>
+                RunOnDedicatedThread(() =>
+                {
+                    started.Signal();
+                    while (!stop.IsCancellationRequested)
+                    {
+                        if (queue.TryAcquire(out var lease, ZLinkApplicationJobOrigin.Remote))
+                        {
+                            Interlocked.Increment(ref barged);
+                            lease!.Dispose();
+                        }
+                        Thread.Yield();
+                    }
+                })
+            )
+            .ToArray();
+        try
+        {
+            Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+            for (var index = 0; index < waiters.Length; index++)
+            {
+                await held.ReleaseForHandlerStartAsync();
+                held = await waiters[index].WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.All(waiters.Skip(index + 1), waiter => Assert.False(waiter.IsCompleted));
+                Assert.Equal(
+                    (ulong)(waiters.Length - index - 1),
+                    queue.GetStatus().CapacityWaiters
+                );
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+            await Task.WhenAll(contenders).WaitAsync(TimeSpan.FromSeconds(5));
+            held.Dispose();
+        }
+        Assert.Equal(0, barged);
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
+    public async Task DisposeRacingCancellation_CompletesEveryPendingWaiterExactlyOnce()
+    {
+        using var queue = CreateQueue(limit: 1);
+        using var held = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        using var cancellation = new CancellationTokenSource();
+        var completions = new int[128];
+        var waiters = Enumerable
+            .Range(0, completions.Length)
+            .Select(index =>
+                Observe(
+                    index,
+                    queue
+                        .AcquireAsync(
+                            index % 2 == 0 ? cancellation.Token : CancellationToken.None,
+                            ZLinkApplicationJobOrigin.Remote
+                        )
+                        .AsTask()
+                )
+            )
+            .ToArray();
+        Assert.Equal((ulong)waiters.Length, queue.GetStatus().CapacityWaiters);
+        await Task.WhenAll(
+                RunOnDedicatedThread(queue.Dispose),
+                RunOnDedicatedThread(cancellation.Cancel)
+            )
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(waiters).WaitAsync(TimeSpan.FromSeconds(5));
+        queue.Dispose();
+        held.Dispose();
+        Assert.All(completions, count => Assert.Equal(1, count));
+        Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+
+        async Task Observe(int index, Task<ZLinkApplicationJobQueueLease> pending)
+        {
+            var failure = await Record.ExceptionAsync(async () =>
+            {
+                using var unexpected = await pending;
+            });
+            Assert.True(
+                failure is OperationCanceledException or ObjectDisposedException,
+                failure?.ToString()
+            );
+            Assert.Equal(1, Interlocked.Increment(ref completions[index]));
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentRotationReserveAndRelease_KeepAccountingExact()
+    {
+        const ulong limit = 4096;
+        using var queue = CreateQueue(limit);
+        using var start = new Barrier(8);
+        var workers = Enumerable
+            .Range(0, 8)
+            .Select(_ =>
+                RunOnDedicatedThread(() =>
+                {
+                    start.SignalAndWait();
+                    for (var index = 0; index < 100_000; index++)
+                    {
+                        var count = queue.TryReserveBatch(1 + index % 8);
+                        Assert.InRange(count, 1, 8);
+                        var reservation = new ZLinkApplicationJobQueueReservation(
+                            queue,
+                            ZLinkApplicationJobOrigin.Remote,
+                            null,
+                            count
+                        );
+                        using var lease = reservation.Claim()!;
+                        if ((index & 1) == 0)
+                            lease.MarkQueued();
+                        var status = queue.GetStatus();
+                        Assert.Equal(
+                            status.ReservedSupplyPermits + status.QueuedApplicationJobs,
+                            status.PermitsInUse
+                        );
+                        Assert.InRange(status.PermitsInUse, 1UL, limit);
+                        lease.ReleaseForHandlerStartAsync().GetAwaiter().GetResult();
+                        reservation.Dispose();
+                    }
+                })
+            )
+            .ToArray();
+        await Task.WhenAll(workers).WaitAsync(TimeSpan.FromMinutes(2));
+        var final = queue.GetStatus();
+        Assert.Equal(0UL, final.ReservedSupplyPermits);
+        Assert.Equal(0UL, final.QueuedApplicationJobs);
+        Assert.Equal(0UL, final.PermitsInUse);
+        Assert.Equal(0UL, final.CapacityWaiters);
+        Assert.InRange(final.PeakPermitsInUse, 1UL, limit);
+    }
+
     [Fact]
     public async Task BatchTransitions_PreserveFifoCancellationAndExactlyOncePermitReturn()
     {
@@ -962,7 +1275,7 @@ public sealed class ApplicationJobQueueTests
     }
 
     [Fact]
-    public async Task Handler_start_release_waits_for_its_lane_result_without_blocking_the_caller()
+    public async Task Handler_start_release_and_status_progress_while_a_clock_callback_is_blocked()
     {
         using var entered = new ManualResetEventSlim();
         using var resume = new ManualResetEventSlim();
@@ -980,10 +1293,13 @@ public sealed class ApplicationJobQueueTests
         try
         {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
-            var release = lease.ReleaseForHandlerStartAsync();
-            Assert.False(release.IsCompleted);
+            await RunOnDedicatedThread(async () =>
+                {
+                    await lease.ReleaseForHandlerStartAsync();
+                    Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+                })
+                .WaitAsync(TimeSpan.FromSeconds(2));
             resume.Set();
-            await release;
 
             using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
@@ -1258,7 +1574,7 @@ public sealed class ApplicationJobQueueTests
             {
                 entered.Set();
                 if (!resume.Wait(TimeSpan.FromSeconds(5)))
-                    throw new TimeoutException("The queue lane was not released.");
+                    throw new TimeoutException("The clock callback was not released.");
             }
             return TimeProvider.System.GetTimestamp();
         }

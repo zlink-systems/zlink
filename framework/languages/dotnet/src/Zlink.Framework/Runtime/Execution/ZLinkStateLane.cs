@@ -191,6 +191,26 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         return new ValueTask(completion.Task);
     }
 
+    // Preparation and scheduling run outside the producer's state lock. Enqueue
+    // only appends the prepared item, so grant order is the destination's FIFO order.
+    internal ZLinkPreparedWork<TState> PrepareAsync<TState>(Func<TState, ValueTask> work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        ObserveEntry();
+        _ = Mailbox;
+        return new ZLinkPreparedWork<TState>(this, work);
+    }
+
+    // The prepared work already owns its payload and completion. Only the
+    // mailbox admission happens here; no work, completion or observer runs.
+    internal bool EnqueuePrepared(LaneWork work)
+    {
+        if (Volatile.Read(ref _closed) != 0)
+            return false;
+        _mailbox!.Enqueue(work);
+        return true;
+    }
+
     /// <summary>
     /// Queues <paramref name="work"/> without waiting for it (spec 06 §5 <c>tryPost</c>). Returns
     /// false when the lane is closed.
@@ -245,7 +265,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     //  Deferred drain for submissions that must not run turns on the caller's
     //  thread. The worker claims the lane only when it runs; until then any
     //  caller can claim it and drain the same FIFO.
-    private void ScheduleDrain() =>
+    internal void ScheduleDrain() =>
         ThreadPool.UnsafeQueueUserWorkItem(
             static state =>
             {
@@ -291,7 +311,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
 
     // One queued item per turn. The item owns the result signal of its turn, so a
     // queued turn allocates no wrapper closure around the caller's work.
-    private abstract class LaneWork
+    internal abstract class LaneWork
     {
 #if DEBUG
         private readonly Action<string, ZLinkStateLane?>? _observer = WorkObserver.Value;
@@ -398,6 +418,46 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         else
             ScheduleDrain();
         await completed.Task.ConfigureAwait(false);
+    }
+}
+
+internal sealed class ZLinkPreparedWork<TState>(ZLinkStateLane owner, Func<TState, ValueTask> work)
+    : ZLinkStateLane.LaneWork
+{
+    private readonly TaskCompletionSource _completion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
+    private TState _state = default!;
+
+    internal ValueTask Completion => new(_completion.Task);
+
+    // Only append here; the producer schedules or completes a rejected post
+    // after releasing its state lock.
+    internal bool Enqueue(TState state)
+    {
+        _state = state;
+        return owner.EnqueuePrepared(this);
+    }
+
+    internal void Schedule(bool enqueued)
+    {
+        if (enqueued)
+            owner.ScheduleDrain();
+        else
+            _completion.TrySetException(new ObjectDisposedException(nameof(ZLinkStateLane)));
+    }
+
+    internal override async ValueTask RunAsync()
+    {
+        try
+        {
+            await work(_state).ConfigureAwait(false);
+            _completion.TrySetResult();
+        }
+        catch (Exception failure)
+        {
+            _completion.TrySetException(failure);
+        }
     }
 }
 

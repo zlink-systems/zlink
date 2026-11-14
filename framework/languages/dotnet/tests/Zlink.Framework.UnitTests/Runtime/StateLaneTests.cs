@@ -9,6 +9,121 @@ namespace Zlink.Framework.UnitTests;
 public sealed class StateLaneTests
 {
     [Fact]
+    public async Task QueuedSynchronousTurns_ShareOneDrainExecutionContext()
+    {
+        await using var lane = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var first = lane.RunAsync(ExecutionContext.Capture);
+        var second = lane.RunAsync(ExecutionContext.Capture);
+        release.SetResult();
+        await occupied;
+        var context = await first;
+        Assert.NotNull(context);
+        Assert.Same(context, await second);
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Drain_PropagatesCurrentToNewThreadAndRestoresAwaitingCaller(bool queued)
+    {
+        await using var lane = new ZLinkStateLane();
+        using var releaseWorker = new ManualResetEventSlim();
+        var workerCurrent = new TaskCompletionSource<ZLinkStateLane?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Thread? worker = null;
+        void StartWorker()
+        {
+            Assert.Same(lane, ZLinkStateLane.Current);
+            worker = new Thread(() =>
+            {
+                releaseWorker.Wait();
+                workerCurrent.SetResult(ZLinkStateLane.Current);
+            })
+            {
+                IsBackground = true,
+            };
+            worker.Start();
+        }
+
+        try
+        {
+            if (queued)
+                await lane.RunAsync(() =>
+                {
+                    StartWorker();
+                    return ValueTask.CompletedTask;
+                });
+            else
+                await lane.RunAsync(StartWorker);
+
+            await lane.DisposeAsync();
+            Assert.Null(ZLinkStateLane.Current);
+            await Task.Yield();
+            Assert.Null(ZLinkStateLane.Current);
+            releaseWorker.Set();
+            Assert.Same(lane, await workerCurrent.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Null(ZLinkStateLane.Current);
+        }
+        finally
+        {
+            releaseWorker.Set();
+            worker?.Join();
+        }
+    }
+
+    [Fact]
+    public async Task DetachedContinuation_AfterDrainEndsCanEnterLaneWithoutStaleCurrent()
+    {
+        await using var lane = new ZLinkStateLane();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? detached = null;
+        await lane.RunAsync(() =>
+        {
+            using (ExecutionContext.SuppressFlow())
+                detached = Task.Run(async () =>
+                {
+                    await release.Task;
+                    Assert.Null(ZLinkStateLane.Current);
+                    Assert.Equal(42, await lane.RunAsync(static () => 42));
+                    Assert.Null(ZLinkStateLane.Current);
+                });
+        });
+        release.SetResult();
+        await detached!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
+    [Fact]
+    public async Task CapturedContinuation_AfterDrainEndsRetainsItsOriginatingLane()
+    {
+        await using var lane = new ZLinkStateLane();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<ZLinkStateLane?>? continuation = null;
+        await lane.RunAsync(() =>
+        {
+            continuation = Task.Run(async () =>
+            {
+                await release.Task;
+                return ZLinkStateLane.Current;
+            });
+        });
+        await lane.DisposeAsync();
+        release.SetResult();
+        Assert.Same(lane, await continuation!.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
+    [Fact]
     public async Task AsynchronousPost_PreservesFailureAndContinuesLaterTurns()
     {
         await using var lane = new ZLinkStateLane();
