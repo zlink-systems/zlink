@@ -38,10 +38,10 @@ msg::message_parts_t before_parts (const msg::envelope_header_t &actual,
     return codec.encode_payload_parts (std::move (header), std::move (payload), type, channel);
 }
 
-void wire_identity ()
+void wire_identity (ladder::payload_shape_t shape)
 {
     for (int level : {2, 3}) {
-        ladder::encoder_t encoder (level);
+        ladder::encoder_t encoder (level, shape);
         for (size_t size : {1024, 4096}) {
             for (bool command : {true, false}) {
                 auto after = encoder.encode (size, 123, phase_active, 456, command,
@@ -95,7 +95,11 @@ void wire_identity ()
 
 int main ()
 {
-    try { wire_identity (); }
+    try {
+        const auto shape = ladder::read_payload_shape ();
+        ladder::verify_wire (shape);
+        wire_identity (shape);
+    }
     catch (const std::exception &error) {
         std::fprintf (stderr, "%s\n", error.what ());
         return 1;

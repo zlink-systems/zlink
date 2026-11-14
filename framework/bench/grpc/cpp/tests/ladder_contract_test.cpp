@@ -3,6 +3,8 @@
 
 #include <cstdio>
 #include <exception>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <thread>
 
 using namespace zlink_cpp_bench;
@@ -32,8 +34,16 @@ struct test_metrics_t
         decoded_header_t stamp;
         require (decode_payload (data, size, &stamp) && stamp.run_id == 123
                    && stamp.seq == 456 && stamp.phase == phase_active
-                   && stamp.payload_size == size,
+                   && (stamp.payload_size == size
+                       || stamp.payload_size == ladder::game_payload_plan (size).json_size),
                  "target did not receive the original stamped body");
+        ++count;
+    }
+    void record_game (std::int64_t run, std::int64_t phase, std::int64_t seq,
+                      std::int64_t sent_ns)
+    {
+        require (run == 123 && phase == phase_active && seq == 456 && sent_ns > 0,
+                 "target did not receive the original mixed DTO stamp");
         ++count;
     }
 };
@@ -153,7 +163,8 @@ void socket_contract (int level)
         }
         catch (...) { target_failure = std::current_exception (); }
     });
-    ladder::encoder_t encoder (level);
+    const auto shape = ladder::read_payload_shape ();
+    ladder::encoder_t encoder (level, shape);
     for (size_t size : {1024, 4096}) {
         auto command = encoder.encode (size, 123, phase_active, 456, true);
         source.send (target_rid).message (command[0]).message (command[1]).submit ();
@@ -161,10 +172,17 @@ void socket_contract (int level)
         auto reply = source.request (target_rid).message (request[0]).message (request[1])
                        .timeout (std::chrono::seconds (2)).submit ();
         const auto decoded = ladder::decode_reply<Payload> (reply, level, 456);
-        require (decoded.body ().size () == size, "reply body size changed");
-        decoded_header_t stamp;
-        require (decode_payload (decoded.body ().data (), size, &stamp) && stamp.seq == 456,
-                 "source completion lost the body stamp");
+        if constexpr (std::is_same_v<Payload, ladder::game_message_t>)
+            require (ladder::game_stamp_matches (decoded, 123, phase_active, 456),
+                     "source completion lost the mixed DTO stamp");
+        else {
+            const auto expected_size = shape == ladder::payload_shape_t::mixed
+              ? ladder::game_payload_plan (size).json_size : size;
+            require (decoded.body ().size () == expected_size, "reply body size changed");
+            decoded_header_t stamp;
+            require (decode_payload (decoded.body ().data (), expected_size, &stamp) && stamp.seq == 456,
+                     "source completion lost the body stamp");
+        }
         if (level >= 2) {
             if (level >= 3) {
                 auto saved = std::move (reply[0]);
@@ -189,6 +207,66 @@ void socket_contract (int level)
         std::rethrow_exception (target_failure);
     require (metrics.count == 4, "target did not handle all four records");
     std::printf ("L%d socket contract: 1K/4K command and request/reply passed\n", level);
+}
+
+void mixed_codec_contract ()
+{
+    const auto serializer = ladder::game_serializer ();
+    require (serializer.content_type () == "application/json", "mixed L4 serializer is not JSON");
+    for (size_t size : {1024, 4096}) {
+        auto value = ladder::make_game_message (size, 123, phase_active, 456,
+                                                1700000000000000000ULL);
+        auto encoded = serializer.serialize (value);
+        auto decoded = serializer.deserialize (encoded);
+        require (ladder::game_stamp_matches (decoded, 123, phase_active, 456),
+                 "mixed JSON lost run/phase/seq fields");
+        require (encoded.to_string ().size () == ladder::game_json_size (value),
+                 "mixed JSON serializer size differs from encoded bytes");
+        auto request = ladder::messaging::client_call_codec_t{}.create_envelope (
+          ladder::messaging::message_kind_t::request, "bench", "BenchPayload",
+          std::chrono::seconds (2), {}, {}, serializer.content_type ());
+        auto response = ladder::reply_parts (value, request);
+        auto reply = serializer.deserialize (fw::detail::encoded_payload_from_raw (response[1]));
+        require (ladder::game_stamp_matches (reply, 123, phase_active, 456),
+                 "mixed reply changed game-message stamp");
+    }
+}
+
+void mixed_fixture_contract ()
+{
+    std::ifstream input (BENCH_LADDER_MIXED_FIXTURE);
+    require (input.good (), "could not open shared mixed payload fixture");
+    const auto fixture = nlohmann::json::parse (input);
+    require (fixture.at ("shape") == "mixed", "shared fixture has wrong shape");
+    const auto serializer = ladder::game_serializer ();
+    for (const auto size : {1024U, 4096U}) {
+        const auto key = std::to_string (size);
+        const auto &golden = fixture.at ("golden").at (key);
+        const auto count = golden.at ("itemCount").get<std::size_t> ();
+        require (count == fixture.at ("itemCounts").at (key).get<std::size_t> ()
+                   && golden.at ("run") == 123 && golden.at ("phase") == 1
+                   && golden.at ("seq") == 456,
+                 "shared mixed fixture count or stamp metadata is inconsistent");
+        auto value = ladder::game_message (123, phase_active, 456,
+                                           1700000000000000000ULL, count);
+        const auto encoded = serializer.serialize (value).to_string ();
+        const auto expected = golden.at ("json").get<std::string> ();
+        if (encoded != expected) {
+            std::size_t mismatch = 0;
+            while (mismatch < encoded.size () && mismatch < expected.size ()
+                   && encoded[mismatch] == expected[mismatch]) ++mismatch;
+            throw std::runtime_error ("C++ mixed JSON differs from fixture at "
+              + std::to_string (mismatch) + "; actual=" + encoded.substr (0, 180)
+              + "; expected=" + expected.substr (0, 180));
+        }
+        require (encoded.size () == golden.at ("byteLength").get<std::size_t> (),
+                 "shared mixed fixture byte length is incorrect");
+        const auto bytes = ladder::message (golden.at ("json").get<std::string> ());
+        const auto decoded = serializer.deserialize (fw::detail::encoded_payload_from_raw (bytes));
+        require (ladder::game_stamp_matches (decoded, 123, phase_active, 456),
+                 "shared mixed golden JSON decoded with a different run/phase/seq");
+    }
+    std::puts ("mixed fixture: C++ JSON matches golden bytes and decodes run/phase/seq for 1K/4K");
 }
 
 void receive_pressure_contract (int level)
@@ -350,12 +428,17 @@ void typed_codec_contract ()
 int main ()
 {
     try {
-        ladder::verify_wire ();
+        const auto shape = ladder::read_payload_shape ();
+        ladder::verify_wire (shape);
         reply_contract ();
         typed_codec_contract ();
+        mixed_fixture_contract ();
         const auto level = fw::detail::ablation::level ();
         receive_pressure_contract (level);
-        if (level == 4)
+        if (level == 4 && shape == ladder::payload_shape_t::mixed) {
+            mixed_codec_contract ();
+            socket_contract<ladder::game_message_t> (level);
+        } else if (level == 4)
             socket_contract<ladder::typed_payload_t> (level);
         else
             socket_contract (level);

@@ -52,6 +52,7 @@ int main (int argc, char **argv)
             return 0;
         }
         const auto level = fw::detail::ablation::level ();
+        const auto shape = ladder::read_payload_shape ();
         const bool raw_mesh = arg_value (argc, argv, "--ladder-raw-mesh", "0") == "1";
         if (level <= 4 || raw_mesh) {
             server_metrics_t metrics;
@@ -60,10 +61,13 @@ int main (int argc, char **argv)
                 return 2;
             std::signal (SIGINT, target_signal);
             std::signal (SIGTERM, target_signal);
+            if (level == 4 && !raw_mesh && shape == ladder::payload_shape_t::mixed)
+                return ladder::direct_server<server_metrics_t, ladder::game_message_t> (
+                  endpoint, metrics, stop_target, level, false, shape);
             if (level == 4 && !raw_mesh)
                 return ladder::direct_server<server_metrics_t, ladder::typed_payload_t> (
-                  endpoint, metrics, stop_target, level, false);
-            return ladder::direct_server (endpoint, metrics, stop_target, level, raw_mesh);
+                  endpoint, metrics, stop_target, level, false, shape);
+            return ladder::direct_server (endpoint, metrics, stop_target, level, raw_mesh, shape);
         }
 #endif
         bench_metric_reader_t metric_reader;

@@ -197,6 +197,8 @@ if(ZLINK_CPP_ABLATION_LADDER)
   add_executable(bench_cpp_ladder_contract_test tests/ladder_contract_test.cpp ${BENCH_PROTO_CC})
   bench_target(bench_cpp_ladder_contract_test)
   target_include_directories(bench_cpp_ladder_contract_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+  target_compile_definitions(bench_cpp_ladder_contract_test PRIVATE
+    BENCH_LADDER_MIXED_FIXTURE="${BENCH_REPO_ROOT}/framework/bench/grpc/ladder-mixed-payload.json")
   target_link_libraries(bench_cpp_ladder_contract_test PRIVATE zlink::framework_codec_protobuf)
   foreach(level RANGE 0 4)
     add_test(NAME bench_cpp_ladder_L${level} COMMAND bench_cpp_ladder_contract_test)

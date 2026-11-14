@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -60,6 +61,25 @@ class server_metrics_t
         ++_active_messages;
         if (_latency_ns.size () < latency_sample_limit)
             _latency_ns.push_back (latency);
+    }
+
+    void record_game (std::int64_t run, std::int64_t phase, std::int64_t seq,
+                      std::int64_t sent_ns)
+    {
+        std::lock_guard<std::mutex> lock (_gate);
+        ++_all_phase_messages;
+        if (run <= 0 || run > std::numeric_limits<std::uint32_t>::max () || seq < 0
+            || (phase != phase_warmup && phase != phase_active) || sent_ns <= 0) {
+            ++_errors;
+            return;
+        }
+        if (phase != phase_active)
+            return;
+        ++_active_messages;
+        const auto now = now_ns ();
+        const auto sent = static_cast<std::uint64_t> (sent_ns);
+        if (_latency_ns.size () < latency_sample_limit)
+            _latency_ns.push_back (now >= sent ? static_cast<double> (now - sent) : 0.0);
     }
 
     void record_error ()

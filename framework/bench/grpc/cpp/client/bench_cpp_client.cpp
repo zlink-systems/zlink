@@ -236,7 +236,7 @@ struct stream_t
     }
 
     void finish_bytes (uint64_t sent, const void *body, size_t body_size, uint64_t seq,
-                       const std::exception *error = nullptr)
+                       const std::exception *error = nullptr, size_t expected_size = 0)
     {
         std::lock_guard lock (mutex);
         if (closed)
@@ -245,9 +245,10 @@ struct stream_t
         bool valid = !error;
         if (body && valid) {
             decoded_header_t header{};
+            const auto expected = expected_size ? expected_size : size;
             valid = decode_payload (body, body_size, &header)
                     && header.run_id == run_id && header.phase == phase
-                    && header.payload_size == size && body_size == size
+                    && header.payload_size == expected && body_size == expected
                     && header.seq == seq;
             if (!valid)
                 ++counters.header_failures;
@@ -264,6 +265,33 @@ struct stream_t
                 ++active_completed;
                 if (sent)
                     latency.add_us (static_cast<double> (now_ns () - sent) / 1000.0);
+            }
+        }
+        counters.leave ();
+        changed.notify_one ();
+    }
+
+    void finish_game (const ladder::game_message_t &reply, uint64_t seq,
+                      const std::exception *error = nullptr)
+    {
+        std::lock_guard lock (mutex);
+        if (closed)
+            return;
+        const auto now = clock_t_::now ();
+        const bool valid = !error && reply.run == run_id && reply.phase == phase
+          && reply.seq == static_cast<std::int64_t> (seq)
+          && reply.sent_ns > 0;
+        if (error)
+            counters.record_exception (*error);
+        else if (!valid)
+            counters.record_error ("ValidationError", "mixed game reply stamp mismatch");
+        else {
+            ++counters.completed;
+            if (now < deadline) {
+                ++active_completed;
+                if (reply.sent_ns > static_cast<std::int64_t> (ladder::game_timestamp_offset))
+                    latency.add_us (static_cast<double> (now_ns ()
+                      - (reply.sent_ns - static_cast<std::int64_t> (ladder::game_timestamp_offset))) / 1000.0);
             }
         }
         counters.leave ();
@@ -797,13 +825,15 @@ class source_t
                 const auto window = pattern_window (_options.pattern);
                 const bool command = _options.pattern == "send-saturation";
 #if defined(ZLINK_CPP_ABLATION_LADDER)
+                const auto ladder_level = fw::detail::ablation::level ();
+                const auto ladder_shape = ladder::read_payload_shape ();
                 if (((_options.implementation == "zlink-framework-cpp"
-                                  && fw::detail::ablation::level () <= 4)
+                                  && ladder_level <= 4)
                                  || _options.ladder_raw_mesh))
                     _driver = std::make_unique<ladder_driver_t> (_options, window, command,
-                      _options.ladder_raw_mesh ? -1 : fw::detail::ablation::level ());
+                      _options.ladder_raw_mesh ? -1 : ladder_level, ladder_shape);
                 else if (_options.implementation == "zlink-framework-cpp"
-                         && fw::detail::ablation::level () == 7)
+                         && ladder_level == 7)
                     _driver = std::make_unique<framework_driver_t<ladder::typed_payload_t>> (
                       _options, window, command);
                 else

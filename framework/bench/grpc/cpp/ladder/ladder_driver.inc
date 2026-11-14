@@ -3,8 +3,9 @@
 class ladder_driver_t final : public driver_t
 {
   public:
-    ladder_driver_t (const options_t &options, int window, bool command, int level) :
-        driver_t (options, window, command), _level (level),
+    ladder_driver_t (const options_t &options, int window, bool command, int level,
+                     ladder::payload_shape_t shape) :
+        driver_t (options, window, command), _level (level), _shape (shape),
         _target (zlink::routing_id_t::from (options.ladder_target_rid))
     {
         const auto rid = zlink::routing_id_t::from ("bench-ladder-" + std::to_string (::getpid ()));
@@ -26,6 +27,13 @@ class ladder_driver_t final : public driver_t
         }
         _socket->connect (options.framework_endpoint);
         prepare_streams (stream_count ());
+        if (_shape == ladder::payload_shape_t::mixed) {
+            for (const auto size : {1024U, 4096U}) {
+                const auto plan = ladder::game_payload_plan (size);
+                std::fprintf (stderr, "ladder shape=mixed target=%zu json_body=%zu items=%zu\n",
+                              static_cast<std::size_t> (size), plan.json_size, plan.item_count);
+            }
+        }
         std::fprintf (stderr, "#4350 source L%d: %s\n", level,
                       _owner ? "real raw_mesh_node_owner_t; binding completion"
                              : "raw binding peer; canonical wire/admission adapter");
@@ -107,7 +115,7 @@ class ladder_driver_t final : public driver_t
         if (_level == 0 || _level == 1)
             return;
         for (int i = 0; i < count; ++i)
-            _encoders.emplace_back (std::make_unique<ladder::encoder_t> (_level));
+            _encoders.emplace_back (std::make_unique<ladder::encoder_t> (_level, _shape));
     }
     void submit (std::shared_ptr<stream_t> stream, int index, uint64_t seq) override
     {
@@ -129,15 +137,25 @@ class ladder_driver_t final : public driver_t
             auto submission = _socket->request (_target).message (parts[0]).message (parts[1])
               .timeout (timeout).async ();
             const auto level = _level;
+            const auto shape = _shape;
             observe_binding (std::move (submission.reply),
-              [stream, seq, level] (const auto &reply) {
+              [stream, seq, level, shape] (const auto &reply) {
                   try {
-                      if (level >= 4) {
+                      if (level >= 4 && shape == ladder::payload_shape_t::mixed) {
+                          auto payload = ladder::decode_reply<ladder::game_message_t> (reply, level, seq);
+                          stream->finish_game (payload, seq);
+                      } else if (level >= 4) {
                           auto payload = ladder::decode_reply<ladder::typed_payload_t> (reply, level, seq);
                           stream->finish_bytes (0, payload.body ().data (), payload.body ().size (), seq);
                       } else {
                           auto payload = ladder::decode_reply (reply, level, seq);
-                          stream->finish (0, &payload, seq);
+                          if (shape == ladder::payload_shape_t::mixed) {
+                              const auto body_size = ladder::game_wire_size (
+                                stream->size, stream->run_id, stream->phase, seq);
+                              stream->finish_bytes (0, payload.body ().data (), payload.body ().size (),
+                                                    seq, nullptr, body_size);
+                          } else
+                              stream->finish (0, &payload, seq);
                       }
                   } catch (const std::exception &error) {
                       stream->finish (0, nullptr, seq, &error);
@@ -150,6 +168,7 @@ class ladder_driver_t final : public driver_t
         }
     }
     int _level;
+    ladder::payload_shape_t _shape;
     std::unique_ptr<zlink::context_t> _context;
     std::unique_ptr<ladder::fw::runtime::mesh::raw_mesh_node_owner_t> _owner;
     std::unique_ptr<zlink::router_socket_t> _raw_socket;

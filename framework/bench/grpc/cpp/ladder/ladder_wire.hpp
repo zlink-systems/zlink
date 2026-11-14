@@ -32,6 +32,12 @@ inline zlink::message_t message (std::string_view bytes)
 {
     return zlink::message_t::from (std::as_bytes (std::span (bytes)));
 }
+inline bool game_stamp_matches (const game_message_t &value, uint32_t run, phase_t phase,
+                                uint64_t seq)
+{
+    return value.run == run && value.phase == phase && value.seq == static_cast<std::int64_t> (seq)
+           && value.sent_ns > 0;
+}
 inline auto protobuf_serializer ()
 {
     // This is the exact serializer selected by the Framework protobuf extension.
@@ -114,10 +120,14 @@ inline fw::runtime::mesh::raw_mesh_node_options_t owner_options (
 class encoder_t
 {
   public:
-    explicit encoder_t (int level) : _level (level)
+    explicit encoder_t (int level, payload_shape_t shape = payload_shape_t::bytes) :
+        _level (level), _shape (shape)
     {
         if (level >= 4) {
-            _type = fw::detail::serializer_registry_access_t::request_plan (typed_serializer ());
+            if (_shape == payload_shape_t::mixed)
+                _type = fw::detail::serializer_registry_access_t::request_plan (game_serializer ());
+            else
+                _type = fw::detail::serializer_registry_access_t::request_plan (typed_serializer ());
         }
         if (level >= 2 || level < 0) {
             if (!_type)
@@ -134,15 +144,22 @@ class encoder_t
         zlink::message_t body;
         // L4 restores the Framework typed codec. L0 still performs all of
         // the raw binding benchmark's payload allocation and protobuf encode.
-        if (_level >= 4) {
+        if (_level >= 4 && _shape == payload_shape_t::mixed) {
+            auto value = make_game_message (size, run, phase, seq);
+            const auto selected = game_serializer ();
+            _type = fw::detail::serializer_registry_access_t::request_plan (selected);
+            body = fw::detail::encoded_payload_to_raw (selected.serialize (value));
+        } else if (_level >= 4) {
             auto value = make_typed_payload (size, run, phase, seq);
             const auto selected = typed_serializer ();
             _type = fw::detail::serializer_registry_access_t::request_plan (selected);
             body = fw::detail::encoded_payload_to_raw (selected.serialize (value));
         } else {
             payload_t value;
-            value.mutable_body ()->assign (size, '\xab');
-            stamp_payload (value.mutable_body ()->data (), size, run, phase, seq);
+            const auto body_size = _shape == payload_shape_t::mixed
+              ? game_wire_size (size, run, phase, seq) : size;
+            value.mutable_body ()->assign (body_size, '\xab');
+            stamp_payload (value.mutable_body ()->data (), body_size, run, phase, seq);
             body = zlink_cpp_bench::encode_bench_payload_message (value);
         }
         if (_level >= 0 && _level < 2)
@@ -178,6 +195,7 @@ class encoder_t
     }
   private:
     int _level;
+    payload_shape_t _shape;
     std::shared_ptr<const fw::detail::request_type_plan_t> _type;
     std::shared_ptr<const fw::detail::prepared_header_fragment_t> _channel;
     const std::string _channel_name = "bench";
@@ -197,7 +215,7 @@ inline std::vector<std::span<const std::byte>> application_views (
     return protocol::decode_application_part_views (protocol::message_bytes (parts[1]), false);
 }
 
-inline void verify_wire ()
+inline void verify_wire (payload_shape_t shape = payload_shape_t::bytes)
 {
     const auto validate_envelope = [] (int level, std::span<const std::byte> bytes) {
         if (level == 0 || level == 1) {
@@ -212,18 +230,30 @@ inline void verify_wire ()
     for (int level : {0, 1, 2, 3, 4}) {
         for (size_t size : {1024, 4096}) {
             for (bool command : {true, false}) {
-                encoder_t encoder (level);
+                encoder_t encoder (level, shape);
                 auto parts = encoder.encode (size, 123, phase_active, 456, command);
                 auto views = application_views (parts);
                 validate_envelope (level, views[0]);
+                const auto expected_size = shape == payload_shape_t::mixed
+                  ? game_payload_plan (size).json_size : size;
                 const auto validate_payload = [&] (const auto &payload) {
                     decoded_header_t header;
-                    if (payload.body ().size () != size
-                        || !decode_payload (payload.body ().data (), size, &header)
+                    if (payload.body ().size () != expected_size
+                        || !decode_payload (payload.body ().data (), expected_size, &header)
                         || header.run_id != 123 || header.phase != phase_active || header.seq != 456)
                         throw std::runtime_error ("ladder wire roundtrip failed");
                 };
-                if (level >= 4) {
+                if (level >= 4 && shape == payload_shape_t::mixed) {
+                    const auto envelope = messaging::envelope_codec_t{}.decode_header (views[0], false).value ();
+                    if (envelope.content_type != game_serializer ().content_type ())
+                        throw std::runtime_error ("mixed payload did not select default JSON");
+                    if (views[1].size () != game_wire_size (size, 123, phase_active, 456))
+                        throw std::runtime_error ("mixed JSON body length differs from L3 payload length");
+                    const auto decoded = game_serializer ().deserialize (
+                      fw::detail::encoded_payload_from_raw (views[1]));
+                    if (!game_stamp_matches (decoded, 123, phase_active, 456))
+                        throw std::runtime_error ("mixed game payload stamp roundtrip failed");
+                } else if (level >= 4) {
                     const auto envelope = messaging::envelope_codec_t{}.decode_header (views[0], false).value ();
                     if (envelope.content_type != typed_serializer ().content_type ())
                         throw std::runtime_error ("typed payload did not select default JSON");
@@ -279,13 +309,20 @@ template <typename Metrics, typename Payload = payload_t> struct fixed_handler_t
             header.emplace (std::move (decoded.value ()));
         }
         Payload payload;
-        if constexpr (std::is_same_v<Payload, typed_payload_t>) {
+        if constexpr (std::is_same_v<Payload, game_message_t>) {
+            payload = fw::detail::deserialize_typed_payload (
+              game_serializer (), application[1], header->content_type);
+        } else if constexpr (std::is_same_v<Payload, typed_payload_t>) {
             payload = fw::detail::deserialize_typed_payload (
               typed_serializer (), application[1], header->content_type);
         } else if (!payload.ParseFromArray (application[1].data (), static_cast<int> (application[1].size ()))) {
             throw std::runtime_error ("invalid raw protobuf payload");
         }
-        metrics.record (payload.body ().data (), payload.body ().size ());
+        if constexpr (std::is_same_v<Payload, game_message_t>)
+            metrics.record_game (payload.run, payload.phase, payload.seq,
+                                 payload.sent_ns - static_cast<std::int64_t> (game_timestamp_offset));
+        else
+            metrics.record (payload.body ().data (), payload.body ().size ());
         // Same retained-header transfer as mesh_record_dispatcher.cpp:47.
         if (!unpacked.empty ())
             header->retained_header.message = std::move (unpacked[0]);
@@ -300,12 +337,16 @@ std::array<zlink::message_t, 2> reply_parts (
     // Every level creates a fresh reply body and fresh parts. L4 selects the
     // default typed JSON serializer; L0-L3 retain the raw protobuf encoder.
     Payload reply;
-    reply.set_body (payload.body ());
     zlink::message_t echo;
-    if constexpr (std::is_same_v<Payload, typed_payload_t>)
+    if constexpr (std::is_same_v<Payload, game_message_t>)
+        echo = fw::detail::encoded_payload_to_raw (game_serializer ().serialize (payload));
+    else if constexpr (std::is_same_v<Payload, typed_payload_t>) {
+        reply.set_body (payload.body ());
         echo = fw::detail::encoded_payload_to_raw (typed_serializer ().serialize (reply));
-    else
+    } else {
+        reply.set_body (payload.body ());
         echo = zlink_cpp_bench::encode_bench_payload_message (reply);
+    }
     if (request) {
         fw::detail::channel_reply_writer_t writer;
         auto response = writer.reply_raw_envelope (
@@ -364,7 +405,9 @@ Payload decode_reply (const std::vector<zlink::message_t> &parts, int level,
               header.error_code.value_or ("request_failed"),
               header.error_message.value_or ("route request failed"), "route request");
     }
-    if constexpr (std::is_same_v<Payload, typed_payload_t>)
+    if constexpr (std::is_same_v<Payload, game_message_t>)
+        return game_serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1]));
+    else if constexpr (std::is_same_v<Payload, typed_payload_t>)
         return typed_serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1]));
     else {
         Payload payload;
@@ -452,7 +495,7 @@ receive_permit_evidence_t receive_reserved (
 
 template <typename Metrics, typename Payload = payload_t>
 int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bool> &stop,
-                   int level, bool raw_mesh)
+                   int level, bool raw_mesh, payload_shape_t shape = payload_shape_t::bytes)
 {
     if (raw_mesh) {
         zlink::context_t context;
@@ -494,6 +537,13 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
         owner.start ();
     else
         owner.ablation_start ();
+    if (shape == payload_shape_t::mixed) {
+        for (const auto size : {1024U, 4096U}) {
+            const auto plan = game_payload_plan (size);
+            std::fprintf (stderr, "ladder target shape=mixed target=%zu json_body=%zu items=%zu\n",
+                          static_cast<std::size_t> (size), plan.json_size, plan.item_count);
+        }
+    }
     std::fprintf (stderr, "#4350 target L%d: real raw_mesh_node_owner_t; fixed handler\n", level);
     struct state_t {
         fw::runtime::mesh::raw_mesh_node_owner_t &owner;
