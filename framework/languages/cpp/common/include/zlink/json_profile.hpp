@@ -3,6 +3,8 @@
 
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
+#include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstddef>
 #include <limits>
@@ -257,45 +259,41 @@ inline bool fail (std::string *error, const char *message)
 
 inline constexpr std::string_view base64_alphabet =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-inline std::string encode_bytes (const std::vector<std::byte> &bytes)
-{
-    std::string text;
-    text.reserve ((bytes.size () / 3 + (bytes.size () % 3 != 0)) * 4);
-    for (std::size_t i = 0; i < bytes.size (); i += 3) {
-        const unsigned a = std::to_integer<unsigned> (bytes[i]);
-        const unsigned b = i + 1 < bytes.size () ? std::to_integer<unsigned> (bytes[i + 1]) : 0;
-        const unsigned c = i + 2 < bytes.size () ? std::to_integer<unsigned> (bytes[i + 2]) : 0;
-        text += base64_alphabet[a >> 2];
-        text += base64_alphabet[((a & 3) << 4) | (b >> 4)];
-        text += i + 1 < bytes.size () ? base64_alphabet[((b & 15) << 2) | (c >> 6)] : '=';
-        text += i + 2 < bytes.size () ? base64_alphabet[c & 63] : '=';
-    }
-    return text;
-}
+inline constexpr auto base64_values = [] {
+    std::array<unsigned char, 256> values{};
+    values.fill (0xff);
+    for (std::size_t i = 0; i < base64_alphabet.size (); ++i)
+        values[static_cast<unsigned char> (base64_alphabet[i])] = static_cast<unsigned char> (i);
+    return values;
+}();
 inline bool decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
 {
     if (text.size () % 4)
         return false;
     bytes.clear ();
+    if (text.empty ())
+        return true;
+    const std::size_t padding = (text.back () == '=') + (text[text.size () - 2] == '=');
+    bytes.resize (text.size () / 4 * 3 - padding);
+    auto *destination = bytes.data ();
     for (std::size_t i = 0; i < text.size (); i += 4) {
-        unsigned v[4]{};
-        for (unsigned j = 0; j < 4; ++j) {
-            if (text[i + j] == '=' && j >= 2 && i + 4 == text.size ())
-                continue;
-            const auto n = base64_alphabet.find (text[i + j]);
-            if (n == std::string_view::npos)
-                return false;
-            v[j] = static_cast<unsigned> (n);
-        }
-        if (text[i + 2] == '=' && (text[i + 3] != '=' || (v[1] & 15) != 0))
+        const unsigned a = base64_values[static_cast<unsigned char> (text[i])];
+        const unsigned b = base64_values[static_cast<unsigned char> (text[i + 1])];
+        const unsigned c =
+          text[i + 2] == '=' ? 0 : base64_values[static_cast<unsigned char> (text[i + 2])];
+        const unsigned d =
+          text[i + 3] == '=' ? 0 : base64_values[static_cast<unsigned char> (text[i + 3])];
+        if ((a | b | c | d) >= 64)
             return false;
-        if (text[i + 3] == '=' && (v[2] & 3) != 0)
+        if (text[i + 2] == '=' && (text[i + 3] != '=' || (b & 15) != 0))
             return false;
-        bytes.push_back (std::byte ((v[0] << 2) | (v[1] >> 4)));
+        if (text[i + 3] == '=' && ((c & 3) != 0 || i + 4 != text.size ()))
+            return false;
+        *destination++ = std::byte ((a << 2) | (b >> 4));
         if (text[i + 2] != '=')
-            bytes.push_back (std::byte ((v[1] << 4) | (v[2] >> 2)));
+            *destination++ = std::byte ((b << 4) | (c >> 2));
         if (text[i + 3] != '=')
-            bytes.push_back (std::byte ((v[2] << 6) | v[3]));
+            *destination++ = std::byte ((c << 6) | d);
     }
     return true;
 }
@@ -357,6 +355,10 @@ class byte_output
   public:
     explicit byte_output (std::vector<std::uint8_t> &out) : bytes (out) {}
     void reserve (std::size_t size) { bytes.reserve (size); }
+    std::size_t size () const { return bytes.size (); }
+    std::size_t capacity () const { return bytes.capacity (); }
+    void resize (std::size_t size) { bytes.resize (size); }
+    std::uint8_t *data () { return bytes.data (); }
     void operator+= (char value) { bytes.push_back (static_cast<std::uint8_t> (value)); }
     void operator+= (std::string_view value)
     {
@@ -364,6 +366,40 @@ class byte_output
     }
     void append (const char *begin, const char *end) { bytes.insert (bytes.end (), begin, end); }
 };
+
+// Generated RFC 4648 symbols need no JSON escaping or UTF-8 validation.
+template <typename Output> void write_bytes (const std::vector<std::byte> &bytes, Output &out)
+{
+    const auto start = out.size ();
+    const auto length = (bytes.size () / 3 + (bytes.size () % 3 != 0)) * 4;
+    const auto end = start + length + 2;
+    if (end > out.capacity ())
+        out.reserve (std::max (end + initial_output_capacity, out.capacity () * 2));
+    out.resize (end);
+    auto *text = out.data () + start;
+    *text++ = '"';
+    std::size_t i = 0;
+    for (; bytes.size () - i >= 3; i += 3) {
+        const unsigned a = std::to_integer<unsigned> (bytes[i]);
+        const unsigned b = std::to_integer<unsigned> (bytes[i + 1]);
+        const unsigned c = std::to_integer<unsigned> (bytes[i + 2]);
+        text[0] = base64_alphabet[a >> 2];
+        text[1] = base64_alphabet[((a & 3) << 4) | (b >> 4)];
+        text[2] = base64_alphabet[((b & 15) << 2) | (c >> 6)];
+        text[3] = base64_alphabet[c & 63];
+        text += 4;
+    }
+    if (i < bytes.size ()) {
+        const unsigned a = std::to_integer<unsigned> (bytes[i]);
+        const unsigned b = i + 1 < bytes.size () ? std::to_integer<unsigned> (bytes[i + 1]) : 0;
+        text[0] = base64_alphabet[a >> 2];
+        text[1] = base64_alphabet[((a & 3) << 4) | (b >> 4)];
+        text[2] = i + 1 < bytes.size () ? base64_alphabet[(b & 15) << 2] : '=';
+        text[3] = '=';
+        text += 4;
+    }
+    *text = '"';
+}
 
 template <typename Output>
 bool write_string (std::string_view value, Output &out, std::string *error)
@@ -516,7 +552,7 @@ bool write_value (const T &value, Output &out, std::string *error)
           [&] (auto entry) { written = write_string (entry.name, out, error); });
         return (found && written) || fail (error, "undeclared enum value");
     } else if constexpr (std::is_same_v<T, std::vector<std::byte>>)
-        return write_string (encode_bytes (value), out, error);
+        write_bytes (value, out);
     else if constexpr (vector_type<T>::value) {
         out += '[';
         bool first = true;

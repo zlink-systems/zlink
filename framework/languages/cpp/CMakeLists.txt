@@ -1117,6 +1117,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   zlink_framework_cpp_enable_test_unused_result_errors(test_cpp_framework_typed_json)
   target_link_libraries(test_cpp_framework_typed_json PRIVATE zlink_framework zlink::stream_connector)
   target_compile_definitions(test_cpp_framework_typed_json PRIVATE
+    ZLINK_TYPED_JSON_BYTES_GOLDEN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/Zlink.Framework.UnitTests/typed_json_bytes_golden.jsonl"
     ZLINK_TYPED_JSON_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-v1.json"
     ZLINK_REQUIRED_PRESENCE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-required-presence.txt")
   add_test(NAME test_cpp_framework_typed_json COMMAND test_cpp_framework_typed_json)
