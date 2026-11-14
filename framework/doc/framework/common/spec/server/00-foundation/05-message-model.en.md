@@ -174,13 +174,13 @@ application payload cross a language boundary and decode to the same value.
 - Date, decimal, UUID, and language-specific custom types are not converted
   implicitly; they use the string or DTO specified by the contract.
 
-| Language declaration | Required | Omission allowed |
-|---|---|---|
-| C++ `dto_traits` | Every declared field. `std::optional<T>` permits null but does not change requiredness | Mark a field whose default-constructed DTO value is its default with `zlink::json::field(..., zlink::json::defaulted)` |
-| C# | A constructor parameter without a default | A constructor parameter with a declared default |
-| Java record | Every component | A component marked with `@ZLinkJsonOptional` |
-| Kotlin | A primary-constructor property without a default | A property with a declared default |
-| TypeScript | A property without `?`; definite-assignment `!` is also required | A property with `?` |
+| Language declaration | Required | Omission allowed | Nullable |
+|---|---|---|---|
+| C++ `dto_traits` | Every declared field. `std::optional<T>` permits null but does not change requiredness | Mark a field whose default-constructed DTO value is its default with `zlink::json::field(..., zlink::json::defaulted)` | A `std::optional<T>` field |
+| C# | A constructor parameter without a default | A constructor parameter with a declared default | A reference marked with NRT `?`, or `Nullable<T>` |
+| Java record | Every component | A component marked with `@ZLinkJsonOptional` | A reference component with an annotation named `Nullable` (JSpecify type-use, JSR 305 or Jakarta declaration). A primitive is never nullable |
+| Kotlin | A primary-constructor property without a default | A property with a declared default | A type marked with `?` |
+| TypeScript | A property without `?`; definite-assignment `!` is also required | A property with `?` | `{ type: 'nullable', value }` in the JSON schema registered for the packet. `?` only allows omission |
 
 Requiredness and nullability are independent. A defaulted non-nullable property uses its default when
 missing and rejects explicit `null`. A nullable property without a default accepts `null` and rejects

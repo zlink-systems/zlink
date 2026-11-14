@@ -315,8 +315,8 @@ Java record components are required by default; mark an optional component with 
 annotation `@ZLinkJsonOptional`. A Jackson `@JsonProperty` used to name a wire property does not
 change requiredness. An omitted optional component receives its Java primitive
 default or `null` for a reference. A Kotlin primary-constructor property is required without a
-default and may be omitted when it declares a default. A required nullable property accepts
-explicit `null` and rejects omission.
+default and may be omitted when it declares a default. Nullability is declared as in the
+[§5 table](../../../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile).
 
 | JVM DTO declaration | Requiredness |
 |---|---|
