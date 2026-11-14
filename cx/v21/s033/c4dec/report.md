@@ -1,6 +1,6 @@
 # C++ typed JSON decode 구조 비교
 
-**직접 span reader(B)를 production에 적용했다.** 1K/4K decode는 **22회·9,424 B / 26회·36,306 B → 2회·1,504 B / 2회·4,576 B**다. nlohmann의 token buffer와 parser stack을 없애고 기존 typed 변환·필수 필드·중복 key 검사를 유지한다. [측정 원본·요약](raw/candidate-summary.json).
+**직접 span reader(B)를 production에 적용했다.** 1K/4K decode는 **22회·9,424 B / 26회·36,306 B → 2회·1,504 B / 2회·4,576 B**다. nlohmann의 token buffer와 parser stack을 없애고 기존 typed 변환·필수 필드·중복 key 검사를 유지한다. [실제 registry 측정](raw/registry-summary.json)·[후보/CPU 요약](raw/candidate-summary.json).
 
 `J=framework/languages/cpp/common/include/zlink/json_profile.hpp`, `N=nlohmann/detail/input/`, `D=framework/languages/dotnet/src/`. C++ 전은 `aae182694c`, 후는 이번 commit이다. 단위는 준비된 JSON body의 decode 1회이며 초기 registry/입력 생성·framing·handler copy는 제외한다. C++ B는 allocation **요청 크기 합계**, .NET B는 managed allocation이다.
 
@@ -43,11 +43,13 @@ B는 escape가 없는 token을 input view로 전달하고 escape에만 scratch�
 
 - 공유 `framework-json-v1.json`, required-presence golden, c4json의 8개 byte fixture와 malformed/escape/Unicode/duplicate/number-edge/random 입력 **55,749건**: A/B 모두 기존 수용·거부 및 decoded 값 동일.
 - 새 allocation budget: **기존 코드에서 22회/9,424 B로 실패(-6)**. [실패 원본](raw/test_cpp_framework_typed_json_allocations-before.txt).
-- Production runtime tests/native registry counter: **빌드·검증 중**. Release, source binding, Core `/root/.cache/zlink/core/1.25.0/linux-x64`, `-j3`, 25 GiB 제한.
+- Production runtime **7/7 통과**(typed JSON·allocation·noexception·connector core/extension·MessagePack·registry): [CTest](raw/ctest-production.log). 실제 L4 DTO의 native malloc과 C++ new가 위 표의 모든 후보·크기에서 일치한다([registry 결과](raw/registry-summary.json), [production stack](raw/production-registry-stacks.txt)).
+- encode/decode allocation 주입 음성 대조는 각각 **-6으로 검출**; 실제 body budget은 1K/4K 모두 통과([양방향 결과](raw/verification-summary.json), [전후 budget](raw/budget-before-after.json)). 긴 escaped 문자열·비연속 iterator·5,000단계 unknown array도 통과했다.
+- Release, source binding, Core `/root/.cache/zlink/core/1.25.0/linux-x64`, `-j3`, 25 GiB 제한; [빌드](raw/build-production.log)·[실제 Core link](raw/ldd-production.txt)·[최종 binary SHA256/freshness](raw/production-test-metadata.json).
 - C++ 전체 format / 공통 header / diff check **0/0/0**: [결과](raw/format-summary.json).
 
 변경 파일: `J`, `tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json.cpp`, `test_cpp_framework_typed_json_allocations.cpp`. 보호 문서·spec·public API·wire·bench DTO 변경 없음.
 
 소유 계층: Framework 공통 typed JSON codec. Spec: message-model §5(`framework/doc/framework/common/spec/server/00-foundation/05-message-model.ko.md:134-153`). 교차언어: .NET/JVM/Node의 기존 typed 표현과 공통 golden을 유지하며 C++ 기존 수용 집합도 보존한다([원문](raw/dotnet-profile-options.cs)·[JVM](raw/java-profile.java)·[Node](raw/node-profile.ts)). 분류 **B**.
 
-점검: token 저장 중복·parser 상태 중복·finite 검사 중복 **3건 수정**, execution gate 우회·Core/binding 결정 보상 **0건**, 이관 **0건**. 로컬 commit: **대기**. 남은 실패: 최종 검증 후 기록한다.
+점검: token 저장 중복·parser 상태 중복·finite 검사 중복 **3건 수정**, execution gate 우회·Core/binding 결정 보상 **0건**, 이관 **0건**. 로컬 commit: **대기**. 남은 관련 실패는 없다.
