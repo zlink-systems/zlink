@@ -30,10 +30,10 @@ def launch(role, extra):
     lib = BENCH / project / 'build/install' / app / 'lib'
     hashes = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(lib.glob('*.jar'))}
     (out / (role+'-jars.json')).write_text(json.dumps(hashes,indent=2))
-    cmd = ['taskset','-c','6-7,14-15','timeout','--signal=TERM','--kill-after=1','29s',JAVA,
+    cmd = ['taskset','-c','6-7,14-15','timeout','--signal=TERM','--kill-after=1','30s',JAVA,
         '--enable-native-access=ALL-UNNAMED','-Xms256m','-Xmx1g','-XX:+UnlockDiagnosticVMOptions','-XX:+LogCompilation',
         f'-XX:LogFile={out}/{role}-compilation.xml', '-XX:+PrintCompilation',
-        f'-agentpath:{JOB}/tools/libasyncProfiler.so=start,event=ctimer,interval=1ms,alloc=128k,jfr,file={out}/{role}.jfr',
+        f'-agentpath:{JOB}/tools/libasyncProfiler.so=start,event=ctimer,interval=1ms,alloc=256k,jfr,file={out}/{role}.jfr',
         '-cp',str(lib/'*'),main] + extra
     log = open(out/(role+'.log'),'w'); files.append(log)
     born = time.time()
@@ -41,14 +41,14 @@ def launch(role, extra):
     processes.append((role,proc,born,cmd))
 
 def ready(url, require):
-    while time.monotonic()-start < 7:
+    while time.monotonic()-start < 9:
         try:
             val = request(url+'/bench/stats')
             if not require or val.get('ready'): return
         except (OSError,ValueError): pass
         if any(p.poll() is not None for _,p,_,_ in processes): raise RuntimeError('child exited')
         time.sleep(.04)
-    raise RuntimeError('startup exceeded 7 seconds')
+    raise RuntimeError('startup exceeded 9 seconds')
 
 def snapshot(label):
     result = {}
@@ -68,7 +68,7 @@ try:
     launch('target',['--endpoint',endpoint,'--metrics-url',target])
     ready(target,False)
     launch('source',['--implementation','zlink-framework-java','--scenario',args.pattern,'--payload-size','1024',
-        '--request-window','100','--submit-concurrency','8','--warmup-seconds','15','--drain-bound-ms','1500',
+        '--request-window','100','--submit-concurrency','8','--warmup-seconds','15',
         '--trigger-url',trigger,'--stats-url',stats,'--target-endpoint',endpoint,'--target-stats-url',target,
         '--run-id','j2l2-'+args.label,'--output',str(out),'--report-file','report.txt'])
     ready(stats,True)
@@ -83,7 +83,7 @@ try:
             future = pool.submit(request,trigger+'/bench/start',body)
             cold = False
             while not future.done():
-                if time.monotonic()-start > 27: raise RuntimeError('run exceeded 27 seconds')
+                if time.monotonic()-start > 29.5: raise RuntimeError('run exceeded 29 seconds')
                 now = time.time()*1000
                 val = request(stats+'/bench/stats')
                 with (out/'stats.jsonl').open('a') as f: f.write(json.dumps({'epochMs':now,'phaseRequested':phase,**val})+'\n')

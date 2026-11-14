@@ -4,6 +4,7 @@ JOB=/root/jobs/fx/cx/v21/s033/ln3pr2
 TOOLS="$JOB/tools/node"
 PROGRESS="$JOB/progress.md"
 variant="$1"; step="$2"; pattern="$3"; payload="$4"
+attempt="${5:-1}"
 case "$variant" in
   A) WORKTREE=/root/worktree/zlink-v21-s033/ln3-base ;;
   B) WORKTREE=/root/worktree/zlink-v21-s033/ln3-pr ;;
@@ -40,7 +41,7 @@ printf -- '- %s %s-%s %s-%s pre-run: HEAD=%s dirty=%s merge-base=%s; artifacts=%
   "$(date -u +%FT%TZ)" "$variant" "$step" "$pattern" "$payload" "$head_commit" "$dirty" "$base_commit" "$hashes" >> "$PROGRESS"
 
 cell="${pattern}-${payload}"
-out="$JOB/raw/$cell/$variant-$step/counted/attempt1"
+out="$JOB/raw/$cell/$variant-$step/counted/attempt$attempt"
 mkdir -p "$out"
 switches=(ZLINK_LADDER_L0_SERVER=1 ZLINK_LADDER_L0_CLIENT=1 ZLINK_LADDER_L2_ENVELOPE=1 ZLINK_LADDER_L2_CLIENT=1)
 if [[ "$step" == L3 ]]; then switches+=(ZLINK_LADDER_L3_SERVICE_WIRE=1 ZLINK_LADDER_L3_CLIENT=1); fi
