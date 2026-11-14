@@ -98,7 +98,7 @@ const CHANNEL_CORRELATION_FIELD = ',"correlationId":';
 const CHANNEL_DEADLINE_FIELD = ',"deadline":';
 const CHANNEL_CORRELATION_TEXT_LENGTH = 32;
 const PREPARED_CHANNEL_CORRELATION = '0'.repeat(CHANNEL_CORRELATION_TEXT_LENGTH);
-const PREPARED_CHANNEL_DEADLINE = '2000-01-01T00:00:00.000Z';
+const PREPARED_CHANNEL_DEADLINE = new Date('2000-01-01T00:00:00.000Z');
 const CHANNEL_CORRELATION_TEXT = /^[0-9a-f]{32}$/;
 const CHANNEL_FLOW_FIELD = ',"flowId":';
 // A flow id is a lowercase UUIDv7 (spec 27 §3): fixed 36 JSON-safe ASCII bytes.
@@ -497,12 +497,12 @@ function encodePayload(
       value = value.decode();
     }
     const selected = selectSerializerWithContentType(value, codecs, declaredType);
-    contentType = contentTypeOf(value);
-    if (selected !== undefined && contentType !== BINARY_CONTENT_TYPE) {
+    if (selected !== undefined && !isRawPayload(value)) {
       const payload = selected.serializer.serialize(value);
       contentType = selected.contentType;
       message = borrowEncodedPayload(payload) ?? payload.data();
     } else {
+      contentType = contentTypeOf(value);
       message = toMessageLike(
         value,
         contentType,
@@ -520,7 +520,7 @@ function encodePayload(
       request === undefined
         ? correlationIdForOutboundKind(kind, correlationId)
         : request.correlationId,
-      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs).toISOString(),
+      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs),
       topic ?? null,
       contractPart === 'reply' ? undefined : null,
       contractPart === 'reply' ? undefined : null,
@@ -542,9 +542,11 @@ function toMessageLike(value: unknown, contentType: string, schema?: ZLinkJsonSc
 }
 
 function contentTypeOf(value: unknown): string {
-  return Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value)
-    ? BINARY_CONTENT_TYPE
-    : JSON_CONTENT_TYPE;
+  return isRawPayload(value) ? BINARY_CONTENT_TYPE : JSON_CONTENT_TYPE;
+}
+
+function isRawPayload(value: unknown): boolean {
+  return Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value);
 }
 
 function isMessage(value: unknown): value is Message {
@@ -565,7 +567,7 @@ function encodeChannelHeader(
   messageName: string,
   contentType: string,
   correlationId: string | null,
-  deadline: string | null,
+  deadline: Date | null,
   topic: string | null,
   errorCode: string | null | undefined,
   errorMessage: string | null | undefined,
@@ -578,23 +580,18 @@ function encodeChannelHeader(
   if (
     codecs !== undefined &&
     metadata === EMPTY_APPLICATION_METADATA &&
-    (flowId === undefined
-      ? flowOrigin === undefined
-      : flowOrigin !== undefined && CHANNEL_FLOW_TEXT.test(flowId)) &&
+    (flowId === undefined) === (flowOrigin === undefined) &&
+    (flowId === undefined || CHANNEL_FLOW_TEXT.test(flowId)) &&
     topic === null &&
     source === undefined &&
-    ((kind === ZLinkChannelMessageKind.Command &&
-      correlationId === null &&
-      deadline === null &&
-      errorCode === null &&
-      errorMessage === null) ||
+    ((((kind === ZLinkChannelMessageKind.Command && correlationId === null && deadline === null) ||
       (kind === ZLinkChannelMessageKind.Request &&
         correlationId !== null &&
         CHANNEL_CORRELATION_TEXT.test(correlationId) &&
         deadline !== null &&
-        deadline.length === PREPARED_CHANNEL_DEADLINE.length &&
-        errorCode === null &&
-        errorMessage === null) ||
+        deadline.getUTCFullYear() <= 9999)) &&
+      errorCode === null &&
+      errorMessage === null) ||
       (kind === ZLinkChannelMessageKind.Response &&
         correlationId !== null &&
         CHANNEL_CORRELATION_TEXT.test(correlationId) &&
@@ -619,6 +616,7 @@ function encodeChannelHeader(
   // The wire has a fixed field order. Measure escaped UTF-8 first, then write
   // each field once into the only header Buffer: no header object, whole JSON
   // string, or post-encode byte copy exists on the outbound path.
+  const deadlineText = deadline === null ? null : deadline.toISOString();
   const measure = new ChannelHeaderWriter();
   writeChannelHeader(
     measure,
@@ -627,7 +625,7 @@ function encodeChannelHeader(
     messageName,
     contentType,
     correlationId,
-    deadline,
+    deadlineText,
     topic,
     errorCode,
     errorMessage,
@@ -645,7 +643,7 @@ function encodeChannelHeader(
     messageName,
     contentType,
     correlationId,
-    deadline,
+    deadlineText,
     topic,
     errorCode,
     errorMessage,
@@ -664,7 +662,7 @@ function preparedChannelHeader(
   messageName: string,
   contentType: string,
   correlationId: string | null,
-  deadline: string | null,
+  deadline: Date | null,
   errorCode: string | null | undefined,
   errorMessage: string | null | undefined,
   flowId: string | undefined,
@@ -717,11 +715,34 @@ function preparedChannelHeader(
       CHANNEL_CORRELATION_TEXT_LENGTH,
       'ascii'
     );
-  if (deadline !== null)
-    bytes.write(deadline, prepared.deadlineOffset, PREPARED_CHANNEL_DEADLINE.length, 'ascii');
+  if (deadline !== null) writeChannelDeadline(bytes, prepared.deadlineOffset, deadline);
   if (flowId !== undefined)
     bytes.write(flowId, prepared.flowOffset, PREPARED_CHANNEL_FLOW.length, 'ascii');
   return bytes;
+}
+
+/** The prepared template already contains the ISO separators and trailing Z. */
+function writeChannelDeadline(bytes: Buffer, offset: number, deadline: Date): void {
+  const year = deadline.getUTCFullYear();
+  const yearRemainder = year % 100;
+  writeTwoDecimalDigits(bytes, offset, (year - yearRemainder) / 100);
+  writeTwoDecimalDigits(bytes, offset + 2, yearRemainder);
+  writeTwoDecimalDigits(bytes, offset + 5, deadline.getUTCMonth() + 1);
+  writeTwoDecimalDigits(bytes, offset + 8, deadline.getUTCDate());
+  writeTwoDecimalDigits(bytes, offset + 11, deadline.getUTCHours());
+  writeTwoDecimalDigits(bytes, offset + 14, deadline.getUTCMinutes());
+  writeTwoDecimalDigits(bytes, offset + 17, deadline.getUTCSeconds());
+  const milliseconds = deadline.getUTCMilliseconds();
+  const millisecondRemainder = milliseconds % 100;
+  bytes[offset + 20] = 0x30 + (milliseconds - millisecondRemainder) / 100;
+  writeTwoDecimalDigits(bytes, offset + 21, millisecondRemainder);
+}
+
+function writeTwoDecimalDigits(bytes: Buffer, offset: number, value: number): void {
+  // Exact integer quotients also avoid temporary heap numbers without JIT.
+  const ones = value % 10;
+  bytes[offset] = 0x30 + (value - ones) / 10;
+  bytes[offset + 1] = 0x30 + ones;
 }
 
 function writeChannelHeader(

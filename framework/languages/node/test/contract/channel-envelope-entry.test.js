@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const { runWithFlow } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const {
   ZLinkEncodedPayload
 } = require('../../packages/framework/dist/contracts/Common/ZLinkEncodedPayload');
@@ -37,7 +38,7 @@ function messages(parts) {
 
 // Reference the previous canonical wire and standalone allocation policy.
 // This encoder does not call the production header writer or its allocator.
-function legacyParts(kind, contentType, data, topic = null, metadata = {}) {
+function legacyParts(kind, contentType, data, topic = null, metadata = {}, timestamp = deadline) {
   const header = {
     formatMarker: 242,
     kind,
@@ -45,7 +46,7 @@ function legacyParts(kind, contentType, data, topic = null, metadata = {}) {
     messageName: 'Packet',
     contentType,
     correlationId: kind === 3 ? null : correlation,
-    deadline: kind === 1 ? new Date(deadline).toISOString() : null,
+    deadline: kind === 1 ? new Date(timestamp).toISOString() : null,
     topic
   };
   if (kind !== 2) {
@@ -264,6 +265,145 @@ test('entry preserves codec selection failures and deadline validation', () => {
       { name: 'RangeError', message: 'deadlineUnixMs must be a positive safe integer.' }
     );
   }
+});
+
+test('request deadline bytes match ISO across calendar and extended-year boundaries', () => {
+  const timestamps = [
+    1,
+    9,
+    10,
+    99,
+    100,
+    999,
+    1000,
+    ...[
+      '1999-12-31T23:59:59.999Z',
+      '2000-01-01T00:00:00.000Z',
+      '2000-02-28T23:59:59.999Z',
+      '2000-02-29T00:00:00.000Z',
+      '2000-03-01T00:00:00.001Z',
+      '2100-02-28T23:59:59.999Z',
+      '2100-03-01T00:00:00.000Z',
+      '2400-02-29T12:34:56.789Z',
+      '9999-12-31T23:59:59.999Z',
+      '+010000-01-01T00:00:00.000Z'
+    ].map(Date.parse),
+    8640000000000000
+  ];
+  for (const timestamp of timestamps) {
+    for (const registry of [undefined, codecs]) {
+      const parts = envelope.encodeChannelEnvelopePartsAtDeadline(
+        1,
+        'entry',
+        'Packet',
+        payload,
+        timestamp,
+        undefined,
+        registry,
+        correlation,
+        false
+      );
+      assert.deepEqual(
+        parts.map(bytes),
+        legacyParts(1, registry ? customType : 'application/json', body, null, {}, timestamp).map(
+          bytes
+        )
+      );
+    }
+  }
+  for (const timestamp of [8640000000000001, Number.MAX_SAFE_INTEGER]) {
+    for (const registry of [undefined, codecs]) {
+      assert.throws(
+        () =>
+          envelope.encodeChannelEnvelopePartsAtDeadline(
+            1,
+            'entry',
+            'Packet',
+            payload,
+            timestamp,
+            undefined,
+            registry,
+            correlation,
+            false
+          ),
+        { name: 'RangeError', message: 'Invalid time value' }
+      );
+    }
+  }
+});
+
+test('request deadline bytes preserve flow and application metadata on both header paths', () => {
+  const flow = { flowId: '01900000-1234-7000-8000-000000000001', flowOrigin: 'Application' };
+  const timestamp = Date.parse('2400-02-29T12:34:56.789Z');
+  for (const registry of [undefined, codecs]) {
+    for (const metadata of [new Map(), new Map([['tenant', '서울']])]) {
+      const parts = runWithFlow(flow, () =>
+        envelope.encodeChannelEnvelopePartsAtDeadline(
+          1,
+          'entry',
+          'Packet',
+          payload,
+          timestamp,
+          undefined,
+          registry,
+          correlation,
+          true,
+          metadata
+        )
+      );
+      const expected = legacyParts(
+        1,
+        registry ? customType : 'application/json',
+        body,
+        null,
+        Object.fromEntries(metadata),
+        timestamp
+      );
+      const header = JSON.parse(expected[0]);
+      header.flowId = flow.flowId;
+      header.flowOrigin = 3;
+      expected[0] = Buffer.from(JSON.stringify(header));
+      assert.deepEqual(parts.map(bytes), expected.map(bytes));
+      const corrupted = Buffer.from(parts[0]);
+      const milliseconds = corrupted.indexOf('.789Z');
+      assert.ok(milliseconds >= 0);
+      corrupted[milliseconds + 1] = 0x30;
+      assert.throws(() => assert.deepEqual(corrupted, expected[0]), assert.AssertionError);
+    }
+  }
+});
+
+test('prepared deadlines write digits without formatting an ISO string per request', (t) => {
+  const encode = (timestamp, metadata) =>
+    envelope.encodeChannelEnvelopePartsAtDeadline(
+      1,
+      'entry',
+      'Packet',
+      payload,
+      timestamp,
+      undefined,
+      codecs,
+      correlation,
+      false,
+      metadata
+    );
+  // Initialize the existing prepared template before observing per-request work.
+  encode(deadline);
+  const original = Date.prototype.toISOString;
+  let calls = 0;
+  t.mock.method(Date.prototype, 'toISOString', function () {
+    calls += 1;
+    return original.call(this);
+  });
+  for (let index = 0; index < 200; index++) {
+    const header = JSON.parse(encode(deadline + index)[0]);
+    assert.equal(header.deadline, original.call(new Date(deadline + index)));
+  }
+  assert.equal(calls, 0);
+  encode(deadline, new Map([['tenant', 'entry']]));
+  assert.equal(calls, 1);
+  encode(Date.parse('+010000-01-01T00:00:00.000Z'));
+  assert.equal(calls, 2);
 });
 
 test('raw and default JSON entry classify the payload once', (t) => {
