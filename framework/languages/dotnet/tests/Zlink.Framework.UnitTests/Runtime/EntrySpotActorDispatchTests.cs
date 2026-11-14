@@ -16307,6 +16307,9 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ConcurrentQueue<string> LifecycleEvents { get; } = new();
 
+        // Entry returns create Actors from separate Actor lanes, as a binding node allows.
+        private readonly object _createdActorsGate = new();
+
         public List<ZLinkBackendActorRef> CreatedActors { get; } = [];
 
         public ZLinkBackendActorRef? ActorLookupResult { get; set; }
@@ -16676,8 +16679,11 @@ public sealed partial class EntrySpotActorDispatchTests
         public ZLinkBackendActorRef CreateActor(string actorId, Message createRequest)
         {
             var actor = new ZLinkBackendActorRef(RoutingId, actorId, 1);
-            CreatedActors.Add(actor);
-            CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            lock (_createdActorsGate)
+            {
+                CreatedActors.Add(actor);
+                CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            }
             return actor;
         }
 
@@ -16691,8 +16697,11 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = authorityOwnerGeneration;
             _ = createRequest;
             var actor = new ZLinkBackendActorRef(RoutingId, actorId, objectGeneration);
-            CreatedActors.Add(actor);
-            CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            lock (_createdActorsGate)
+            {
+                CreatedActors.Add(actor);
+                CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            }
             return actor;
         }
 
