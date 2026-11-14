@@ -331,7 +331,7 @@ The "common mistake" columns below come from code that AI tools wrote during rea
 | While a game is running, a Spot handler never awaits a remote request or a database reply. An await inside a handler holds the turn, so every message and timer of that Spot stops | (design rule) |
 | Do not write round results per Actor. When a round ends, the Spot writes the results of every Actor in that round in one transaction, then tells each Actor after the commit so their memory matches | (design rule) |
 
-"The one Spot that owns the value" means a SpotWide Spot that holds state. A `PerActor` Spot keeps no state, so values several Actors change together go to an external store as [Execution model §4](32-execution-model.en.md#4-peractor-one-lane-each) describes, protected by conditional updates.
+"The one Spot that owns the value" means a SpotWide Spot that holds state. A `PerActor` Spot keeps no state, so values several Actors change together go to an external store as [Execution model §4](32-execution-model.en.md#4-peractor--one-lane-each) describes, protected by conditional updates.
 
 AI tools build it this way because common examples (Spring, NestJS and the like) are stateless REST: "load from repository → modify → save". When you see that shape in game node code, stop and move it to Actor and Spot ownership.
 
@@ -372,7 +372,7 @@ An Actor moves to another node when it joins a Spot and when it is relocated. Ev
 
 Decide in this order:
 
-1. A player's data (deck, gear, balance) is player Actor state. The Actor enters the Spot carrying its state, so a SpotWide Spot (the default) reads the entered Actor's state directly, without sending a message, because Actor handlers and Spot handlers share the same Spot gate. In a PerActor Spot each Actor runs on its own lane, so reading its state directly from the Spot is a race; ask the Actor instead ([Execution model §4](32-execution-model.en.md#4-peractor-one-lane-each)). If each Actor truly needs separate handling on entry, register it with `defer()`.
+1. A player's data (deck, gear, balance) is player Actor state. The Actor enters the Spot carrying its state, so a SpotWide Spot (the default) reads the entered Actor's state directly, without sending a message, because Actor handlers and Spot handlers share the same Spot gate. In a PerActor Spot each Actor runs on its own lane, so reading its state directly from the Spot is a race; ask the Actor instead ([Execution model §4](32-execution-model.en.md#4-peractor--one-lane-each)). If each Actor truly needs separate handling on entry, register it with `defer()`.
 2. Room-wide data (game settings, table rules) is Spot state. Read it once when the Spot is created.
 3. Large data used only by the Spot, which Actors do not normally hold, is rare. Only when it is truly needed:
    - Do not request it per player. Before the game starts, the Spot fetches it for all participants in one request (the same shape as round settlement).

@@ -313,7 +313,7 @@ HTTP 로비는 일반 웹 서버처럼 만들어도 된다. 다만 게임 상태
 | 게임이 진행되는 동안 Spot handler는 원격 request나 DB 응답을 기다리지 않는다. handler 안의 await는 그 turn을 쥐고 있어 같은 Spot의 모든 메시지와 timer가 멈춘다 | (설계 규칙) |
 | 판 결과는 Actor별로 따로 쓰지 않는다. 한 판이 끝날 때 Spot이 그 판에 참여한 모든 Actor의 결과를 한 트랜잭션으로 쓰고, 커밋 뒤 각 Actor에 결과를 알려 메모리 값을 맞춘다 | (설계 규칙) |
 
-"그 값을 소유한 Spot 하나"는 상태를 두는 SpotWide Spot을 말한다. `PerActor` Spot은 Spot에 상태를 두지 않으므로 여러 Actor가 함께 바꾸는 값은 [실행 모델 §4](32-execution-model.ko.md#4-peractor-lane마다-하나)대로 외부 저장소에 두고, 조건부 갱신으로 지킨다.
+"그 값을 소유한 Spot 하나"는 상태를 두는 SpotWide Spot을 말한다. `PerActor` Spot은 Spot에 상태를 두지 않으므로 여러 Actor가 함께 바꾸는 값은 [실행 모델 §4](32-execution-model.ko.md#4-peractor--lane마다-하나)대로 외부 저장소에 두고, 조건부 갱신으로 지킨다.
 
 AI가 이렇게 만드는 이유는 흔한 예제(Spring·NestJS 등)가 "리포지토리 조회 → 수정 → 저장"의 무상태 REST이기 때문이다. 게임 노드 코드에서 이 형태가 보이면 멈추고 Actor·Spot 소유 구조로 바꾼다.
 
@@ -354,7 +354,7 @@ Actor는 Spot에 들어갈 때(Join)와 노드를 옮길 때 다른 노드로 �
 
 판단 순서:
 
-1. 이용자의 데이터(덱, 장비, 잔액)는 이용자 Actor의 상태다. Actor가 상태를 들고 Spot에 들어오므로, SpotWide Spot(기본)은 들어온 Actor의 상태를 메시지 없이 그대로 읽는다. Actor handler와 Spot handler가 같은 Spot gate를 쓰기 때문이다. PerActor Spot에서는 Actor가 자기 lane에서 따로 실행되므로 Spot이 그 상태를 직접 읽으면 경합이다. Actor에 묻는다([실행 모델 §4](32-execution-model.ko.md#4-peractor-lane마다-하나)). 입장 때 Actor마다 따로 처리할 일이 꼭 있으면 `defer()`로 등록한다.
+1. 이용자의 데이터(덱, 장비, 잔액)는 이용자 Actor의 상태다. Actor가 상태를 들고 Spot에 들어오므로, SpotWide Spot(기본)은 들어온 Actor의 상태를 메시지 없이 그대로 읽는다. Actor handler와 Spot handler가 같은 Spot gate를 쓰기 때문이다. PerActor Spot에서는 Actor가 자기 lane에서 따로 실행되므로 Spot이 그 상태를 직접 읽으면 경합이다. Actor에 묻는다([실행 모델 §4](32-execution-model.ko.md#4-peractor--lane마다-하나)). 입장 때 Actor마다 따로 처리할 일이 꼭 있으면 `defer()`로 등록한다.
 2. 방 전체의 데이터(게임 설정, 테이블 규칙)는 Spot의 상태다. Spot을 만들 때 한 번 읽는다.
 3. 크고 Spot에서만 쓰여 Actor가 평소 들고 있지 않는 데이터는 드물다. 정말 필요할 때만:
    - 이용자별로 따로 요청하지 않는다. 게임 시작 전에 참가자 전체 분을 Spot이 요청 하나로 가져온다(판 결과 정산과 같은 방식).
