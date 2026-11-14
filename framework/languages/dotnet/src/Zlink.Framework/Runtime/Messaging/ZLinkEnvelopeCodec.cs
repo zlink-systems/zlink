@@ -636,36 +636,44 @@ internal static class ZLinkEnvelopeCodec
 
     private static HeaderField ReadHeaderField(ref Utf8JsonReader reader)
     {
-        // Canonical field names fit on the stack. Escaped/long names still use
-        // the reader's unescaping and the ordinal field-name match.
-        Span<char> buffer = stackalloc char[14];
-        ReadOnlySpan<char> name =
-            reader.ValueSpan.Length <= buffer.Length
-                ? buffer[..reader.CopyString(buffer)]
-                : reader.GetString().AsSpan();
+        // Compare canonical names in place. A known name has at most 13 ASCII
+        // characters, each at most six bytes when escaped. Longer encoded
+        // names cannot match; the unknown-name path still validates Unicode.
+        Span<byte> buffer = stackalloc byte[13 * 6];
+        scoped ReadOnlySpan<byte> name = reader.ValueSpan;
+        if (reader.ValueIsEscaped && name.Length <= buffer.Length)
+            name = buffer[..reader.CopyString(buffer)];
         // Length partitions keep the field mapping in one place while retaining
         // the case-sensitive envelope property-name contract.
-        return name.Length switch
+        var field = name.Length switch
         {
-            4 when name.Equals("kind", StringComparison.Ordinal) => HeaderField.Kind,
-            5 when name.Equals("topic", StringComparison.Ordinal) => HeaderField.Topic,
-            6 when name.Equals("source", StringComparison.Ordinal) => HeaderField.Source,
-            6 when name.Equals("flowId", StringComparison.Ordinal) => HeaderField.FlowId,
-            8 when name.Equals("deadline", StringComparison.Ordinal) => HeaderField.Deadline,
-            8 when name.Equals("metadata", StringComparison.Ordinal) => HeaderField.Metadata,
-            9 when name.Equals("errorCode", StringComparison.Ordinal) => HeaderField.ErrorCode,
-            10 when name.Equals("flowOrigin", StringComparison.Ordinal) => HeaderField.FlowOrigin,
-            11 when name.Equals("channelName", StringComparison.Ordinal) => HeaderField.ChannelName,
-            11 when name.Equals("messageName", StringComparison.Ordinal) => HeaderField.MessageName,
-            11 when name.Equals("contentType", StringComparison.Ordinal) => HeaderField.ContentType,
-            12 when name.Equals("formatMarker", StringComparison.Ordinal) =>
-                HeaderField.FormatMarker,
-            12 when name.Equals("errorMessage", StringComparison.Ordinal) =>
-                HeaderField.ErrorMessage,
-            13 when name.Equals("correlationId", StringComparison.Ordinal) =>
-                HeaderField.CorrelationId,
+            4 when name.SequenceEqual("kind"u8) => HeaderField.Kind,
+            5 when name.SequenceEqual("topic"u8) => HeaderField.Topic,
+            6 when name.SequenceEqual("source"u8) => HeaderField.Source,
+            6 when name.SequenceEqual("flowId"u8) => HeaderField.FlowId,
+            8 when name.SequenceEqual("deadline"u8) => HeaderField.Deadline,
+            8 when name.SequenceEqual("metadata"u8) => HeaderField.Metadata,
+            9 when name.SequenceEqual("errorCode"u8) => HeaderField.ErrorCode,
+            10 when name.SequenceEqual("flowOrigin"u8) => HeaderField.FlowOrigin,
+            11 when name.SequenceEqual("channelName"u8) => HeaderField.ChannelName,
+            11 when name.SequenceEqual("messageName"u8) => HeaderField.MessageName,
+            11 when name.SequenceEqual("contentType"u8) => HeaderField.ContentType,
+            12 when name.SequenceEqual("formatMarker"u8) => HeaderField.FormatMarker,
+            12 when name.SequenceEqual("errorMessage"u8) => HeaderField.ErrorMessage,
+            13 when name.SequenceEqual("correlationId"u8) => HeaderField.CorrelationId,
             _ => HeaderField.Unknown,
         };
+        if (field == HeaderField.Unknown)
+        {
+            // Matching ASCII bytes already establishes valid Unicode for known
+            // names. Preserve the reader's strict validation for ignored names.
+            Span<char> characters = stackalloc char[14];
+            if (reader.ValueSpan.Length <= characters.Length)
+                _ = reader.CopyString(characters);
+            else
+                _ = reader.GetString();
+        }
+        return field;
     }
 
     private enum HeaderField
@@ -1199,11 +1207,23 @@ internal static class ZLinkEnvelopeCodec
         ZLinkFlowOrigin? flowOrigin
     )
     {
-        var length = WritePlannedHeader(Span<byte>.Empty, header, plan, flowId, flowOrigin);
+        Span<byte> deadlineBuffer = stackalloc byte[35];
+        var deadline = FormatHeaderDeadline(header.Deadline, deadlineBuffer);
+        var length = WritePlannedHeader(
+            Span<byte>.Empty,
+            header,
+            plan,
+            flowId,
+            flowOrigin,
+            deadline
+        );
         var result = new Message(length);
         try
         {
-            if (WritePlannedHeader(result.AsSpan(), header, plan, flowId, flowOrigin) != length)
+            if (
+                WritePlannedHeader(result.AsSpan(), header, plan, flowId, flowOrigin, deadline)
+                != length
+            )
                 throw new InvalidOperationException("ZLink envelope changed while being encoded.");
             return result;
         }
@@ -1219,15 +1239,15 @@ internal static class ZLinkEnvelopeCodec
         ZLinkEnvelopeHeader header,
         HeaderPlan plan,
         string? flowId,
-        ZLinkFlowOrigin? flowOrigin
+        ZLinkFlowOrigin? flowOrigin,
+        ReadOnlySpan<byte> deadline
     )
     {
         var written = 0;
         WriteHeaderToken(plan.Bytes.AsSpan(0, plan.DynamicOffset), destination, ref written);
         WriteHeaderString(header.CorrelationId, destination, ref written);
         WriteHeaderToken(",\"deadline\":"u8, destination, ref written);
-        Span<byte> deadline = stackalloc byte[35];
-        WriteHeaderToken(FormatHeaderDeadline(header.Deadline, deadline), destination, ref written);
+        WriteHeaderToken(deadline, destination, ref written);
         WriteHeaderToken(",\"topic\":"u8, destination, ref written);
         WriteHeaderString(header.Topic, destination, ref written);
         WriteHeaderToken(",\"errorCode\":"u8, destination, ref written);
