@@ -11,10 +11,9 @@ const fixture = path.join(__dirname, 'fixtures', 'actor-direct-route-process.js'
 const {
   ZLinkFrameworkInternalErrorKind
 } = require('../../packages/framework/dist/runtime/framework-errors-internal');
-const { testRedisUrl: redisUrl, connectTestRedis } = require('./helpers/test-redis');
+const { connectTestRedis } = require('./helpers/test-redis');
 const { startChild, stopChild, deletePrefix } = require('./helpers/native-process-harness')(
-  fixture,
-  redisUrl
+  fixture
 );
 
 for (const scenario of [

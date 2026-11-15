@@ -2,11 +2,11 @@
 
 const { createClient } = require('redis');
 
-//  A job that provides Redis sets ZLINK_TEST_REDIS_URL. There an unreachable
-//  Redis fails the test instead of skipping it; only a run without the variable
-//  skips (#4542).
-const providedRedisUrl = process.env.ZLINK_TEST_REDIS_URL;
-const testRedisUrl = providedRedisUrl ?? 'redis://127.0.0.1:6379';
+//  ZLINK_REDIS_TEST_ENDPOINT (host:port) is the one Redis a test run uses, in
+//  every language. When it is set, an unreachable Redis fails the test; without
+//  it a run tries 127.0.0.1:6379 and skips when nothing answers (#4542).
+const providedEndpoint = process.env.ZLINK_REDIS_TEST_ENDPOINT;
+const testRedisUrl = `redis://${providedEndpoint ?? '127.0.0.1:6379'}`;
 
 async function connectTestRedis(t) {
   const client = createClient({ url: testRedisUrl, socket: { reconnectStrategy: false } });
@@ -17,8 +17,8 @@ async function connectTestRedis(t) {
     return client;
   } catch (error) {
     if (client.isOpen) client.disconnect();
-    if (providedRedisUrl !== undefined) {
-      throw new Error(`ZLINK_TEST_REDIS_URL is set but Redis is unreachable at ${testRedisUrl}`, {
+    if (providedEndpoint !== undefined) {
+      throw new Error(`ZLINK_REDIS_TEST_ENDPOINT is set but Redis is unreachable at ${testRedisUrl}`, {
         cause: error
       });
     }

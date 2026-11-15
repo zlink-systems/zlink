@@ -3,10 +3,9 @@ const path = require('node:path');
 const test = require('node:test');
 
 const fixture = path.join(__dirname, 'fixtures', 'user-spot-native-process.js');
-const { testRedisUrl: redisUrl, connectTestRedis } = require('./helpers/test-redis');
+const { connectTestRedis } = require('./helpers/test-redis');
 const { startChild, stopChild, deletePrefix } = require('./helpers/native-process-harness')(
-  fixture,
-  redisUrl
+  fixture
 );
 
 test(

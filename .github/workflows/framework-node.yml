@@ -280,26 +280,10 @@ jobs:
           fi
           "${root}/upstream/emscripten/emcc" --version | head -1
 
-      # Location Store contract tests need Redis. With ZLINK_TEST_REDIS_URL set they
-      # fail instead of skipping when Redis is unreachable (#4542). A loopback port
-      # chosen by Docker keeps concurrent jobs on one machine apart.
-      - name: Start Redis for Location Store contract tests
+      # Redis-backed contract tests fail instead of skipping once the job provides Redis (#4542).
+      - name: Start Redis for Redis-backed tests
         if: startsWith(matrix.target.name, 'linux-')
-        run: |
-          set -euo pipefail
-          name="zlink-node-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ strategy.job-index }}"
-          docker run -d --rm --name "${name}" -p 127.0.0.1::6379 redis:7
-          echo "ZLINK_NODE_REDIS_CONTAINER=${name}" >> "${GITHUB_ENV}"
-          port="$(docker port "${name}" 6379/tcp | head -1 | sed 's/.*://')"
-          for _ in $(seq 1 30); do
-            if [ "$(docker exec "${name}" redis-cli ping 2>/dev/null)" = "PONG" ]; then
-              echo "ZLINK_TEST_REDIS_URL=redis://127.0.0.1:${port}" >> "${GITHUB_ENV}"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "Redis container ${name} did not answer PING within 30 seconds" >&2
-          exit 1
+        uses: ./.github/actions/test-redis
 
       - name: Run Node framework release gate
         working-directory: framework/languages/node
@@ -321,9 +305,9 @@ jobs:
         working-directory: framework/languages/node
         run: npm run test:browser
 
-      - name: Stop Redis for Location Store contract tests
-        if: always() && env.ZLINK_NODE_REDIS_CONTAINER != ''
-        run: docker rm -f "${ZLINK_NODE_REDIS_CONTAINER}"
+      - name: Stop Redis for Redis-backed tests
+        if: always() && env.ZLINK_TEST_REDIS_CONTAINER != ''
+        run: docker rm -f "${ZLINK_TEST_REDIS_CONTAINER}"
 
   framework-node-cross-language:
     if: ${{ !inputs.skip_tests }}
