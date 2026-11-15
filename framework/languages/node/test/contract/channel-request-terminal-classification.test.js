@@ -126,9 +126,11 @@ test('request failures retain the Core terminal and classify submit results by m
   });
   //  An unclassified exception is a Framework execution failure, not a
   //  transport disconnect.
-  assert.deepEqual(requestFailureResult(new Error('socket closed')), {
+  const cause = new Error('socket closed');
+  assert.deepEqual(requestFailureResult(cause), {
     terminalResult: RequestResult.InternalError,
-    failureCode: 17
+    failureCode: 17,
+    cause
   });
 });
 
