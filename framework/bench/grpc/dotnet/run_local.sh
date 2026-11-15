@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_common.sh
 source "${ROOT_DIR}/../runner_common.sh"
-bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet" \
+bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet,zlink-dotnet-json,zlink-framework-dotnet-json" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 
 CONFIGURATION=Release
@@ -13,7 +13,7 @@ if [[ "${SKIP_BUILD}" != 1 ]]; then
   "${ROOT_DIR}/build.sh"
 fi
 
-check_ports_free 5200 5219
+check_ports_free 5200 5224
 mkdir -p "${OUTPUT_DIR}"
 b_pid=""
 a_pid=""
@@ -41,6 +41,15 @@ for run in $(seq 1 "${RUNS}"); do
         target_project="${ROOT_DIR}/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj"
         target_args=(--endpoint "${target_endpoint}" --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
         ;;
+      zlink-dotnet-json)
+        trigger_url="http://127.0.0.1:5216"
+        source_stats_url="http://127.0.0.1:5217"
+        target_endpoint="tcp://127.0.0.1:5218"
+        target_command_endpoint="tcp://127.0.0.1:5219"
+        target_stats_url="http://127.0.0.1:5220"
+        target_project="${ROOT_DIR}/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj"
+        target_args=(--endpoint "${target_endpoint}" --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}" --game-json)
+        ;;
       zlink-framework-dotnet)
         trigger_url="http://127.0.0.1:5212"
         source_stats_url="http://127.0.0.1:5213"
@@ -49,6 +58,15 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_url="http://127.0.0.1:5215"
         target_project="${ROOT_DIR}/ZLinkServer/WithGrpcBench.ZLinkServer.csproj"
         target_args=(--endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
+        ;;
+      zlink-framework-dotnet-json)
+        trigger_url="http://127.0.0.1:5221"
+        source_stats_url="http://127.0.0.1:5222"
+        target_endpoint="tcp://127.0.0.1:5223"
+        target_command_endpoint=""
+        target_stats_url="http://127.0.0.1:5224"
+        target_project="${ROOT_DIR}/ZLinkServer/WithGrpcBench.ZLinkServer.csproj"
+        target_args=(--endpoint "${target_endpoint}" --metrics-url "${target_stats_url}" --game-json)
         ;;
     esac
 
@@ -90,7 +108,7 @@ for run in $(seq 1 "${RUNS}"); do
           "$((WARMUP_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
 
         cleanup_cell
-        wait_for_ports_free 5200 5219
+        wait_for_ports_free 5200 5224
       done
     done
   done
