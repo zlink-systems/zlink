@@ -9,17 +9,23 @@ const { once } = require('node:events');
 const workspaceRoot = path.resolve(__dirname, '..', '..');
 const lockModule = path.join(workspaceRoot, 'scripts', 'node-test-gate-lock.js');
 
-test('runtime gate leaves actual browser E2E to the dedicated browser gate', () => {
+test('runtime gate leaves actual browser E2E to the dedicated browser gate', async () => {
   const source = fs.readFileSync(path.join(workspaceRoot, 'scripts', 'run_node_runtime_gate.js'), 'utf8');
   const commands = [];
   vm.runInNewContext(source, {
     __dirname: path.join(workspaceRoot, 'scripts'),
     require(name) {
       if (name === './node-test-gate-lock') return { acquireNodeTestGateLock: () => () => {} };
+      if (name === './node-test-file-runner') return {
+        async runTestFileWithDeadline(args) {
+          commands.push([process.execPath, ...args]);
+          return { status: 0, stdout: '# Subtest: fixture\nok 1 - fixture\n1..1\n# tests 1\n' };
+        }
+      };
       if (name === 'node:child_process') return {
         spawnSync(command, args) {
           commands.push([command, ...args]);
-          return { status: 0, stdout: '# Subtest: fixture\nok 1 - fixture\n1..1\n# tests 1\n' };
+          return { status: 0 };
         }
       };
       return require(name);
@@ -31,6 +37,8 @@ test('runtime gate leaves actual browser E2E to the dedicated browser gate', () 
     },
     console: { log() {}, error() {} }
   });
+  // The mocked runner settles at once; one macrotask lets the gate's file loop finish.
+  await new Promise((resolve) => setImmediate(resolve));
   const testInvocations = commands.filter((args) => args.includes('--test'));
   const testFiles = testInvocations.map((args) => args.at(-1));
   assert(testFiles.includes(__filename));
@@ -129,7 +137,7 @@ test('node runtime and coverage gates isolate native test handles and concurrent
 
   const runtimeGate = fs.readFileSync(path.join(workspaceRoot, 'scripts', 'run_node_runtime_gate.js'), 'utf8');
   assert.doesNotMatch(runtimeGate, /--test-force-exit/);
-  assert.match(runtimeGate, /timeout: 600000/);
+  assert.match(runtimeGate, /deadlineMs: 600000/);
   assert.match(runtimeGate, /plan=.*announced=/);
   assert.match(runtimeGate, /plan=.*completed=/);
   assert.match(runtimeGate, /completedTestCount !== expectedTestCount/);
