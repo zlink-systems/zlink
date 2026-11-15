@@ -726,6 +726,33 @@ test('Entry relocation staging preserves absent joined Spot membership', async (
   }
 });
 
+test('public Find uses the current Ready authority instead of a staged local ActorRef', async () => {
+  const current = {
+    actorId: 'staged-find', nodeRid: rid('current-owner'), objectGeneration: 7n, meshName: 'play'
+  };
+  const manager = createActorManager({
+    actorFactories: new Map([['player', { create: (context) => ({ context }) }]]),
+    nativeActorNode: createMockSpotNode({
+      restoreActorAuthority(actorId, _type, generation) {
+        return { nodeRid: rid('staged-target'), actorId, generation };
+      }
+    }),
+    actorRefResolver: {
+      async resolveActorRef(actorId) {
+        assert.equal(actorId, current.actorId);
+        return current;
+      }
+    }
+  });
+  await manager.prepareRelocationActor(current.actorId, 'player', 7n, 11n, undefined, 0n, 0n);
+  try {
+    assert.strictEqual(await manager.find(current.actorId), current);
+    assert.equal(await manager.findActor(current.actorId), undefined);
+  } finally {
+    await manager.abortRelocationActor(current.actorId);
+  }
+});
+
 test('relocation Actor materialization bypasses the new-Actor Entry Spot callback', async () => {
   const events = [];
   class RelocatedActor {
