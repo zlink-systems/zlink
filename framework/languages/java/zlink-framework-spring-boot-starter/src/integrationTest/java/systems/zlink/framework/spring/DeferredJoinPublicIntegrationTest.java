@@ -1,7 +1,6 @@
 package systems.zlink.framework.spring;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -19,6 +18,7 @@ import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -42,8 +42,7 @@ public class DeferredJoinPublicIntegrationTest {
     @ParameterizedTest
     @ValueSource(longs = {0, 1500})
     void typedDeferredJoinAcrossHosts(long restoreDelayMs) throws Exception {
-        String redis = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(redis != null && !redis.isBlank(), "Redis integration endpoint is required");
+        ZLinkTestRedis.endpoint();
         completion.set(null);
         completed = new CountDownLatch(1);
         joined = new CountDownLatch(1);
@@ -166,7 +165,7 @@ public class DeferredJoinPublicIntegrationTest {
         ZLinkRedisLocationStore locations(Environment e) {
             return new ZLinkRedisLocationStore(
                     new ZLinkRedisLocationOptions()
-                            .setConnectionString(System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT"))
+                            .setConnectionString(ZLinkTestRedis.endpoint())
                             .setKeyPrefix(e.getRequiredProperty("repro.prefix") + "locations:"));
         }
 
@@ -174,7 +173,7 @@ public class DeferredJoinPublicIntegrationTest {
         ZLinkRedisRelocationStore relocations(Environment e) {
             return new ZLinkRedisRelocationStore(
                     new ZLinkRedisRelocationOptions()
-                            .setConnectionString(System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT"))
+                            .setConnectionString(ZLinkTestRedis.endpoint())
                             .setKeyPrefix(e.getRequiredProperty("repro.prefix") + "relocation:"));
         }
 

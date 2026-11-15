@@ -1,7 +1,6 @@
 package systems.zlink.framework.spring;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -27,6 +26,7 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -150,7 +150,7 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
         public ZLinkRedisRelocationStore relocationStore() {
             return new ZLinkRedisRelocationStore(
                     new ZLinkRedisRelocationOptions()
-                            .setConnectionString(System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT"))
+                            .setConnectionString(ZLinkTestRedis.endpoint())
                             .setKeyPrefix("stale-spot-blobs-1618-" + UUID.randomUUID() + ":"));
         }
 
@@ -254,10 +254,7 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
         final ZLinkProviderLocationRepository repository;
 
         Fixture(String backend) {
-            String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-            assumeTrue(
-                    endpoint != null && !endpoint.isBlank(),
-                    "Redis relocation provider endpoint is required");
+            String endpoint = ZLinkTestRedis.endpoint();
             if (backend.equals("redis")) {
                 store =
                         new ZLinkRedisLocationStore(

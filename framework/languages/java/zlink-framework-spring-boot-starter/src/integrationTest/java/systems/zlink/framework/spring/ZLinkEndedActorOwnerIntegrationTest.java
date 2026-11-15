@@ -1,7 +1,6 @@
 package systems.zlink.framework.spring;
 
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -24,6 +23,7 @@ import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -214,8 +214,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
     @Test
     void disabledFactoryRecreatesActorFromEndedOwnerRecordsAfterNormalProcessExit()
             throws Exception {
-        String redis = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        Assumptions.assumeTrue(redis != null && !redis.isBlank());
+        String redis = ZLinkTestRedis.endpoint();
         var logs = Files.createTempDirectory("zlink-1570-public-");
         System.out.println("Ended Actor owner logs: " + logs);
         String prefix = "actor-reclaim-" + UUID.randomUUID() + ":";
@@ -268,8 +267,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
 
     @Test
     void disabledFactoryRecreatesActorAfterOwnerProcessIsKilled() throws Exception {
-        String redis = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        Assumptions.assumeTrue(redis != null && !redis.isBlank());
+        String redis = ZLinkTestRedis.endpoint();
         var logs = Files.createTempDirectory("zlink-1570-public-");
         System.out.println("Actor crash logs: " + logs);
         String prefix = "actor-reclaim-" + UUID.randomUUID() + ":";
