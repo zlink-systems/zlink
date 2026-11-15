@@ -2,23 +2,23 @@
   "version": 1,
   "packages": [
     {
-      "ref": "abseil/20250127.0#e0dcc4b8a367edb49b062cb07ed8e9e6",
+      "ref": "abseil/20260107.1#883e95a7be2b767999f64669ac642e5d",
       "package_id": "4303f728e224d9dd1c734a0b5f811a292f0c9ae5"
     },
     {
-      "ref": "boost/1.85.0#3ef9643dcf9d8bee3f925bceb080395d",
+      "ref": "boost/1.85.0#f37e8b5d24d10df58dbfbcfa6a9b0a54",
       "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
     },
     {
-      "ref": "hiredis/1.3.0#e39b0954c9bf2bac589b762bba5c5dce",
+      "ref": "hiredis/1.3.1#9812ceaa0bdc98a1d38c636dfd60ea66",
       "package_id": "dfc84b9ee26da333e0cdeb9a3198f46138d76a53"
     },
     {
-      "ref": "libcurl/8.22.0#3599f8564660d38f96af52da40795734",
-      "package_id": "e08723b672b42fd07c332a643d025454b2718bb0"
+      "ref": "libcurl/8.23.0#edd8c65a093575a81c27cd8c1c20502c",
+      "package_id": "df20919466acda76907dd7fa5c9aa7285ff40c03"
     },
     {
-      "ref": "libuv/1.51.0#ea781dcacf58c65462ab0d3d75e9b002",
+      "ref": "libuv/1.53.0#d09f58c3119facdb31cff53db2b1034c",
       "package_id": "258056170a5add18e564ac86c77027634e725af3"
     },
     {
@@ -30,23 +30,23 @@
       "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
     },
     {
-      "ref": "openssl/3.6.4#bc460bf37686ccae86a15bfdce71be11",
-      "package_id": "e4c14108d3b7faefe18a2bd73e4478b57cbe9b00"
+      "ref": "openssl/3.6.5#3c1311f37543e7140f33fe5989f315c2",
+      "package_id": "cc383ba38b7aa535e4f79d1614354c88c23fcbd6"
     },
     {
-      "ref": "opentelemetry-cpp/1.26.0#a671ccb304bb7ba023e64be6cb19e9e4",
-      "package_id": "54c879e16b48a146dfbfc9dfb5afb41d2e288a13"
+      "ref": "opentelemetry-cpp/1.26.0#cbfb0b6481f11f6f208a91882d2c02e6",
+      "package_id": "1d638e0d55101e362772c5a8e3844317508dabba"
     },
     {
-      "ref": "protobuf/5.27.0#99c5d5f87d1eea580a2234238020821b",
-      "package_id": "d6aa7315e3f695e791afce1a3060bf6ffe9952c9"
+      "ref": "protobuf/6.33.5#ca5ff466767b31a1b496ec60247e105c",
+      "package_id": "a1f0878608969cfbdba4558441a227fa730bcf07"
     },
     {
-      "ref": "redis-plus-plus/1.3.15#465ec9e6b105587ae51e826d08dffa62",
-      "package_id": "ed9b9bacdac409709f9b841732e89d5c7b54a9f2"
+      "ref": "redis-plus-plus/1.3.15#9005bf48a2341005269458ea999203d5",
+      "package_id": "8e6f0c58e555a7766f53df73136cacdc902fd844"
     },
     {
-      "ref": "zlib/1.3.2#1cb806da49011867778ffb6ac7190fcb",
+      "ref": "zlib/1.4#f51abf05ab684e2283b6d4c1243b624f",
       "package_id": "258056170a5add18e564ac86c77027634e725af3"
     }
   ]
