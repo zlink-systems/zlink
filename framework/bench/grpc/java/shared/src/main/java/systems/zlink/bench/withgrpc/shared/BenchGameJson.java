@@ -4,11 +4,13 @@ package systems.zlink.bench.withgrpc.shared;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
+
 import java.io.IOException;
 
-/** Standard Jackson mapping used by the binding JSON row. */
+/** Reuses the framework-json-v1 mapper for the binding JSON row. */
 public final class BenchGameJson {
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = ZLinkFrameworkJsonProfile.mapper();
 
     private BenchGameJson() {}
 

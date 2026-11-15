@@ -11,7 +11,7 @@ bench_init cpp "grpc-cpp,zlink-cpp,zlink-framework-cpp,zlink-cpp-json,zlink-fram
 cd "${HERE}"
 
 WARMUP_SEGMENTS=10
-BUILD_DIR="${HERE}/build"
+BUILD_DIR="${BUILD_DIR:-${HERE}/build}"
 
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 

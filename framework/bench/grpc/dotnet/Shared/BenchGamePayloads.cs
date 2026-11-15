@@ -1,59 +1,41 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using Systems.Zlink.Stream.Connector.Internal;
 
 namespace WithGrpcBench.Shared;
 
 // Declaration order is the shared fixture's Framework JSON v1 wire order.
-public sealed record BenchGameMessage(
-    string DisplayName,
-    [property: JsonNumberHandling(
-        JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString
-    )]
-        long Gold,
-    int Heading,
-    [property: JsonNumberHandling(
-        JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString
-    )]
-        long Hp,
-    IReadOnlyList<BenchGameItem> Items,
-    [property: JsonNumberHandling(
-        JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString
-    )]
-        long Level,
-    [property: JsonNumberHandling(
-        JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString
-    )]
-        long Mp,
-    bool Online,
-    [property: JsonNumberHandling(
-        JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString
-    )]
-        long Phase,
-    string PlayerId,
-    string RoomId,
-    [property: JsonNumberHandling(
-        JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString
-    )]
-        long Run,
-    [property: JsonNumberHandling(
-        JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString
-    )]
-        long SentNs,
-    [property: JsonNumberHandling(
-        JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString
-    )]
-        long Seq,
-    string Session,
-    int X,
-    int Y,
-    int Z
-);
+// Required init properties use the Framework's declared-nullability setter checks.
+public sealed record BenchGameMessage
+{
+    public required string DisplayName { get; init; }
+    public required long Gold { get; init; }
+    public required int Heading { get; init; }
+    public required long Hp { get; init; }
+    public required IReadOnlyList<BenchGameItem> Items { get; init; }
+    public required long Level { get; init; }
+    public required long Mp { get; init; }
+    public required bool Online { get; init; }
+    public required long Phase { get; init; }
+    public required string PlayerId { get; init; }
+    public required string RoomId { get; init; }
+    public required long Run { get; init; }
+    public required long SentNs { get; init; }
+    public required long Seq { get; init; }
+    public required string Session { get; init; }
+    public required int X { get; init; }
+    public required int Y { get; init; }
+    public required int Z { get; init; }
+}
 
-public sealed record BenchGameItem(int Count, string Id, int Slot);
+public sealed record BenchGameItem
+{
+    public required int Count { get; init; }
+    public required string Id { get; init; }
+    public required int Slot { get; init; }
+}
 
 public static class BenchGamePayloads
 {
-    private static readonly JsonSerializerOptions RawJsonOptions = new(JsonSerializerDefaults.Web);
     private const long TimestampOffsetNs = 1_000_000_000_000_000_000L;
 
     public static long TimestampNow() => checked(TimestampOffsetNs + BenchMetricHeaders.NowNs());
@@ -84,40 +66,47 @@ public static class BenchGamePayloads
         long sentNs,
         int itemCount
     ) =>
-        new(
-            "Player_12345678",
-            987654321,
-            271,
-            287,
-            Enumerable
+        new()
+        {
+            DisplayName = "Player_12345678",
+            Gold = 987654321,
+            Heading = 271,
+            Hp = 287,
+            Items = Enumerable
                 .Range(0, itemCount)
-                .Select(index => new BenchGameItem(
-                    index % 9 + 1,
-                    $"item-{index + 1:D8}",
-                    index % 32
-                ))
+                .Select(index => new BenchGameItem
+                {
+                    Count = index % 9 + 1,
+                    Id = $"item-{index + 1:D8}",
+                    Slot = index % 32,
+                })
                 .ToArray(),
-            42,
-            164,
-            true,
-            (long)phase,
-            "player-0000000000000001",
-            "room-000000000000000001",
-            runId,
-            sentNs,
-            checked((long)sequence),
-            "session-0000000000000001",
-            -123456,
-            7890,
-            654321
-        );
+            Level = 42,
+            Mp = 164,
+            Online = true,
+            Phase = (long)phase,
+            PlayerId = "player-0000000000000001",
+            RoomId = "room-000000000000000001",
+            Run = runId,
+            SentNs = sentNs,
+            Seq = checked((long)sequence),
+            Session = "session-0000000000000001",
+            X = -123456,
+            Y = 7890,
+            Z = 654321,
+        };
 
     public static byte[] EncodeStandard(BenchGameMessage value) =>
-        JsonSerializer.SerializeToUtf8Bytes(value, RawJsonOptions);
+        JsonSerializer.SerializeToUtf8Bytes(value, ZLinkJsonSerializerOptions.FrameworkPayload);
 
-    public static BenchGameMessage DecodeStandard(ReadOnlySpan<byte> value) =>
-        JsonSerializer.Deserialize<BenchGameMessage>(value, RawJsonOptions)
-        ?? throw new InvalidOperationException("Game JSON body decoded to null.");
+    public static BenchGameMessage DecodeStandard(ReadOnlySpan<byte> value)
+    {
+        ZLinkFrameworkJsonDocument.ValidateDocument(value);
+        return JsonSerializer.Deserialize<BenchGameMessage>(
+                value,
+                ZLinkJsonSerializerOptions.FrameworkPayload
+            ) ?? throw new JsonException("Game JSON body decoded to null.");
+    }
 
     public static bool HasExpectedStamp(
         BenchGameMessage value,

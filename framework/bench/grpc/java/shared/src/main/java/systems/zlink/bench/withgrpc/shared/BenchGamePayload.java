@@ -2,8 +2,9 @@
 
 package systems.zlink.bench.withgrpc.shared;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonPropertyOrder;
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,21 +31,21 @@ import java.util.List;
     "z"
 })
 public record BenchGamePayload(
-        String displayName,
-        @JsonFormat(shape = JsonFormat.Shape.STRING) long gold,
+        @JsonSetter(nulls = Nulls.FAIL) String displayName,
+        long gold,
         int heading,
-        @JsonFormat(shape = JsonFormat.Shape.STRING) long hp,
-        List<Item> items,
-        @JsonFormat(shape = JsonFormat.Shape.STRING) long level,
-        @JsonFormat(shape = JsonFormat.Shape.STRING) long mp,
+        long hp,
+        @JsonSetter(nulls = Nulls.FAIL) List<Item> items,
+        long level,
+        long mp,
         boolean online,
-        @JsonFormat(shape = JsonFormat.Shape.STRING) long phase,
-        String playerId,
-        String roomId,
-        @JsonFormat(shape = JsonFormat.Shape.STRING) long run,
-        @JsonFormat(shape = JsonFormat.Shape.STRING) long sentNs,
-        @JsonFormat(shape = JsonFormat.Shape.STRING) long seq,
-        String session,
+        long phase,
+        @JsonSetter(nulls = Nulls.FAIL) String playerId,
+        @JsonSetter(nulls = Nulls.FAIL) String roomId,
+        long run,
+        long sentNs,
+        long seq,
+        @JsonSetter(nulls = Nulls.FAIL) String session,
         int x,
         int y,
         int z) {
@@ -92,5 +93,5 @@ public record BenchGamePayload(
                 654321);
     }
 
-    public record Item(int count, String id, int slot) {}
+    public record Item(int count, @JsonSetter(nulls = Nulls.FAIL) String id, int slot) {}
 }

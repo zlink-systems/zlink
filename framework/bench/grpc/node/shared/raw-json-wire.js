@@ -2,6 +2,11 @@
 'use strict';
 
 const zlink = require('@zlink-systems/zlink');
+const { gameJsonContract } = require('./game-payload');
+const {
+  stringifyFrameworkJsonV1,
+  parseFrameworkJsonV1
+} = require('../../../../languages/node/packages/framework/dist/runtime/messaging/framework-json-v1');
 
 const REQUEST_ENVELOPE = Buffer.from(
   '{"kind":1,"channelName":"bench","messageName":"BenchGameMessage",' +
@@ -17,11 +22,17 @@ const RESPONSE_ENVELOPE = Buffer.from(
 );
 
 function encodeGameMessage(value) {
-  return zlink.Message.from(Buffer.from(JSON.stringify(value), 'utf8'));
+  return zlink.Message.from(
+    Buffer.from(stringifyFrameworkJsonV1(value, gameJsonContract.payload), 'utf8')
+  );
 }
 
 function decodeGameMessage(bytes) {
-  return JSON.parse(Buffer.from(bytes).toString('utf8'));
+  return parseFrameworkJsonV1(
+    Buffer.from(bytes).toString('utf8'),
+    undefined,
+    gameJsonContract.payload
+  );
 }
 
 module.exports = { REQUEST_ENVELOPE, RESPONSE_ENVELOPE, encodeGameMessage, decodeGameMessage };

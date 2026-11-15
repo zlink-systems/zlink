@@ -4,9 +4,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const path = require('node:path');
-const { ZLinkPacket } = require('@zlink-systems/framework');
 const gamePayload = require('./game-payload');
 const rawJson = require('./raw-json-wire');
+const {
+  stringifyFrameworkJsonV1
+} = require('../../../../languages/node/packages/framework/dist/runtime/messaging/framework-json-v1');
 const { REQUEST_ENVELOPE, RESPONSE_ENVELOPE } = rawJson;
 const { encodeFrameworkPayloadMessage, decodeFrameworkPayloadMessage } = require(
   path.join(
@@ -14,8 +16,6 @@ const { encodeFrameworkPayloadMessage, decodeFrameworkPayloadMessage } = require
     '../../../../languages/node/packages/framework/dist/runtime/messaging/payload-codec'
   )
 );
-
-ZLinkPacket('BenchGameMessage')(gamePayload.GameMessage);
 
 for (const payloadSize of [1024, 4096]) {
   test(`raw JSON and framework typed JSON match game fixture at ${payloadSize}`, () => {
@@ -33,11 +33,19 @@ for (const payloadSize of [1024, 4096]) {
 
     const rawEncoded = rawJson.encodeGameMessage(value);
     try {
-      assert.deepEqual(Buffer.from(rawEncoded.data()), expected, 'JSON.stringify output bytes');
+      assert.deepEqual(
+        Buffer.from(rawEncoded.data()),
+        expected,
+        'Framework schema codec output bytes'
+      );
       const rawDecoded = rawJson.decodeGameMessage(expected);
-      assert.equal(rawDecoded.run, '123');
-      assert.equal(rawDecoded.phase, '1');
-      assert.equal(rawDecoded.seq, '456');
+      assert.equal(rawDecoded.run, 123n);
+      assert.equal(rawDecoded.phase, 1n);
+      assert.equal(rawDecoded.seq, 456n);
+      assert.equal(
+        stringifyFrameworkJsonV1(rawDecoded, gamePayload.gameJsonContract.payload),
+        golden.json
+      );
     } finally {
       rawEncoded.close();
     }
@@ -56,9 +64,13 @@ for (const payloadSize of [1024, 4096]) {
         'application/json',
         'BenchGameMessage'
       );
-      assert.equal(frameworkDecoded.run, '123');
-      assert.equal(frameworkDecoded.phase, '1');
-      assert.equal(frameworkDecoded.seq, '456');
+      assert.equal(frameworkDecoded.run, 123n);
+      assert.equal(frameworkDecoded.phase, 1n);
+      assert.equal(frameworkDecoded.seq, 456n);
+      assert.equal(
+        stringifyFrameworkJsonV1(frameworkDecoded, gamePayload.gameJsonContract.payload),
+        golden.json
+      );
     } finally {
       frameworkEncoded.close();
     }
@@ -74,3 +86,53 @@ test('JSON game implementations reject unsupported payload sizes by implementati
     );
   }
 });
+
+for (const payloadSize of [1024, 4096]) {
+  const valid = JSON.parse(gamePayload.fixture.golden[String(payloadSize)].json);
+  const cases = [];
+  for (const name of Object.keys(valid)) {
+    const missing = structuredClone(valid);
+    delete missing[name];
+    cases.push([`missing ${name}`, missing]);
+    cases.push([`null ${name}`, { ...valid, [name]: null }]);
+  }
+  for (const name of Object.keys(valid.items[0])) {
+    for (const mutation of ['missing', 'null']) {
+      const bad = structuredClone(valid);
+      if (mutation === 'missing') delete bad.items[0][name];
+      else bad.items[0][name] = null;
+      cases.push([`${mutation} items[0].${name}`, bad]);
+    }
+  }
+  cases.push(['noncanonical int64', { ...valid, gold: '01' }]);
+  cases.push(['numeric int64', { ...valid, gold: 1 }]);
+  cases.push(['string int32', { ...valid, heading: '1' }]);
+  for (const [label, bad] of cases) {
+    test(`JSON codec rejection parity ${payloadSize}: ${label}`, () => {
+      const bytes = Buffer.from(JSON.stringify(bad));
+      let rawError;
+      let frameworkError;
+      try {
+        rawJson.decodeGameMessage(bytes);
+      } catch (error) {
+        rawError = error;
+      }
+      const message = { isEmpty: () => false, getString: () => bytes.toString('utf8') };
+      try {
+        decodeFrameworkPayloadMessage(
+          message,
+          undefined,
+          gamePayload.GameMessage,
+          'application/json',
+          'BenchGameMessage'
+        );
+      } catch (error) {
+        frameworkError = error;
+      }
+      assert.ok(rawError instanceof TypeError, 'binding codec must reject the contract violation');
+      assert.ok(frameworkError, 'framework typed codec must reject the contract violation');
+      assert.match(frameworkError.message, /PayloadDecodeFailed/);
+      assert.equal(rawError.constructor, frameworkError.cause.constructor);
+    });
+  }
+}

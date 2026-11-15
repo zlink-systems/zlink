@@ -14,7 +14,6 @@ require('reflect-metadata');
 const { Module, Injectable } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const { ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs');
-const { ZLinkPacket } = require('@zlink-systems/framework');
 const {
   ZLINK_PROTOBUF_CONTENT_TYPE
 } = require('@zlink-systems/framework-codec-protobuf/framework');
@@ -30,7 +29,6 @@ const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5234');
 const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5235');
 const jsonBody = argv.includes('--json-body');
 const packetName = jsonBody ? 'BenchGameMessage' : contract.PACKET_NAME;
-ZLinkPacket(packetName)(gamePayload.GameMessage);
 
 const metrics = new BenchServerMetrics();
 

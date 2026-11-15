@@ -1,9 +1,11 @@
 using System.Buffers.Binary;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Google.Protobuf;
-using Systems.Zlink.Stream.Connector.Contracts;
 using WithGrpcBench.Shared;
+using Zlink.Framework.Contracts.Codecs;
 
 const string golden = "0a1d4b4e4c5a04030201011d00000008070605040302011817161514131211";
 foreach (var size in new[] { 29, 127, 128, 1024 })
@@ -47,6 +49,22 @@ foreach (var size in new[] { 29, 127, 128, 1024 })
 }
 Console.WriteLine("dotnet raw wire identity: 29, 127, 128, 1024 bytes PASS");
 
+// The default codec is internal. Reflection is confined to this test oracle.
+var codecType = Assembly
+    .Load("Zlink.Framework")
+    .GetType(
+        "Zlink.Framework.Runtime.Messaging.ZLinkFrameworkJsonPayloadCodec",
+        throwOnError: true
+    )!;
+var frameworkJson = (IZLinkMessageSerializer)
+    codecType
+        .GetProperty("ReceiveSerializer", BindingFlags.Static | BindingFlags.NonPublic)!
+        .GetValue(null)!;
+
+var serializeFrameworkPart = codecType
+    .GetMethod("SerializePart", BindingFlags.Static | BindingFlags.NonPublic)!
+    .CreateDelegate<Func<object?, Type, Systems.Zlink.Message>>();
+
 using (
     var fixture = JsonDocument.Parse(
         File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "ladder-mixed-payload.json"))
@@ -83,8 +101,9 @@ using (
         if (expectedBytes.Length != byteLength)
             throw new InvalidOperationException($"Fixture byte length differs for {payloadSize}.");
         var rawBytes = BenchGamePayloads.EncodeStandard(game);
-        var frameworkPayload = game.ToJson();
-        var frameworkBytes = frameworkPayload.Payload.ToArray();
+        var frameworkBytes = frameworkJson
+            .Serialize(game, typeof(BenchGameMessage))
+            .Bytes.ToArray();
         if (!rawBytes.AsSpan().SequenceEqual(expectedBytes))
             throw new InvalidOperationException(
                 $"Raw System.Text.Json game bytes differ from the {payloadSize} fixture golden."
@@ -94,10 +113,11 @@ using (
                 $"Framework typed JSON game bytes differ from the {payloadSize} fixture golden."
             );
         var decodedRaw = BenchGamePayloads.DecodeStandard(expectedBytes);
-        var decodedFramework = new ZlinkStreamEncodedPayload(
-            ZlinkStreamCodec.Json,
-            expectedBytes
-        ).FromJson<BenchGameMessage>();
+        var decodedFramework = (BenchGameMessage)
+            frameworkJson.Deserialize(
+                ZLinkEncodedPayload.From(expectedBytes),
+                typeof(BenchGameMessage)
+            )!;
         if (
             !BenchGamePayloads.HasExpectedStamp(decodedRaw, 123, BenchPhase.Active, 456)
             || !BenchGamePayloads.HasExpectedStamp(decodedFramework, 123, BenchPhase.Active, 456)
@@ -105,8 +125,71 @@ using (
             throw new InvalidOperationException(
                 $"Game JSON stamp decode failed for {payloadSize}."
             );
+        if (
+            !BenchGamePayloads.EncodeStandard(decodedRaw).AsSpan().SequenceEqual(expectedBytes)
+            || !frameworkJson
+                .Serialize(decodedFramework, typeof(BenchGameMessage))
+                .Bytes.Span.SequenceEqual(expectedBytes)
+        )
+            throw new InvalidOperationException("JSON decoder changed body fields.");
+        var valid = JsonNode.Parse(expected)!.AsObject();
+        var invalid = new List<JsonObject>();
+        foreach (var name in valid.Select(property => property.Key))
+        {
+            var missing = (JsonObject)valid.DeepClone();
+            missing.Remove(name);
+            invalid.Add(missing);
+            var nullField = (JsonObject)valid.DeepClone();
+            nullField[name] = null;
+            invalid.Add(nullField);
+        }
+        foreach (var name in valid["items"]![0]!.AsObject().Select(property => property.Key))
+        {
+            var missing = (JsonObject)valid.DeepClone();
+            missing["items"]![0]!.AsObject().Remove(name);
+            invalid.Add(missing);
+            var nullField = (JsonObject)valid.DeepClone();
+            nullField["items"]![0]![name] = null;
+            invalid.Add(nullField);
+        }
+        foreach (var gold in new JsonNode[] { JsonValue.Create("01")!, JsonValue.Create(1)! })
+        {
+            var bad = (JsonObject)valid.DeepClone();
+            bad["gold"] = gold;
+            invalid.Add(bad);
+        }
+        var stringHeading = (JsonObject)valid.DeepClone();
+        stringHeading["heading"] = "1";
+        invalid.Add(stringHeading);
+        foreach (var bad in invalid)
+        {
+            var bytes = Encoding.UTF8.GetBytes(bad.ToJsonString());
+            var rawRejected = false;
+            var frameworkRejected = false;
+            try
+            {
+                BenchGamePayloads.DecodeStandard(bytes);
+            }
+            catch (JsonException)
+            {
+                rawRejected = true;
+            }
+            try
+            {
+                frameworkJson.Deserialize(
+                    ZLinkEncodedPayload.From(bytes),
+                    typeof(BenchGameMessage)
+                );
+            }
+            catch (JsonException)
+            {
+                frameworkRejected = true;
+            }
+            if (!rawRejected || !frameworkRejected)
+                throw new InvalidOperationException($"JSON rejection parity failed: {bad}");
+        }
         Console.WriteLine(
-            $"dotnet game JSON fixture {payloadSize}: raw + public Framework JSON codec encoding and decode PASS ({expectedBytes.Length} bytes)"
+            $"dotnet game JSON fixture {payloadSize}: binding + Framework typed JSON bytes, decode, rejection parity PASS ({expectedBytes.Length} bytes)"
         );
     }
 }

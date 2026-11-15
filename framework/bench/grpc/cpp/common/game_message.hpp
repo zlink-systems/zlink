@@ -5,6 +5,7 @@
 #include "bench_common.hpp"
 
 #include <zlink/json.hpp>
+#include <zlink/json_profile.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
@@ -45,9 +46,6 @@ struct game_message_t
     int32_t y = 7890;
     int32_t z = 654321;
 };
-
-void to_json (nlohmann::json &json, const game_item_t &value);
-void from_json (const nlohmann::json &json, game_item_t &value);
 
 inline size_t game_item_count (size_t payload_size)
 {
@@ -94,79 +92,6 @@ inline bool game_stamp_matches (
            && value.items.size () == game_item_count (payload_size);
 }
 
-inline nlohmann::json game_json (const game_message_t &value)
-{
-    return nlohmann::json{{"displayName", value.display_name},
-                          {"gold", std::to_string (value.gold)},
-                          {"heading", value.heading},
-                          {"hp", std::to_string (value.hp)},
-                          {"items", value.items},
-                          {"level", std::to_string (value.level)},
-                          {"mp", std::to_string (value.mp)},
-                          {"online", value.online},
-                          {"phase", std::to_string (value.phase)},
-                          {"playerId", value.player_id},
-                          {"roomId", value.room_id},
-                          {"run", std::to_string (value.run)},
-                          {"sentNs", std::to_string (value.sent_ns)},
-                          {"seq", std::to_string (value.seq)},
-                          {"session", value.session},
-                          {"x", value.x},
-                          {"y", value.y},
-                          {"z", value.z}};
-}
-
-inline void to_json (nlohmann::json &json, const game_item_t &value)
-{
-    json = nlohmann::json{{"count", value.count}, {"id", value.id}, {"slot", value.slot}};
-}
-
-inline void from_json (const nlohmann::json &json, game_item_t &value)
-{
-    json.at ("count").get_to (value.count);
-    json.at ("id").get_to (value.id);
-    json.at ("slot").get_to (value.slot);
-}
-
-inline void to_json (nlohmann::json &json, const game_message_t &value)
-{
-    json = game_json (value);
-}
-
-inline void from_json (const nlohmann::json &json, game_message_t &value)
-{
-    value.display_name = json.at ("displayName").get<std::string> ();
-    value.gold = std::stoll (json.at ("gold").get<std::string> ());
-    value.heading = json.at ("heading").get<int32_t> ();
-    value.hp = std::stoll (json.at ("hp").get<std::string> ());
-    value.items = json.at ("items").get<std::vector<game_item_t>> ();
-    value.level = std::stoll (json.at ("level").get<std::string> ());
-    value.mp = std::stoll (json.at ("mp").get<std::string> ());
-    value.online = json.at ("online").get<bool> ();
-    value.phase = std::stoll (json.at ("phase").get<std::string> ());
-    value.player_id = json.at ("playerId").get<std::string> ();
-    value.room_id = json.at ("roomId").get<std::string> ();
-    value.run = std::stoll (json.at ("run").get<std::string> ());
-    value.sent_ns = std::stoll (json.at ("sentNs").get<std::string> ());
-    value.seq = std::stoll (json.at ("seq").get<std::string> ());
-    value.session = json.at ("session").get<std::string> ();
-    value.x = json.at ("x").get<int32_t> ();
-    value.y = json.at ("y").get<int32_t> ();
-    value.z = json.at ("z").get<int32_t> ();
-}
-
-inline std::string encode_game_json (const game_message_t &value)
-{
-    return game_json (value).dump ();
-}
-
-inline game_message_t decode_game_json (const void *data, size_t size)
-{
-    return nlohmann::json::parse (static_cast<const char *> (data),
-                                  static_cast<const char *> (data) + size)
-      .get<game_message_t> ();
-}
-
 } // namespace zlink_cpp_bench
 
 namespace zlink::json
@@ -200,5 +125,19 @@ template <> struct dto_traits<zlink_cpp_bench::game_message_t>
                  field ("z", &zlink_cpp_bench::game_message_t::z)};
 };
 } // namespace zlink::json
+
+namespace zlink_cpp_bench
+{
+inline std::string encode_game_json (const game_message_t &value)
+{
+    return zlink::detail::json_profile::encode (value);
+}
+
+inline game_message_t decode_game_json (const void *data, size_t size)
+{
+    const auto *begin = static_cast<const char *> (data);
+    return zlink::detail::json_profile::decode<game_message_t> (begin, begin + size);
+}
+} // namespace zlink_cpp_bench
 
 #endif

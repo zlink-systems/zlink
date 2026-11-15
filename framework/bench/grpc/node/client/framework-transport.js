@@ -5,7 +5,6 @@ require('reflect-metadata');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const { ZLinkModule, ZLINK_ROUTE_CLIENT, zlinkFramework } = require('@zlink-systems/nestjs');
-const { ZLinkPacket } = require('@zlink-systems/framework');
 const {
   ZLINK_PROTOBUF_CONTENT_TYPE
 } = require('@zlink-systems/framework-codec-protobuf/framework');
@@ -18,7 +17,6 @@ const header = require('../shared/bench-metric-header');
 async function createFrameworkTransport(options) {
   const jsonBody = options.implementation === 'zlink-framework-node-json';
   const packetName = jsonBody ? 'BenchGameMessage' : contract.PACKET_NAME;
-  ZLinkPacket(packetName)(gamePayload.GameMessage);
   const createPayload = jsonBody
     ? (size, run, phase, sequence) =>
         gamePayload.createGameMessage(
