@@ -860,6 +860,150 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Theory]
+    [InlineData("absent", "$zlink.heartbeat.ping")]
+    [InlineData("absent", "$zlink.actor.bound")]
+    [InlineData("absent", "$zlink.actor.unbound")]
+    [InlineData("absent", "unknown.control")]
+    [InlineData("pre-ready", "$zlink.heartbeat.ping")]
+    [InlineData("pre-ready", "$zlink.actor.bound")]
+    [InlineData("pre-ready", "$zlink.actor.unbound")]
+    [InlineData("pre-ready", "unknown.control")]
+    [InlineData("closing", "$zlink.heartbeat.ping")]
+    [InlineData("closing", "$zlink.actor.bound")]
+    [InlineData("closing", "$zlink.actor.unbound")]
+    [InlineData("closing", "unknown.control")]
+    public async Task Issue4345_control_dispatch_is_independent_of_session_state(
+        string state,
+        string name
+    )
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        await using var provider = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime)
+            .BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket { BlockSendAsync = state == "closing" };
+        var routingId = RoutingId.From("state-control");
+        var decoded = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Control,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            name,
+            ZlinkStreamMetadata.Empty
+        );
+        var runner = new ZLinkRuntimeTaskRunner(
+            runtime.ErrorSink,
+            CancellationToken.None,
+            runtime.ExecutionOwner
+        );
+        using var jobs = new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                int.MaxValue,
+                2
+            )
+        );
+        var node = new ZLinkStreamNodeRuntime(
+            "state-control",
+            provider,
+            socket,
+            new TestSocketMonitor(),
+            typeof(SessionOrderingSession),
+            runner,
+            "test",
+            applicationJobQueue: jobs
+        );
+        ZLinkStreamSessionRuntime? session = null;
+        Task<bool>? closing = null;
+        try
+        {
+            if (state == "absent")
+            {
+                node.Start();
+                socket.EnqueuePacket(
+                    routingId,
+                    ZLinkStreamProtocolDefaults.EncodeHeader(decoded).Span,
+                    []
+                );
+                await WaitUntilAsync(() =>
+                    socket.DequeuedPacketCount == 1 && jobs.GetStatus().ReservedSupplyPermits == 0
+                );
+                Assert.Equal(0, node.SessionCount);
+            }
+            else
+            {
+                session = await ZLinkStreamSessionRuntime.CreateAsync(
+                    provider,
+                    socket,
+                    routingId,
+                    typeof(SessionOrderingSession),
+                    static _ => { },
+                    "test",
+                    TimeProvider.System,
+                    requireConnectionReady: true
+                );
+                if (state == "closing")
+                {
+                    closing = session.CloseForDrainAsync(CancellationToken.None).AsTask();
+                    await socket.SendAsyncStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                    Assert.True(session.IsTransportTerminating);
+                }
+                await session.DispatchControlPacketAsync(decoded, ReadOnlyMemory<byte>.Empty);
+            }
+            var frames = socket.SentFrames.ToArray();
+            if (name == "$zlink.heartbeat.ping")
+            {
+                Assert.Collection(
+                    frames.Skip(state == "closing" ? 1 : 0),
+                    frame =>
+                    {
+                        Assert.True(
+                            ZLinkStreamFrameCodec.TryDecode(frame, out var header, out var payload)
+                        );
+                        Assert.Equal(
+                            "$zlink.heartbeat.pong",
+                            ZLinkStreamProtocolDefaults.DecodeHeader(header.ToArray()).Name
+                        );
+                        Assert.Empty(payload.ToArray());
+                    }
+                );
+                Assert.Equal(0, socket.DisconnectCount);
+            }
+            else
+            {
+                await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.Contains(
+                    socket.SentFrames,
+                    frame =>
+                        ZLinkStreamFrameCodec.TryDecode(frame, out _, out var payload)
+                        && payload
+                            .ToArray()
+                            .SequenceEqual(
+                                Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec.EncodeProtocolError()
+                            )
+                );
+            }
+            Assert.Equal(0UL, jobs.GetStatus().ReservedSupplyPermits);
+            Assert.DoesNotContain("connected", lifetime.Events(routingId));
+        }
+        finally
+        {
+            socket.AllowSendAsync.TrySetResult();
+            if (closing is not null)
+                await closing;
+            if (session is not null)
+                await session.DisposeAsync();
+            await node.DisposeAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Theory]
     [InlineData("$zlink.heartbeat.ping")]
     [InlineData("$zlink.heartbeat.pong")]
     [InlineData("$zlink.future")]
@@ -922,7 +1066,38 @@ public sealed class StreamSessionForcedCleanupTests
             Assert.Equal(0, node.SessionCount);
             Assert.Equal(0UL, jobs.GetStatus().ReservedSupplyPermits);
             Assert.Empty(lifetime.Events(routingId));
-            Assert.Empty(socket.SentFrames);
+            if (name == "$zlink.heartbeat.ping")
+                Assert.Collection(
+                    socket.SentFrames,
+                    frame =>
+                    {
+                        Assert.True(
+                            ZLinkStreamFrameCodec.TryDecode(frame, out var decoded, out var body)
+                        );
+                        Assert.Equal(
+                            "$zlink.heartbeat.pong",
+                            ZLinkStreamProtocolDefaults.DecodeHeader(decoded.ToArray()).Name
+                        );
+                        Assert.Empty(body.ToArray());
+                    }
+                );
+            else if (name == "unknown.control")
+            {
+                Assert.Collection(
+                    socket.SentFrames,
+                    frame =>
+                    {
+                        Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out _, out var body));
+                        Assert.Equal(
+                            Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec.EncodeProtocolError(),
+                            body.ToArray()
+                        );
+                    }
+                );
+                Assert.Equal(1, socket.DisconnectCount);
+            }
+            else
+                Assert.Empty(socket.SentFrames);
 
             monitor.Emit(
                 new ZLinkBackendSocketMonitorEvent(

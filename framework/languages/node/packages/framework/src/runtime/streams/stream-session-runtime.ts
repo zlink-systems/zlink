@@ -228,31 +228,23 @@ export class ZLinkStreamSessionRuntime {
     this.serial.executeControl(async () => this.markConnected(localAddr, remoteAddr));
   }
 
+  recordInbound(): void {
+    this.lastInboundFrameAt = Math.max(this.lastInboundFrameAt, this.livenessClock.now());
+  }
+
   enqueuePacket(
     payload: Message,
     decodedHeader: ZLinkStreamFrameHeader,
     terminalOwner?: ZLinkRetainedStreamOwner,
     applicationJobPermit?: ApplicationJobPermitPort
   ): void {
-    this.lastInboundFrameAt = Math.max(this.lastInboundFrameAt, this.livenessClock.now());
+    this.recordInbound();
     let terminalReleased = false;
     const releaseTerminal = (): void => {
       if (terminalReleased) return;
       terminalReleased = true;
       terminalOwner?.close();
     };
-    if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
-      void this.handleControl(decodedHeader, payload)
-        .catch((error) => {
-          this.options.onError?.(error);
-        })
-        .finally(() => {
-          applicationJobPermit?.releaseAfterInternalProcessing();
-          payload.close();
-          releaseTerminal();
-        });
-      return;
-    }
     if (
       decodedHeader.kind === ZLinkStreamMessageKind.Response ||
       decodedHeader.kind === ZLinkStreamMessageKind.Error
@@ -298,7 +290,8 @@ export class ZLinkStreamSessionRuntime {
     );
   }
 
-  enqueueDisconnected(error?: unknown): void {
+  enqueueDisconnected(error?: unknown, closeReason?: string): void {
+    if (closeReason !== undefined) this.closeReason = closeReason;
     this.queueDisconnect(error);
   }
 
@@ -584,58 +577,6 @@ export class ZLinkStreamSessionRuntime {
       }
       payload.close();
     }
-  }
-
-  private async handleControl(header: ZLinkStreamFrameHeader, payload: Message): Promise<void> {
-    const payloadBytes = messageToBytes(payload);
-    if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
-      if (payloadBytes.length !== 0) {
-        this.logIgnoredControl(header.name, payloadBytes.length);
-      }
-      await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG);
-      return;
-    }
-    if (header.name === ZLINK_STREAM_HEARTBEAT_PONG) {
-      if (payloadBytes.length !== 0) {
-        this.logIgnoredControl(header.name, payloadBytes.length);
-      }
-      return;
-    }
-    if (
-      header.name === ZlinkStreamControlPacket.ActorBound ||
-      header.name === ZlinkStreamControlPacket.ActorUnbound
-    ) {
-      await this.closeForLiveness(
-        ZLinkStreamCloseReasonCode.ProtocolError,
-        'protocol_error',
-        `Unexpected stream actor control frame: ${header.name}`
-      );
-      return;
-    }
-    if (header.name.startsWith('$zlink.')) {
-      this.logIgnoredControl(header.name, payloadBytes.length);
-      return;
-    }
-    await this.closeForLiveness(
-      ZLinkStreamCloseReasonCode.ProtocolError,
-      'protocol_error',
-      `Unknown stream control frame: ${header.name}`
-    );
-  }
-
-  private logIgnoredControl(name: string, payloadLength: number): void {
-    STREAM_RUNTIME_LOGGER.emit({
-      eventName: 'zlink.stream.control_ignored',
-      timestamp: new Date(),
-      severityNumber: SeverityNumber.DEBUG,
-      severityText: 'DEBUG',
-      body: `Ignored STREAM control name=${name} payloadBytes=${payloadLength} peerSessionRid=${this.stream.sessionId}`,
-      attributes: {
-        control_name: name,
-        payload_bytes: payloadLength,
-        peer_session_rid: this.stream.sessionId
-      }
-    });
   }
 
   private scheduleLivenessCheck(): void {
@@ -1058,6 +999,75 @@ export class ZLinkStreamSessionNodeRuntime {
     });
   }
 
+  private async handleControl(
+    routingId: unknown,
+    header: ZLinkStreamFrameHeader,
+    payload: Message
+  ): Promise<void> {
+    const session = this.sessions.get(streamSessionIdFromRoutingId(routingId));
+    session?.recordInbound();
+    const stream =
+      session?.stream ??
+      new ZLinkManagedStream(
+        this.options.socket,
+        routingId,
+        this.options.messageSerializers,
+        this.options.nativeSessionService,
+        this.options.meshCompletions,
+        undefined,
+        this.options.nativeSessionRouteForMesh
+      );
+    const payloadBytes = messageToBytes(payload);
+    if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
+      if (payloadBytes.length !== 0) {
+        this.logIgnoredControl(stream, header.name, payloadBytes.length);
+      }
+      await stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG);
+      return;
+    }
+    if (header.name === ZLINK_STREAM_HEARTBEAT_PONG) {
+      if (payloadBytes.length !== 0) {
+        this.logIgnoredControl(stream, header.name, payloadBytes.length);
+      }
+      return;
+    }
+    if (
+      header.name === ZlinkStreamControlPacket.ActorBound ||
+      header.name === ZlinkStreamControlPacket.ActorUnbound
+    ) {
+      await stream.closeForReason(
+        ZLinkStreamCloseReasonCode.ProtocolError,
+        `Unexpected stream actor control frame: ${header.name}`
+      );
+      session?.enqueueDisconnected(undefined, 'protocol_error');
+      return;
+    }
+    if (header.name.startsWith('$zlink.')) {
+      this.logIgnoredControl(stream, header.name, payloadBytes.length);
+      return;
+    }
+    await stream.closeForReason(
+      ZLinkStreamCloseReasonCode.ProtocolError,
+      `Unknown stream control frame: ${header.name}`
+    );
+    session?.enqueueDisconnected(undefined, 'protocol_error');
+  }
+
+  private logIgnoredControl(stream: ZLinkManagedStream, name: string, payloadLength: number): void {
+    STREAM_RUNTIME_LOGGER.emit({
+      eventName: 'zlink.stream.control_ignored',
+      timestamp: new Date(),
+      severityNumber: SeverityNumber.DEBUG,
+      severityText: 'DEBUG',
+      body: `Ignored STREAM control name=${name} payloadBytes=${payloadLength} peerSessionRid=${stream.sessionId}`,
+      attributes: {
+        control_name: name,
+        payload_bytes: payloadLength,
+        peer_session_rid: stream.sessionId
+      }
+    });
+  }
+
   private async runReceiveLoop(signal: AbortSignal): Promise<void> {
     while (!this.isReceiveStopped(signal)) {
       let permit: ApplicationJobPermitPort | undefined;
@@ -1125,14 +1135,34 @@ export class ZLinkStreamSessionNodeRuntime {
       }
 
       this.activityVersion += 1;
+      let decodedHeader: ZLinkStreamFrameHeader;
+      try {
+        decodedHeader = decodeStreamHeader(
+          header.data(),
+          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+        );
+      } catch (error) {
+        session = this.getOrCreateSession(routingId);
+        throw error;
+      }
+      payload = ownedMessage(body.data());
+      if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
+        const controlPayload = payload;
+        void this.handleControl(routingId, decodedHeader, controlPayload)
+          .catch((error) => this.options.onError?.(error))
+          .finally(() => {
+            permit.releaseAfterInternalProcessing();
+            controlPayload.close();
+            this.recyclePacket(packet);
+          });
+        payload = undefined;
+        releasePermitOnFailure = false;
+        packetTransferred = true;
+        return;
+      }
       session = this.getOrCreateSession(routingId);
       if (session === undefined) return;
       this.applyPendingConnectionMetadata(session);
-      const decodedHeader = decodeStreamHeader(
-        header.data(),
-        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
-      );
-      payload = ownedMessage(body.data());
       const terminalCompletion =
         decodedHeader.kind === ZLinkStreamMessageKind.Response ||
         decodedHeader.kind === ZLinkStreamMessageKind.Error;
@@ -1157,6 +1187,7 @@ export class ZLinkStreamSessionNodeRuntime {
       packetTransferred = true;
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
+      if (routingId !== null) session ??= this.findSession(routingId);
       if (routingId !== null && session !== undefined) {
         this.handleMalformedPacket(routingId, session, failure);
       } else {

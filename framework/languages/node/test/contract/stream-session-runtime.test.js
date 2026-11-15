@@ -1213,6 +1213,59 @@ test('scheduled heartbeat and transport timeout progress before handler terminal
   assert.equal(disconnected, true);
 });
 
+for (const state of ['absent', 'pre-ready', 'closing']) {
+  for (const name of ['$zlink.heartbeat.ping', '$zlink.actor.bound', '$zlink.actor.unbound', 'unknown.control']) {
+    test(`issue4345 control ${name} with session ${state}`, async () => {
+      const socket = new FakeStreamSocket();
+      const clock = new FakeLivenessClock();
+      const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+      let release;
+      const held = new Promise(resolve => { release = resolve; });
+      const created = [];
+      const runtime = createStreamRuntime({
+        socket, livenessClock: clock, applicationJobQueue: queue,
+        sessionFactory(context) {
+          created.push(context);
+          const session = { context, async onDisconnected() { await held; } };
+          return state === 'pre-ready' ? held.then(() => session) : session;
+        }
+      });
+      try {
+        runtime.start();
+        if (state !== 'absent') {
+          runtime.markConnected('state-control');
+          await clock.flush();
+          if (state === 'closing') {
+            runtime.markDisconnected('state-control');
+            await clock.flush();
+            assert.equal(runtime.findSession('state-control').isDisconnected, true);
+          }
+        }
+        const existing = runtime.findSession('state-control');
+        socket.emitPacket('state-control', fakeHeader({
+          kind: connector.ZlinkStreamMessageKind.Control,
+          codec: connector.ZlinkStreamCodec.Raw,
+          flags: connector.ZlinkStreamHeaderFlags.None, name
+        }), fakeMessage(''));
+        await waitForCondition(() => socket.sent.length > 0, 'state-independent control dispatch');
+        await waitForCondition(() => queue.snapshot().reservedSupplyPermits === 0n, 'control permit returned');
+        assert.equal(created.length, state === 'absent' ? 0 : 1);
+        assert.equal(runtime.findSession('state-control'), existing);
+        if (name === '$zlink.heartbeat.ping') {
+          assert.equal(controlHeader(socket.sent[0]).name, '$zlink.heartbeat.pong');
+          assert.deepEqual(socket.disconnects, []);
+        } else {
+          assert.equal(decodeSessionClosing(socket.sent[0]).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.ProtocolError);
+          assert.deepEqual(socket.disconnects, ['state-control']);
+        }
+      } finally {
+        release();
+        await runtime.dispose();
+      }
+    });
+  }
+}
+
 test('STREAM control returns its permit while the same session application turn awaits', async () => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();

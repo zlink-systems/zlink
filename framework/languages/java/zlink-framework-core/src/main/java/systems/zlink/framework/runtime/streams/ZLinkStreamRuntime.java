@@ -1374,18 +1374,16 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                 + routingId,
                         sendFailure);
             }
-            if (messageTooLarge) {
-                try {
-                    stream.disconnectPeer(routingId);
-                } catch (RuntimeException disconnectFailure) {
-                    LOGGER.log(
-                            Level.FINE,
-                            "STREAM EMSGSIZE disconnect failed: "
-                                    + streamNode.name()
-                                    + ":"
-                                    + routingId,
-                            disconnectFailure);
-                }
+            try {
+                stream.disconnectPeer(routingId);
+            } catch (RuntimeException disconnectFailure) {
+                LOGGER.log(
+                        Level.FINE,
+                        "STREAM protocol-error disconnect failed: "
+                                + streamNode.name()
+                                + ":"
+                                + routingId,
+                        disconnectFailure);
             }
             if (session != null) {
                 recordSessionClosed(session, "protocol_error");

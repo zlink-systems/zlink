@@ -24,7 +24,14 @@ class session_t final : public fw::packet_stream_session_t
     std::promise<void> entered;
     std::atomic_bool completed{false};
 
-    fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
+    std::function<fw::task_t<void> (fw::stream_t &)> on_connected_hook;
+
+    fw::task_t<void> on_connected (fw::stream_t &stream) override
+    {
+        if (on_connected_hook)
+            co_await on_connected_hook (stream);
+        co_return;
+    }
     fw::task_t<void> on_disconnected (fw::stream_t &) override { co_return; }
     fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
     fw::task_t<void> on_packet (fw::stream_t &stream,
@@ -40,7 +47,7 @@ class session_t final : public fw::packet_stream_session_t
     }
 };
 
-int server_cases (bool debug, bool core)
+int server_cases (bool debug, bool core, std::string_view closing_control = {})
 {
     int failures = 0;
     auto check = [&] (bool ok, const char *label) {
@@ -88,6 +95,13 @@ int server_cases (bool debug, bool core)
     auto runtime = fw::detail::stream_runtime_t::from (builder);
     auto provider = services.build_provider ();
     session_t session;
+    if (!closing_control.empty ()) {
+        session.on_connected_hook = [&session] (fw::stream_t &stream) -> fw::task_t<void> {
+            co_await stream.close ();
+            session.entered.set_value ();
+            co_await session.release.task ();
+        };
+    }
     auto listeners = std::make_shared<fw::runtime::listener_status_registry_t> ();
     auto jobs = std::make_shared<fw::runtime::application_job_queue_t> (
       fw::runtime::application_job_queue_configuration_t{});
@@ -103,6 +117,47 @@ int server_cases (bool debug, bool core)
     wire::asio::io_context io;
     const wire::tcp::endpoint address (wire::asio::ip::address_v4::loopback (),
                                        fw::tests::endpoint_port (endpoint));
+    if (!closing_control.empty ()) {
+        wire::tcp::socket peer (io);
+        auto entered = session.entered.get_future ();
+        peer.connect (address);
+        check (entered.wait_for (std::chrono::seconds (5)) == std::future_status::ready,
+               "issue4345 public stream close entered before control");
+        const auto control = wire::frame (std::string (closing_control));
+        wire::asio::write (peer, wire::asio::buffer (control));
+        if (closing_control == "$zlink.heartbeat.ping") {
+            const auto pong = wire::read_server_frame (peer);
+            check (!pong.first && pong.second == wire::frame ("$zlink.heartbeat.pong"),
+                   "issue4345 closing session still responds with pong");
+        } else {
+            std::array<std::uint8_t, 1> response{};
+            const auto error = wire::read_exact (peer, wire::asio::buffer (response));
+            check (error == wire::asio::error::eof || error == wire::asio::error::connection_reset,
+                   "issue4345 closing session terminates invalid control");
+        }
+        check (!session.completed.load (), "issue4345 callback remains held through control");
+        session.release.complete (fw::result_t<void>::success ());
+        host.stop ();
+        if (mesh)
+            mesh->stop ();
+        return failures;
+    }
+    {
+        wire::tcp::socket peer (io);
+        peer.connect (address);
+        const auto ping = wire::frame ("$zlink.heartbeat.ping");
+        wire::asio::write (peer, wire::asio::buffer (ping));
+        const auto pong = wire::read_server_frame (peer);
+        check (!pong.first && pong.second == wire::frame ("$zlink.heartbeat.pong"),
+               "issue4345 first control replies without an application packet");
+    }
+    for (const auto *state : {"absent", "pre-ready"}) {
+        for (const auto *name : {"$zlink.heartbeat.ping", "$zlink.actor.bound",
+                                 "$zlink.actor.unbound", "unknown.control"})
+            std::cout
+              << "issue4345 session " << state << " control " << name
+              << ": SKIP (wire and existing host test access cannot fix Core registry state)\n";
+    }
     {
         wire::tcp::socket peer (io);
         peer.connect (address);
@@ -222,6 +277,8 @@ int main (int argc, char **argv)
         return 1;
     }
     const std::string mode = argc > 1 ? argv[1] : "server";
+    if (mode.starts_with ("closing:"))
+        return server_cases (false, true, std::string_view (mode).substr (8)) ? 1 : 0;
     if (mode == "connector")
         return wire::connector_cases ([] (const wire::sc::connector_options_t &options, auto test) {
             auto connector = wire::sc::connector_factory_t::create (options);

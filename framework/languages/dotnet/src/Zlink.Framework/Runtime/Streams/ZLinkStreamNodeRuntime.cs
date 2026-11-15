@@ -503,12 +503,41 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
             if (decoded.Kind == ZlinkStreamMessageKind.Control)
             {
-                // Control owns only finite infrastructure processing. The frame retains
-                // its ingress permit until that processing has ended, including a drop.
+                // Control is transport infrastructure and does not create an application session.
                 if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } session)
                     await session
                         .DispatchControlPacketAsync(decoded, payload.AsReadOnlyMemory())
                         .ConfigureAwait(false);
+                else
+                {
+                    var stream = new ZLinkManagedStream(
+                        Socket,
+                        routingId,
+                        _runtime.Registration.Codecs,
+                        _transport
+                    );
+                    try
+                    {
+                        ZLinkStreamControlFrames.Dispatch(
+                            stream,
+                            decoded,
+                            payload.AsReadOnlyMemory(),
+                            ZLinkMessageFlowTracer.GetLogger(_runtime.Services)
+                        );
+                    }
+                    catch (Exception protocolError)
+                    {
+                        _runtime.ErrorSink.ReportHandlerException(protocolError);
+                        try
+                        {
+                            ZLinkStreamControlFrames.SendProtocolError(stream);
+                        }
+                        finally
+                        {
+                            await stream.CloseAsync().ConfigureAwait(false);
+                        }
+                    }
+                }
                 return true;
             }
 
