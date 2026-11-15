@@ -133,11 +133,14 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         ValidateAuthorityKey(key);
         var stored = await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false);
-        return stored is null
+        ZLinkAuthorityReadResult result = stored is null
             ? new ZLinkAuthorityReadResult.Missing(
                 await ReadStoreNowAsync(cancellationToken).ConfigureAwait(false)
             )
             : new ZLinkAuthorityReadResult.Found(stored.Snapshot);
+        if (AuthorityObservedAsync is { } observed)
+            await observed(key, stored?.Snapshot.StoreVersion).ConfigureAwait(false);
+        return result;
     }
 
     public async ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
@@ -491,6 +494,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                         current.Snapshot.OwnerLeaseGeneration
                     )
                 );
+            if (AuthorityObservedAsync is { } observed)
+                await observed(key, meta is null ? null : applied.PutVersions[metaKey].Value)
+                    .ConfigureAwait(false);
             return meta is null
                 ? new ZLinkAuthorityCompareExchangeResult.Deleted(
                     applied.PutVersions.Values.Single().Value,
@@ -4420,9 +4426,14 @@ internal sealed partial class ZLinkProviderLocationRepository
             if (current is null)
                 return new ZLinkObjectCommitResult.Stale();
             if (!MatchesReservation(current, reservation))
+            {
+                if (current.Meta.ReservedCreation is null && AuthorityObservedAsync is { } observed)
+                    await observed(reservation.Key, current.Snapshot.StoreVersion)
+                        .ConfigureAwait(false);
                 return current.Meta.ReservedCreation is null
                     ? new ZLinkObjectCommitResult.AlreadyCommitted(current.Snapshot)
                     : new ZLinkObjectCommitResult.Stale();
+            }
             var target = await ReadEligibleTargetAsync(
                     reservation.TargetDescriptor,
                     reservation.TargetNodeLifecycleGeneration,
@@ -4505,6 +4516,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                 continue;
             }
             var applied = (ZLinkStoreWriteResult.Applied)result;
+            if (AuthorityObservedAsync is { } committedObserver)
+                await committedObserver(
+                        reservation.Key,
+                        applied.PutVersions[AuthorityMetaKey(reservation.Key)].Value
+                    )
+                    .ConfigureAwait(false);
             return new ZLinkObjectCommitResult.Committed(
                 Snapshot(
                     meta,
