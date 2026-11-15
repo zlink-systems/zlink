@@ -280,11 +280,12 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     public void EnqueuePacket(
         Message header,
         Message payload,
+        ZlinkStreamHeader decoded,
         ZLinkApplicationJobQueueLease? applicationJobAdmission = null
     )
     {
         if (
-            TryEnqueuePacket(header, payload, applicationJobAdmission)
+            TryEnqueuePacket(header, payload, decoded, applicationJobAdmission)
             == ZLinkSerialPostAdmission.Accepted
         )
             return;
@@ -294,6 +295,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     public ZLinkSerialPostAdmission TryEnqueuePacket(
         Message header,
         Message payload,
+        ZlinkStreamHeader decoded,
         ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
         IDisposable? payloadOwner = null
     )
@@ -301,9 +303,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         if (Volatile.Read(ref _applicationDispatchClosed) != 0)
             return ZLinkSerialPostAdmission.Closed;
         _liveness.RecordInbound();
-        var applicationInbound = ZlinkStreamHeaderCodec.IsApplicationHeader(
-            header.AsReadOnlySpan()
-        );
         var admission = _serial.ExecuteApplication(
             async cancellationToken =>
             {
@@ -311,13 +310,14 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 using var admissionScope = applicationJobAdmission is { } admission
                     ? ZLinkApplicationJobQueueInvocation.Enter(admission)
                     : null;
-                await DispatchPacketAsync(header, payload, cancellationToken).ConfigureAwait(false);
+                await DispatchPacketAsync(header, payload, decoded, cancellationToken)
+                    .ConfigureAwait(false);
             },
             Math.Max(payload.Size, 0),
             Math.Max(header.Size, 0),
             applicationJobAdmission is not null
         );
-        if (admission == ZLinkSerialPostAdmission.Accepted && applicationInbound)
+        if (admission == ZLinkSerialPostAdmission.Accepted)
             _liveness.RecordApplicationInbound();
         return admission;
     }
@@ -363,34 +363,32 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         return false;
     }
 
-    public ZLinkSerialPostAdmission TryEnqueueControlPacket(
-        Message header,
-        Message payload,
-        ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
-        IDisposable? payloadOwner = null
+    public async ValueTask<bool> DispatchControlPacketAsync(
+        ZlinkStreamHeader decoded,
+        ReadOnlyMemory<byte> payload
     )
     {
-        _liveness.RecordInbound();
-        var applicationInbound = ZlinkStreamHeaderCodec.IsApplicationHeader(
-            header.AsReadOnlySpan()
-        );
-        var admission = _serial.ExecuteControl(
-            async cancellationToken =>
-            {
-                using var payloadOwnerScope = payloadOwner;
-                using var admissionScope = applicationJobAdmission is { } admission
-                    ? ZLinkApplicationJobQueueInvocation.Enter(admission)
-                    : null;
-                await DispatchPacketAsync(header, payload, cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-            },
-            Math.Max(payload.Size, 0),
-            Math.Max(header.Size, 0),
-            applicationJobAdmission is not null
-        );
-        if (admission == ZLinkSerialPostAdmission.Accepted && applicationInbound)
-            _liveness.RecordApplicationInbound();
-        return admission;
+        try
+        {
+            return await _lane
+                .RunAsync(() =>
+                {
+                    if (
+                        (_requireConnectionReady && !_connectionReady.Task.IsCompletedSuccessfully)
+                        || IsClosing
+                    )
+                        return false;
+                    _liveness.RecordInbound();
+                    ZLinkStreamControlFrames.Dispatch(Stream, decoded, payload, _logger);
+                    return true;
+                })
+                .ConfigureAwait(false);
+        }
+        catch (Exception protocolError)
+        {
+            await CloseForProtocolErrorAsync(protocolError).ConfigureAwait(false);
+            return false;
+        }
     }
 
     public void CheckLiveness()
@@ -578,6 +576,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private async ValueTask DispatchPacketAsync(
         Message header,
         Message payload,
+        ZlinkStreamHeader decoded,
         CancellationToken cancellationToken
     )
     {
@@ -586,30 +585,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         {
             if (!await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false))
                 return;
-            ZlinkStreamHeader decoded;
-            try
-            {
-                decoded = ZLinkStreamProtocolDefaults.DecodeHeader(
-                    header.AsReadOnlyMemory(),
-                    _flow.CaptureEnabled
-                );
-                if (decoded.Kind == ZlinkStreamMessageKind.Control)
-                {
-                    ZLinkStreamControlFrames.Dispatch(
-                        Stream,
-                        decoded,
-                        payload.AsReadOnlyMemory(),
-                        _logger
-                    );
-                    return;
-                }
-            }
-            catch (Exception protocolError)
-            {
-                await CloseForProtocolErrorAsync(protocolError).ConfigureAwait(false);
-                return;
-            }
-
             using var currentFlow = ZLinkFlowContext.Enter(
                 decoded.FlowId,
                 decoded.FlowOrigin is { } streamOrigin
@@ -730,7 +705,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         }
     }
 
-    private async ValueTask CloseForProtocolErrorAsync(Exception error)
+    internal async ValueTask CloseForProtocolErrorAsync(Exception error)
     {
         TryScheduleTerminal(
             ZlinkStreamCloseReason.ProtocolError,

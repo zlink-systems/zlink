@@ -852,6 +852,43 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void controlReturnsItsPermitWhileTheSameSessionApplicationTurnAwaits() throws Exception {
+        TestSession.holdFirstDispatch = true;
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("held", "{}"));
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+        TestSession session = awaitSession();
+        try {
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+            awaitCondition(
+                    () ->
+                            lastRegistration
+                                            .applicationJobQueue()
+                                            .snapshot()
+                                            .reservedSupplyPermits()
+                                    == 0);
+            assertFalse(session.firstDispatch.isDone());
+            stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PING));
+            assertTrue(stream.heartbeatPongAsyncAttempted.await(5, TimeUnit.SECONDS));
+            awaitCondition(
+                    () ->
+                            lastRegistration
+                                            .applicationJobQueue()
+                                            .snapshot()
+                                            .reservedSupplyPermits()
+                                    == 0);
+            assertEquals(List.of(0), stream.heartbeatPongPayloadLengths);
+            assertEquals(
+                    0, lastRegistration.applicationJobQueue().snapshot().queuedApplicationJobs());
+            assertFalse(session.firstDispatch.isDone());
+            assertEquals(1, session.dispatchCount.get());
+        } finally {
+            session.firstDispatch.complete(null);
+        }
+    }
+
+    @Test
     void continuesReceivingAcrossSerializedSessionDispatch() throws Exception {
         TestSession.holdFirstDispatch = true;
         FakeStream stream = new FakeStream();

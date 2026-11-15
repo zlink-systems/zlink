@@ -4,6 +4,7 @@ using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Tests.Common;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -36,36 +37,18 @@ public sealed class SessionJobQueueLoadTests
                     .StreamNodes.Values.Single()
                     .BoundEndpoint
             );
-            using var connectConcurrency = new SemaphoreSlim(128);
-            var connected = await Task.WhenAll(
-                Enumerable
-                    .Range(0, sessionCount)
-                    .Select(async _ =>
-                    {
-                        await connectConcurrency.WaitAsync();
-                        try
-                        {
-                            var connector = ZlinkStreamConnectorFactory.Create(
-                                new ZlinkStreamConnectorOptions
-                                {
-                                    Endpoint = new Uri(endpoint),
-                                    DispatchMode = ZlinkStreamDispatchMode.Immediate,
-                                    ConnectTimeout = TimeSpan.FromSeconds(30),
-                                    RequestTimeout = TimeSpan.FromSeconds(1),
-                                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
-                                }
-                            );
-                            lock (connectors)
-                                connectors.Add(connector);
-                            await connector.Connect.Async();
-                            return connector;
-                        }
-                        finally
-                        {
-                            connectConcurrency.Release();
-                        }
-                    })
+            var connected = await StreamConnectionHarness.ConnectAsync(
+                connectors,
+                sessionCount,
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri(endpoint),
+                    DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                    ConnectTimeout = TimeSpan.FromSeconds(30),
+                    RequestTimeout = TimeSpan.FromSeconds(1),
+                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                }
             );
             await host
                 .Services.GetRequiredService<SessionCount>()

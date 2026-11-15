@@ -1213,6 +1213,48 @@ test('scheduled heartbeat and transport timeout progress before handler terminal
   assert.equal(disconnected, true);
 });
 
+test('STREAM control returns its permit while the same session application turn awaits', async () => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+  let entered;
+  let release;
+  let completed = false;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    applicationJobQueue: queue,
+    sessionFactory(context) {
+      return { context, async onDispatch() { entered(); await held; completed = true; } };
+    }
+  });
+  try {
+    runtime.start();
+    runtime.markConnected('control-permit-held-turn');
+    await clock.flush();
+    socket.emitPacket('control-permit-held-turn', fakeHeader({ name: 'Held' }), fakeMessage(''));
+    await started;
+    await waitForCondition(() => queue.snapshot().reservedSupplyPermits === 0n, 'handler entry returns permit');
+    assert.equal(completed, false);
+    socket.emitPacket('control-permit-held-turn', fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name: '$zlink.heartbeat.ping'
+    }), fakeMessage(''));
+    await waitForCondition(() => socket.sent.some(sent => controlHeader(sent).name === '$zlink.heartbeat.pong'), 'control before handler completion');
+    await waitForCondition(() => queue.snapshot().reservedSupplyPermits === 0n, 'control returns permit');
+    assert.equal(completed, false);
+    assert.equal(queue.snapshot().queuedApplicationJobs, 0n);
+  } finally {
+    release();
+    await runtime.dispose();
+  }
+  assert.equal(completed, true);
+});
+
 test('stream heartbeat control bypasses a blocked application handler', async (t) => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
