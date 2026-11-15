@@ -182,7 +182,6 @@ export class ZLinkActorRuntimeState {
   private createRequestPayloadValue: Buffer | undefined;
   private ownsLocationValue = false;
   private locationGenerationValue: bigint | undefined;
-  private ownerLeaseGenerationValue: bigint | undefined;
   private movingValue = false;
   private deferredJoinPendingValue = false;
   private destroyTask: Promise<void> | undefined;
@@ -292,10 +291,6 @@ export class ZLinkActorRuntimeState {
     return this.locationGenerationValue;
   }
 
-  get ownerLeaseGeneration(): bigint | undefined {
-    return this.ownerLeaseGenerationValue;
-  }
-
   get isSteadyReady(): boolean {
     return (
       this.actorValue !== undefined &&
@@ -358,10 +353,6 @@ export class ZLinkActorRuntimeState {
 
   setLocationGeneration(generation: bigint): void {
     this.locationGenerationValue = generation;
-  }
-
-  setOwnerLeaseGeneration(generation: bigint): void {
-    this.ownerLeaseGenerationValue = generation;
   }
 
   getOrStartDestroy(
@@ -594,7 +585,6 @@ export class ZLinkActorRuntimeState {
     this.createRequestPayloadValue = undefined;
     this.ownsLocationValue = false;
     this.locationGenerationValue = undefined;
-    this.ownerLeaseGenerationValue = undefined;
     this.movingValue = false;
     this.deferredJoinPendingValue = false;
     this.destroyTask = undefined;
@@ -617,7 +607,6 @@ export class ZLinkActorRuntimeState {
     this.remoteActorPacketTargetValue = undefined;
     this.createRequestPayloadValue = undefined;
     this.locationGenerationValue = undefined;
-    this.ownerLeaseGenerationValue = undefined;
     this.movingValue = false;
     this.deferredJoinPendingValue = false;
     this.destroyTask = undefined;

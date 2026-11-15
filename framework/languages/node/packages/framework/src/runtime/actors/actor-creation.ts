@@ -66,9 +66,6 @@ export class ZLinkActorCreationCoordinator {
         if (activation.generation !== undefined) {
           state.setLocationGeneration(activation.generation);
         }
-        if (activation.ownerLeaseGeneration !== undefined) {
-          state.setOwnerLeaseGeneration(activation.ownerLeaseGeneration);
-        }
         state.markLocationOwned();
         return activation.activated;
       }

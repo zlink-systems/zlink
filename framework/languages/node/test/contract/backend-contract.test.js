@@ -1618,6 +1618,8 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
 
   try {
     await runtime.start();
+    assert.equal(runtime.primaryMeshNode.status().state, framework.MeshNodeRuntimeState.Preparing);
+    await runtime.publishMeshNodeState(framework.ZLinkFrameworkRuntimeState.Serving);
     sender.setBind(ANY_LOOPBACK_PORT);
     sender.start();
     senderPump = new backend.ZLinkMeshDispatchPump(sender, {
