@@ -466,7 +466,13 @@ internal static class BenchMeasurement
                     }
                     catch (Exception error)
                     {
-                        streamMetrics.Complete(started, false, error);
+                        streamMetrics.Complete(
+                            started,
+                            false,
+                            error,
+                            Stopwatch.GetTimestamp(),
+                            sequence
+                        );
                     }
                 }
                 try
@@ -479,13 +485,16 @@ internal static class BenchMeasurement
                         .GetAwaiter()
                         .GetResult();
                 }
-                catch (TimeoutException)
+                catch (Exception error)
+                    when (
+                        error is TimeoutException
+                        || error is OperationCanceledException
+                            && operationCancellation.IsCancellationRequested
+                    )
                 {
-                    streamMetrics.FreezeTerminal();
-                    operationCancellation.Cancel();
+                    // Outstanding requests are abandoned by the terminal snapshot.
                 }
-                catch (OperationCanceledException)
-                    when (operationCancellation.IsCancellationRequested)
+                finally
                 {
                     streamMetrics.FreezeTerminal();
                 }
@@ -493,6 +502,8 @@ internal static class BenchMeasurement
         );
         foreach (var streamMetrics in locals)
             metrics.MergeFrom(streamMetrics);
+        // All stream snapshots must exclude the shared cancellation's terminal callbacks.
+        operationCancellation.Cancel();
     }
 
     private static async Task ObserveGameJsonRequestReplyAsync(
@@ -520,7 +531,7 @@ internal static class BenchMeasurement
         }
         catch (Exception error)
         {
-            metrics.Complete(started, false, error);
+            metrics.Complete(started, false, error, Stopwatch.GetTimestamp(), sequence);
         }
     }
 
@@ -614,7 +625,13 @@ internal static class BenchMeasurement
                     }
                     catch (Exception error)
                     {
-                        streamMetrics.Complete(started, false, error);
+                        streamMetrics.Complete(
+                            started,
+                            false,
+                            error,
+                            Stopwatch.GetTimestamp(),
+                            sequence
+                        );
                     }
                 }
                 try
@@ -627,13 +644,16 @@ internal static class BenchMeasurement
                         .GetAwaiter()
                         .GetResult();
                 }
-                catch (TimeoutException)
+                catch (Exception error)
+                    when (
+                        error is TimeoutException
+                        || error is OperationCanceledException
+                            && operationCancellation.IsCancellationRequested
+                    )
                 {
-                    streamMetrics.FreezeTerminal();
-                    operationCancellation.Cancel();
+                    // Outstanding requests are abandoned by the terminal snapshot.
                 }
-                catch (OperationCanceledException)
-                    when (operationCancellation.IsCancellationRequested)
+                finally
                 {
                     streamMetrics.FreezeTerminal();
                 }
@@ -641,6 +661,8 @@ internal static class BenchMeasurement
         );
         foreach (var streamMetrics in locals)
             metrics.MergeFrom(streamMetrics);
+        // All stream snapshots must exclude the shared cancellation's terminal callbacks.
+        operationCancellation.Cancel();
     }
 
     private static async Task ObserveRequestReplyAsync(
@@ -666,7 +688,7 @@ internal static class BenchMeasurement
         }
         catch (Exception error)
         {
-            metrics.Complete(started, false, error);
+            metrics.Complete(started, false, error, Stopwatch.GetTimestamp(), sequence);
         }
     }
 

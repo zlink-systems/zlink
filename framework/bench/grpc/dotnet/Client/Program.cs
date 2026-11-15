@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Google.Protobuf;
+using Grpc.Core;
 using Grpc.Net.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -861,6 +862,8 @@ internal sealed class RawBenchSocket : IDisposable
 
 internal sealed class SourceMetrics(int sampleLimit)
 {
+    private static readonly bool TraceErrors =
+        Environment.GetEnvironmentVariable("ZLINK_BENCH_TRACE_ERRORS") == "1";
     private const int ErrorKindLimit = 8;
     private const int ErrorMessageLimit = 200;
     private readonly object gate = new();
@@ -914,7 +917,7 @@ internal sealed class SourceMetrics(int sampleLimit)
         Complete(started, success, error, Stopwatch.GetTimestamp());
     }
 
-    internal void Complete(long started, bool success, Exception? error, long now)
+    internal void Complete(long started, bool success, Exception? error, long now, ulong? sequence = null)
     {
         var elapsed = (long)((now - started) * 1_000_000.0 / Stopwatch.Frequency);
         lock (gate)
@@ -930,7 +933,25 @@ internal sealed class SourceMetrics(int sampleLimit)
             {
                 errors++;
                 if (error is not null)
+                {
                     RecordError(error);
+                    if (TraceErrors)
+                        Console.Error.WriteLine(JsonSerializer.Serialize(new
+                        {
+                            diagnostic = "bench-request-error",
+                            sequence,
+                            phase = Phase.ToString(),
+                            boundary = now < activeDeadline ? "window" : "drain",
+                            timestamp = now,
+                            deadline = activeDeadline,
+                            utc = DateTimeOffset.UtcNow,
+                            type = error.GetType().FullName,
+                            statusCode = (error as RpcException)?.StatusCode.ToString(),
+                            message = error.Message,
+                            detail = (error as RpcException)?.Status.Detail,
+                            inner = error.InnerException?.ToString(),
+                        }));
+                }
             }
             if (now < activeDeadline)
             {

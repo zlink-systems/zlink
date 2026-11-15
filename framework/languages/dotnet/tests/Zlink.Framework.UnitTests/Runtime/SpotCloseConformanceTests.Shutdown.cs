@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Spots;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 
@@ -82,14 +84,15 @@ public sealed partial class SpotCloseConformanceTests
         IZLinkInstanceSpotContext? current = null;
         host.State.OnInstanceInitializing = context => current = context;
         var initial = await host.RequestInstanceAsync(spotId);
-        await using var source = await StartPeerAsync(host, registerInstanceFactory: false);
+        var authority = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await host
+                    .Runtime.Registration.Locations.ResolveStore()!
+                    .ReadAuthorityAsync(ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId))
+            )
+            .Snapshot;
         Task<ZLinkFrameworkTerminationResult>? shutdown = null;
-        host.State.OnInstanceHandler = async _ =>
-        {
-            host.State.OnInstanceHandler = null;
-            host.State.ContextCloseTask = current!.CloseAsync().AsTask();
-            await source.SendInstanceAsync(spotId, "successor-intent");
-        };
+        Task<InstanceSpotActivationTerminal>? retained = null;
         host.State.OnInstanceClosing = generation =>
             host.State.Order.Enqueue(
                 generation.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -104,7 +107,25 @@ public sealed partial class SpotCloseConformanceTests
                     .ShutdownAsync()
                     .AsTask();
         };
-        await source.RequestInstanceAsync(spotId, "close");
+        // Run the context call on its application gate so host termination
+        // does not race an unrelated remote trigger request's reply.
+        await ((ZLinkSpotActivation)current!)._serial.ExecuteAsync(
+            async (activation, _) =>
+            {
+                // Target acceptance keeps this intent pending behind the current
+                // handler turn; source send completion does not establish that.
+                retained = await AdmitRetainedIntentAsync(
+                    host,
+                    activation,
+                    authority,
+                    spotId,
+                    "successor-intent"
+                );
+                Assert.False(retained.IsCompleted);
+                host.State.ContextCloseTask = current!.CloseAsync().AsTask();
+            },
+            CancellationToken.None
+        );
         Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
         Assert.NotNull(shutdown);
         var stopped = await shutdown.WaitAsync(Wait);
@@ -112,6 +133,8 @@ public sealed partial class SpotCloseConformanceTests
             $"Shutdown outcome: {stopped.Outcome}; initialized={string.Join(",", host.State.InitializedGenerations)}; closed={string.Join(",", host.State.Order)}"
         );
         Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, stopped.Outcome);
+        Assert.NotNull(retained);
+        Assert.Equal(RequestResult.Ok, (await retained.WaitAsync(Wait)).Result);
         Assert.Equal(2, host.State.InitializedGenerations.Count);
         Assert.Equal(
             host.State.InitializedGenerations.Select(generation =>
