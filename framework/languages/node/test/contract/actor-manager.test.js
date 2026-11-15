@@ -2709,6 +2709,9 @@ test('cross-owner formal join rejection returns its typed terminal to the source
     actorFactories: new Map([['player', PlayerFactory]]),
     joinCoordinator: new framework.ZLinkActorNativeJoinCoordinator({
       node,
+      locationLifecycle: {
+        currentOwnerToken: { ownerId: 'source-owner', leaseGeneration: 1n }
+      },
       entrySpotIdProvider: () => 'play-entry-123e4567-e89b-42d3-a456-426614174000',
       completionTableProvider: () => node.completionTable,
       spotRouteResolver: {
@@ -2756,7 +2759,6 @@ test('cross-owner formal join rejection returns its typed terminal to the source
     generation: 1n
   });
   sourceState.setLocationGeneration(1n);
-  sourceState.setOwnerLeaseGeneration(1n);
 
   const result = await submitDeferredActorJoin(
     actor,
@@ -2798,7 +2800,6 @@ function boundSessionCommand44Harness(overrides = {}) {
   const state = {
     nativeActorRef: actorRef,
     locationGeneration: 17n,
-    ownerLeaseGeneration: 23n,
     spotId: 'room-target',
     remoteBoundSessionTarget: {
       routerChannelId: 'session.route',
@@ -2833,6 +2834,7 @@ function boundSessionCommand44Harness(overrides = {}) {
     storeNow: new Date(0)
   };
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'target-owner', leaseGeneration: 23n }),
     routeTransport: {
       async sendToSpot() { throw new Error('command 44 must use the service-wire path'); },
       requestToSpot() { return prepareZLinkRequestReply((async () => { throw new Error('command 44 must not use request/reply transport'); })(), identityRequestReply); }
@@ -3045,7 +3047,6 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     actorType: 'player',
     nativeActorRef: { nodeRid: rid('source-node'), actorId: 'actor-seal', generation: 9n },
     locationGeneration: 3n,
-    ownerLeaseGeneration: 5n,
     get boundSession() {
       return remoteTarget;
     },
@@ -3079,6 +3080,7 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
   const seals = [];
   const routes = [];
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 5n }),
     routeTransport: {},
     spotManager: () => undefined,
     actorManager: () => ({ getState: () => state }),
@@ -3220,7 +3222,6 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     spotId: rid('room-source'),
     nativeActorRef: { nodeRid: rid('source-node'), actorId: 'actor-abort-reopen', generation: 9n },
     locationGeneration: 3n,
-    ownerLeaseGeneration: 5n,
     get boundSession() {
       return remoteTarget;
     },
@@ -3267,6 +3268,7 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     storeNow: new Date(0)
   };
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'owner-source', leaseGeneration: 5n }),
     routeTransport: {},
     spotManager: () => ({
       async beginActorTransfer() { events.push('begin-transfer'); },
@@ -3592,8 +3594,6 @@ test('one-way command 44 shutdown failure preserves the committed target without
     setJoinedSpot() {},
     get locationGeneration() { return locationGeneration; },
     setLocationGeneration(value) { locationGeneration = value; },
-    ownerLeaseGeneration: 23n,
-    setOwnerLeaseGeneration(value) { this.ownerLeaseGeneration = value; },
     get ownsLocation() { return ownsLocation; },
     markLocationOwned() { ownsLocation = true; },
     markLocationReleased() { ownsLocation = false; }
@@ -3641,6 +3641,7 @@ test('one-way command 44 shutdown failure preserves the committed target without
   };
   let authorityReads = 0;
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'target-owner', leaseGeneration: 23n }),
     routeTransport: {},
     spotManager: () => undefined,
     actorManager: () => ({
@@ -3705,7 +3706,6 @@ test('native target actor location installs its enclosing User Spot Ready route'
     nativeActorRef: { nodeRid: rid('target-node'), actorId: 'alice', generation: 9n },
     clearAfterDestroy() {},
     setLocationGeneration() {},
-    setOwnerLeaseGeneration() {},
     setJoinedSpot() {},
     markLocationOwned() {},
     setRemoteActorPacketTarget(target) { remoteActorPacketTarget = target; }

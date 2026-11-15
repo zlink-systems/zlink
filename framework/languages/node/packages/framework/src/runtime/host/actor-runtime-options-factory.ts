@@ -201,7 +201,8 @@ export class ZLinkActorRuntimeOptionsFactory {
                   meshName: meshName ?? this.options.primaryMeshName() ?? '',
                   nodeRid: actorRef.nodeRid,
                   ownershipGeneration: state?.locationGeneration,
-                  ownerLeaseGeneration: state?.ownerLeaseGeneration,
+                  ownerLeaseGeneration:
+                    this.options.locationLifecycle()?.currentOwnerToken?.leaseGeneration,
                   bindingGeneration: state?.boundSessionBindingGeneration
                 } as ActorRef);
           },

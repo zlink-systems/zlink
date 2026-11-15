@@ -63,10 +63,6 @@ async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard, re
   );
   const runtime = new internal.ZLinkLocationRuntime({
     ownerId: 'recovery-owner',
-    rewriteAuthorityPayloadForOwner: (payload, owner) =>
-      isActorAuthorityPayload(payload)
-        ? rewriteActorAuthorityOwner(payload, owner)
-        : (rewriteServiceAuthorityOwner(payload, owner) ?? payload),
     stores: {
       locationStore: store,
       authorityStore: store,
@@ -337,6 +333,118 @@ async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard, re
 }
 
 for (const provider of [false, true]) {
+  test(`Preserve recovery uses the new host lease for relocation source fencing (${provider})`, async (t) => {
+    const {
+      ZLinkActorRuntimeState
+    } = require('../../packages/framework/dist/runtime/actors/actor-runtime-state');
+    const { DefaultZLinkActorManager } = require('../../packages/framework/dist/runtime/actors');
+    const {
+      ZLinkActorTransferRuntime
+    } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
+    const s = await fixture(t, provider);
+    const rid = s.authority.allocation.descriptor.rid;
+    const actor = { context: { actorId: 'recovery-actor' } };
+    const state = new ZLinkActorRuntimeState('recovery-actor');
+    state.rememberMeshName('play');
+    state.setNativeActorRef({ actorId: 'recovery-actor', generation: 1n, nodeRid: rid });
+    DefaultZLinkActorManager.prototype.adoptCreatedAuthority.call(
+      { states: new Map([['recovery-actor', state]]) },
+      'recovery-actor',
+      s.authority.authorityOwnerGeneration,
+      s.originalOwner.leaseGeneration
+    );
+    state.installBoundSessionBinding({
+      bindingGeneration: 1n,
+      sessionOwnerNodeGeneration: 1n,
+      sessionOwnerId: 'session-owner',
+      sessionOwnerLeaseGeneration: 17n,
+      sessionRid: RoutingId.from('session'),
+      sessionNodeRid: RoutingId.from('session-node'),
+      targetNodeRid: RoutingId.from('session-node'),
+      routerChannelId: 'router'
+    });
+    const requests = [];
+    const transfer = new ZLinkActorTransferRuntime({
+      currentOwner: () => s.runtime.currentOwnerToken,
+      authorityStore: () => s.store,
+      primaryMeshNode: () => ({ status: () => ({ routingId: rid, lifecycleGeneration: 1n }) }),
+      sessionRelocationWire: () => ({
+        requestSessionRelocationSeal: async (_channel, _rid, request) => {
+          requests.push(request);
+          return { sealResult: 'bindingAbsent' };
+        }
+      })
+    });
+    await s.outage();
+    assert.equal(await s.renew(true), true);
+    await s.publish();
+    await s.lifecycle.reclaimOwnerRows();
+    assert.equal(s.runtime.executionAllowed(s.execution), true);
+    assert.notDeepEqual(s.runtime.currentOwnerToken, s.originalOwner);
+    const { createRelayMeshHost } = require('./fixtures/relay-host');
+    const { host, meshRuntime } = createRelayMeshHost({
+      registration: internal.createFrameworkRegistration()
+    });
+    host.locationOwner.runtime = s.runtime;
+    host.setActorManager({ getState: () => state });
+    meshRuntime.meshNode = () => ({ status: () => ({ routingId: rid, lifecycleGeneration: 1n }) });
+    const source = host.actorHandoff.options.requestSource('recovery-actor');
+    assert.equal(source.ownerLeaseGeneration, s.runtime.currentOwnerToken.leaseGeneration);
+    assert.equal(source.objectGeneration, s.authority.objectGeneration);
+    assert.equal(source.authorityOwnerGeneration, s.authority.authorityOwnerGeneration);
+    await transfer.sealBoundSessionRoute(
+      actor,
+      state,
+      undefined,
+      { high: 1n, low: 2n },
+      { rid, lifecycleGeneration: 1n }
+    );
+    assert.equal(requests.length, 1);
+    assert.equal(
+      requests[0].actor.ownerLeaseGeneration,
+      s.runtime.currentOwnerToken.leaseGeneration
+    );
+    assert.equal(
+      requests[0].coordinator.leaseGeneration,
+      s.runtime.currentOwnerToken.leaseGeneration
+    );
+    assert.equal(requests[0].session.sessionOwnerLeaseGeneration, 17n);
+    const currentOwner = s.runtime.currentOwnerToken;
+    transfer.options.currentOwner = () => ({
+      ...currentOwner,
+      leaseGeneration: currentOwner.leaseGeneration + 1n
+    });
+    await assert.rejects(
+      transfer.sealBoundSessionRoute(
+        actor,
+        state,
+        undefined,
+        { high: 1n, low: 3n },
+        { rid, lifecycleGeneration: 1n }
+      ),
+      /source fence is stale/u
+    );
+    assert.equal(requests.length, 1, 'a mismatched Store lease must still be rejected');
+    state.retireBoundSessionBinding(state.boundSession);
+    const {
+      ZLinkRemoteBoundSessionRelay
+    } = require('../../packages/framework/dist/runtime/host/remote-bound-session-relay');
+    const responses = [];
+    const relay = new ZLinkRemoteBoundSessionRelay({
+      currentOwner: () => s.runtime.currentOwnerToken,
+      actorManager: () => ({ getState: () => state }),
+      actorSessionNode: () => ({}),
+      streamBindingRuntime: () => ({
+        sendLocalBoundSessionResponse: async () => false,
+        sendNativeBoundSessionResponse: async (_node, actorRef) => {
+          responses.push(actorRef);
+        }
+      })
+    });
+    await relay.sendActorResponse(actor, 'Reply', 1n, {}, { metadata: new Map() });
+    assert.equal(responses[0].ownerLeaseGeneration, s.runtime.currentOwnerToken.leaseGeneration);
+    assert.equal(responses[0].ownershipGeneration, s.authority.authorityOwnerGeneration);
+  });
   for (const kind of ['actor', 'user_spot', 'instance_spot']) {
     test(`Preserve renew keeps token and waits for both confirmations (${provider}/${kind})`, async (t) => {
       const s = await fixture(t, provider, kind);
@@ -779,8 +887,11 @@ for (const provider of [false, true]) {
 for (const provider of [false, true]) {
   test(`Preserve checks lifecycle and the current lease while a descriptor for an intermediate lease is visible (${provider})`, async (t) => {
     const s = await fixture(t, provider);
+    // A renew that finds the lease expired outside a Store outage ends every execution
+    // (Location runtime §5), so the preserved object is created under the intermediate lease.
     await s.renew(true, 300);
     await s.publish();
+    const actor = await s.addActor('intermediate-lease-actor');
     await s.outage(400);
     s.expire();
     assert.equal(await s.renew(false, 1400), true);
@@ -801,12 +912,15 @@ for (const provider of [false, true]) {
     };
     const publication = s.publishRuntime();
     await submitted.promise;
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.equal(s.runtime.executionAllowed(actor.execution), false);
     descriptorReply.resolve();
     await publication;
     await s.lifecycle.reclaimOwnerRows();
-    assert.equal((await s.store.readAuthority(s.key)).ownerLeaseGeneration, owner.leaseGeneration);
-    assert.equal(s.runtime.executionAllowed(s.execution), true);
+    assert.equal(
+      (await s.store.readAuthority(actor.key)).ownerLeaseGeneration,
+      owner.leaseGeneration
+    );
+    assert.equal(s.runtime.executionAllowed(actor.execution), true);
     assert.equal(s.writes.length, 1);
     assert.deepEqual(s.legacyWrites, []);
   });
@@ -880,14 +994,18 @@ for (const provider of [false, true]) {
       assert.equal(await s.renew(true, 1100), true);
       await s.publish();
       await s.lifecycle.reclaimOwnerRows();
-      const current = await s.store.readAuthority(s.key);
+      const object =
+        kind === 'actor'
+          ? await s.addActor('post-claim-actor')
+          : await addScaleSpot(s, 'post-claim', kind);
+      const current = await s.store.readAuthority(object.key);
       assert.equal(current.ownerLeaseGeneration, s.runtime.currentOwnerToken.leaseGeneration);
       const writes = s.writes.length;
       await s.outage(1200);
       assert.equal(await s.renew(false, 1300), true);
       await s.lifecycle.reclaimOwnerRows();
-      assert.equal(s.runtime.executionAllowed(s.execution), true);
-      assert.equal(s.discarded(), 0);
+      assert.equal(s.runtime.executionAllowed(object.execution), true);
+      assert.equal(object.discarded(), 0);
       assert.equal(s.writes.length, writes);
       assert.deepEqual(s.legacyWrites, []);
     });
@@ -952,13 +1070,16 @@ async function addScaleSpot(s, index, kind) {
     });
   s.lifecycle.confirmAuthority(key, committed.ready);
   const execution = {};
+  let discarded = 0;
   s.lifecycle.bindSpotExecution('play', id, execution);
   s.lifecycle.trackExecution(
     execution,
     () => true,
-    () => {}
+    () => {
+      discarded++;
+    }
   );
-  return { key, execution };
+  return { key, execution, discarded: () => discarded };
 }
 
 function iterationProbe(t) {
@@ -1021,7 +1142,7 @@ for (const provider of [false, true]) {
     // A new lease forces captureRecovery's post-CAS currentTracked lookup as well.
     assert.equal(await s.renew(true, 1200), true);
     counts.claims = 0;
-    const excluded = await s.runtime.reclaimOwnerAuthorities(s.publish());
+    await s.runtime.reclaimOwnerAuthorities(s.publish());
     await t.test(
       'capture and post-CAS validation visit tracked items a bounded number of times',
       () => {
@@ -1033,19 +1154,6 @@ for (const provider of [false, true]) {
     for (const row of rows) assert.equal(s.runtime.executionAllowed(row.execution), true);
     assert.equal(s.runtime.ownerLeaseRecoveryRequired, false);
 
-    await t.test('reclaim exclusion does not visit retained records per row', async () => {
-      counts.retained = 0;
-      for (const row of rows) {
-        const authority = await s.store.readAuthority(row.key);
-        assert.equal(excluded(row.key, authority), true);
-        assert.equal(counts.retained, 0, 'row exclusion must not iterate retained records');
-        assert.equal(excluded(row.key), false);
-        assert.equal(excluded(row.key, { ...authority, objectGeneration: 999999n }), false);
-        assert.equal(excluded(row.key, { ...authority, authorityOwnerGeneration: 999999n }), false);
-      }
-      assert.equal(excluded(encodeAuthorityKey('actor', 'not-retained'), s.authority), false);
-      assert.equal(counts.retained, 0, 'row exclusion must not iterate retained records');
-    });
     t.diagnostic(
       `objects=5000 captureDerefs=${captureDerefs} captureVisits=${captureVisits} admissionDerefs=${admissionDerefs} postCasVisits=${counts.claims} exclusionVisits=${counts.retained}`
     );
@@ -1090,35 +1198,6 @@ for (const kind of ['actor', 'user_spot', 'instance_spot']) {
     assert.equal(s.discarded(), 1);
   });
 }
-
-test('reclaim exclusion indexes every retained incarnation sharing an authority key', async (t) => {
-  const s = await fixture(t, false);
-  const key = encodeAuthorityKey('actor', 'shared-key');
-  const incarnations = [
-    { objectGeneration: 10n, authorityOwnerGeneration: 20n },
-    { objectGeneration: 10n, authorityOwnerGeneration: 21n },
-    { objectGeneration: 11n, authorityOwnerGeneration: 22n }
-  ];
-  for (const incarnation of incarnations)
-    s.runtime.trackExecution(
-      {},
-      () => true,
-      () => {},
-      () => ({
-        key,
-        meshName: 'play',
-        incarnation,
-        run: async () => true
-      })
-    );
-  await s.outage();
-  assert.equal(await s.renew(), true);
-  const excluded = await s.runtime.reclaimOwnerAuthorities(s.publish());
-  for (const incarnation of incarnations) assert.equal(excluded(key, incarnation), true);
-  assert.equal(excluded(key, { objectGeneration: 10n, authorityOwnerGeneration: 22n }), false);
-  assert.equal(excluded(key, { objectGeneration: 11n, authorityOwnerGeneration: 20n }), false);
-  assert.equal(excluded(key), false);
-});
 
 for (const provider of [false, true]) {
   for (const loss of ['replaced-token', 'preserve-rejected']) {
@@ -1275,8 +1354,11 @@ for (const provider of [false, true]) {
       if (terminal === 'loss') s.runtime.discardExecution(s.execution);
       if (terminal === 'shutdown') await s.runtime.stop();
       publication.resolve();
-      if (terminal === 'shutdown') await assert.rejects(recovery, /requires a claimed owner token/);
-      else await recovery;
+      await recovery;
+      if (terminal === 'shutdown')
+        assert.throws(() => s.runtime.executionAllowed(s.execution), {
+          kind: internal.ZLinkFrameworkErrorKind.ShuttingDown
+        });
       const results = await outcomes;
       assert.equal(calls, terminal === 'resume' ? 2 : 0);
       for (const result of results) {

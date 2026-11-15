@@ -41,6 +41,8 @@ import {
 } from '../framework-errors-internal';
 
 export interface ZLinkRemoteBoundSessionRelayOptions {
+  readonly currentOwner: () =>
+    import('../locations/internal-location-contracts').ZLinkLocationOwnerToken | undefined;
   readonly requestTimeoutMs?: number;
   readonly sessionRelocationSealTimeoutMs: number;
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
@@ -471,7 +473,11 @@ export class ZLinkRemoteBoundSessionRelay {
     ) {
       return;
     }
-    const actorRef = currentActorRef(state, fallbackActorRef);
+    const actorRef = currentActorRef(
+      state,
+      fallbackActorRef,
+      this.options.currentOwner()?.leaseGeneration
+    );
     const remoteTarget = fallbackBoundSessionTarget ?? state?.remoteBoundSessionTarget;
     if (remoteTarget !== undefined) {
       await this.sendRemoteBoundSessionResponse(
@@ -526,7 +532,8 @@ export class ZLinkRemoteBoundSessionRelay {
     }
     const state = this.options.actorManager()?.getState(actorId);
     const actorRef =
-      currentActorRef(state, fallbackActorRef) ?? this.options.destroyedActorRefs.get(actorId);
+      currentActorRef(state, fallbackActorRef, this.options.currentOwner()?.leaseGeneration) ??
+      this.options.destroyedActorRefs.get(actorId);
     const remoteTarget = fallbackBoundSessionTarget ?? state?.remoteBoundSessionTarget;
     if (remoteTarget !== undefined) {
       await this.sendRemoteBoundSessionError(
@@ -651,10 +658,10 @@ function currentActorRef(
         readonly meshName?: string;
         readonly boundSessionBindingGeneration: bigint;
         readonly locationGeneration?: bigint;
-        readonly ownerLeaseGeneration?: bigint;
       }
     | undefined,
-  fallback: ActorRef | undefined
+  fallback: ActorRef | undefined,
+  ownerLeaseGeneration: bigint | undefined
 ): ActorRef | undefined {
   const native = state?.nativeActorRef;
   if (native === undefined) return fallback;
@@ -668,7 +675,7 @@ function currentActorRef(
     meshName,
     nodeRid: native.nodeRid,
     ownershipGeneration: state?.locationGeneration,
-    ownerLeaseGeneration: state?.ownerLeaseGeneration,
+    ownerLeaseGeneration,
     bindingGeneration: state?.boundSessionBindingGeneration
   } as ActorRef;
 }

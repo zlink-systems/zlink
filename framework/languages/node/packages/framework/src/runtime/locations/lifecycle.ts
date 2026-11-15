@@ -41,6 +41,10 @@ export {
 export type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
 export class ZLinkLocationLifecycle {
+  get currentOwnerToken() {
+    return this.runtime.currentOwnerToken;
+  }
+
   private readonly actorClaims: ZLinkActorLocationClaims;
   private readonly spotClaims: ZLinkSpotLocationClaims;
   private readonly actorSessionRoutes: ZLinkActorSessionRouteClaims;
@@ -52,7 +56,7 @@ export class ZLinkLocationLifecycle {
     actorStore: ZLinkActorLocationStore,
     entryMeshName = '',
     private readonly authorityStore?: ZLinkAuthorityStore,
-    spotStore?: ZLinkSpotLocationStore,
+    _spotStore?: ZLinkSpotLocationStore,
     invalidateSpotRoute?: (spotId: RoutingId) => void,
     observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void
   ) {
@@ -63,12 +67,7 @@ export class ZLinkLocationLifecycle {
       authorityStore,
       observeActorAuthorityVersion
     );
-    this.spotClaims = new ZLinkSpotLocationClaims(
-      runtime,
-      authorityStore,
-      spotStore ?? inferSpotStore(actorStore),
-      invalidateSpotRoute
-    );
+    this.spotClaims = new ZLinkSpotLocationClaims(runtime, authorityStore, invalidateSpotRoute);
     this.actorSessionRoutes = new ZLinkActorSessionRouteClaims(runtime);
     this.runtime.addOwnershipLostHandler(this.ownershipLostHandler);
   }
@@ -242,13 +241,7 @@ export class ZLinkLocationLifecycle {
   }
 
   async reclaimOwnerRows(publication?: Promise<void>, signal?: AbortSignal): Promise<void> {
-    const excluded = await this.runtime.reclaimOwnerAuthorities?.(
-      publication,
-      signal,
-      (key, expected, confirmed) => this.confirmAuthority(key, confirmed, expected)
-    );
-    await this.actorClaims.reclaimOwnerRows(excluded);
-    await this.spotClaims.reclaimOwnerRows(excluded);
+    await this.runtime.reclaimOwnerAuthorities?.(publication, signal);
   }
 
   confirmAuthority(
@@ -405,18 +398,6 @@ export class ZLinkLocationLifecycle {
     this.spotClaims.onOwnershipLost(event);
     this.actorSessionRoutes.onOwnershipLost(event);
   }
-}
-
-function inferSpotStore(actorStore: ZLinkActorLocationStore): ZLinkSpotLocationStore | undefined {
-  const candidate = actorStore as Partial<ZLinkSpotLocationStore>;
-  if (
-    typeof candidate.updateSpot === 'function' &&
-    typeof candidate.removeSpot === 'function' &&
-    typeof candidate.resolveSpot === 'function'
-  ) {
-    return actorStore as unknown as ZLinkSpotLocationStore;
-  }
-  return undefined;
 }
 
 export type ZLinkRecoveryAuthorityFence = Pick<
