@@ -6,7 +6,9 @@ import {
   type ZLinkSpot,
   type ZLinkSpotActorJoinResult,
   ZLinkEncodedPayload,
-  ZLinkMessage
+  ZLinkMessage,
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind
 } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
@@ -256,7 +258,10 @@ export class ZLinkSpotActorMembership {
   private requireActivation(spotId: RoutingId, meshName?: string): ZLinkSpotActivation {
     const activation = this.options.resolveActivation(spotId, meshName);
     if (activation === undefined) {
-      throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.Unavailable,
+        `Spot '${spotId}' is not active.`
+      );
     }
     return activation;
   }
