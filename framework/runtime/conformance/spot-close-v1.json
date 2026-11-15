@@ -256,6 +256,20 @@
       }
     }
   ],
+  "successorCloseCases": [
+    {
+      "name": "successor-context-close-retains-next-intent",
+      "given": {
+        "host": "Serving",
+        "retainedIntentCount": 2,
+        "successorHandler": "contextClose"
+      },
+      "expect": {
+        "handlerIncarnations": [2, 3],
+        "closeResults": [true, true]
+      }
+    }
+  ],
   "readyRouteCases": [
     {
       "name": "stale-ready-owner-fence-request",

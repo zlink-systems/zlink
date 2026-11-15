@@ -490,8 +490,9 @@ internal abstract partial class ZLinkSpotActivation
     }
 
     internal Task<T>? PostLifecycleOperation<T>(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation
-    ) => _serial.PostLifecycleOperation(operation);
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation,
+        Action? terminalRelease = null
+    ) => _serial.PostLifecycleOperation(operation, terminalRelease);
 
     internal void AttachNativeDispatch()
     {

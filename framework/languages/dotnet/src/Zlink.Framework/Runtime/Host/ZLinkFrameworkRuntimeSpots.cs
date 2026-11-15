@@ -175,15 +175,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask<bool> CloseCurrentSpotAsync(
+    internal ValueTask<bool> CloseCurrentSpotAsync(
         ZLinkSpotActivation activation,
         CancellationToken cancellationToken
     )
     {
-        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
-        return await _spots
-            .CloseFromContextAsync(GetOrStartState(), activation, cancellationToken)
-            .ConfigureAwait(false);
+        return _spots.CloseFromContextAsync(GetOrStartState(), activation, cancellationToken);
     }
 
     private static string RequireSpotType(string value)
