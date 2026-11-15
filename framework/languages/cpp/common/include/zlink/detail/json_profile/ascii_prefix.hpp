@@ -2,6 +2,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 namespace zlink::detail::json_profile {
 inline std::size_t plain_ascii_prefix(std::uint64_t word) {
  constexpr std::uint64_t high=0x8080808080808080ULL, ones=0x0101010101010101ULL, spaces=0x2020202020202020ULL;
@@ -9,5 +10,23 @@ inline std::size_t plain_ascii_prefix(std::uint64_t word) {
  const auto special=(word&high)|((word-spaces)&~word&high)|((quotes-ones)&~quotes&high)|((slashes-ones)&~slashes&high);
  const auto leading=std::endian::native==std::endian::little ? std::countr_zero(special) : std::countl_zero(special);
  return static_cast<std::size_t>(leading/8);
+}
+inline std::size_t plain_ascii_prefix (const char *text, std::size_t size)
+{
+ std::size_t offset = 0;
+ while (size - offset >= 8) {
+  std::uint64_t word;
+  std::memcpy (&word, text + offset, sizeof word);
+  const auto count = plain_ascii_prefix (word);
+  offset += count;
+  if (count != 8) return offset;
+ }
+ if (offset != size) {
+  // Zero padding supplies a control-byte sentinel without reading past size.
+  std::uint64_t word = 0;
+  std::memcpy (&word, text + offset, size - offset);
+  offset += plain_ascii_prefix (word);
+ }
+ return offset;
 }
 }

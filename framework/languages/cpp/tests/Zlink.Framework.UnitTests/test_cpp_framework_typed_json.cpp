@@ -215,6 +215,78 @@ void verify_sax_boundaries ()
     assert (!p::try_decode<tree> (bom.begin (), bom.end ()));
 }
 
+void verify_number_tokens ()
+{
+    namespace p = zlink::detail::json_profile;
+    const auto decode = []<typename T> (std::string_view text) {
+        return p::try_decode<T> (text.begin (), text.end ());
+    };
+    const auto rejected = []<typename T> (std::string_view text, std::string_view expected) {
+        std::string error;
+        assert (!p::try_decode<T> (text.begin (), text.end (), &error));
+        if (error != expected)
+            std::cerr << "number token " << text << ": expected " << expected << ", got "
+                      << error << '\n';
+        assert (error == expected);
+    };
+    assert (decode.operator()<std::int32_t> ("-0") == 0);
+    assert (decode.operator()<std::int32_t> ("-2147483648") == INT32_MIN);
+    assert (decode.operator()<std::uint32_t> ("4294967295") == UINT32_MAX);
+    assert (decode.operator()<std::int64_t> ("\"-9223372036854775808\"") == INT64_MIN);
+    assert (decode.operator()<std::uint64_t> ("\"18446744073709551615\"") == UINT64_MAX);
+    for (const auto text : {"01", "+1", "-01", "1.", "1e", "1e+", "1e-", "--1"})
+        rejected.operator()<std::int32_t> (text, "invalid JSON");
+    for (const auto text : {"1e3", "1.0", "18446744073709551616"})
+        rejected.operator()<std::int32_t> (text, "expected integer number");
+    for (const auto text : {"2147483648", "-2147483649", "18446744073709551615"})
+        rejected.operator()<std::int32_t> (text, "integer out of range");
+    rejected.operator()<std::uint32_t> ("-1", "integer out of range");
+    rejected.operator()<std::uint64_t> ("18446744073709551615",
+                                      "expected 64-bit decimal string");
+    for (const auto text : {"\"-0\"", "\"01\"", "\"+1\"", "\"1e3\""})
+        rejected.operator()<std::int64_t> (text, "invalid JSON");
+    rejected.operator()<std::int64_t> ("\"9223372036854775808\"", "invalid JSON");
+    rejected.operator()<std::uint64_t> ("\"18446744073709551616\"", "invalid JSON");
+    assert (decode.operator()<double> ("1e3") == 1000.0);
+    assert (decode.operator()<double> ("-1.25E+2") == -125.0);
+    assert (decode.operator()<double> ("1e-9999") == 0.0);
+    const auto negative_zero = decode.operator()<double> ("-1e-9999");
+    assert (negative_zero && *negative_zero == 0.0 && std::signbit (*negative_zero));
+    assert (decode.operator()<double> ("4.9406564584124654e-324")
+            == std::numeric_limits<double>::denorm_min ());
+    rejected.operator()<double> ("1e9999", "invalid JSON");
+    rejected.operator()<float> ("3.5e38", "floating point out of range");
+    // A semantic rejection precedes a malformed suffix; preserve that error order.
+    rejected.operator()<std::int64_t> ("01", "expected 64-bit decimal string");
+    const std::string terminated ("1\0ignored", 9);
+    assert (decode.operator()<std::int32_t> (terminated) == 1);
+    rejected.operator()<std::vector<int>> (std::string ("[1\0]", 4), "invalid JSON");
+}
+
+void verify_string_spans ()
+{
+    namespace p = zlink::detail::json_profile;
+    // Exercise every short tail and special-byte position against the JSON oracle.
+    for (std::size_t size = 1; size <= 40; ++size)
+        for (std::size_t position = 0; position != size; ++position)
+            for (unsigned byte = 0; byte != 256; ++byte) {
+                std::string value (size, 'a');
+                value[position] = static_cast<char> (byte);
+                const auto wire = p::try_encode (value);
+                if (byte >= 0x80) {
+                    assert (!wire);
+                    continue;
+                }
+                assert (wire && *wire == nlohmann::json (value).dump ());
+                assert (p::try_decode<std::string> (wire->begin (), wire->end ()) == value);
+            }
+    for (const std::string value : {"", "\xc3\xa9", "a\xe2\x80\xa8\"b", "\xf0\x9f\x8e\xae"}) {
+        const auto wire = p::encode (value);
+        assert (wire == nlohmann::json (value).dump ());
+        assert (p::try_decode<std::string> (wire.begin (), wire.end ()) == value);
+    }
+}
+
 void verify_float_round_trips ()
 {
     namespace p = zlink::detail::json_profile;
@@ -478,6 +550,8 @@ int main ()
     verify_byte_sequence_wire ();
     verify_base64_padding ();
     verify_field_masks ();
+    verify_number_tokens ();
+    verify_string_spans ();
     verify_float_round_trips ();
     verify_goldens ();
     verify_required_presence ();

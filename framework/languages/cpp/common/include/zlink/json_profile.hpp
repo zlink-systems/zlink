@@ -369,7 +369,6 @@ class byte_output
     {
         bytes.insert (bytes.end (), value.begin (), value.end ());
     }
-    void append (const char *begin, const char *end) { bytes.insert (bytes.end (), begin, end); }
 };
 
 // Generated RFC 4648 symbols need no JSON escaping or UTF-8 validation.
@@ -417,7 +416,15 @@ bool write_string (std::string_view value, Output &out, std::string *error)
         return fail (error, "invalid UTF-8 string");
     constexpr char hex[] = "0123456789abcdef";
     out += '"';
-    for (const unsigned char ch : value) {
+    for (std::size_t offset = 0; offset != value.size ();) {
+        const auto count = plain_ascii_prefix (value.data () + offset, value.size () - offset);
+        if (count) {
+            out += std::string_view (value.data () + offset, count);
+            offset += count;
+            if (offset == value.size ())
+                break;
+        }
+        const auto ch = static_cast<unsigned char> (value[offset++]);
         switch (ch) {
             case '"':
                 out += "\\\"";
@@ -457,7 +464,7 @@ template <typename T, typename Output> void write_integer (T value, Output &out)
 {
     char buffer[32];
     auto result = std::to_chars (buffer, buffer + sizeof buffer, value);
-    out.append (buffer, result.ptr);
+    out += std::string_view (buffer, static_cast<std::size_t> (result.ptr - buffer));
 }
 
 template <typename T> bool read_decimal (std::string_view text, T &out, std::string *error)
@@ -526,7 +533,7 @@ template <typename Output> void write_float (double value, Output &out)
     }
     char buffer[64];
     const auto converted = std::to_chars (buffer, buffer + sizeof buffer, value);
-    out.append (buffer, converted.ptr);
+    out += std::string_view (buffer, static_cast<std::size_t> (converted.ptr - buffer));
 }
 template <typename T, typename Output>
 bool write_value (const T &value, Output &out, std::string *error)
@@ -636,7 +643,7 @@ struct sax_event
     std::string_view text{};
 };
 
-class typed_sax final : public nlohmann::json_sax<nlohmann::json>
+class typed_sax final
 {
     struct destination
     {
@@ -894,29 +901,27 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
     }
     bool complete () const { return healthy && started && frames.empty (); }
     bool syntax_error () { return !healthy ? false : reject("invalid JSON"); }
-    bool null () override { return dispatch ({sax_kind::null}); }
-    bool boolean (bool value) override
+    bool null () { return dispatch ({sax_kind::null}); }
+    bool boolean (bool value)
     {
         sax_event e{sax_kind::boolean};
         e.boolean = value;
         return dispatch (e);
     }
-    bool number_integer (number_integer_t value) override
+    bool number_integer (std::int64_t value)
     {
         sax_event e{sax_kind::integer};
         e.integer = value;
         return dispatch (e);
     }
-    bool number_unsigned (number_unsigned_t value) override
+    bool number_unsigned (std::uint64_t value)
     {
         sax_event e{sax_kind::unsigned_integer};
         e.unsigned_integer = value;
         return dispatch (e);
     }
-    bool number_float (number_float_t value, const string_t &) override
+    bool number_float (double value)
     {
-        if (!valid_float (value))
-            return reject ("non-finite number");
         sax_event e{sax_kind::floating};
         e.floating = value;
         return dispatch (e);
@@ -946,19 +951,6 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
     }
     bool borrowed_key (std::string_view value)
     {
-        return key_view(value);
-    }
-    bool string (string_t &value) override
-    {
-        sax_event e{sax_kind::string};
-        e.text = value;
-        return dispatch (e);
-    }
-    bool binary (binary_t &) override { return reject ("expected JSON value"); }
-    bool start_object (std::size_t) override { return dispatch ({sax_kind::object}); }
-    bool key (string_t &value) override { return key_view(value); }
-    bool key_view (std::string_view value)
-    {
         if (frames.empty () || frames.back ().kind != sax_kind::object)
             return reject ("unexpected property name");
         auto &parent = frames.back ();
@@ -967,13 +959,10 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         parent.phase = json_phase::value;
         return true;
     }
-    bool end_object () override { return end (sax_kind::object); }
-    bool start_array (std::size_t) override { return dispatch ({sax_kind::array}); }
-    bool end_array () override { return end (sax_kind::array); }
-    bool parse_error (std::size_t, const std::string &, const nlohmann::json::exception &) override
-    {
-        return syntax_error ();
-    }
+    bool start_object () { return dispatch ({sax_kind::object}); }
+    bool end_object () { return end (sax_kind::object); }
+    bool start_array () { return dispatch ({sax_kind::array}); }
+    bool end_array () { return end (sax_kind::array); }
 };
 // A capacity estimate has no wire or validation authority; the existing writer owns both.
 template<typename T> std::size_t output_capacity_hint(const T&value) {

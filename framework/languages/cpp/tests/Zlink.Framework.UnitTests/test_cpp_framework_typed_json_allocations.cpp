@@ -124,7 +124,7 @@ int main (int argc, char **argv)
     const auto parse_reference = [&] () -> std::optional<allocation_dto_t> {
         allocation_dto_t value;
         typed_sax handler (value, nullptr);
-        if (!nlohmann::json::sax_parse (wire.begin (), wire.end (), &handler)
+        if (!token_reader (wire.data (), wire.data () + wire.size ()).parse (handler)
             || !handler.complete ())
             return std::nullopt;
         return value;
