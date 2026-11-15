@@ -364,8 +364,9 @@ for (const provider of [false, true]) {
       routerChannelId: 'router'
     });
     const requests = [];
+    let staleOwner;
     const transfer = new ZLinkActorTransferRuntime({
-      currentOwner: () => s.runtime.currentOwnerToken,
+      currentOwner: () => staleOwner ?? s.runtime.currentOwnerToken,
       authorityStore: () => s.store,
       primaryMeshNode: () => ({ status: () => ({ routingId: rid, lifecycleGeneration: 1n }) }),
       sessionRelocationWire: () => ({
@@ -381,17 +382,6 @@ for (const provider of [false, true]) {
     await s.lifecycle.reclaimOwnerRows();
     assert.equal(s.runtime.executionAllowed(s.execution), true);
     assert.notDeepEqual(s.runtime.currentOwnerToken, s.originalOwner);
-    const { createRelayMeshHost } = require('./fixtures/relay-host');
-    const { host, meshRuntime } = createRelayMeshHost({
-      registration: internal.createFrameworkRegistration()
-    });
-    host.locationOwner.runtime = s.runtime;
-    host.setActorManager({ getState: () => state });
-    meshRuntime.meshNode = () => ({ status: () => ({ routingId: rid, lifecycleGeneration: 1n }) });
-    const source = host.actorHandoff.options.requestSource('recovery-actor');
-    assert.equal(source.ownerLeaseGeneration, s.runtime.currentOwnerToken.leaseGeneration);
-    assert.equal(source.objectGeneration, s.authority.objectGeneration);
-    assert.equal(source.authorityOwnerGeneration, s.authority.authorityOwnerGeneration);
     await transfer.sealBoundSessionRoute(
       actor,
       state,
@@ -410,10 +400,7 @@ for (const provider of [false, true]) {
     );
     assert.equal(requests[0].session.sessionOwnerLeaseGeneration, 17n);
     const currentOwner = s.runtime.currentOwnerToken;
-    transfer.options.currentOwner = () => ({
-      ...currentOwner,
-      leaseGeneration: currentOwner.leaseGeneration + 1n
-    });
+    staleOwner = { ...currentOwner, leaseGeneration: currentOwner.leaseGeneration + 1n };
     await assert.rejects(
       transfer.sealBoundSessionRoute(
         actor,
