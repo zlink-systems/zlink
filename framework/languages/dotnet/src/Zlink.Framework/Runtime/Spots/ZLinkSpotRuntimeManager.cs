@@ -939,7 +939,7 @@ internal sealed class ZLinkSpotRuntimeManager(
         throw new ZLinkConfigurationException($"SPOT factory '{spotType}' is not registered.");
     }
 
-    public ZLinkSpotActivation? GetActivationBySpotId(
+    public ZLinkSpotActivation GetActivationBySpotId(
         ZLinkFrameworkComponentState state,
         string spotId
     )
@@ -951,7 +951,10 @@ internal sealed class ZLinkSpotRuntimeManager(
                 return activation;
         }
 
-        return null;
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            $"Actor Join target '{spotId}' is not active."
+        );
     }
 }
 

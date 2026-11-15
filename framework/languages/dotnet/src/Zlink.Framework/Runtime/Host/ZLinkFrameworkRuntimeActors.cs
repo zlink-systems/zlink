@@ -2429,22 +2429,16 @@ internal sealed partial class ZLinkFrameworkRuntime
             ?? throw new InvalidOperationException(
                 "ZLink framework runtime is not available for actor handoff."
             );
-        if (_spots.GetActivationBySpotId(state, spotId) is { } userSpot)
-            return new ActorHandoffTarget(spotId, userSpot.NodeRid, userSpot, null);
-        var entryNode = AwaitStateLane(
-            state.RunStateAsync(() =>
-                state.SpotNodes.Values.FirstOrDefault(node =>
-                    node.EntrySpotActivation is { } entrySpot
-                    && string.Equals(entrySpot.SpotId, spotId, StringComparison.Ordinal)
-                )
-            )
+        // Node registration and Entry activation are initialized before Running;
+        // resolving a target does not require a state-lane turn.
+        var entryNode = state.SpotNodes.Values.FirstOrDefault(node =>
+            node.EntrySpotActivation is { } entrySpot
+            && string.Equals(entrySpot.SpotId, spotId, StringComparison.Ordinal)
         );
         if (entryNode?.EntrySpotActivation is { } entrySpot)
             return new ActorHandoffTarget(spotId, entryNode.Node.RoutingId, null, entrySpot);
-        throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
-            $"Actor Join target '{spotId}' is not active."
-        );
+        var userSpot = _spots.GetActivationBySpotId(state, spotId);
+        return new ActorHandoffTarget(spotId, userSpot.NodeRid, userSpot, null);
     }
 
     /// <summary>

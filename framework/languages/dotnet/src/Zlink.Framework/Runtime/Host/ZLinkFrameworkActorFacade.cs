@@ -82,7 +82,7 @@ internal sealed class ZLinkFrameworkActorFacade(
                     )
                     .ConfigureAwait(false);
         }
-        var localActivation = runtime.ResolveActorHandoffTarget(spotId).UserSpot!;
+        var localActivation = spots.GetActivationBySpotId(getState(), spotId);
         return await JoinLocalActorAsync(
                 actor,
                 actorState,
@@ -149,7 +149,7 @@ internal sealed class ZLinkFrameworkActorFacade(
     )
     {
         var sourceActivation = actorState.Activation;
-        if (localActivation is not null && ReferenceEquals(sourceActivation, localActivation))
+        if (ReferenceEquals(sourceActivation, localActivation))
             return new ZLinkActorJoinResult.Accepted(ToActorRef(actorState), ZLinkMessage.Empty);
 
         if (absoluteDeadline is null)

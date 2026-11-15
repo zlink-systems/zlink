@@ -9,6 +9,26 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class SpotCloseConformanceTests
 {
+    [Fact]
+    public async Task SameNodeActorJoin_EntrySpotIdIsNotAUserSpot()
+    {
+        using var flow = ClosingFlow(nameof(SameNodeActorJoin_EntrySpotIdIsNotAUserSpot), false, 0);
+        await using var host = await SpotCloseHost.StartAsync();
+        var actorId = await host.CreateActorAsync();
+        var entrySpotId = await host.GetEntrySpotIdAsync(actorId);
+        Assert.False(string.IsNullOrWhiteSpace(entrySpotId));
+
+        await host.JoinActorAsync(entrySpotId, actorId);
+
+        var result = Assert.IsType<ZLinkActorJoinCompletion.Failed>(
+            await host.State.JoinCompletion.Task.WaitAsync(Wait)
+        );
+        output.WriteLine($"4510 Entry Spot JoinSpot target={entrySpotId} kind={result.Kind}");
+        Assert.NotEqual(default, result.OperationId);
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, result.Kind);
+        Assert.IsType<ZLinkActorCreateResult.Existing>(await host.GetExistingActorAsync(actorId));
+    }
+
     public static IEnumerable<object[]> JoinFailureCases()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
