@@ -7,7 +7,6 @@ import com.google.protobuf.UnsafeByteOperations;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -174,7 +173,8 @@ public final class FrameworkStack implements AutoCloseable {
     public record PeerEndpoint(String value) {}
 
     @EnableZLinkFramework
-    @SpringBootApplication(proxyBeanMethods = false)
+    @SpringBootConfiguration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
     public static class BenchClientFrameworkApp {
         @Bean
         ZLinkFrameworkConfigurer benchClientFramework(PeerEndpoint endpoint) {
