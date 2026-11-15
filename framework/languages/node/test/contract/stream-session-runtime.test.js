@@ -2087,6 +2087,7 @@ test('STREAM receive readiness cycles retain a bounded number of pending promise
     return { entered, enter };
   });
   let index = 0;
+  let wake;
   const pending = new Set();
   const hook = createHook({
     init(id, type) { if (type === 'PROMISE') pending.add(id); },
@@ -2103,9 +2104,11 @@ test('STREAM receive readiness cycles retain a bounded number of pending promise
             resolve(false);
           };
           signal.addEventListener('abort', done, { once: true });
+          wake = done;
           waits[index++].enter(done);
         });
       },
+      wake() { wake?.(); },
       markDrained() {},
       dispose() {}
     }
@@ -2144,6 +2147,7 @@ test('stream session node runtime checks Poller readiness before Framework recv'
       markDrained() {
         ready = false;
       },
+      wake() {},
       dispose() {
         disposed = true;
       }
@@ -3016,6 +3020,7 @@ function readyPoller() {
     waitForReadable() {
       return new Promise((resolve) => setImmediate(() => resolve(true)));
     },
+    wake() {},
     markDrained() {},
     dispose() {}
   };
@@ -3024,14 +3029,22 @@ function readyPoller() {
 // A data socket that never becomes readable: the receive loop parks and only an
 // independent monitor drain can still report connection lifecycle events.
 function idlePoller() {
+  let wake;
   return {
     wait() { return false; },
     waitForReadable(signal) {
       return new Promise((resolve) => {
         if (signal === undefined) return;
-        signal.addEventListener('abort', () => resolve(false), { once: true });
+        const done = () => {
+          signal.removeEventListener('abort', done);
+          wake = undefined;
+          resolve(false);
+        };
+        signal.addEventListener('abort', done, { once: true });
+        wake = done;
       });
     },
+    wake() { wake?.(); },
     markDrained() {},
     dispose() {}
   };
