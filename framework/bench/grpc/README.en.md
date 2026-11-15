@@ -28,10 +28,15 @@ Three implementations are compared per language. `<lang>` is one of `dotnet`, `n
 | `grpc-<lang>` | That language's gRPC unary RPC |
 | `zlink-<lang>` | The raw binding's ROUTER↔ROUTER TCP path, bypassing the framework |
 | `zlink-framework-<lang>` | Framework RouteMesh request/send addressed directly to a node RID |
+| `zlink-cpp-json` | C++ raw binding path with the shared game-message JSON fixture body (sizes 1024/4096 only) |
+| `zlink-framework-cpp-json` | C++ framework default typed JSON path with the same fixture body (sizes 1024/4096 only) |
 
-The default execution order is `grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`. Since the
-three implementations run the same pattern at the same payload size and the same active duration,
-the table shows the three implementations side by side under one pattern.
+The default execution order puts the C++ `zlink-cpp-json` and
+`zlink-framework-cpp-json` cells after the existing `grpc-<lang>`, `zlink-<lang>`, and
+`zlink-framework-<lang>` cells. Both JSON implementations share
+`framework/bench/grpc/ladder-mixed-payload.json`; the C++ golden test is
+`bench_cpp_game_json_fixture`. Each implementation runs the same pattern at the same payload size
+and active duration, so the table shows the implementations side by side under one pattern.
 
 ### 1.2 The C Reference Bench
 
@@ -81,11 +86,13 @@ and a value obtained before that change completes isn't a value that satisfies t
 
 ## 2. Measurement Patterns
 
-The initial scope uses only two payload sizes and three patterns. The default payload sizes are
-`1024` and `4096` bytes. The payload size is the full size of the protobuf `bytes body` or the raw
-ZLink message body. The first 29 bytes are used as the measurement header, and the rest is filled
-as the business payload area. The gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, and
-ZMP header aren't included in this size.
+The initial scope uses two payload sizes and three patterns. The default payload sizes are `1024`
+and `4096` bytes. For the existing protobuf rows, payload size is the length of the protobuf
+`bytes body` or raw ZLink message body. The first 29 bytes hold the measurement header, and the rest
+is filled as the business payload area. The C++ JSON rows use the shared fixture's item count for
+each size; their JSON bodies are 1,011 and 4,087 bytes, as checked by the golden test. The gRPC
+HTTP/2 frame, protobuf field overhead, ZLink envelope, and ZMP header aren't included in payload
+size.
 
 | Pattern Name | gRPC | ZLink raw binding | ZLink framework | Interpretation |
 |-----------|------|-------------------|-----------------|------|
@@ -148,8 +155,8 @@ one-way send. Under this condition the difference was N times.
 
 ## 3. Execution Conditions
 
-- For each implementation (`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`) run one
-  **source process A** and one **target process B**. A has the HTTP trigger listener, a stats
+- For each implementation (`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`, and the C++
+  JSON variants) run one **source process A** and one **target process B**. A has the HTTP trigger listener, a stats
   endpoint, and the client toward B (gRPC stub, raw ROUTER, framework node client). B has the
   echo (request) or receive counter (send) and a stats endpoint. §10 defines the roles, the trigger
   contract, and the cell order.
@@ -164,8 +171,11 @@ one-way send. Under this condition the difference was N times.
   pattern depth is not a condition that is set but a result that is measured and recorded
   (§5.2). This bench has no `request_window` setting.
 - The default `submit_concurrency` is `8`.
-- gRPC and ZLink framework use the same protobuf DTO. The ZLink raw binding skips the framework but
-  puts the same shape on the wire: two parts, an envelope header part and a protobuf-encoded
+- Each cell uses one server-to-server connection — one gRPC channel is shared by eight stubs, one
+  raw ROUTER is shared by eight streams, and one RouteMesh socket is shared by its streams.
+- gRPC and the two existing ZLink rows use the same protobuf DTO. The ZLink raw binding skips the
+  framework but puts the same shape on the wire: two parts, an envelope header part and a
+  protobuf-encoded
   `BenchPayload` part, with the 29-byte measurement header inside that protobuf `bytes body`. This
   shape is not a choice; it is a precondition of the judgement. §7.2 formula 1 divides
   `zlink-<lang>` by `zlink-c`, so two rows with different wire shapes would divide two different
@@ -404,8 +414,13 @@ reaches 60% or more of the raw binding result, the framework's added cost is jud
 ```text
 at each of payload sizes 1024 and 4096:
 zlink-<lang> / zlink-c                     >= 0.80   binding layer passes
-zlink-framework-<lang> / zlink-<lang>      >= 0.60   framework added cost passes (all three patterns)
+zlink-framework-<lang>-json / zlink-<lang>-json >= 0.60 framework added cost passes (all three patterns)
 ```
+
+The framework/binding 0.60 judgment uses the two cells with the shared JSON body:
+`zlink-framework-<lang>-json / zlink-<lang>-json`. In C++, these are
+`zlink-framework-cpp-json / zlink-cpp-json`. The existing protobuf-body rows remain for the gRPC
+comparison.
 
 Both formulas are calculated separately per payload size. A language passes only when it satisfies
 the criterion at both `1024` and `4096`. A result that satisfies only one size isn't a pass, and

@@ -181,3 +181,10 @@ bench_target(bench_cpp_submit_threads_test)
 bench_grpc_target(bench_cpp_submit_threads_test)
 target_link_libraries(bench_cpp_submit_threads_test PRIVATE zlink::framework_codec_protobuf)
 add_test(NAME bench_cpp_submit_threads COMMAND bench_cpp_submit_threads_test)
+
+add_executable(bench_cpp_game_json_test tests/game_json_test.cpp)
+target_include_directories(bench_cpp_game_json_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+target_link_libraries(bench_cpp_game_json_test PRIVATE zlink::framework protobuf::libprotobuf)
+target_compile_definitions(bench_cpp_game_json_test PRIVATE
+  BENCH_GAME_JSON_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../ladder-mixed-payload.json")
+add_test(NAME bench_cpp_game_json_fixture COMMAND bench_cpp_game_json_test)

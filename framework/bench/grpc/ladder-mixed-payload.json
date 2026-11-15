@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "shape": "mixed",
+  "wireOrder": "Framework JSON v1 field names in ascending ordinal order; int64 values use decimal JSON strings",
+  "fields": [
+    {
+      "name": "displayName",
+      "jsonType": "string",
+      "value": "Player_12345678"
+    },
+    {
+      "name": "gold",
+      "jsonType": "string",
+      "semanticType": "int64",
+      "value": "987654321"
+    },
+    {
+      "name": "heading",
+      "jsonType": "number",
+      "semanticType": "int32",
+      "value": 271
+    },
+    {
+      "name": "hp",
+      "jsonType": "string",
+      "semanticType": "int64",
+      "value": "287"
+    },
+    {
+      "name": "items",
+      "jsonType": "array<object>",
+      "value": "nestedItem"
+    },
+    {
+      "name": "level",
+      "jsonType": "string",
+      "semanticType": "int64",
+      "value": "42"
+    },
+    {
+      "name": "mp",
+      "jsonType": "string",
+      "semanticType": "int64",
+      "value": "164"
+    },
+    {
+      "name": "online",
+      "jsonType": "boolean",
+      "value": true
+    },
+    {
+      "name": "phase",
+      "jsonType": "string",
+      "semanticType": "int64",
+      "value": "1"
+    },
+    {
+      "name": "playerId",
+      "jsonType": "string",
+      "value": "player-0000000000000001"
+    },
+    {
+      "name": "roomId",
+      "jsonType": "string",
+      "value": "room-000000000000000001"
+    },
+    {
+      "name": "run",
+      "jsonType": "string",
+      "semanticType": "int64",
+      "value": "123"
+    },
+    {
+      "name": "sentNs",
+      "jsonType": "string",
+      "semanticType": "int64",
+      "value": "1700000000000000000"
+    },
+    {
+      "name": "seq",
+      "jsonType": "string",
+      "semanticType": "int64",
+      "value": "456"
+    },
+    {
+      "name": "session",
+      "jsonType": "string",
+      "value": "session-0000000000000001"
+    },
+    {
+      "name": "x",
+      "jsonType": "number",
+      "semanticType": "int32",
+      "value": -123456
+    },
+    {
+      "name": "y",
+      "jsonType": "number",
+      "semanticType": "int32",
+      "value": 7890
+    },
+    {
+      "name": "z",
+      "jsonType": "number",
+      "semanticType": "int32",
+      "value": 654321
+    }
+  ],
+  "nestedItem": {
+    "wireOrder": [
+      "count",
+      "id",
+      "slot"
+    ],
+    "fields": [
+      {
+        "name": "count",
+        "jsonType": "number",
+        "semanticType": "int32",
+        "valueRule": "zero-based-index % 9 + 1"
+      },
+      {
+        "name": "id",
+        "jsonType": "string",
+        "valueRule": "item-{1-based-index:08d}"
+      },
+      {
+        "name": "slot",
+        "jsonType": "number",
+        "semanticType": "int32",
+        "valueRule": "zero-based-index % 32"
+      }
+    ]
+  },
+  "stampFields": {
+    "run": "run",
+    "phase": "phase",
+    "phaseNumericValue": 1,
+    "seq": "seq"
+  },
+  "itemCounts": {
+    "1024": 16,
+    "4096": 88
+  },
+  "golden": {
+    "1024": {
+      "run": 123,
+      "phase": 1,
+      "seq": 456,
+      "itemCount": 16,
+      "json": "{\"displayName\":\"Player_12345678\",\"gold\":\"987654321\",\"heading\":271,\"hp\":\"287\",\"items\":[{\"count\":1,\"id\":\"item-00000001\",\"slot\":0},{\"count\":2,\"id\":\"item-00000002\",\"slot\":1},{\"count\":3,\"id\":\"item-00000003\",\"slot\":2},{\"count\":4,\"id\":\"item-00000004\",\"slot\":3},{\"count\":5,\"id\":\"item-00000005\",\"slot\":4},{\"count\":6,\"id\":\"item-00000006\",\"slot\":5},{\"count\":7,\"id\":\"item-00000007\",\"slot\":6},{\"count\":8,\"id\":\"item-00000008\",\"slot\":7},{\"count\":9,\"id\":\"item-00000009\",\"slot\":8},{\"count\":1,\"id\":\"item-00000010\",\"slot\":9},{\"count\":2,\"id\":\"item-00000011\",\"slot\":10},{\"count\":3,\"id\":\"item-00000012\",\"slot\":11},{\"count\":4,\"id\":\"item-00000013\",\"slot\":12},{\"count\":5,\"id\":\"item-00000014\",\"slot\":13},{\"count\":6,\"id\":\"item-00000015\",\"slot\":14},{\"count\":7,\"id\":\"item-00000016\",\"slot\":15}],\"level\":\"42\",\"mp\":\"164\",\"online\":true,\"phase\":\"1\",\"playerId\":\"player-0000000000000001\",\"roomId\":\"room-000000000000000001\",\"run\":\"123\",\"sentNs\":\"1700000000000000000\",\"seq\":\"456\",\"session\":\"session-0000000000000001\",\"x\":-123456,\"y\":7890,\"z\":654321}",
+      "byteLength": 1011
+    },
+    "4096": {
+      "run": 123,
+      "phase": 1,
+      "seq": 456,
+      "itemCount": 88,
+      "json": "{\"displayName\":\"Player_12345678\",\"gold\":\"987654321\",\"heading\":271,\"hp\":\"287\",\"items\":[{\"count\":1,\"id\":\"item-00000001\",\"slot\":0},{\"count\":2,\"id\":\"item-00000002\",\"slot\":1},{\"count\":3,\"id\":\"item-00000003\",\"slot\":2},{\"count\":4,\"id\":\"item-00000004\",\"slot\":3},{\"count\":5,\"id\":\"item-00000005\",\"slot\":4},{\"count\":6,\"id\":\"item-00000006\",\"slot\":5},{\"count\":7,\"id\":\"item-00000007\",\"slot\":6},{\"count\":8,\"id\":\"item-00000008\",\"slot\":7},{\"count\":9,\"id\":\"item-00000009\",\"slot\":8},{\"count\":1,\"id\":\"item-00000010\",\"slot\":9},{\"count\":2,\"id\":\"item-00000011\",\"slot\":10},{\"count\":3,\"id\":\"item-00000012\",\"slot\":11},{\"count\":4,\"id\":\"item-00000013\",\"slot\":12},{\"count\":5,\"id\":\"item-00000014\",\"slot\":13},{\"count\":6,\"id\":\"item-00000015\",\"slot\":14},{\"count\":7,\"id\":\"item-00000016\",\"slot\":15},{\"count\":8,\"id\":\"item-00000017\",\"slot\":16},{\"count\":9,\"id\":\"item-00000018\",\"slot\":17},{\"count\":1,\"id\":\"item-00000019\",\"slot\":18},{\"count\":2,\"id\":\"item-00000020\",\"slot\":19},{\"count\":3,\"id\":\"item-00000021\",\"slot\":20},{\"count\":4,\"id\":\"item-00000022\",\"slot\":21},{\"count\":5,\"id\":\"item-00000023\",\"slot\":22},{\"count\":6,\"id\":\"item-00000024\",\"slot\":23},{\"count\":7,\"id\":\"item-00000025\",\"slot\":24},{\"count\":8,\"id\":\"item-00000026\",\"slot\":25},{\"count\":9,\"id\":\"item-00000027\",\"slot\":26},{\"count\":1,\"id\":\"item-00000028\",\"slot\":27},{\"count\":2,\"id\":\"item-00000029\",\"slot\":28},{\"count\":3,\"id\":\"item-00000030\",\"slot\":29},{\"count\":4,\"id\":\"item-00000031\",\"slot\":30},{\"count\":5,\"id\":\"item-00000032\",\"slot\":31},{\"count\":6,\"id\":\"item-00000033\",\"slot\":0},{\"count\":7,\"id\":\"item-00000034\",\"slot\":1},{\"count\":8,\"id\":\"item-00000035\",\"slot\":2},{\"count\":9,\"id\":\"item-00000036\",\"slot\":3},{\"count\":1,\"id\":\"item-00000037\",\"slot\":4},{\"count\":2,\"id\":\"item-00000038\",\"slot\":5},{\"count\":3,\"id\":\"item-00000039\",\"slot\":6},{\"count\":4,\"id\":\"item-00000040\",\"slot\":7},{\"count\":5,\"id\":\"item-00000041\",\"slot\":8},{\"count\":6,\"id\":\"item-00000042\",\"slot\":9},{\"count\":7,\"id\":\"item-00000043\",\"slot\":10},{\"count\":8,\"id\":\"item-00000044\",\"slot\":11},{\"count\":9,\"id\":\"item-00000045\",\"slot\":12},{\"count\":1,\"id\":\"item-00000046\",\"slot\":13},{\"count\":2,\"id\":\"item-00000047\",\"slot\":14},{\"count\":3,\"id\":\"item-00000048\",\"slot\":15},{\"count\":4,\"id\":\"item-00000049\",\"slot\":16},{\"count\":5,\"id\":\"item-00000050\",\"slot\":17},{\"count\":6,\"id\":\"item-00000051\",\"slot\":18},{\"count\":7,\"id\":\"item-00000052\",\"slot\":19},{\"count\":8,\"id\":\"item-00000053\",\"slot\":20},{\"count\":9,\"id\":\"item-00000054\",\"slot\":21},{\"count\":1,\"id\":\"item-00000055\",\"slot\":22},{\"count\":2,\"id\":\"item-00000056\",\"slot\":23},{\"count\":3,\"id\":\"item-00000057\",\"slot\":24},{\"count\":4,\"id\":\"item-00000058\",\"slot\":25},{\"count\":5,\"id\":\"item-00000059\",\"slot\":26},{\"count\":6,\"id\":\"item-00000060\",\"slot\":27},{\"count\":7,\"id\":\"item-00000061\",\"slot\":28},{\"count\":8,\"id\":\"item-00000062\",\"slot\":29},{\"count\":9,\"id\":\"item-00000063\",\"slot\":30},{\"count\":1,\"id\":\"item-00000064\",\"slot\":31},{\"count\":2,\"id\":\"item-00000065\",\"slot\":0},{\"count\":3,\"id\":\"item-00000066\",\"slot\":1},{\"count\":4,\"id\":\"item-00000067\",\"slot\":2},{\"count\":5,\"id\":\"item-00000068\",\"slot\":3},{\"count\":6,\"id\":\"item-00000069\",\"slot\":4},{\"count\":7,\"id\":\"item-00000070\",\"slot\":5},{\"count\":8,\"id\":\"item-00000071\",\"slot\":6},{\"count\":9,\"id\":\"item-00000072\",\"slot\":7},{\"count\":1,\"id\":\"item-00000073\",\"slot\":8},{\"count\":2,\"id\":\"item-00000074\",\"slot\":9},{\"count\":3,\"id\":\"item-00000075\",\"slot\":10},{\"count\":4,\"id\":\"item-00000076\",\"slot\":11},{\"count\":5,\"id\":\"item-00000077\",\"slot\":12},{\"count\":6,\"id\":\"item-00000078\",\"slot\":13},{\"count\":7,\"id\":\"item-00000079\",\"slot\":14},{\"count\":8,\"id\":\"item-00000080\",\"slot\":15},{\"count\":9,\"id\":\"item-00000081\",\"slot\":16},{\"count\":1,\"id\":\"item-00000082\",\"slot\":17},{\"count\":2,\"id\":\"item-00000083\",\"slot\":18},{\"count\":3,\"id\":\"item-00000084\",\"slot\":19},{\"count\":4,\"id\":\"item-00000085\",\"slot\":20},{\"count\":5,\"id\":\"item-00000086\",\"slot\":21},{\"count\":6,\"id\":\"item-00000087\",\"slot\":22},{\"count\":7,\"id\":\"item-00000088\",\"slot\":23}],\"level\":\"42\",\"mp\":\"164\",\"online\":true,\"phase\":\"1\",\"playerId\":\"player-0000000000000001\",\"roomId\":\"room-000000000000000001\",\"run\":\"123\",\"sentNs\":\"1700000000000000000\",\"seq\":\"456\",\"session\":\"session-0000000000000001\",\"x\":-123456,\"y\":7890,\"z\":654321}",
+      "byteLength": 4087
+    }
+  }
+}
