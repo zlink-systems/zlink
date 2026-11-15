@@ -3,7 +3,6 @@ import { RequestRuntime } from '../foundation/request-runtime';
 import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import { isUtf8 } from 'node:buffer';
 import { channelErrorKindFromCode } from '../channels/channel-envelope';
-import { routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
   createZLinkRequest,
@@ -14,13 +13,11 @@ import {
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 import {
   type ActorRef,
-  type RoutingId,
   type ZLinkActorClient,
   type ZLinkActorRequestCall,
   type ZLinkActorSendCall,
   type ZLinkMessageSerializer,
-  ZLinkFrameworkException,
-  ZLinkSpotKind
+  ZLinkFrameworkException
 } from '../../contracts';
 
 import { ZLINK_MAX_ACTOR_ID_BYTES } from '../../contracts/Common/CoreTypes';
@@ -64,7 +61,6 @@ import {
   classifySubmitResult,
   requireOneWayCompletion,
   throwAlreadySubmitted,
-  ZLinkSubmitStatus,
   type ZLinkSubmitResult
 } from '../messaging/submission-result';
 import {
@@ -84,11 +80,6 @@ import {
   createMessageFollowId,
   type ZLinkActorMessageFollowContext
 } from './actor-message-follow-context';
-import {
-  encodeRemoteActorPacketRelayPayload,
-  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
-} from './actor-packet-relay-wire';
-import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
 
 export interface ZLinkActorClientOptions {
   readonly admission?: ZLinkRuntimeAdmissionGate;
@@ -111,7 +102,6 @@ export interface ZLinkActorClientOptions {
     requestOperation?: PendingOperation<unknown>
   ) => Promise<unknown> | undefined;
   readonly sendErrorReporter?: (error: unknown) => void;
-  readonly routeTransport?: ZLinkActorRoutedJoinTransport;
   readonly transportDeliveryGate?: () =>
     | {
         waitBeforeSubmit(
@@ -164,7 +154,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     explicitPacketName: string | undefined,
     message: unknown,
     metadata: ReadonlyMap<string, string>
-  ): Promise<ZLinkSubmitResult> {
+  ): Promise<void> {
     this.options.admission?.requireCall();
     const route = await this.resolveActorRoute(actorId);
     const { meshName, actorRef: actor } = route;
@@ -203,29 +193,13 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           if (duplicate !== undefined) submissions.push(duplicate);
         }
         await Promise.all(submissions);
-        return { status: ZLinkSubmitStatus.Submitted };
+        return;
       }
-      const node = this.requireNode(meshName);
-      if (
-        this.options.routeTransport !== undefined &&
-        !routingIdsEqual(node.status().routingId, actor.nodeRid)
-      ) {
-        await this.options.routeTransport.sendToSpot(
-          remoteActorRouteTarget(route),
-          encodeRemoteActorPacketRelayPayload({
-            actorId,
-            header: parts[0].data(),
-            payload: parts[1].data(),
-            bindingActorRef: actor,
-            actorRef: actor,
-            returnResponse: false,
-            messageFollowContext: messageFollow
-          }),
-          { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
-        );
-        return { status: ZLinkSubmitStatus.Submitted };
-      }
-      return await this.submitActorSend(meshName, toBackendActorRef(actor), parts, route);
+      requireOneWayCompletion(
+        await this.submitActorSend(meshName, toBackendActorRef(actor), parts, route),
+        'Actor send',
+        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound
+      );
     } catch (error) {
       throw this.mapActorFailure(actorId, error, routeFence, meshName);
     } finally {
@@ -340,7 +314,6 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
               remainingActorRequestTimeout(actorId, deadlineMs),
               signal,
               route,
-              messageFollow,
               onAdmitted,
               requestOperation,
               receiver
@@ -400,7 +373,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     if (routeFence !== undefined && resolver !== undefined)
       resolver.invalidateActorRouteIfMatches(routeFence);
     if (meshName !== undefined) this.options.staleActorRefReporter?.(meshName, actorId);
-    return actorLocationStale(actorId, error);
+    return error;
   }
 
   private throwIfKnownStale(route: ZLinkResolvedActorRoute): void {
@@ -489,73 +462,11 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
     route: ZLinkResolvedActorRoute,
-    messageFollowContext: ZLinkActorMessageFollowContext,
     onAdmitted: (() => void) | undefined,
     requestOperation: PendingOperation<unknown>,
     destination: OperationObserver<unknown, unknown>
   ): void {
     const node = this.requireNode(meshName);
-    if (
-      this.options.routeTransport !== undefined &&
-      !routingIdsEqual(node.status().routingId, actor.nodeRid)
-    ) {
-      const relay = encodeRemoteActorPacketRelayPayload({
-        actorId: actor.actorId,
-        header: parts[0].data(),
-        payload: parts[1].data(),
-        bindingActorRef: {
-          actorId: actor.actorId,
-          objectGeneration: actor.generation,
-          meshName,
-          nodeRid: actor.nodeRid as unknown as RoutingId
-        },
-        actorRef: {
-          actorId: actor.actorId,
-          objectGeneration: actor.generation,
-          meshName,
-          nodeRid: actor.nodeRid as unknown as RoutingId
-        },
-        returnResponse: true,
-        messageFollowContext
-      });
-      this.options.routeTransport.requestToSpot(
-        remoteActorRouteTarget(route),
-        relay,
-        {
-          packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-          timeoutMs,
-          signal,
-          onAdmitted,
-          requestOperation
-        },
-        {
-          operationCompleted: (id, value) => {
-            const reply = value as {
-              ok?: boolean;
-              error?: unknown;
-              errorKind?: unknown;
-              response?: TReply;
-            };
-            if (reply.ok !== true) {
-              destination.operationFailed(
-                id,
-                createInternalFrameworkException(
-                  remoteRelayErrorKind(reply.errorKind),
-                  typeof reply.error === 'string'
-                    ? reply.error
-                    : `Remote Actor request failed for '${actor.actorId}'.`
-                ),
-                undefined
-              );
-              return;
-            }
-            destination.operationCompleted(id, reply.response, undefined);
-          },
-          operationFailed: (id, error) => destination.operationFailed(id, error, undefined)
-        }
-      );
-      return;
-    }
     const completions = this.options.completionTableProvider(meshName);
     if (completions === undefined) {
       throw routeNotConnected('Actor request requires a running MeshNode completion table.');
@@ -638,24 +549,6 @@ function actorRouteInvalidationFence(
   };
 }
 
-function remoteActorRouteTarget(route: ZLinkResolvedActorRoute) {
-  if (route.enclosingSpotRoute !== undefined) {
-    return route.enclosingSpotRoute;
-  }
-  return {
-    routerChannelId: route.meshName,
-    targetNodeRid: route.actorRef.nodeRid,
-    spotId: (route.spotId ?? String(route.actorRef.nodeRid)) as unknown as RoutingId,
-    spotKind: route.spotId === undefined ? ZLinkSpotKind.Entry : ZLinkSpotKind.User,
-    targetSpotGeneration: route.spotGeneration ?? route.ownerNodeGeneration,
-    targetNodeGeneration: route.ownerNodeGeneration,
-    targetOwnerId: route.ownerId,
-    ownerLeaseGeneration: route.ownerLeaseGeneration,
-    authorityOwnerGeneration: route.authorityOwnerGeneration,
-    authorityStoreVersion: route.authorityStoreVersion
-  };
-}
-
 function createActorMessageFollowContext(
   route: ZLinkResolvedActorRoute,
   parts: readonly Message[],
@@ -689,14 +582,6 @@ function createActorMessageFollowContext(
     correlationId,
     operationId
   );
-}
-
-function remoteRelayErrorKind(value: unknown): ZLinkFrameworkInternalErrorKind {
-  return Object.values(ZLinkFrameworkInternalErrorKind).includes(
-    value as ZLinkFrameworkInternalErrorKind
-  )
-    ? (value as ZLinkFrameworkInternalErrorKind)
-    : ZLinkFrameworkInternalErrorKind.RequestFailed;
 }
 
 function requireActorId(actorId: string): void {
@@ -749,7 +634,7 @@ class DefaultZLinkActorSendCall implements ZLinkActorSendCall {
     private readonly submitter: (
       packetName: string | undefined,
       metadata: ReadonlyMap<string, string>
-    ) => Promise<ZLinkSubmitResult>,
+    ) => Promise<void>,
     private readonly message: unknown
   ) {}
 
@@ -766,14 +651,9 @@ class DefaultZLinkActorSendCall implements ZLinkActorSendCall {
   async submit(): Promise<void> {
     ensureSingleSubmit(this.executed);
     this.executed = true;
-    const result = await this.submitter(
+    await this.submitter(
       this.packet ?? resolveFrameworkPacketName(this.message, undefined, 'Actor'),
       this.selectedMetadata
-    );
-    requireOneWayCompletion(
-      result,
-      'Actor send',
-      ZLinkFrameworkInternalErrorKind.ActorRouteNotFound
     );
   }
 }
@@ -860,7 +740,7 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
 }
 
 function sameSpotRoute(sourceSpotId: unknown, route: ZLinkResolvedActorRoute): boolean {
-  const targetSpotId = route.enclosingSpotRoute?.spotId ?? route.spotId;
+  const targetSpotId = route.spotId;
   return targetSpotId !== undefined && String(sourceSpotId) === String(targetSpotId);
 }
 
@@ -1005,9 +885,12 @@ function routeNotConnected(message: string, cause?: unknown): ZLinkFrameworkExce
 }
 
 function isStaleActorError(error: unknown): boolean {
+  if (!(error instanceof ZLinkFrameworkException)) return false;
+  const kind = internalFrameworkErrorKind(error);
   return (
-    error instanceof ZLinkFrameworkException &&
-    internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.ActorLocationStale
+    kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
+    kind === ZLinkFrameworkInternalErrorKind.ActorRouteNotFound ||
+    kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
   );
 }
 
