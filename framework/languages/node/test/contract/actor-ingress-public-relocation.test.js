@@ -10,6 +10,7 @@ const locations = require('../../packages/framework-locations-redis/dist');
 const connector = require('../../packages/stream-connector/dist');
 const telemetry = require('./helpers/telemetry-log-capture');
 const framework = require('../../packages/framework/dist');
+const { ReceiveKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 function deferred() {
   let resolve;
@@ -303,6 +304,19 @@ test(
       const originalExecute = activation.executeActor.bind(activation);
       let queued = 0,
         entryQueued = 0;
+      let directQueued = 0;
+      const nodes = runtime.spotNodeRuntime;
+      const native = nodes.meshNode(mesh);
+      const mailbox = native.runtime.mailbox;
+      const enqueue = mailbox.tryEnqueue.bind(mailbox);
+      t.mock.method(mailbox, 'tryEnqueue', (record) => {
+        const accepted = enqueue(record);
+        if (accepted && record.stateful?.targetActor?.actorId === actorId &&
+            [ReceiveKind.ActorSend, ReceiveKind.ActorRequest].includes(record.stateful?.receiveKind)) {
+          directQueued++;
+        }
+        return accepted;
+      });
       t.mock.method(activation, 'executeActor', (id, ...args) => {
         const result = originalExecute(id, ...args);
         if (id === actorId) {
@@ -316,7 +330,7 @@ test(
         }
         return result;
       });
-      const entry = runtime.spotNodeRuntime.entryActivations.get(mesh).spotSerialExecutor;
+      const entry = nodes.entryActivations.get(mesh).spotSerialExecutor;
       const executeEntry = entry.executeActor.bind(entry);
       t.mock.method(entry, 'executeActor', (id, ...args) => {
         const result = executeEntry(id, ...args);
@@ -339,7 +353,7 @@ test(
       );
       await client.close();
       await until(
-        () => queued >= 3 || entryQueued >= 3,
+        () => directQueued >= 2 && (queued >= 1 || entryQueued >= 1),
         'send, request and physical disconnect did not enter the previous owner FIFO'
       );
       release.resolve();

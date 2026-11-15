@@ -276,6 +276,7 @@ export class ZLinkFrameworkRuntimeHost
       hasOwnerToken: this.locationOwner.currentRuntime?.currentOwnerToken !== undefined,
       ownerAdmissionOpen: this.admission.ownerAdmissionOpen(),
       channelRuntimeStarted: this.channelRuntime !== undefined,
+      actorRouteCache: this.actorClientLocationResolver?.[inspectRuntime](),
       fanoutStoreIsLocationStore:
         this.locationOwner.currentStores?.fanoutStore ===
         this.locationOwner.currentStores?.locationStore,
@@ -493,6 +494,8 @@ export class ZLinkFrameworkRuntimeHost
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics,
       fallbackNodeRid: `node-${randomUUID()}`,
+      observeActorAuthorityVersion: (actorId, storeVersion) =>
+        this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
       rewriteAuthorityPayloadForOwner
     });
     this.streamBindingRuntime = new ZLinkStreamBindingRuntime({
@@ -2975,10 +2978,6 @@ export class ZLinkFrameworkRuntimeHost
         this.locationOwner.currentLifecycle?.confirmAuthority(
           encodeAuthorityKey('actor', actorRef.actorId),
           authority
-        );
-        this.actorClientLocationResolver?.observeActorAuthorityVersion(
-          actorRef.actorId,
-          authority.storeVersion.value
         );
       },
       reportPostCommitError: (error) =>
