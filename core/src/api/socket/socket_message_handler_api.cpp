@@ -6,6 +6,7 @@
 #include "api/message/recv_result_internal.hpp"
 #include "api/socket/socket_completion_queue_internal.hpp"
 #include "core/msg.hpp"
+#include "core/stream_latency_diag.hpp"
 #include "sockets/stream/stream.hpp"
 
 #include <atomic>
@@ -94,6 +95,11 @@ zlink_recv_result_t zlink_stream_recv_packet (
     handle.socket->store_last_recv_source_rid (&source_rid);
     if (source_rid_out_)
         *source_rid_out_ = handle.socket->last_recv_source_rid_view ();
+    if (zlink::stream_latency_diag::enabled) {
+        const zlink::msg_t *header = reinterpret_cast<const zlink::msg_t *> (header_out_);
+        zlink::stream_latency_diag::delivered (header->transport_connection_id (),
+                                               header->stream_diag_sequence ());
+    }
     return ZLINK_RECV_OK;
 }
 

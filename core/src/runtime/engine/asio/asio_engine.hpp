@@ -21,6 +21,7 @@
 #include "protocol/i_encoder.hpp"
 #include "protocol/i_decoder.hpp"
 #include "core/msg.hpp"
+#include "core/stream_latency_diag.hpp"
 #include "protocol/metadata.hpp"
 #include "engine/asio/handler_allocator.hpp"
 #include "engine/asio/asio_engine_pipeline.hpp"
@@ -271,6 +272,9 @@ class asio_engine_t : public i_engine
     //  use) and return its size.
     size_t select_handshake_read_buffer ();
 
+    std::unique_ptr<stream_latency_diag::engine_t> _latency_diag;
+    void diag_read (size_t bytes);
+    void diag_write (size_t bytes);
     static const size_t read_buffer_size = 8192;
 
     //  Handshake-phase reads (no decoder yet) use a small lazily-allocated

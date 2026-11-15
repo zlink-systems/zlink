@@ -409,6 +409,16 @@ int zlink::stream_t::decode_packet_bytes (uint32_t source_rid_,
         return -1;
     };
     const auto enqueue_parts = [&] (msg_t *header_, msg_t *body_) {
+        if (stream_latency_diag::enabled) {
+            const uint64_t conn = source_pipe_->get_transport_connection_id ();
+            if (source_pipe_->diag_packet_conn != conn) {
+                source_pipe_->diag_packet_conn = conn;
+                source_pipe_->diag_packet_seq = 0;
+            }
+            const uint64_t seq = ++source_pipe_->diag_packet_seq;
+            header_->set_transport_connection_id (conn);
+            header_->set_stream_diag_sequence (stream_latency_diag::selected (seq) ? seq : 0);
+        }
         if (enqueue_packet (source_rid_, header_, body_) != 0) {
             const int saved_errno = errno;
             close_local_msg (header_);
@@ -817,6 +827,8 @@ int zlink::stream_t::xsend (
         } else {
             pipe_message_admission_t write_admission =
               pipe_message_admission_invalid;
+            if (stream_latency_diag::enabled)
+                out->diag_stream_tx = true;
             const bool ok =
               out->write_single_message_and_flush_no_recursive_hwm_check (
                 msg_, &write_admission);
@@ -895,6 +907,8 @@ int zlink::stream_t::xsend (
 
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
+        if (stream_latency_diag::enabled)
+            _current_out->diag_stream_tx = true;
         const bool ok =
           _current_out->write_single_message_and_flush_no_recursive_hwm_check (
             msg_, &write_admission);
@@ -981,6 +995,8 @@ int zlink::stream_t::xsend_routed (
         out->terminate (false);
     } else {
         pipe_message_admission_t write_admission = pipe_message_admission_invalid;
+        if (stream_latency_diag::enabled)
+            out->diag_stream_tx = true;
         if (!out->write_single_message_and_flush_no_recursive_hwm_check (
               msg_, &write_admission)) {
             if (admission_out_)

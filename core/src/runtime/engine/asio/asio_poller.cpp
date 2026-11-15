@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "utils/precompiled.hpp"
+#include "core/stream_latency_diag.hpp"
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
 
 #include "engine/asio/asio_poller.hpp"
@@ -447,6 +448,8 @@ void zlink::asio_poller_t::loop ()
         //  scenarios like ROUTER patterns where multiple messages arrive rapidly.
 
         //  Step 1: Process all ready events non-blocking
+        const uint64_t diag_start =
+          stream_latency_diag::enabled ? stream_latency_diag::cpu_now () : 0;
         std::size_t events_processed = _io_context.poll ();
         ASIO_DBG ("loop: poll() processed %zu events", events_processed);
 
@@ -462,8 +465,11 @@ void zlink::asio_poller_t::loop ()
             }
 
             ASIO_DBG ("loop: run_for %d ms (no ready events)", poll_timeout_ms);
-            _io_context.run_for (std::chrono::milliseconds (poll_timeout_ms));
+            events_processed += _io_context.run_for (std::chrono::milliseconds (poll_timeout_ms));
         }
+        if (stream_latency_diag::enabled)
+            stream_latency_diag::tick (stream_latency_diag::cpu_now () - diag_start,
+                                       events_processed);
         //  else: Events were processed, continue loop immediately to check
         //  for more ready events (batching effect)
         //  Clean up retired entries that have no pending operations

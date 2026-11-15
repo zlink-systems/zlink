@@ -175,6 +175,9 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
 {
     ENGINE_DBG ("Constructor called, fd=%d", fd_);
 
+    if (stream_latency_diag::enabled && _options.type == ZLINK_CORE_SOCKET_STREAM)
+        _latency_diag.reset (new stream_latency_diag::engine_t ());
+
     //  _pipeline.read_buffer is allocated lazily on the first handshake
     //  read (see start_async_read/speculative_read). Raw engines create
     //  their decoder at plug time and never use it.
@@ -602,6 +605,8 @@ bool zlink::asio_engine_t::speculative_read ()
         return true;
     }
 
+    if (stream_latency_diag::enabled)
+        diag_read (bytes);
     _pipeline.last_read_bytes = bytes;
 
     //  Mirror async path behavior for backpressure buffering.
@@ -719,6 +724,8 @@ void zlink::asio_engine_t::start_async_write ()
                 return;
             }
         } else {
+            if (stream_latency_diag::enabled)
+                diag_write (bytes);
             _outpos += bytes;
             _outsize -= bytes;
             if (_outsize == 0) {
@@ -988,6 +995,8 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
         return;
     }
 
+    if (stream_latency_diag::enabled)
+        diag_read (bytes_transferred);
     _pipeline.last_read_bytes = bytes_transferred;
 
     //  During backpressure, STREAM keeps proactor-style buffering, while
@@ -1132,6 +1141,9 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
 
     if (!_connection_facade.plugged)
         return;
+
+    if (stream_latency_diag::enabled)
+        diag_write (bytes_transferred);
 
     if (ec) {
         if (ec == boost::asio::error::operation_aborted && !_deferred_terminal_error)
@@ -1545,6 +1557,9 @@ void zlink::asio_engine_t::speculative_write ()
         return;
     }
 
+    if (stream_latency_diag::enabled)
+        diag_write (bytes);
+
     //  Partial or complete write succeeded
     _outpos += bytes;
     _outsize -= bytes;
@@ -1599,6 +1614,8 @@ void zlink::asio_engine_t::speculative_write ()
 
             _outpos += more_bytes;
             _outsize -= more_bytes;
+            if (stream_latency_diag::enabled)
+                diag_write (more_bytes);
             stream_spec_bytes += more_bytes;
 
             if (_outsize > 0) {
@@ -1904,7 +1921,26 @@ int zlink::asio_engine_t::push_one_then_decode_and_push (msg_t *msg_)
 
 int zlink::asio_engine_t::pull_msg_from_session (msg_t *msg_)
 {
-    return _connection_facade.session->pull_msg (msg_);
+    const int rc = _connection_facade.session->pull_msg (msg_);
+    if (stream_latency_diag::enabled && _latency_diag && rc == 0)
+        _latency_diag->pulled_msg (msg_->size (), msg_->stream_diag_sequence ());
+    return rc;
+}
+
+void zlink::asio_engine_t::diag_read (size_t bytes)
+{
+    if (_latency_diag && bytes) {
+        stream_latency_diag::pending (_pipeline.total_pending_bytes);
+        _latency_diag->rx.feed (_endpoint_uri_pair.connection_id, _pipeline.read_buffer_ptr, bytes,
+                                _options.stream_recv_mode == ZLINK_STREAM_RECV_MODE_PACKET,
+                                stream_latency_diag::read);
+    }
+}
+
+void zlink::asio_engine_t::diag_write (size_t bytes)
+{
+    if (_latency_diag && bytes)
+        _latency_diag->wrote (_endpoint_uri_pair.connection_id, bytes);
 }
 
 int zlink::asio_engine_t::push_msg_to_session (msg_t *msg_)

@@ -13,6 +13,7 @@
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "core/recv_internal.hpp"
 #include "core/scoped_msg.hpp"
+#include "core/stream_latency_diag.hpp"
 #include "sockets/router/router.hpp"
 
 namespace
@@ -173,6 +174,12 @@ zlink_recv_result_t zlink_recv (
           handle.socket, staged_metadata.return_source_rid_as_null
             ? NULL : &staged_metadata.source_node_rid, source_rid_out_);
         *part_count_out_ = staged_part_count;
+        if (zlink::stream_latency_diag::enabled && type == ZLINK_CORE_SOCKET_STREAM
+            && staged_part_count) {
+            const zlink::msg_t *part = reinterpret_cast<const zlink::msg_t *> (parts_out_);
+            zlink::stream_latency_diag::delivered (part->transport_connection_id (),
+                                                   part->stream_diag_sequence ());
+        }
         return ZLINK_RECV_OK;
     }
 
@@ -259,6 +266,11 @@ zlink_recv_result_t zlink_recv (
       source_rid_out_);
     *part_count_out_ = part_count;
     errno = 0;
+    if (zlink::stream_latency_diag::enabled && type == ZLINK_CORE_SOCKET_STREAM) {
+        const zlink::msg_t *part = reinterpret_cast<const zlink::msg_t *> (parts_out_);
+        zlink::stream_latency_diag::delivered (part->transport_connection_id (),
+                                               part->stream_diag_sequence ());
+    }
     return ZLINK_RECV_OK;
 }
 

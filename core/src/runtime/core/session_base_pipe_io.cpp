@@ -93,6 +93,10 @@ void zlink::session_base_t::release_decoder_frame (
 int zlink::session_base_t::push_msg_internal (msg_t *msg_,
                                               void **reservation_)
 {
+    if (stream_latency_diag::enabled && _pipe && options.type == ZLINK_CORE_SOCKET_STREAM) {
+        _pipe->diag_stream_rx = true;
+        _pipe->diag_packet = options.stream_recv_mode == ZLINK_STREAM_RECV_MODE_PACKET;
+    }
     if (_pipe)
         msg_->set_transport_connection_id (
           _pipe->get_transport_connection_id ());

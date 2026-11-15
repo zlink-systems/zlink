@@ -964,6 +964,7 @@ set(socket-sources
     ${socket-proxy-sources})
 
 set(engine-sources
+    src/runtime/core/stream_latency_diag.cpp
     src/runtime/engine/asio/asio_engine.cpp
     src/runtime/engine/asio/asio_poller.cpp
     src/runtime/engine/asio/asio_zmp_engine.cpp

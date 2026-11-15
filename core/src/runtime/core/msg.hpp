@@ -194,6 +194,21 @@ class msg_t
     uint32_t get_routing_id () const;
     int set_routing_id (uint32_t routing_id_);
     int reset_routing_id ();
+    // STREAM diagnostics use otherwise-unused auxiliary bytes, preserving ABI.
+    uint64_t stream_diag_sequence () const
+    {
+        return _u.base.auxiliary.bytes[0] == auxiliary_stream_diag
+                 ? _u.base.auxiliary.request_reply.sequence
+                 : 0;
+    }
+    void set_stream_diag_sequence (uint64_t seq)
+    {
+        if (_u.base.auxiliary.bytes[0] != auxiliary_none
+            && _u.base.auxiliary.bytes[0] != auxiliary_stream_diag)
+            return;
+        _u.base.auxiliary.request_reply.sequence = seq;
+        _u.base.auxiliary.bytes[0] = auxiliary_stream_diag;
+    }
     uint64_t transport_connection_id () const;
     void set_transport_connection_id (uint64_t connection_id_);
     const char *group () const;
@@ -273,7 +288,8 @@ class msg_t
         auxiliary_none,
         auxiliary_group_short,
         auxiliary_group_long,
-        auxiliary_request_reply
+        auxiliary_request_reply,
+        auxiliary_stream_diag
     };
 
     struct long_group_t

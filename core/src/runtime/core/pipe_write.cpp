@@ -993,7 +993,10 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
             }
         }
 
-        _out_pipe->write (*msg_, false);
+        if (stream_latency_diag::enabled && (diag_stream_rx || diag_stream_tx))
+            publish_outbound_frame_unlocked (*msg_, false);
+        else
+            _out_pipe->write (*msg_, false);
         const uint64_t bytes_written =
           _bytes_written.load (std::memory_order_acquire);
         const uint64_t peers_bytes_read =
@@ -1123,6 +1126,37 @@ bool zlink::pipe_t::counted_pending_message_ref (const msg_t &msg_)
 void zlink::pipe_t::publish_outbound_frame_unlocked (const msg_t &msg_,
                                                      bool more_)
 {
+    if (stream_latency_diag::enabled && (diag_stream_rx || diag_stream_tx) && !msg_.is_delimiter ()
+        && !msg_.is_credential () && !msg_.is_routing_id () && !(msg_.flags () & msg_t::command)) {
+        const uint64_t conn = get_transport_connection_id ();
+        if (diag_stream_rx) {
+            msg_t tagged = msg_;
+            if (!diag_packet) {
+                const uint64_t seq = diag_rx_enqueue.conn == conn ? diag_rx_enqueue.seq + 1 : 1;
+                tagged.set_stream_diag_sequence (stream_latency_diag::selected (seq) ? seq : 0);
+            }
+            diag_rx_enqueue.feed (conn, const_cast<msg_t &> (msg_).data (), msg_.size (),
+                                  diag_packet, stream_latency_diag::rx_enqueue);
+            _out_pipe->write (tagged, more_);
+        } else {
+            if (diag_tx_conn != conn) {
+                diag_tx_conn = conn;
+                diag_tx_seq = 0;
+            }
+            msg_t tagged = msg_;
+            const uint64_t seq = ++diag_tx_seq;
+            const bool sampled = stream_latency_diag::selected (seq);
+            tagged.set_stream_diag_sequence (sampled ? seq : 0);
+            if (sampled) {
+                stream_latency_diag::event (conn, seq, stream_latency_diag::accept,
+                                            stream_latency_diag::now ());
+                stream_latency_diag::event (conn, seq, stream_latency_diag::tx_enqueue,
+                                            stream_latency_diag::now ());
+            }
+            _out_pipe->write (tagged, more_);
+        }
+        return;
+    }
     if (!_conflate) {
         _out_pipe->write (msg_, more_);
         return;

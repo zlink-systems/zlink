@@ -17,6 +17,7 @@
 #include "core/endpoint.hpp"
 #include "core/msg.hpp"
 #include "core/pipe_stream_packet_state.hpp"
+#include "core/stream_latency_diag.hpp"
 #include "utils/mutex.hpp"
 #include "utils/macros.hpp"
 
@@ -291,6 +292,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool mark_stream_connect_event_emitted ();
     bool mark_connection_ready_event_emitted ();
     stream_packet_state_t &stream_packet_state ();
+    // Each field is used only by this endpoint's existing producer/consumer.
+    stream_latency_diag::parser_t diag_rx_enqueue;
+    bool diag_stream_rx = false, diag_stream_tx = false, diag_packet = false;
+    uint64_t diag_tx_conn = 0, diag_tx_seq = 0;
+    uint64_t diag_packet_conn = 0, diag_packet_seq = 0;
     mutex_t &transport_sync ();
     void close_stream_route ();
     bool stream_route_closed () const;
