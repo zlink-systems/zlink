@@ -23,7 +23,7 @@ for binary in "${GRPC_BIN}" "${RAW_BIN}" "${FW_BIN}" "${SOURCE_BIN}"; do
   [[ -x "${binary}" ]] || { echo "missing ${binary}; run without SKIP_BUILD=1" >&2; exit 1; }
 done
 
-check_ports_free 5240 5260
+check_ports_free 5240 5259
 mkdir -p "${OUTPUT_DIR}"
 a_pid=""
 b_pid=""
@@ -59,20 +59,20 @@ for run in $(seq 1 "${RUNS}"); do
         target_command=("${FW_BIN}" --endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
         ;;
       zlink-java-json)
-        trigger_url="http://127.0.0.1:5256"
-        source_stats_url="http://127.0.0.1:5257"
-        target_endpoint="tcp://127.0.0.1:5258"
-        target_command_endpoint="tcp://127.0.0.1:5259"
-        target_stats_url="http://127.0.0.1:5260"
+        trigger_url="http://127.0.0.1:5245"
+        source_stats_url="http://127.0.0.1:5246"
+        target_endpoint="tcp://127.0.0.1:5247"
+        target_command_endpoint="tcp://127.0.0.1:5248"
+        target_stats_url="http://127.0.0.1:5249"
         target_command=("${RAW_BIN}" --implementation "${impl}" --endpoint "${target_endpoint}" \
           --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
         ;;
       zlink-framework-java-json)
-        trigger_url="http://127.0.0.1:5256"
-        source_stats_url="http://127.0.0.1:5257"
-        target_endpoint="tcp://127.0.0.1:5258"
+        trigger_url="http://127.0.0.1:5252"
+        source_stats_url="http://127.0.0.1:5253"
+        target_endpoint="tcp://127.0.0.1:5254"
         target_command_endpoint=""
-        target_stats_url="http://127.0.0.1:5259"
+        target_stats_url="http://127.0.0.1:5255"
         target_command=("${FW_BIN}" --implementation "${impl}" --endpoint "${target_endpoint}" \
           --metrics-url "${target_stats_url}")
         ;;
@@ -116,7 +116,7 @@ for run in $(seq 1 "${RUNS}"); do
           "$((WARMUP_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
 
         cleanup_cell
-        wait_for_ports_free 5240 5260
+        wait_for_ports_free 5240 5259
       done
     done
   done

@@ -20,7 +20,7 @@ the two stacks transmit the same way" isn't this bench's question.
 
 ### 1.1 Implementation Names
 
-Three implementations are compared per language. `<lang>` is one of `dotnet`, `node`, `java`,
+Five implementations are compared per language (`kotlin` has only the first three). `<lang>` is one of `dotnet`, `node`, `java`,
 `kotlin`, `cpp`. The report table and the `RESULT` line use the same names.
 
 | Implementation Name | Meaning |
@@ -28,14 +28,14 @@ Three implementations are compared per language. `<lang>` is one of `dotnet`, `n
 | `grpc-<lang>` | That language's gRPC unary RPC |
 | `zlink-<lang>` | The raw binding's ROUTER↔ROUTER TCP path, bypassing the framework |
 | `zlink-framework-<lang>` | Framework RouteMesh request/send addressed directly to a node RID |
-| `zlink-cpp-json` | C++ raw binding path with the shared game-message JSON fixture body (sizes 1024/4096 only) |
-| `zlink-framework-cpp-json` | C++ framework default typed JSON path with the same fixture body (sizes 1024/4096 only) |
+| `zlink-<lang>-json` | The same raw binding path as `zlink-<lang>`; the body is the shared game message encoded and decoded with the language's standard JSON library (C++ nlohmann, .NET System.Text.Json, Java Jackson, Node `JSON.stringify`/`JSON.parse`) (sizes 1024/4096 only) |
+| `zlink-framework-<lang>-json` | The same RouteMesh path as `zlink-framework-<lang>`; the same game message is sent with the framework's default typed JSON (sizes 1024/4096 only) |
 
-The default execution order puts the C++ `zlink-cpp-json` and
-`zlink-framework-cpp-json` cells after the existing `grpc-<lang>`, `zlink-<lang>`, and
-`zlink-framework-<lang>` cells. Both JSON implementations share
-`framework/bench/grpc/ladder-mixed-payload.json`; the C++ golden test is
-`bench_cpp_game_json_fixture`. Each implementation runs the same pattern at the same payload size
+The default execution order is `grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`,
+`zlink-<lang>-json`, `zlink-framework-<lang>-json`. In all four languages both JSON implementations
+share `framework/bench/grpc/ladder-mixed-payload.json` (fields, order, item count per size, stamp
+fields, golden bodies), and each language tests that both encoders produce the golden body byte for
+byte. Each implementation runs the same pattern at the same payload size
 and active duration, so the table shows the implementations side by side under one pattern.
 
 ### 1.2 The C Reference Bench
@@ -89,7 +89,7 @@ and a value obtained before that change completes isn't a value that satisfies t
 The initial scope uses two payload sizes and three patterns. The default payload sizes are `1024`
 and `4096` bytes. For the existing protobuf rows, payload size is the length of the protobuf
 `bytes body` or raw ZLink message body. The first 29 bytes hold the measurement header, and the rest
-is filled as the business payload area. The C++ JSON rows use the shared fixture's item count for
+is filled as the business payload area. The JSON rows use the shared fixture's item count for
 each size; their JSON bodies are 1,011 and 4,087 bytes, as checked by the golden test. The gRPC
 HTTP/2 frame, protobuf field overhead, ZLink envelope, and ZMP header aren't included in payload
 size.
@@ -418,9 +418,9 @@ zlink-framework-<lang>-json / zlink-<lang>-json >= 0.60 framework added cost pas
 ```
 
 The framework/binding 0.60 judgment uses the two cells with the shared JSON body:
-`zlink-framework-<lang>-json / zlink-<lang>-json`. In C++, these are
-`zlink-framework-cpp-json / zlink-cpp-json`. The existing protobuf-body rows remain for the gRPC
-comparison.
+`zlink-framework-<lang>-json / zlink-<lang>-json`. The framework's default payload is typed JSON,
+so only a binding that sends the same JSON body leaves the framework layer's own cost. The existing
+protobuf-body rows remain for the gRPC comparison.
 
 Both formulas are calculated separately per payload size. A language passes only when it satisfies
 the criterion at both `1024` and `4096`. A result that satisfies only one size isn't a pass, and
@@ -610,7 +610,9 @@ same in every language.
 | `cpp` | 5280-5299 | 5280/5281, 5282/5283 | 5285/5286, 5287/5288/5289 | 5292/5293, 5294/5295 |
 | C reference (client-driven) | 6200-6219 | 6200/6201, 6202/6203 | 6205/6206, 6207/6208/6209 | none |
 
-`+16` to `+19` of each band are reserved. The runner checks that its own band's ports are free
+`zlink-<lang>-json` and `zlink-framework-<lang>-json` reuse the ports of `zlink-<lang>` and
+`zlink-framework-<lang>`; only one pair is measured at a time within a language, so they never
+overlap. `+16` to `+19` of each band are reserved. The runner checks that its own band's ports are free
 before starting a measurement. If one is in use it stops instead of moving to another port. Moving a
 port would make the endpoint recorded in the result disagree with the endpoint actually used. The
 Kotlin supplementary cells reuse Java's B, so they never run at the same time as a Java measurement
