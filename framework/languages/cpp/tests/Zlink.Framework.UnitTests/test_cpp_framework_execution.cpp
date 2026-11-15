@@ -8288,9 +8288,12 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
       target_address.node_rid, target_address.spot_id, target_address.object_generation,
       target_address.node_generation, target_address.authority_owner_generation,
       static_cast<std::uint64_t> (target_address.owner.lease_generation));
+    const auto target_resolver = std::make_shared<wire_join_spot_resolver_t> ();
+    target_resolver->address = target_address;
     auto joined = std::async (std::launch::async, [&] {
         auto result = std::move (source.join_application_actor_to_spot (
-                                   actor, target_address, zlink::message_t{}, join_timeout))
+                                   actor, spot_id_t (target_address.spot_id), target_resolver,
+                                   zlink::message_t{}, join_timeout))
                         .result ();
         if (result && result.value ().result_code == actor_join_reply_t::relayed) {
             const auto cleanup = result.value ().source_cleanup ().result ();
@@ -8465,10 +8468,12 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                                                     .owner = target_owner,
                                                     .node_generation =
                                                       target.status ().lifecycle_generation ()};
+        const auto local_resolver = std::make_shared<wire_join_spot_resolver_t> ();
+        local_resolver->address = local_address;
         auto local_join = std::async (std::launch::async, [&] {
-            return std::move (target.join_application_actor_to_spot (joined_result.value ().actor,
-                                                                     local_address,
-                                                                     zlink::message_t{}, 2s))
+            return std::move (target.join_application_actor_to_spot (
+                                joined_result.value ().actor, spot_id_t (local_address.spot_id),
+                                local_resolver, zlink::message_t{}, 2s))
               .result ();
         });
         if (local_join.wait_for (2s) == std::future_status::ready) {

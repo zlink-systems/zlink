@@ -298,6 +298,7 @@
         <Compile Include="Runtime/SpotRouteRecreateTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.Closing.cs"/>
+        <Compile Include="Runtime/SpotCloseConformanceTests.JoinFailures.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.Shutdown.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.SuccessorAdmission.cs"/>
         <Compile Include="Runtime/SpotCloseAdmissionSealTests.cs"/>

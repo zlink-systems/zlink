@@ -710,6 +710,39 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task SameNodeJoin_WithoutNativeRoutingRefRejectsEntrySpotTarget()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            var actor = new ProbeActor("4510-entry-no-native-ref");
+            var entrySpotId = Assert
+                .IsType<ZLinkEntrySpotActivation>(
+                    runtime.GetSpotNodeRuntime("entry").EntrySpotActivation
+                )
+                .SpotId;
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await runtime.JoinActorAsync(
+                    entrySpotId,
+                    actor,
+                    ZLinkMessage.Empty,
+                    CancellationToken.None
+                )
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            Assert.Equal($"Actor Join target '{entrySpotId}' is not active.", failure.Message);
+            Assert.Null(node.ActorJoinSubmittedParts);
+            Assert.Null(actor.Context.SpotId);
+            Assert.Null(runtime.GetOrCreateActorState(actor.ActorId).NativeActorRef);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task SameNodeJoin_WithoutNativeRoutingRefReportsTheLocalMissingTarget()
     {
         var node = new CapturingSpotNode();
@@ -717,7 +750,7 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var actor = new ProbeActor("b12-no-native-ref");
-            var failure = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await runtime.JoinActorAsync(
                     "b12-missing-target",
                     actor,
@@ -725,7 +758,8 @@ public sealed partial class EntrySpotActorDispatchTests
                     CancellationToken.None
                 )
             );
-            Assert.Equal("SPOT 'b12-missing-target' is not active.", failure.Message);
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            Assert.Equal("Actor Join target 'b12-missing-target' is not active.", failure.Message);
             Assert.Null(node.ActorJoinSubmittedParts);
             Assert.Null(actor.Context.SpotId);
             Assert.Null(runtime.GetOrCreateActorState(actor.ActorId).NativeActorRef);
