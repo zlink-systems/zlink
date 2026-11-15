@@ -210,6 +210,9 @@ function createNodeReadablePoller(socket: {
       }
       return promise;
     },
+    wake(): void {
+      settlePending(false);
+    },
     markDrained(): void {
       readable = false;
     },
