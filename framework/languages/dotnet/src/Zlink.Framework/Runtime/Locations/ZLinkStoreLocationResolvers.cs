@@ -49,6 +49,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         _options = options ?? new ZLinkLocationOptions();
         _time = timeProvider ?? leaseTracker.TimeProvider;
         _liveRows = new ZLinkLiveLocationRows(leaseTracker);
+        if (store is ZLinkProviderLocationRepository repository)
+            repository.AuthorityObserved = ObserveAuthority;
     }
 
     public async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
@@ -295,6 +297,24 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             return (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable);
         }
         return (row, liveRowPresent, ZLinkLocationResolutionKind.Ready);
+    }
+
+    internal void ObserveAuthority(ZLinkAuthorityKey key, string? storeVersion = null)
+    {
+        if (!ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out var spotId))
+            return;
+        var spotKey = new ZLinkSpotLocationKey(spotId);
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                // StoreVersion is opaque: a different observation invalidates the snapshot.
+                if (
+                    _spotRoutes.TryGetValue(spotKey, out var cached)
+                    && !string.Equals(cached.StoreVersion, storeVersion, StringComparison.Ordinal)
+                )
+                    _spotRoutes.Remove(spotKey);
+            })
+        );
     }
 
     internal void InvalidateSpotRoute(ZLinkSpotLocationKey key)

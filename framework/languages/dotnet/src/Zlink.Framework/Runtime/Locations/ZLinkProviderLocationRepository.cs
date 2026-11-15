@@ -18,6 +18,9 @@ internal sealed partial class ZLinkProviderLocationRepository(
 ) : IZLinkLocationRepository
 {
     private readonly ProviderBoundary _provider = new(provider);
+
+    // Successful authority observations are delivered before returning to the caller.
+    internal Action<ZLinkAuthorityKey, string?>? AuthorityObserved { get; set; }
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly TimeSpan _ownerLeaseFencingMargin =
         ownerLeaseFencingMargin ?? TimeSpan.FromSeconds(5);
