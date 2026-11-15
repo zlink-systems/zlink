@@ -148,7 +148,6 @@ for (const [changedVersion, departed] of [
       async handle(_spot, actor, _context, packet) {
         const state = manager.getState(actor.context.actorId);
         // This is the committed source-fence input used by the next Deferred Join.
-        assert.equal(state.ownerLeaseGeneration, 1n, 'handler must have a committed owner lease');
         assert.equal(state.locationGeneration, 12n);
         handlers++;
         order.push(packet.order);
@@ -317,7 +316,6 @@ for (const [changedVersion, departed] of [
     });
     try {
       assert.equal(await manager.findActor(actorId), undefined);
-      assert.equal(manager.getState(actorId).ownerLeaseGeneration, undefined);
       await probe();
       const stage = {
         ...materialized,

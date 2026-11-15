@@ -169,6 +169,7 @@ interface ServiceSpotMessageFollowState {
 export interface ServiceStatefulResult {
   readonly terminalResult: number;
   readonly failureCode: number;
+  readonly cause?: unknown;
   readonly failureMessage?: string;
   readonly payload?: ServiceApplicationPayload;
   readonly kindData?: ReceiveKindData;
@@ -6158,7 +6159,10 @@ function failure(error: unknown): ServiceStatefulResult {
   if (error instanceof ZLinkFrameworkException) {
     return internalFrameworkWireReply(error);
   }
-  return internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.RequestFailed);
+  return {
+    ...internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.RequestFailed),
+    cause: error
+  };
 }
 
 function actorKey(actor: Pick<ServiceActorRef, 'actorId' | 'generation'>): string {

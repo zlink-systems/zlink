@@ -28,7 +28,6 @@ function boundSource(actorId) {
   const state = new framework.ZLinkActorRuntimeState(actorId);
   state.setNativeActorRef({ nodeRid: sourceNode, actorId, generation: 9n });
   state.setLocationGeneration(3n);
-  state.setOwnerLeaseGeneration(5n);
   state.installBoundSessionBinding({
     routerChannelId: 'play',
     targetNodeRid: sessionNode,
@@ -46,6 +45,7 @@ function boundSource(actorId) {
 function sourceRuntime(source, events, options = {}) {
   const handoff = { begun: false };
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 5n }),
     routeTransport: {},
     spotManager: () =>
       options.beginActorTransfer === undefined

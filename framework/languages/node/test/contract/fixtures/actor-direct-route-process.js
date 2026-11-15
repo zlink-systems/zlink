@@ -9,6 +9,9 @@ const {
 const { Module, Injectable } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const f = require('@zlink-systems/framework');
+const {
+  ServiceRelocationObjectRestoreOwner
+} = require('../../../packages/framework/dist/internal');
 const n = require('@zlink-systems/nestjs');
 const {
   ZLinkRedisLocationStore,
@@ -30,6 +33,7 @@ class Move {
   }
 }
 let preparedResolve, resumeResolve, pendingDelivery;
+let releasePublication;
 const deliveryGate = { async waitBeforeSubmit() {} };
 class Notice {
   constructor(value = 'notice') {
@@ -204,6 +208,25 @@ async function start() {
 async function execute(action) {
   const id = process.env.ZLINK_TEST_SPOT;
   switch (action) {
+    case 'holdPublication': {
+      const openAdmission = ServiceRelocationObjectRestoreOwner.prototype.openAdmission;
+      const publication = new Promise((resolve) => {
+        releasePublication = () => {
+          ServiceRelocationObjectRestoreOwner.prototype.openAdmission = openAdmission;
+          resolve();
+        };
+      });
+      // Every committed target reaches admission, even when publication cleanup fails.
+      ServiceRelocationObjectRestoreOwner.prototype.openAdmission = async function (...args) {
+        send({ type: 'publication-held' });
+        await publication;
+        return await openAdmission.apply(this, args);
+      };
+      return true;
+    }
+    case 'resumePublication':
+      releasePublication();
+      return true;
     case 'waitNewOwner':
     case 'waitRouteReady':
       for await (const x of routeMesh.observe(meshName, 64, AbortSignal.timeout(10000))) {
