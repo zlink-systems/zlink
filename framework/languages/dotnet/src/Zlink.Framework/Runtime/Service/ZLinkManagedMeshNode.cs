@@ -5110,25 +5110,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
             return SubmitRoutedApplicationSend(peer, CreateStatefulWire(head, parts, metadata));
         }
-        if (
-            !_spots.TryGetValue(
-                ZLinkSpotId.FromBoundary(targetSpotId, nameof(targetSpotId)),
-                out var spot
-            )
-        )
-            return SubmitResult.NotFound;
         var hasLocalAuthority = _observedSpotAuthorities.TryGetValue(
             new ObservedSpotAuthorityKey(targetNodeRid, targetSpotId),
             out var localAuthority
         );
         if (
-            hasLocalAuthority
-            && (
-                localAuthority.TargetNodeGeneration != _lifecycleGeneration
-                || localAuthority.AuthorityOwnerGeneration != spot.AuthorityOwnerGeneration
-                || localAuthority.OwnerLeaseGeneration
-                    != checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
+            !TryAcceptDirectSpot(
+                targetSpotId,
+                targetSpotGeneration,
+                hasLocalAuthority ? localAuthority : null,
+                readyRoute?.Authority.OwnerId.Value,
+                out var spot
             )
+        )
+            return SubmitResult.NotFound;
+        // Message Follow retains the original incarnation's authority fence.
+        if (
+            messageFollowRoute is not null
+            && hasLocalAuthority
+            && localAuthority.AuthorityOwnerGeneration != spot.AuthorityOwnerGeneration
         )
             return SubmitResult.NotFound;
         if (!hasLocalAuthority)
@@ -5191,6 +5191,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             requestAdmission: requestAdmission
         );
         return SubmitResult.Ok;
+    }
+
+    private bool TryAcceptDirectSpot(
+        string spotId,
+        ulong objectGeneration,
+        ObservedAuthority? authority,
+        string? instanceOwnerId,
+        out ZLinkManagedSpot spot
+    )
+    {
+        if (!_spots.TryGetValue(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)), out spot!))
+            return false;
+        // Direct messages address the logical ID. An owner fence belongs only
+        // to its own incarnation; the current Ready queue owns admission.
+        return spot.IsActive
+            && (
+                instanceOwnerId is null
+                || spot.LifecycleGeneration >= objectGeneration
+                    && instanceOwnerId == _localRequestSourceFence.OwnerId
+            )
+            && (
+                authority is not { } observed
+                || observed.TargetNodeGeneration == _lifecycleGeneration
+                    && observed.OwnerLeaseGeneration
+                        == checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
+                    && (
+                        spot.LifecycleGeneration != objectGeneration
+                        || spot.AuthorityOwnerGeneration == observed.AuthorityOwnerGeneration
+                    )
+            );
     }
 
     private SubmitResult TryPrepareRemoteSpotWire(
@@ -8696,21 +8726,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 or ServiceWireConstants.Command.SpotRequest
         )
         {
-            var hasTargetSpot = _spots.TryGetValue(
-                ZLinkSpotId.FromBoundary(stateful.TargetSpotId, nameof(stateful.TargetSpotId)),
+            var accepted = TryAcceptDirectSpot(
+                stateful.TargetSpotId,
+                stateful.TargetSpotGeneration,
+                new ObservedAuthority(
+                    stateful.TargetNodeGeneration,
+                    stateful.AuthorityOwnerGeneration,
+                    stateful.OwnerLeaseGeneration
+                ),
+                instanceReadyRoute ? stateful.TargetOwnerId : null,
                 out var spot
             );
+            var hasTargetSpot = spot is not null;
             var localOwnerLeaseGeneration = checked(
                 (ulong)Volatile.Read(ref _localOwnerLeaseGeneration)
             );
-            if (
-                !hasTargetSpot
-                || instanceReadyRoute && spot!.LifecycleGeneration < stateful.TargetSpotGeneration
-                || spot!.LifecycleGeneration == stateful.TargetSpotGeneration
-                    && spot.AuthorityOwnerGeneration != stateful.AuthorityOwnerGeneration
-                || instanceReadyRoute && stateful.TargetOwnerId != _localRequestSourceFence.OwnerId
-                || stateful.OwnerLeaseGeneration != localOwnerLeaseGeneration
-            )
+            if (!accepted)
             {
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"stateful_spot_rejected source={sourceRid} target_node={stateful.TargetNodeRid} spot={stateful.TargetSpotId} wire_spot_gen={stateful.TargetSpotGeneration} wire_authority_gen={stateful.AuthorityOwnerGeneration} wire_lease_gen={stateful.OwnerLeaseGeneration} has_spot={hasTargetSpot} local_spot_gen={(hasTargetSpot ? spot!.LifecycleGeneration : 0)} local_authority_gen={(hasTargetSpot ? spot!.AuthorityOwnerGeneration : 0)} local_lease_gen={localOwnerLeaseGeneration}"
@@ -8769,7 +8800,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 }
                 return false;
             }
-            owner = MailboxKey.ForSpot(spot, MeshReadyDomains.Application);
+            owner = MailboxKey.ForSpot(spot!, MeshReadyDomains.Application);
             kind = request ? MeshRecordKind.SpotRequest : MeshRecordKind.SpotSend;
             operationKind = MeshOperationKind.SpotRequest;
         }

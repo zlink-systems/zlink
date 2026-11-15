@@ -562,7 +562,7 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
         catch (ZLinkFrameworkException error)
             when (ZLinkSpotHandleRequestExecution.IsStaleRoute(error))
         {
-            target.InvalidateRoute();
+            await target.InvalidateRouteAsync().ConfigureAwait(false);
             throw;
         }
     }
