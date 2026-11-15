@@ -210,6 +210,7 @@ async function runActive(transport, metrics, options, trigger) {
   const deadline = header.nowNs() + BigInt(Math.round(trigger.durationMs * 1e6));
   metrics.reset(deadline, trigger.phase === 'warmup' ? header.PHASE_WARMUP : header.PHASE_ACTIVE);
   const runId = headerRunId(trigger.runId);
+  const createPayload = transport.createPayload || header.createPayloadBytes;
   let sequence = 0;
   const nextSequence = () => sequence++;
   const boundary = delay(Math.ceil(Number(deadline - header.nowNs()) / 1e6)).then(async () => {
@@ -220,7 +221,16 @@ async function runActive(transport, metrics, options, trigger) {
 
   let running;
   if (trigger.pattern === 'request-serial') {
-    running = requestWorkers(1, transport, metrics, trigger, runId, nextSequence, deadline);
+    running = requestWorkers(
+      1,
+      transport,
+      metrics,
+      trigger,
+      runId,
+      nextSequence,
+      deadline,
+      createPayload
+    );
   } else if (trigger.pattern === 'request-window') {
     running = requestWorkers(
       trigger.requestWindow,
@@ -229,7 +239,8 @@ async function runActive(transport, metrics, options, trigger) {
       trigger,
       runId,
       nextSequence,
-      deadline
+      deadline,
+      createPayload
     );
   } else if (trigger.pattern === 'request-backpressure') {
     running = requestBackpressure(
@@ -240,7 +251,8 @@ async function runActive(transport, metrics, options, trigger) {
       trigger,
       runId,
       nextSequence,
-      deadline
+      deadline,
+      createPayload
     );
   } else if (trigger.pattern === 'send-saturation') {
     running = sendWorkers(
@@ -250,7 +262,8 @@ async function runActive(transport, metrics, options, trigger) {
       trigger,
       runId,
       nextSequence,
-      deadline
+      deadline,
+      createPayload
     );
   } else {
     throw new Error(`unsupported pattern ${trigger.pattern}`);
@@ -297,11 +310,20 @@ async function runActive(transport, metrics, options, trigger) {
   };
 }
 
-async function requestWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
+async function requestWorkers(
+  count,
+  transport,
+  metrics,
+  trigger,
+  runId,
+  nextSequence,
+  deadline,
+  createPayload
+) {
   const workers = Array.from({ length: count }, () =>
     (async () => {
       while (header.nowNs() < deadline) {
-        await executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
+        await executeRequest(transport, metrics, trigger, runId, 0, nextSequence(), createPayload);
       }
     })()
   );
@@ -316,20 +338,24 @@ async function requestBackpressure(
   trigger,
   runId,
   nextSequence,
-  deadline
+  deadline,
+  createPayload
 ) {
-  await Promise.all(Array.from({ length: count }, (_, stream) =>
-    requestBackpressureStream(
-      stream,
-      transport,
-      metrics,
-      options,
-      trigger,
-      runId,
-      nextSequence,
-      deadline
+  await Promise.all(
+    Array.from({ length: count }, (_, stream) =>
+      requestBackpressureStream(
+        stream,
+        transport,
+        metrics,
+        options,
+        trigger,
+        runId,
+        nextSequence,
+        deadline,
+        createPayload
+      )
     )
-  ));
+  );
 }
 
 async function requestBackpressureStream(
@@ -340,7 +366,8 @@ async function requestBackpressureStream(
   trigger,
   runId,
   nextSequence,
-  deadline
+  deadline,
+  createPayload
 ) {
   if (typeof transport.requestSubmission === 'function') {
     const pending = new Set();
@@ -352,12 +379,7 @@ async function requestBackpressureStream(
       // continue to make progress.
       if (blocked === null) {
         const sequence = nextSequence();
-        const payload = header.createPayloadBytes(
-          trigger.payloadBytes,
-          runId,
-          metrics.phase,
-          sequence
-        );
+        const payload = createPayload(trigger.payloadBytes, runId, metrics.phase, sequence);
         const started = metrics.begin(stream);
         let submission;
         try {
@@ -369,7 +391,7 @@ async function requestBackpressureStream(
           const reply = (async () => {
             try {
               const value = await submission.reply;
-              validateReply(value, runId, metrics.phase, trigger.payloadBytes, sequence);
+              validateReply(value, runId, metrics.phase, trigger.payloadBytes, sequence, transport);
               metrics.complete(started, true, null, stream);
             } catch (error) {
               metrics.complete(started, false, error, stream);
@@ -406,7 +428,15 @@ async function requestBackpressureStream(
   const pending = new Set();
   let issuedSinceYield = 0;
   while (header.nowNs() < deadline) {
-    const operation = executeRequest(transport, metrics, trigger, runId, stream, nextSequence());
+    const operation = executeRequest(
+      transport,
+      metrics,
+      trigger,
+      runId,
+      stream,
+      nextSequence(),
+      createPayload
+    );
     pending.add(operation);
     operation.finally(() => pending.delete(operation));
     issuedSinceYield += 1;
@@ -419,17 +449,21 @@ async function requestBackpressureStream(
   await Promise.race([Promise.all([...pending]), delay(options.drainBoundMs)]);
 }
 
-async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
+async function sendWorkers(
+  count,
+  transport,
+  metrics,
+  trigger,
+  runId,
+  nextSequence,
+  deadline,
+  createPayload
+) {
   const workers = Array.from({ length: count }, (_, stream) =>
     (async () => {
       while (header.nowNs() < deadline) {
         const sequence = nextSequence();
-        const payload = header.createPayloadBytes(
-          trigger.payloadBytes,
-          runId,
-          metrics.phase,
-          sequence
-        );
+        const payload = createPayload(trigger.payloadBytes, runId, metrics.phase, sequence);
         const started = metrics.begin(stream);
         try {
           if (typeof transport.sendSubmission === 'function') {
@@ -453,19 +487,23 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
   await Promise.all(workers);
 }
 
-async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
-  const payload = header.createPayloadBytes(trigger.payloadBytes, runId, metrics.phase, sequence);
+async function executeRequest(transport, metrics, trigger, runId, stream, sequence, createPayload) {
+  const payload = createPayload(trigger.payloadBytes, runId, metrics.phase, sequence);
   const started = metrics.begin(stream);
   try {
     const reply = await transport.request(stream, payload);
-    validateReply(reply, runId, metrics.phase, trigger.payloadBytes, sequence);
+    validateReply(reply, runId, metrics.phase, trigger.payloadBytes, sequence, transport);
     metrics.complete(started, true, null, stream);
   } catch (error) {
     metrics.complete(started, false, error, stream);
   }
 }
 
-function validateReply(reply, runId, phase, payloadBytes, sequence) {
+function validateReply(reply, runId, phase, payloadBytes, sequence, transport) {
+  if (typeof transport.validateReply === 'function') {
+    transport.validateReply(reply, runId, phase, payloadBytes, sequence);
+    return;
+  }
   const decoded = header.decode(reply);
   if (!header.isExpected(decoded, runId, phase, payloadBytes, sequence)) {
     throw new Error('echo reply did not carry the expected metric header');

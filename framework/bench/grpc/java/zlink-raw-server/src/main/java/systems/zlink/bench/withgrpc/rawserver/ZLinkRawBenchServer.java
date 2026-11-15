@@ -2,10 +2,9 @@
 
 package systems.zlink.bench.withgrpc.rawserver;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.util.List;
 import systems.zlink.bench.withgrpc.shared.Args;
+import systems.zlink.bench.withgrpc.shared.BenchGameJson;
+import systems.zlink.bench.withgrpc.shared.BenchGamePayload;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
 import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
@@ -20,59 +19,80 @@ import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
 /**
- * {@code zlink-<lang>} server, java row: raw binding, ROUTER&lt;-&gt;ROUTER
- * (FB-001, spec section 1.3).
+ * {@code zlink-<lang>} server, java row: raw binding, ROUTER&lt;-&gt;ROUTER (FB-001, spec section
+ * 1.3).
  *
- * <p>Two ROUTERs, not one. spec section 3 separates the request echo endpoint from the
- * command endpoint so that an echo reply can never be counted in the
- * {@code send-saturation} receive total.
+ * <p>Two ROUTERs, not one. spec section 3 separates the request echo endpoint from the command
+ * endpoint so that an echo reply can never be counted in the {@code send-saturation} receive total.
  *
- * <p>Each ROUTER has its own blocking receive thread, and the stats endpoint runs on
- * its own executor. Unlike the single-threaded node harness this server can block in
- * {@code recv} without stalling the settle poll (spec section 3 / FB-008).
+ * <p>Each ROUTER has its own blocking receive thread, and the stats endpoint runs on its own
+ * executor. Unlike the single-threaded node harness this server can block in {@code recv} without
+ * stalling the settle poll (spec section 3 / FB-008).
  */
 public final class ZLinkRawBenchServer {
-    private ZLinkRawBenchServer() {
-    }
+    private ZLinkRawBenchServer() {}
 
     public static void main(String[] args) throws Exception {
         MeasurementTiming.initialize();
         String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5247");
         String commandEndpoint = Args.value(args, "--command-endpoint", "tcp://127.0.0.1:5248");
         String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5249");
+        boolean json = "zlink-java-json".equals(Args.value(args, "--implementation", "zlink-java"));
 
         BenchServerMetrics metrics = new BenchServerMetrics();
         boolean replyProbe = System.getenv("BENCH_REPLY_PROBE") != null;
         try (Context context = Zlink.createContext();
-             RouterSocket requestRouter = context.createRouterSocket();
-             RouterSocket commandRouter = context.createRouterSocket()) {
+                RouterSocket requestRouter = context.createRouterSocket();
+                RouterSocket commandRouter = context.createRouterSocket()) {
 
-            requestRouter.setRoutingId(RoutingId.from(
-                RawWire.RAW_REQUEST_SERVER_ID.getBytes(StandardCharsets.US_ASCII)));
-            commandRouter.setRoutingId(RoutingId.from(
-                RawWire.RAW_COMMAND_SERVER_ID.getBytes(StandardCharsets.US_ASCII)));
+            requestRouter.setRoutingId(
+                    RoutingId.from(
+                            RawWire.RAW_REQUEST_SERVER_ID.getBytes(StandardCharsets.US_ASCII)));
+            commandRouter.setRoutingId(
+                    RoutingId.from(
+                            RawWire.RAW_COMMAND_SERVER_ID.getBytes(StandardCharsets.US_ASCII)));
             requestRouter.options().mandatory(true);
             commandRouter.options().mandatory(true);
             requestRouter.bind(endpoint);
             commandRouter.bind(commandEndpoint);
 
-            var stats = BenchStatsServer.start(metricsUrl, metrics,
-                "{\"implementation\":\"zlink-java\",\"socket\":\"ROUTER<->ROUTER\","
-                + "\"endpoint\":\"" + endpoint + "\",\"commandEndpoint\":\""
-                + commandEndpoint + "\"}");
+            var stats =
+                    BenchStatsServer.start(
+                            metricsUrl,
+                            metrics,
+                            "{\"implementation\":\""
+                                    + (json ? "zlink-java-json" : "zlink-java")
+                                    + "\",\"socket\":\"ROUTER<->ROUTER\","
+                                    + "\"endpoint\":\""
+                                    + endpoint
+                                    + "\",\"commandEndpoint\":\""
+                                    + commandEndpoint
+                                    + "\"}");
 
-            Thread requestThread = new Thread(
-                () -> pumpRequests(requestRouter, metrics, replyProbe), "bench-raw-request");
-            Thread commandThread = new Thread(
-                () -> pumpCommands(commandRouter, metrics), "bench-raw-command");
+            Thread requestThread =
+                    new Thread(
+                            () -> pumpRequests(requestRouter, metrics, replyProbe, json),
+                            "bench-raw-request");
+            Thread commandThread =
+                    new Thread(
+                            () -> pumpCommands(commandRouter, metrics, json), "bench-raw-command");
             requestThread.setDaemon(true);
             commandThread.setDaemon(true);
             try {
                 requestThread.start();
                 commandThread.start();
-                System.err.println("[raw-server] request=" + endpoint + " command="
-                    + commandEndpoint + " stats=" + metricsUrl);
+                System.err.println(
+                        "[raw-server] request="
+                                + endpoint
+                                + " command="
+                                + commandEndpoint
+                                + " stats="
+                                + metricsUrl);
                 if (System.in.read() < 0) {
                     Thread.currentThread().join();
                 }
@@ -89,10 +109,14 @@ public final class ZLinkRawBenchServer {
     }
 
     private static final java.util.concurrent.atomic.AtomicInteger probeCount =
-        new java.util.concurrent.atomic.AtomicInteger();
+            new java.util.concurrent.atomic.AtomicInteger();
 
     private static void pumpRequests(
-        RouterSocket socket, BenchServerMetrics metrics, boolean replyProbe) {
+            RouterSocket socket, BenchServerMetrics metrics, boolean replyProbe, boolean json) {
+        if (json) {
+            pumpRequestsJson(socket, metrics, replyProbe);
+            return;
+        }
         try (Received received = new Received()) {
             while (true) {
                 boolean receivedMessage = false;
@@ -113,11 +137,14 @@ public final class ZLinkRawBenchServer {
                     // unsuccessful one leaves them caller-owned, and leaking a wrapper
                     // per reply is what starves the reply path at depth.
                     try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
-                         Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
+                            Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
                         boolean hasToken = received.replyToken().isPresent();
                         if (replyProbe && probeCount.getAndIncrement() < 5) {
-                            System.err.println("[probe] reply branch hasToken=" + hasToken
-                                + " parts=" + received.parts().size());
+                            System.err.println(
+                                    "[probe] reply branch hasToken="
+                                            + hasToken
+                                            + " parts="
+                                            + received.parts().size());
                         }
                         if (hasToken) {
                             received.reply().message(header).message(replyBody).submit();
@@ -152,7 +179,12 @@ public final class ZLinkRawBenchServer {
         }
     }
 
-    private static void pumpCommands(RouterSocket socket, BenchServerMetrics metrics) {
+    private static void pumpCommands(
+            RouterSocket socket, BenchServerMetrics metrics, boolean json) {
+        if (json) {
+            pumpCommandsJson(socket, metrics);
+            return;
+        }
         try (Received received = new Received()) {
             while (true) {
                 boolean receivedMessage = false;
@@ -190,11 +222,97 @@ public final class ZLinkRawBenchServer {
         }
     }
 
+    private static void pumpRequestsJson(
+            RouterSocket socket, BenchServerMetrics metrics, boolean replyProbe) {
+        try (Received received = new Received()) {
+            while (true) {
+                boolean receivedMessage = false;
+                try {
+                    if (!socket.recv(received, RecvFlags.NONE)) {
+                        continue;
+                    }
+                    receivedMessage = true;
+                    BenchGamePayload payload = decodeJson(lastPart(received));
+                    if (payload == null) {
+                        metrics.recordError();
+                        continue;
+                    }
+                    metrics.record(payload);
+                    try (Message header = Message.from(RawWire.JSON_RESPONSE_ENVELOPE);
+                            Message replyBody = Message.from(BenchGameJson.encode(payload))) {
+                        boolean hasToken = received.replyToken().isPresent();
+                        if (replyProbe && probeCount.getAndIncrement() < 5) {
+                            System.err.println(
+                                    "[probe] reply branch hasToken="
+                                            + hasToken
+                                            + " parts="
+                                            + received.parts().size());
+                        }
+                        if (hasToken) {
+                            received.reply().message(header).message(replyBody).submit();
+                        } else {
+                            received.send().message(header).message(replyBody).submit();
+                        }
+                    }
+                } catch (ZlinkRecvException error) {
+                    if (error.getResult() == RecvResult.TERMINATED) return;
+                    if (error.getResult() == RecvResult.NO_DATA) continue;
+                    if (receivedMessage) metrics.recordError();
+                    System.err.println("raw JSON request loop failed: " + error);
+                } catch (Exception error) {
+                    if (receivedMessage) metrics.recordError();
+                    System.err.println("raw JSON request loop failed: " + error);
+                }
+            }
+        }
+    }
+
+    private static void pumpCommandsJson(RouterSocket socket, BenchServerMetrics metrics) {
+        try (Received received = new Received()) {
+            while (true) {
+                boolean receivedMessage = false;
+                try {
+                    if (!socket.recv(received, RecvFlags.NONE)) continue;
+                    receivedMessage = true;
+                    BenchGamePayload payload = decodeJson(lastPart(received));
+                    if (payload == null) metrics.recordError();
+                    else metrics.record(payload);
+                } catch (ZlinkRecvException error) {
+                    if (error.getResult() == RecvResult.TERMINATED) return;
+                    if (error.getResult() == RecvResult.NO_DATA) continue;
+                    if (receivedMessage) metrics.recordError();
+                    System.err.println("raw JSON command loop failed: " + error);
+                } catch (Exception error) {
+                    if (receivedMessage) metrics.recordError();
+                    System.err.println("raw JSON command loop failed: " + error);
+                }
+            }
+        }
+    }
+
     private static ByteBuffer lastPartBody(Received received) {
         List<Message> parts = received.parts();
         if (parts.isEmpty()) {
             return null;
         }
         return RawWire.decodeBenchPayloadBody(parts.get(parts.size() - 1).dataBuffer());
+    }
+
+    private static ByteBuffer lastPart(Received received) {
+        List<Message> parts = received.parts();
+        return parts.isEmpty() ? null : parts.get(parts.size() - 1).dataBuffer();
+    }
+
+    private static BenchGamePayload decodeJson(ByteBuffer body) {
+        if (body == null) {
+            return null;
+        }
+        byte[] bytes = new byte[body.remaining()];
+        body.duplicate().get(bytes);
+        try {
+            return BenchGameJson.decode(bytes);
+        } catch (IllegalArgumentException error) {
+            return null;
+        }
     }
 }

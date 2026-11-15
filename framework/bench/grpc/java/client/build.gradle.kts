@@ -20,6 +20,14 @@ application {
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
+val benchGameJsonTest by tasks.registering(JavaExec::class) {
+    description = "Verify raw and framework typed JSON against the shared game payload fixture"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.BenchGameJsonTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(benchGameJsonTest) }
+
 val rawProgressTest by tasks.registering(JavaExec::class) {
     description = "Verify raw request progress without a reply cap and across poller ownership changes"
     classpath = sourceSets.test.get().runtimeClasspath
