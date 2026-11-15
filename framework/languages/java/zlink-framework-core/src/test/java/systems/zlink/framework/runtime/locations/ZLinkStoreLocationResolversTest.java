@@ -907,10 +907,14 @@ final class ZLinkStoreLocationResolversTest {
                         .toList();
         Map<Integer, Integer> callsByOffset = new java.util.HashMap<>();
         AtomicInteger requeryCalls = new AtomicInteger();
+        int[] firstRowRequeryOffset = {-1};
         ZLinkLocationRepository store =
                 repository(
                         (method, arguments) -> {
                             if (method.equals("list")) {
+                                if ((Integer) arguments[2] < 1)
+                                    throw new IllegalArgumentException(
+                                            "authority scan limit must be positive");
                                 String prefix = (String) arguments[0];
                                 @SuppressWarnings("unchecked")
                                 var cursor = (Optional<ZLinkAuthorityScanCursor>) arguments[1];
@@ -924,13 +928,18 @@ final class ZLinkStoreLocationResolversTest {
                                 int callCount = callsByOffset.getOrDefault(offset, 0);
                                 callsByOffset.put(offset, callCount + 1);
                                 if (callCount > 0) requeryCalls.incrementAndGet();
+                                if (callCount > 0 && (Integer) arguments[2] == 1)
+                                    firstRowRequeryOffset[0] =
+                                            firstRowRequeryOffset[0] < 0
+                                                    ? offset
+                                                    : firstRowRequeryOffset[0];
                                 List<ZLinkAuthorityEntry> rows =
                                         entries.stream()
                                                 .filter(entry -> entry.key().startsWith(prefix))
                                                 .toList();
                                 int end =
                                         Math.min(
-                                                offset + Math.min((Integer) arguments[2], 256),
+                                                offset + Math.min((Integer) arguments[2], 2),
                                                 rows.size());
                                 String next = end < rows.size() ? Integer.toString(end) : null;
                                 if (callCount > 0 && next != null) next += ":" + "c".repeat(3000);
@@ -964,6 +973,15 @@ final class ZLinkStoreLocationResolversTest {
                                         new ZLinkPageRequest(1000, token))
                                 .toCompletableFuture()
                                 .join();
+                if (firstRowRequeryOffset[0] >= 0
+                        && token != null
+                        && Integer.parseInt(
+                                        new String(
+                                                java.util.Base64.getUrlDecoder().decode(token),
+                                                java.nio.charset.StandardCharsets.UTF_8))
+                                == firstRowRequeryOffset[0])
+                    assertEquals(
+                            expected.get(firstRowRequeryOffset[0]), page.items().get(0).globalId());
                 var wirePage = new LinkedHashMap<String, Object>();
                 wirePage.put(
                         "items",
@@ -988,6 +1006,7 @@ final class ZLinkStoreLocationResolversTest {
                         page.items().stream().map(ZLinkLocationObjectEntry::globalId).toList());
                 token = page.continuationToken();
             } while (token != null);
+            assertTrue(firstRowRequeryOffset[0] >= 0);
             assertTrue(requeryCalls.get() > 0);
             assertEquals(expected, actual);
             assertEquals(actual.size(), new java.util.HashSet<>(actual).size());

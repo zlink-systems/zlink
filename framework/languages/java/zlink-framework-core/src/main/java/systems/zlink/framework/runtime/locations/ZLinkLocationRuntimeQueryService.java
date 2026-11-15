@@ -254,7 +254,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                                                         itemPositions.add(
                                                                                 new BatchPosition(
                                                                                         cursor,
-                                                                                        row));
+                                                                                        row + 1));
                                                                         bytes[0] =
                                                                                 candidateItemsBytes;
                                                                         return used + 1;
@@ -338,11 +338,14 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         encodedBytes -= encodedObjectBytes(removed);
         int remainingBytes = encodedBytes;
         var position = itemPositions.remove(itemPositions.size() - 1);
-        if (itemPositions.isEmpty())
+        if (values.isEmpty())
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("encoded object location entry exceeds 4 MiB"));
+        if (position.rows() == 1)
             return fitObjectPage(
-                    prefix, values, remainingBytes, itemPositions, batchStart, batchStart);
+                    prefix, values, remainingBytes, itemPositions, position.start(), batchStart);
         return stores.unifiedStore()
-                .list(prefix, position.start(), position.rowsBefore(), OPEN)
+                .list(prefix, position.start(), position.rows() - 1, OPEN)
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthorityPage page))
@@ -358,7 +361,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                         });
     }
 
-    private record BatchPosition(Optional<ZLinkAuthorityScanCursor> start, int rowsBefore) {}
+    private record BatchPosition(Optional<ZLinkAuthorityScanCursor> start, int rows) {}
 
     static int encodedObjectPageBytes(
             int encodedItemsBytes, int itemCount, String continuationToken) {

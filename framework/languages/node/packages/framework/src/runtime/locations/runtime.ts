@@ -1632,9 +1632,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         ) {
           encodedItemsBytes -= this.encodedObjectSize(items.pop()!);
           const position = itemRows.pop()!;
-          if (itemRows.length === 0) {
-            cursor = batchCursor;
-            break;
+          if (items.length === 0)
+            throw new Error('The encoded object location entry exceeds 4 MiB.');
+          if (position.rows === 1) {
+            cursor = position.start;
+            continue;
           }
           const prior = await this.stores.authorityStore.listAuthorities(
             prefix,

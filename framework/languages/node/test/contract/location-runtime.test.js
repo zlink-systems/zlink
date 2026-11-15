@@ -932,13 +932,17 @@ test('object location page rechecks a cursor returned for its consumed rows', as
   });
   const calls = new Map();
   let requeryCalls = 0;
+  let firstRowRequeryOffset;
   const authorityStore = {
     async listAuthorities(prefix, cursor, limit) {
+      if (limit < 1) throw new RangeError('authority scan limit must be positive');
       const offset = cursor === undefined ? 0 : Number(cursor.encoded.split(':', 1)[0]);
       const callCount = calls.get(offset) ?? 0;
       calls.set(offset, callCount + 1);
       if (callCount > 0) requeryCalls++;
-      const end = Math.min(offset + limit, records.length);
+      if (callCount > 0 && limit === 1 && firstRowRequeryOffset === undefined)
+        firstRowRequeryOffset = offset;
+      const end = Math.min(offset + Math.min(limit, 2), records.length);
       const rows = records.slice(offset, end);
       const nextCursor =
         end < records.length
@@ -957,10 +961,19 @@ test('object location page rechecks a cursor returned for its consumed rows', as
   const all = [];
   let continuationToken;
   do {
+    const requestedOffset =
+      continuationToken === undefined
+        ? undefined
+        : Number(continuationToken.split(':', 1)[0]);
     const page = await runtime.listObjectLocations(
       { objectKind: 'user_spot' },
       { pageSize: 1000, continuationToken }
     );
+    if (firstRowRequeryOffset !== undefined && requestedOffset === firstRowRequeryOffset)
+      assert.equal(
+        page.items[0]?.globalId,
+        authorityKeys.decodeAuthorityKey(records[firstRowRequeryOffset].key).globalId
+      );
     const wire = JSON.stringify({
       items: page.items.map((entry) => ({
         globalId: entry.globalId,
@@ -976,6 +989,7 @@ test('object location page rechecks a cursor returned for its consumed rows', as
     all.push(...page.items.map((entry) => entry.globalId));
     continuationToken = page.continuationToken;
   } while (continuationToken !== undefined);
+  assert.notEqual(firstRowRequeryOffset, undefined);
   assert.ok(requeryCalls > 0);
   assert.deepEqual(
     all,

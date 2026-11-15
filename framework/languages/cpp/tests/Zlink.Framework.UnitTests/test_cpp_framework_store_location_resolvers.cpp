@@ -3508,6 +3508,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ObjectPageRechecksCursorForConsumedR
         std::vector<authority_entry_t> entries;
         std::map<std::size_t, std::size_t> calls_by_offset;
         std::size_t requery_calls = 0;
+        std::optional<std::size_t> first_row_requery_offset;
 
         task_t<authority_scan_result_t>
         list_authorities (std::string prefix,
@@ -3515,15 +3516,19 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ObjectPageRechecksCursorForConsumedR
                           std::size_t limit,
                           std::stop_token = {}) override
         {
+            if (limit == 0)
+                throw std::invalid_argument ("authority scan limit must be positive");
             const auto offset = cursor ? std::stoul (std::string (cursor->encoded ())) : 0u;
             const auto calls = calls_by_offset[offset]++;
             if (calls > 0)
                 ++requery_calls;
+            if (calls > 0 && limit == 1 && !first_row_requery_offset)
+                first_row_requery_offset = offset;
             std::vector<authority_entry_t> rows;
             for (const auto &entry : entries)
                 if (entry.key.value.starts_with (prefix))
                     rows.push_back (entry);
-            const auto end = std::min (offset + std::min (limit, std::size_t{256}), rows.size ());
+            const auto end = std::min (offset + std::min (limit, std::size_t{2}), rows.size ());
             authority_page_t page;
             page.items.assign (rows.begin () + offset, rows.begin () + end);
             if (end < rows.size ()) {
@@ -3567,6 +3572,11 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ObjectPageRechecksCursorForConsumedR
                         .result ();
         ASSERT_TRUE (result.has_value ());
         const auto &page = result.value ();
+        if (store.first_row_requery_offset && cursor
+            && std::stoul (*cursor) == *store.first_row_requery_offset) {
+            ASSERT_FALSE (page.items.empty ());
+            EXPECT_EQ (expected[*store.first_row_requery_offset], page.items.front ().global_id);
+        }
         nlohmann::json items = nlohmann::json::array ();
         for (const auto &entry : page.items)
             items.push_back (
@@ -3584,6 +3594,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ObjectPageRechecksCursorForConsumedR
             actual.push_back (entry.global_id);
         cursor = page.continuation_token;
     } while (cursor);
+    EXPECT_TRUE (store.first_row_requery_offset.has_value ());
     EXPECT_GT (store.requery_calls, 0u);
     EXPECT_EQ (expected, actual);
     EXPECT_EQ (actual.size (), std::set<std::string> (actual.begin (), actual.end ()).size ());

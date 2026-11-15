@@ -702,9 +702,12 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                     encoded_items_bytes -= entry_bytes;
                     const auto [start, rows] = item_rows.back ();
                     item_rows.pop_back ();
-                    if (item_rows.empty ()) {
-                        cursor = batch_cursor;
-                        break;
+                    if (output.items.empty ())
+                        co_return co_await unavailable<location_page_t<location_object_entry_t>> (
+                          "Location Store encoded object entry exceeds 4 MiB");
+                    if (rows == 1) {
+                        cursor = start;
+                        continue;
                     }
                     auto prior = co_await _store->list_authorities (prefix, start, rows - 1);
                     const auto *prior_page = std::get_if<authority_page_t> (&prior);

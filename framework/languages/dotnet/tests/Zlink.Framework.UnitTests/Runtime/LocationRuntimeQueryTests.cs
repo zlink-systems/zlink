@@ -467,7 +467,7 @@ public sealed class LocationRuntimeQueryTests
                 );
             })
             .ToArray();
-        var store = new ObjectPageFixtureStore(entries, 256, inflateRequeryCursor: true);
+        var store = new ObjectPageFixtureStore(entries, 2, inflateRequeryCursor: true);
         var options = new ZLinkLocationOptions();
         var query = new ZLinkLocationRuntimeQueryService(
             options,
@@ -484,6 +484,12 @@ public sealed class LocationRuntimeQueryTests
                 new ZLinkLocationObjectFilter(ZLinkLocationObjectKind.UserSpot),
                 new ZLinkPageRequest(1000, cursor)
             );
+            if (
+                store.FirstRowRequeryOffset is int expectedOffset
+                && cursor is not null
+                && int.Parse(cursor.Split(':', 2)[0]) == expectedOffset
+            )
+                Assert.Equal(expected[expectedOffset], page.Items[0].GlobalId);
             var bytes = JsonSerializer.SerializeToUtf8Bytes(
                 new
                 {
@@ -504,6 +510,7 @@ public sealed class LocationRuntimeQueryTests
             actual.AddRange(page.Items.Select(entry => entry.GlobalId));
             cursor = page.ContinuationToken;
         } while (cursor is not null);
+        Assert.NotNull(store.FirstRowRequeryOffset);
         Assert.True(store.RequeryCalls > 0);
         Assert.Equal(expected, actual);
         Assert.Equal(actual.Count, actual.Distinct().Count());
@@ -527,6 +534,7 @@ public sealed class LocationRuntimeQueryTests
 
         public int ScanCalls { get; private set; }
         public int RequeryCalls { get; private set; }
+        public int? FirstRowRequeryOffset { get; private set; }
 
         public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
             string prefix,
@@ -535,6 +543,7 @@ public sealed class LocationRuntimeQueryTests
             CancellationToken cancellationToken = default
         )
         {
+            ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
             ScanCalls++;
             Assert.True(prefix is "zla1:a:" or "zla1:s:");
             var rows = entries
@@ -545,6 +554,8 @@ public sealed class LocationRuntimeQueryTests
             callsByOffset[offset] = callCount + 1;
             if (callCount > 0)
                 RequeryCalls++;
+            if (callCount > 0 && limit == 1)
+                FirstRowRequeryOffset ??= offset;
             var end = Math.Min(offset + Math.Min(limit, storePageSize), rows.Length);
             var nextCursor = end < rows.Length ? end.ToString() : null;
             if (inflateRequeryCursor && callCount > 0 && nextCursor is not null)

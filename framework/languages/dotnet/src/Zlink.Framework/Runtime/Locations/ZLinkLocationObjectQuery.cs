@@ -143,10 +143,14 @@ internal sealed class ZLinkLocationObjectQuery(
                     items.RemoveAt(items.Count - 1);
                     var (start, rows) = itemRows[^1];
                     itemRows.RemoveAt(itemRows.Count - 1);
-                    if (itemRows.Count == 0)
+                    if (items.Count == 0)
+                        throw Unavailable(
+                            $"The encoded object location entry exceeds {MaximumEncodedPageBytes} bytes."
+                        );
+                    if (rows == 1)
                     {
-                        cursor = batchCursor;
-                        break;
+                        cursor = start;
+                        continue;
                     }
                     var prior = await ReadAsync(
                             "object-location-query-list",
