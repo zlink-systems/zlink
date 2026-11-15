@@ -27,6 +27,7 @@ import systems.zlink.framework.spots.ZLinkSpotKind;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -394,6 +395,421 @@ final class ZLinkStoreLocationResolversTest {
             assertEquals(
                     expected,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        }
+    }
+
+    @Test
+    void objectLocationPagesFollowSharedFixture() throws Exception {
+        var root = java.nio.file.Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (root != null
+                && !java.nio.file.Files.isRegularFile(
+                        root.resolve(
+                                "framework/runtime/conformance/object-location-pages-v1.json")))
+            root = root.getParent();
+        assertNotNull(root);
+        var fixture =
+                new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readTree(
+                                java.nio.file.Files.readString(
+                                        root.resolve(
+                                                "framework/runtime/conformance/object-location-pages-v1.json")));
+        for (var scenario : fixture.get("cases")) {
+            var ids = new java.util.HashMap<String, String>();
+            var entries = new java.util.ArrayList<ZLinkAuthorityEntry>();
+            for (var row : fixture.get("datasets").get(scenario.get("dataset").asText())) {
+                var profile = fixture.get("profiles").get(row.get("profile").asText());
+                var id = row.get("id").asText();
+                var globalId =
+                        profile.get("idPrefix").asText() + row.get("globalIdSuffix").asText();
+                ids.put(id, globalId);
+                var kind =
+                        ZLinkPlacementObjectKind.valueOf(
+                                row.get("kind").asText().toUpperCase(java.util.Locale.ROOT));
+                var original = readySpotSnapshot();
+                var snapshot =
+                        new ZLinkAuthoritySnapshot(
+                                "v1",
+                                original.payload(),
+                                1,
+                                1,
+                                original.ownerId(),
+                                1,
+                                new ZLinkPlacementAllocation(
+                                        ZLinkPlacementAllocationState.ACTIVE,
+                                        kind,
+                                        profile.get("stableType").asText(),
+                                        new ZLinkMeshNodeDescriptorKey(
+                                                profile.get("meshName").asText(),
+                                                RoutingId.from(profile.get("nodeRid").asText())),
+                                        1,
+                                        original.allocation().capacityBundle()),
+                                original.pendingCreation(),
+                                original.storeNow());
+                entries.add(
+                        new ZLinkAuthorityEntry(
+                                kind == ZLinkPlacementObjectKind.ACTOR
+                                        ? ZLinkAuthorityKeyCodec.actor(globalId)
+                                        : ZLinkAuthorityKeyCodec.spot(globalId),
+                                snapshot));
+            }
+            var scans = new AtomicInteger();
+            var store =
+                    repository(
+                            (method, arguments) -> {
+                                if (method.equals("readOwnerLease"))
+                                    return CompletableFuture.completedFuture(
+                                            new ZLinkOwnerLeaseMissing());
+                                if (!method.equals("list"))
+                                    throw new UnsupportedOperationException(method);
+                                scans.incrementAndGet();
+                                var prefix = (String) arguments[0];
+                                assertTrue(
+                                        prefix.equals(ZLinkAuthorityKeyCodec.actorPrefix())
+                                                || prefix.equals(
+                                                        ZLinkAuthorityKeyCodec.spotPrefix()));
+                                @SuppressWarnings("unchecked")
+                                var cursor = (Optional<ZLinkAuthorityScanCursor>) arguments[1];
+                                int offset =
+                                        cursor.map(value -> Integer.parseInt(value.encoded()))
+                                                .orElse(0);
+                                var rows =
+                                        entries.stream()
+                                                .filter(entry -> entry.key().startsWith(prefix))
+                                                .toList();
+                                int end =
+                                        Math.min(
+                                                offset
+                                                        + Math.min(
+                                                                (Integer) arguments[2],
+                                                                scenario.get("storePageSize")
+                                                                        .asInt()),
+                                                rows.size());
+                                return CompletableFuture.supplyAsync(
+                                        () ->
+                                                new ZLinkAuthorityPage(
+                                                        rows.subList(offset, end),
+                                                        end < rows.size()
+                                                                ? Optional.of(
+                                                                        new ZLinkAuthorityScanCursor(
+                                                                                Integer.toString(
+                                                                                        end)))
+                                                                : Optional.empty()));
+                            });
+            var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+            try (var runtime =
+                    new ZLinkLocationRuntime(
+                            stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+                var query =
+                        new ZLinkLocationRuntimeQueryService(
+                                stores, runtime, new ZLinkLocationOptions());
+                var jsonMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                var encodingProbe =
+                        new ZLinkLocationObjectEntry(
+                                "actor-é\"\\\b\t\n\f\r\u0001",
+                                1,
+                                "mesh-é\"\\\b\t\n\f\r\u0001",
+                                RoutingId.from("node-1"),
+                                ZLinkLocationObjectState.READY,
+                                "type-é\"\\\b\t\n\f\r\u0001");
+                assertEquals(
+                        jsonMapper.writeValueAsBytes(
+                                        Map.of(
+                                                "globalId", encodingProbe.globalId(),
+                                                "objectGeneration",
+                                                        encodingProbe.objectGeneration(),
+                                                "meshName", encodingProbe.meshName(),
+                                                "nodeRid", encodingProbe.nodeRid().toString(),
+                                                "state", encodingProbe.state().name(),
+                                                "stableType", encodingProbe.stableType()))
+                                .length,
+                        ZLinkLocationRuntimeQueryService.encodedObjectBytes(encodingProbe));
+                var filter =
+                        ZLinkLocationObjectFilter.of(
+                                ZLinkPlacementObjectKind.valueOf(
+                                        scenario.get("objectKind")
+                                                .asText()
+                                                .toUpperCase(java.util.Locale.ROOT)));
+                var all = new java.util.ArrayList<String>();
+                List<ZLinkLocationObjectEntry> previousBoundaryItems = null;
+                String previousBoundaryCursor = null;
+                String token = null;
+                for (var expected : scenario.get("expectedPages")) {
+                    var page =
+                            query.listObjectLocations(
+                                            filter,
+                                            new ZLinkPageRequest(
+                                                    scenario.get("pageSize").asInt(), token))
+                                    .toCompletableFuture()
+                                    .join();
+                    var encodedEntries =
+                            page.items().stream()
+                                    .map(
+                                            entry ->
+                                                    Map.of(
+                                                            "globalId", entry.globalId(),
+                                                            "objectGeneration",
+                                                                    entry.objectGeneration(),
+                                                            "meshName", entry.meshName(),
+                                                            "nodeRid", entry.nodeRid().toString(),
+                                                            "state", entry.state().name(),
+                                                            "stableType", entry.stableType()))
+                                    .toList();
+                    var encodedPage = new LinkedHashMap<String, Object>();
+                    encodedPage.put("items", encodedEntries);
+                    encodedPage.put("continuationToken", page.continuationToken());
+                    int actualPageBytes = jsonMapper.writeValueAsBytes(encodedPage).length;
+                    int calculatedItemsBytes =
+                            page.items().stream()
+                                    .mapToInt(ZLinkLocationRuntimeQueryService::encodedObjectBytes)
+                                    .sum();
+                    assertEquals(
+                            actualPageBytes,
+                            ZLinkLocationRuntimeQueryService.encodedObjectPageBytes(
+                                    calculatedItemsBytes,
+                                    page.items().size(),
+                                    page.continuationToken()));
+                    assertTrue(actualPageBytes <= 4 * 1024 * 1024);
+                    if (previousBoundaryItems != null
+                            && scenario.get("pageSize").asInt() == 1000
+                            && !page.items().isEmpty()
+                            && previousBoundaryItems.size() < 1000) {
+                        var candidateEntries =
+                                java.util.stream.Stream.concat(
+                                                previousBoundaryItems.stream(),
+                                                java.util.stream.Stream.of(page.items().get(0)))
+                                        .map(
+                                                entry ->
+                                                        Map.of(
+                                                                "globalId", entry.globalId(),
+                                                                "objectGeneration",
+                                                                        entry.objectGeneration(),
+                                                                "meshName", entry.meshName(),
+                                                                "nodeRid",
+                                                                        entry.nodeRid().toString(),
+                                                                "state", entry.state().name(),
+                                                                "stableType", entry.stableType()))
+                                        .toList();
+                        var candidatePage = new LinkedHashMap<String, Object>();
+                        candidatePage.put("items", candidateEntries);
+                        candidatePage.put("continuationToken", previousBoundaryCursor);
+                        assertTrue(
+                                jsonMapper.writeValueAsBytes(candidatePage).length
+                                        > 4 * 1024 * 1024);
+                    }
+                    previousBoundaryItems = page.items();
+                    previousBoundaryCursor = page.continuationToken();
+                    var expectedIds = new java.util.ArrayList<String>();
+                    expected.forEach(id -> expectedIds.add(ids.get(id.asText())));
+                    assertEquals(
+                            expectedIds.size(), page.items().size(), scenario.get("name").asText());
+                    for (int index = 0; index < expectedIds.size(); index++)
+                        assertEquals(
+                                expectedIds.get(index),
+                                page.items().get(index).globalId(),
+                                scenario.get("name").asText() + " entry " + index);
+                    all.addAll(
+                            page.items().stream().map(ZLinkLocationObjectEntry::globalId).toList());
+                    token = page.continuationToken();
+                }
+                assertNull(token, scenario.get("name").asText());
+                assertEquals(
+                        scenario.get("expectedScanCalls").asInt(),
+                        scans.get(),
+                        scenario.get("name").asText());
+                var expectedAll = new java.util.ArrayList<String>();
+                scenario.get("expectedAll").forEach(id -> expectedAll.add(ids.get(id.asText())));
+                assertEquals(expectedAll, all);
+                assertEquals(all.size(), new java.util.HashSet<>(all).size());
+            }
+        }
+    }
+
+    @Test
+    void objectQueryScansPagesRatherThanIndividualAuthorities() {
+        var entries =
+                java.util.stream.IntStream.range(0, 1000)
+                        .mapToObj(
+                                index ->
+                                        new ZLinkAuthorityEntry(
+                                                ZLinkAuthorityKeyCodec.spot("room-" + index),
+                                                readySpotSnapshot()))
+                        .toList();
+        for (int pageSize : new int[] {100, 256, 1000}) {
+            var scans = new AtomicInteger();
+            var limits = new java.util.ArrayList<Integer>();
+            var store =
+                    repository(
+                            (method, arguments) ->
+                                    switch (method) {
+                                        case "list" -> {
+                                            assertEquals(
+                                                    ZLinkAuthorityKeyCodec.spotPrefix(),
+                                                    arguments[0]);
+                                            @SuppressWarnings("unchecked")
+                                            var cursor =
+                                                    (Optional<ZLinkAuthorityScanCursor>)
+                                                            arguments[1];
+                                            int offset =
+                                                    cursor.map(
+                                                                    value ->
+                                                                            Integer.parseInt(
+                                                                                    value
+                                                                                            .encoded()))
+                                                            .orElse(0);
+                                            int limit = (Integer) arguments[2];
+                                            scans.incrementAndGet();
+                                            limits.add(limit);
+                                            int end = Math.min(offset + limit, entries.size());
+                                            yield CompletableFuture.completedFuture(
+                                                    new ZLinkAuthorityPage(
+                                                            entries.subList(offset, end),
+                                                            end < entries.size()
+                                                                    ? Optional.of(
+                                                                            new ZLinkAuthorityScanCursor(
+                                                                                    Integer
+                                                                                            .toString(
+                                                                                                    end)))
+                                                                    : Optional.empty()));
+                                        }
+                                        case "readOwnerLease" ->
+                                                CompletableFuture.completedFuture(
+                                                        new ZLinkOwnerLeaseMissing());
+                                        default -> throw new UnsupportedOperationException(method);
+                                    });
+            var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+            try (var runtime =
+                    new ZLinkLocationRuntime(
+                            stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+                var query =
+                        new ZLinkLocationRuntimeQueryService(
+                                stores, runtime, new ZLinkLocationOptions());
+                var ids = new java.util.ArrayList<String>();
+                String token = null;
+                do {
+                    var page =
+                            query.listObjectLocations(
+                                            ZLinkLocationObjectFilter.of(
+                                                    ZLinkPlacementObjectKind.USER_SPOT),
+                                            new ZLinkPageRequest(pageSize, token))
+                                    .toCompletableFuture()
+                                    .join();
+                    assertEquals(
+                            Math.min(pageSize, entries.size() - ids.size()), page.items().size());
+                    ids.addAll(
+                            page.items().stream().map(ZLinkLocationObjectEntry::globalId).toList());
+                    token = page.continuationToken();
+                    assertEquals((ids.size() + pageSize - 1) / pageSize, scans.get());
+                } while (token != null);
+                assertEquals(
+                        java.util.stream.IntStream.range(0, 1000)
+                                .mapToObj(index -> "room-" + index)
+                                .toList(),
+                        ids);
+                assertTrue(limits.stream().allMatch(limit -> limit == pageSize));
+            }
+        }
+    }
+
+    @Test
+    void objectQueryKeepsByteLimitedContinuationAtUnreturnedEntry() {
+        var original = readySpotSnapshot();
+        var stableType = "\u0001".repeat(255);
+        var descriptor =
+                new ZLinkMeshNodeDescriptorKey(
+                        "\u0001".repeat(160), RoutingId.from("\u0001".repeat(255)));
+        var allocation = original.allocation();
+        var snapshot =
+                new ZLinkAuthoritySnapshot(
+                        original.storeVersion(),
+                        original.payload(),
+                        original.objectGeneration(),
+                        original.authorityOwnerGeneration(),
+                        original.ownerId(),
+                        original.ownerLeaseGeneration(),
+                        new ZLinkPlacementAllocation(
+                                allocation.state(),
+                                allocation.objectKind(),
+                                stableType,
+                                descriptor,
+                                allocation.descriptorLifecycleGeneration(),
+                                ZLinkPlacementCapacityBundle.spot(
+                                        ZLinkPlacementObjectKind.USER_SPOT, stableType, 1)),
+                        original.pendingCreation(),
+                        original.storeNow());
+        var ids =
+                java.util.stream.IntStream.range(0, 1000)
+                        .mapToObj(index -> "\u0001".repeat(250) + String.format("%04d", index))
+                        .toList();
+        var entries =
+                ids.stream()
+                        .map(
+                                id ->
+                                        new ZLinkAuthorityEntry(
+                                                ZLinkAuthorityKeyCodec.spot(id), snapshot))
+                        .toList();
+        var store =
+                repository(
+                        (method, arguments) ->
+                                switch (method) {
+                                    case "list" -> {
+                                        @SuppressWarnings("unchecked")
+                                        var cursor =
+                                                (Optional<ZLinkAuthorityScanCursor>) arguments[1];
+                                        int offset =
+                                                cursor.map(
+                                                                value ->
+                                                                        Integer.parseInt(
+                                                                                value.encoded()))
+                                                        .orElse(0);
+                                        int end =
+                                                Math.min(
+                                                        offset
+                                                                + Math.min(
+                                                                        (Integer) arguments[2],
+                                                                        128),
+                                                        entries.size());
+                                        yield CompletableFuture.supplyAsync(
+                                                () ->
+                                                        new ZLinkAuthorityPage(
+                                                                entries.subList(offset, end),
+                                                                end < entries.size()
+                                                                        ? Optional.of(
+                                                                                new ZLinkAuthorityScanCursor(
+                                                                                        Integer
+                                                                                                .toString(
+                                                                                                        end)))
+                                                                        : Optional.empty()));
+                                    }
+                                    case "readOwnerLease" ->
+                                            CompletableFuture.completedFuture(
+                                                    new ZLinkOwnerLeaseMissing());
+                                    default -> throw new UnsupportedOperationException(method);
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            var filter = ZLinkLocationObjectFilter.of(ZLinkPlacementObjectKind.USER_SPOT);
+            var first =
+                    query.listObjectLocations(filter, new ZLinkPageRequest(1000, null))
+                            .toCompletableFuture()
+                            .join();
+            assertEquals(909, first.items().size());
+            assertEquals(
+                    ids.subList(0, first.items().size()),
+                    first.items().stream().map(ZLinkLocationObjectEntry::globalId).toList());
+            assertNotNull(first.continuationToken());
+            var second =
+                    query.listObjectLocations(
+                                    filter, new ZLinkPageRequest(1000, first.continuationToken()))
+                            .toCompletableFuture()
+                            .join();
+            assertEquals(
+                    ids.subList(first.items().size(), ids.size()),
+                    second.items().stream().map(ZLinkLocationObjectEntry::globalId).toList());
+            assertNull(second.continuationToken());
         }
     }
 

@@ -21,15 +21,10 @@ import java.util.concurrent.CompletionStage;
 
 /** Builds operational projections from descriptors and durable authority. */
 public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRuntimeQuery {
-    private static final int OBJECT_PAGE_ENVELOPE_BYTES = 256;
     private static final int MAXIMUM_QUERY_PAGE_ITEMS = 1000;
     private static final int DESCRIPTOR_SCAN_PAGE_ITEMS = 1000;
     private static final int MAX_OBJECT_PAGE_BYTES = 4 * 1024 * 1024;
     private static final int MAX_CONTINUATION_TOKEN_BYTES = 4096;
-    private static final int OBJECT_JSON_FIXED_BYTES =
-            "{\"globalId\":,\"objectGeneration\":,\"meshName\":,\"nodeRid\":,\"state\":,\"stableType\":}"
-                    .getBytes(StandardCharsets.UTF_8)
-                    .length;
     private static final ZLinkStoreCancellation OPEN = () -> false;
     private final ZLinkRegisteredLocationStores stores;
     private final ZLinkLocationRuntime runtime;
@@ -155,13 +150,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                 new ZLinkAuthorityScanCursor(
                                         parseCursor(safe.continuationToken())));
         return unavailable(
-                loadObjectPage(
-                        filter,
-                        prefix,
-                        cursor,
-                        pageSize,
-                        new ArrayList<>(),
-                        OBJECT_PAGE_ENVELOPE_BYTES),
+                loadObjectPage(filter, prefix, cursor, pageSize, new ArrayList<>(), 0),
                 "list object locations");
     }
 
@@ -196,102 +185,156 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
             List<ZLinkLocationObjectEntry> values,
             int encodedBytes) {
         return stores.unifiedStore()
-                .list(prefix, cursor, 1, OPEN)
+                .list(prefix, cursor, pageSize - values.size(), OPEN)
                 .thenCompose(
                         page -> {
-                            if (!(page instanceof ZLinkAuthorityPage authorityPage))
+                            if (!(page instanceof ZLinkAuthorityPage batch))
                                 return CompletableFuture.failedFuture(
                                         new IllegalStateException("location scan cursor expired"));
-                            if (authorityPage.items().isEmpty()) {
-                                if (authorityPage.nextCursor().isPresent()) {
-                                    return loadObjectPage(
-                                            filter,
-                                            prefix,
-                                            authorityPage.nextCursor(),
-                                            pageSize,
-                                            values,
-                                            encodedBytes);
-                                }
-                                return CompletableFuture.completedFuture(
-                                        new ZLinkLocationPage<>(List.copyOf(values), null));
+                            // Carry the existing byte total through sequential asynchronous
+                            // projections.
+                            int[] bytes = {encodedBytes};
+                            CompletionStage<Integer> consumed =
+                                    CompletableFuture.completedFuture(0);
+                            for (int index = 0; index < batch.items().size(); index++) {
+                                final int row = index;
+                                consumed =
+                                        consumed.thenCompose(
+                                                used -> {
+                                                    if (used != row || values.size() >= pageSize)
+                                                        return CompletableFuture.completedFuture(
+                                                                used);
+                                                    var entry = batch.items().get(row);
+                                                    var allocation = entry.snapshot().allocation();
+                                                    if (allocation.objectKind()
+                                                                    != filter.objectKind()
+                                                            || (filter.stableType() != null
+                                                                    && !filter.stableType()
+                                                                            .equals(
+                                                                                    allocation
+                                                                                            .stableType()))
+                                                            || (filter.meshName() != null
+                                                                    && !filter.meshName()
+                                                                            .equals(
+                                                                                    allocation
+                                                                                            .descriptor()
+                                                                                            .meshName())))
+                                                        return CompletableFuture.completedFuture(
+                                                                used + 1);
+                                                    return toObjectEntry(
+                                                                    entry.key(), entry.snapshot())
+                                                            .thenApply(
+                                                                    projected -> {
+                                                                        int entryBytes =
+                                                                                encodedObjectBytes(
+                                                                                        projected);
+                                                                        String continuation =
+                                                                                batch.nextCursor()
+                                                                                        .map(
+                                                                                                next ->
+                                                                                                        encodeCursor(
+                                                                                                                next
+                                                                                                                        .encoded()))
+                                                                                        .orElse(
+                                                                                                null);
+                                                                        int candidateItemsBytes =
+                                                                                bytes[0]
+                                                                                        + entryBytes;
+                                                                        if (encodedObjectPageBytes(
+                                                                                        candidateItemsBytes,
+                                                                                        values
+                                                                                                        .size()
+                                                                                                + 1,
+                                                                                        continuation)
+                                                                                > MAX_OBJECT_PAGE_BYTES)
+                                                                            return used;
+                                                                        values.add(projected);
+                                                                        bytes[0] =
+                                                                                candidateItemsBytes;
+                                                                        return used + 1;
+                                                                    });
+                                                });
                             }
-                            ZLinkAuthorityEntry entry = authorityPage.items().getFirst();
-                            ZLinkAuthoritySnapshot snapshot = entry.snapshot();
-                            ZLinkPlacementAllocation allocation = snapshot.allocation();
-                            CompletionStage<ZLinkLocationObjectEntry> projection =
-                                    allocation.objectKind() != filter.objectKind()
-                                                    || (filter.stableType() != null
-                                                            && !filter.stableType()
-                                                                    .equals(
-                                                                            allocation
-                                                                                    .stableType()))
-                                                    || (filter.meshName() != null
-                                                            && !filter.meshName()
-                                                                    .equals(
-                                                                            allocation
-                                                                                    .descriptor()
-                                                                                    .meshName()))
-                                            ? CompletableFuture.completedFuture(null)
-                                            : toObjectEntry(entry.key(), snapshot);
-                            return projection.thenCompose(
-                                    projected -> {
-                                        int nextBytes = encodedBytes;
-                                        if (projected != null) {
-                                            int entryBytes = encodedObjectBytes(projected) + 1;
-                                            if (entryBytes + OBJECT_PAGE_ENVELOPE_BYTES
-                                                    > MAX_OBJECT_PAGE_BYTES) {
-                                                return CompletableFuture.failedFuture(
-                                                        new IllegalStateException(
-                                                                "location object entry exceeds the"
-                                                                        + " 4 MiB response limit"));
-                                            }
-                                            if (!values.isEmpty()
-                                                    && nextBytes + entryBytes
-                                                            > MAX_OBJECT_PAGE_BYTES
-                                                                    - OBJECT_PAGE_ENVELOPE_BYTES) {
+                            return consumed.thenCompose(
+                                    used -> {
+                                        if (used < batch.items().size()) {
+                                            if (used == 0)
                                                 return CompletableFuture.completedFuture(
                                                         new ZLinkLocationPage<>(
                                                                 List.copyOf(values),
-                                                                encodeCursor(
-                                                                        cursor.orElseThrow()
-                                                                                .encoded())));
-                                            }
-                                            values.add(projected);
-                                            nextBytes += entryBytes;
+                                                                cursor.map(
+                                                                                next ->
+                                                                                        encodeCursor(
+                                                                                                next
+                                                                                                        .encoded()))
+                                                                        .orElse(null)));
+                                            return stores.unifiedStore()
+                                                    .list(prefix, cursor, used, OPEN)
+                                                    .thenApply(
+                                                            read -> {
+                                                                if (!(read
+                                                                        instanceof
+                                                                        ZLinkAuthorityPage partial))
+                                                                    throw new IllegalStateException(
+                                                                            "location scan cursor expired");
+                                                                return new ZLinkLocationPage<>(
+                                                                        List.copyOf(values),
+                                                                        partial.nextCursor()
+                                                                                .map(
+                                                                                        next ->
+                                                                                                encodeCursor(
+                                                                                                        next
+                                                                                                                .encoded()))
+                                                                                .orElse(null));
+                                                            });
                                         }
                                         if (values.size() >= pageSize
-                                                || authorityPage.nextCursor().isEmpty()) {
+                                                || batch.nextCursor().isEmpty())
                                             return CompletableFuture.completedFuture(
                                                     new ZLinkLocationPage<>(
                                                             List.copyOf(values),
-                                                            authorityPage
-                                                                    .nextCursor()
+                                                            batch.nextCursor()
                                                                     .map(
                                                                             next ->
                                                                                     encodeCursor(
                                                                                             next
                                                                                                     .encoded()))
                                                                     .orElse(null)));
-                                        }
                                         return loadObjectPage(
                                                 filter,
                                                 prefix,
-                                                authorityPage.nextCursor(),
+                                                batch.nextCursor(),
                                                 pageSize,
                                                 values,
-                                                nextBytes);
+                                                bytes[0]);
                                     });
                         });
     }
 
-    private static int encodedObjectBytes(ZLinkLocationObjectEntry object) {
-        return OBJECT_JSON_FIXED_BYTES
+    static int encodedObjectPageBytes(
+            int encodedItemsBytes, int itemCount, String continuationToken) {
+        return "{\"items\":[".getBytes(StandardCharsets.UTF_8).length
+                + encodedItemsBytes
+                + Math.max(0, itemCount - 1)
+                + "],\"continuationToken\":".getBytes(StandardCharsets.UTF_8).length
+                + (continuationToken == null ? 4 : jsonStringBytes(continuationToken))
+                + 1;
+    }
+
+    static int encodedObjectBytes(ZLinkLocationObjectEntry object) {
+        return "{\"globalId\":".getBytes(StandardCharsets.UTF_8).length
                 + jsonStringBytes(object.globalId())
-                + Long.toString(object.objectGeneration()).getBytes(StandardCharsets.UTF_8).length
+                + ",\"objectGeneration\":".getBytes(StandardCharsets.UTF_8).length
+                + Long.toString(object.objectGeneration()).length()
+                + ",\"meshName\":".getBytes(StandardCharsets.UTF_8).length
                 + jsonStringBytes(object.meshName())
+                + ",\"nodeRid\":".getBytes(StandardCharsets.UTF_8).length
                 + jsonStringBytes(object.nodeRid().toString())
+                + ",\"state\":".getBytes(StandardCharsets.UTF_8).length
                 + jsonStringBytes(object.state().name())
-                + jsonStringBytes(object.stableType());
+                + ",\"stableType\":".getBytes(StandardCharsets.UTF_8).length
+                + jsonStringBytes(object.stableType())
+                + 1;
     }
 
     private static int jsonStringBytes(String value) {
@@ -299,7 +342,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
             if (c == '"' || c == '\\') bytes++;
-            else if (c < 0x20) bytes += 5;
+            else if (c < 0x20)
+                bytes += c == '\b' || c == '\t' || c == '\n' || c == '\f' || c == '\r' ? 1 : 5;
         }
         return bytes;
     }

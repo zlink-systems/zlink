@@ -5412,8 +5412,7 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     // ListAuthoritiesAsync's `prefix` parameter (IZLinkLocationRepository)
     // is the pre-existing "zla1:a:"/"zla1:s:" kind marker every caller
-    // passes (ZLinkLocationObjectQuery, ZLinkRelocationStartupRecovery,
-    // ZLinkInstanceSpotActivationTarget) -- translated here to the
+    // passes (ZLinkLocationObjectQuery, ZLinkInstanceSpotActivationTarget) -- translated here to the
     // canonical preimage's kind segment for the real opaque-record scan.
     // An empty prefix (scan everything) passes through unchanged.
     private static string AuthorityMetaPrefix(string prefix) =>

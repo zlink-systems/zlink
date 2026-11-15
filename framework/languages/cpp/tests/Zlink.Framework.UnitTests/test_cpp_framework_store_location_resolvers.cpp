@@ -38,10 +38,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <future>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -62,6 +65,22 @@ struct auto_connect_cache_test_access_t
                               owner_admission_deadline)
           .result ();
         return resolver._spot_routes.at (route_key).expires_at;
+    }
+};
+
+struct store_location_runtime_query_test_access_t
+{
+    static std::size_t encoded_object_size (const location_object_entry_t &entry)
+    {
+        return store_location_runtime_query_t::encoded_object_size (entry);
+    }
+
+    static std::size_t encoded_object_page_size (std::size_t items_bytes,
+                                                 std::size_t item_count,
+                                                 std::optional<std::string_view> continuation_token)
+    {
+        return store_location_runtime_query_t::encoded_object_page_size (items_bytes, item_count,
+                                                                         continuation_token);
     }
 };
 
@@ -3295,6 +3314,189 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsExactAndPagedObj
     EXPECT_THROW (query.list_object_locations ({.object_kind = location_object_kind_t::actor},
                                                {.page_size = 0}),
                   std::invalid_argument);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ObjectLocationPagesFollowSharedFixture)
+{
+    using namespace zlink::framework;
+    auto root = std::filesystem::path (__FILE__).parent_path ();
+    while (!std::filesystem::exists (
+      root / "framework/runtime/conformance/object-location-pages-v1.json")) {
+        ASSERT_NE (root, root.parent_path ());
+        root = root.parent_path ();
+    }
+    std::ifstream input (root / "framework/runtime/conformance/object-location-pages-v1.json");
+    const auto fixture = nlohmann::json::parse (input);
+    const std::string escaped_utf8_probe = "é\\\"\b\t\n\f\r\x01";
+    EXPECT_EQ (nlohmann::json (escaped_utf8_probe).dump ().size (),
+               escaped_utf8_probe.size () + 2 + 2 + 5 + 5);
+    class fixture_store_t final : public test_location_repository_t
+    {
+      public:
+        std::vector<authority_entry_t> entries;
+        std::size_t store_page_size;
+        std::size_t scan_calls = 0;
+        task_t<authority_scan_result_t>
+        list_authorities (std::string prefix,
+                          std::optional<authority_scan_cursor_t> cursor,
+                          std::size_t limit,
+                          std::stop_token = {}) override
+        {
+            ++scan_calls;
+            EXPECT_TRUE (prefix == "zla1:a:" || prefix == "zla1:s:");
+            std::vector<authority_entry_t> rows;
+            for (const auto &entry : entries)
+                if (entry.key.value.starts_with (prefix))
+                    rows.push_back (entry);
+            const auto offset = cursor ? std::stoul (std::string (cursor->encoded ())) : 0u;
+            const auto end = std::min (offset + std::min (limit, store_page_size), rows.size ());
+            authority_page_t page;
+            page.items.assign (rows.begin () + offset, rows.begin () + end);
+            if (end < rows.size ())
+                page.next_cursor.emplace (std::to_string (end));
+            co_return authority_scan_result_t{std::move (page)};
+        }
+    };
+    const zlink::framework::location_object_entry_t encoding_probe{
+      .global_id = "actor-é\"\\\b\t\n\f\r\x01",
+      .object_generation = 1,
+      .mesh_name = "mesh-é\"\\\b\t\n\f\r\x01",
+      .node_rid = zlink::routing_id_t::from (std::string ("node-1")),
+      .state = zlink::framework::location_object_state_t::ready,
+      .stable_type = "type-é\"\\\b\t\n\f\r\x01"};
+    const auto encoded_probe =
+      nlohmann::json{{"globalId", encoding_probe.global_id},
+                     {"objectGeneration", encoding_probe.object_generation},
+                     {"meshName", encoding_probe.mesh_name},
+                     {"nodeRid", encoding_probe.node_rid.to_string ()},
+                     {"state", "ready"},
+                     {"stableType", encoding_probe.stable_type}}
+        .dump ();
+    EXPECT_EQ (
+      encoded_probe.size (),
+      zlink::framework::runtime::store_location_runtime_query_test_access_t::encoded_object_size (
+        encoding_probe));
+    for (const auto &scenario : fixture.at ("cases")) {
+        [&] {
+            SCOPED_TRACE (scenario.at ("name").get<std::string> ());
+            fixture_store_t store;
+            store.store_page_size = scenario.at ("storePageSize").get<std::size_t> ();
+            std::map<std::string, std::string> ids;
+            for (const auto &row :
+                 fixture.at ("datasets").at (scenario.at ("dataset").get<std::string> ())) {
+                const auto &profile =
+                  fixture.at ("profiles").at (row.at ("profile").get<std::string> ());
+                const auto id = row.at ("id").get<std::string> ();
+                const auto global_id = profile.at ("idPrefix").get<std::string> ()
+                                       + row.at ("globalIdSuffix").get<std::string> ();
+                ids.emplace (id, global_id);
+                const auto kind = row.at ("kind").get<std::string> ();
+                authority_snapshot_t snapshot;
+                snapshot.store_version = "v1";
+                snapshot.object_generation = 1;
+                snapshot.authority_owner_generation = 1;
+                snapshot.owner = {"owner", 1};
+                snapshot.allocation.state = placement_allocation_state_t::active;
+                snapshot.allocation.object_kind = kind == "actor" ? placement_object_kind_t::actor
+                                                  : kind == "user_spot"
+                                                    ? placement_object_kind_t::user_spot
+                                                    : placement_object_kind_t::instance_spot;
+                snapshot.allocation.stable_type = profile.at ("stableType").get<std::string> ();
+                snapshot.allocation.target.mesh_name = profile.at ("meshName").get<std::string> ();
+                snapshot.allocation.target.node_rid =
+                  node_rid_t::from_string (profile.at ("nodeRid").get<std::string> ());
+                store.entries.push_back (
+                  {kind == "actor" ? zlink::framework::runtime::actor_authority_key (global_id)
+                                   : zlink::framework::runtime::spot_authority_key (global_id),
+                   std::move (snapshot)});
+            }
+            location_options_t options;
+            location_runtime_t runtime (store, options, "owner-query");
+            store_location_runtime_query_t query (store, runtime, options);
+            const auto kind = scenario.at ("objectKind").get<std::string> ();
+            const location_object_filter_t filter{
+              .object_kind = kind == "actor"       ? location_object_kind_t::actor
+                             : kind == "user_spot" ? location_object_kind_t::user_spot
+                                                   : location_object_kind_t::instance_spot};
+            std::optional<std::string> cursor;
+            std::vector<std::string> all;
+            std::optional<std::vector<location_object_entry_t>> previous_boundary_items;
+            std::optional<std::string> previous_boundary_cursor;
+            for (const auto &expected : scenario.at ("expectedPages")) {
+                auto result = query
+                                .list_object_locations (
+                                  filter, {.page_size = scenario.at ("pageSize").get<int> (),
+                                           .continuation_token = cursor})
+                                .result ();
+                ASSERT_TRUE (result.has_value ())
+                  << (result.error () ? result.error ()->what () : "no Framework error");
+                const auto &page = result.value ();
+                const auto encoded_page = [] (const auto &items, const auto &token) {
+                    nlohmann::json encoded_items = nlohmann::json::array ();
+                    std::size_t encoded_items_bytes = 0;
+                    for (const auto &entry : items) {
+                        const auto state =
+                          entry.state == location_object_state_t::creating ? "creating"
+                          : entry.state == location_object_state_t::ready  ? "ready"
+                                                                           : "unavailable";
+                        nlohmann::json encoded_entry = {
+                          {"globalId", entry.global_id},
+                          {"objectGeneration", entry.object_generation},
+                          {"meshName", entry.mesh_name},
+                          {"nodeRid", entry.node_rid.to_string ()},
+                          {"state", state},
+                          {"stableType", entry.stable_type}};
+                        EXPECT_EQ (
+                          encoded_entry.dump ().size (),
+                          zlink::framework::runtime::store_location_runtime_query_test_access_t::
+                            encoded_object_size (entry));
+                        encoded_items_bytes += zlink::framework::runtime::
+                          store_location_runtime_query_test_access_t::encoded_object_size (entry);
+                        encoded_items.push_back (std::move (encoded_entry));
+                    }
+                    const auto encoded = nlohmann::json{
+                      {"items", std::move (encoded_items)},
+                      {"continuationToken",
+                       token}}.dump ();
+                    const auto token_view =
+                      token ? std::optional<std::string_view> (*token) : std::nullopt;
+                    const auto calculated =
+                      zlink::framework::runtime::store_location_runtime_query_test_access_t::
+                        encoded_object_page_size (encoded_items_bytes, items.size (), token_view);
+                    EXPECT_EQ (encoded.size (), calculated);
+                    return encoded;
+                };
+                EXPECT_LE (encoded_page (page.items, page.continuation_token).size (),
+                           4u * 1024u * 1024u);
+                if (previous_boundary_items && scenario.at ("pageSize").get<int> () == 1000
+                    && !page.items.empty () && previous_boundary_items->size () < 1000) {
+                    auto candidate_items = *previous_boundary_items;
+                    candidate_items.push_back (page.items.front ());
+                    EXPECT_GT (encoded_page (candidate_items, previous_boundary_cursor).size (),
+                               4u * 1024u * 1024u);
+                }
+                previous_boundary_items = page.items;
+                previous_boundary_cursor = page.continuation_token;
+                std::vector<std::string> actual_ids, expected_ids;
+                for (const auto &entry : page.items)
+                    actual_ids.push_back (entry.global_id);
+                for (const auto &id : expected)
+                    expected_ids.push_back (ids.at (id.get<std::string> ()));
+                ASSERT_EQ (expected_ids.size (), actual_ids.size ());
+                for (std::size_t index = 0; index < expected_ids.size (); ++index)
+                    EXPECT_EQ (expected_ids[index], actual_ids[index]);
+                all.insert (all.end (), actual_ids.begin (), actual_ids.end ());
+                cursor = page.continuation_token;
+            }
+            EXPECT_FALSE (cursor);
+            EXPECT_EQ (scenario.at ("expectedScanCalls").get<std::size_t> (), store.scan_calls);
+            std::vector<std::string> expected_all;
+            for (const auto &id : scenario.at ("expectedAll"))
+                expected_all.push_back (ids.at (id.get<std::string> ()));
+            EXPECT_EQ (expected_all, all);
+            EXPECT_EQ (all.size (), std::set<std::string> (all.begin (), all.end ()).size ());
+        }();
+    }
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeObjectQueryMapsStoreFailureToUnavailable)
