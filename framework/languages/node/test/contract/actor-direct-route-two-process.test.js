@@ -41,11 +41,21 @@ for (const scenario of [
         fs.mkdtempSync(path.join(os.tmpdir(), 'actor-direct-'));
       const children = [];
       const redis = createClient({ url: redisUrl, socket: { reconnectStrategy: false } });
-      await redis.connect();
+      redis.on('error', () => {});
+      try {
+        await redis.connect();
+        await redis.ping();
+      } catch (error) {
+        if (redis.isOpen) redis.disconnect();
+        if (!process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR)
+          fs.rmSync(flowDirectory, { recursive: true, force: true });
+        t.skip(`Redis is unavailable at ${redisUrl}: ${error.message}`);
+        return;
+      }
       t.after(async () => {
         await Promise.all(children.map(stopChild));
         await deletePrefix(redis, keyPrefix);
-        await redis.quit();
+        if (redis.isOpen) await redis.quit();
         if (!process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR)
           fs.rmSync(flowDirectory, { recursive: true, force: true });
       });
