@@ -8,7 +8,6 @@ const {
 const { Message, RequestResult } = require('@zlink-systems/zlink');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const { createHook } = require('node:async_hooks');
-const { waitActorReply } = require('../../packages/framework/dist/runtime/actors/actor-request-deadline');
 
 class ActorNotify { constructor(value) { this.value = value; } }
 class ActorAsk { constructor(value) { this.value = value; } }

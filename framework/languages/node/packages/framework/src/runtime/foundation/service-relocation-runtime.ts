@@ -180,9 +180,10 @@ export class ServiceRelocationAuthorityPayloadCodec implements ServiceRelocation
   }
 
   read(payload: Uint8Array): ServiceRelocationPublication | undefined {
-    return (
-      decodeCanonicalAuthorityPublication(payload) ?? decodeAuthorityEnvelope(payload)?.publication
-    );
+    const canonical = decodeCanonicalAuthorityLayout(payload);
+    return canonical === undefined
+      ? decodeAuthorityEnvelope(payload)?.publication
+      : decodeCanonicalAuthorityPublication(canonical);
   }
 
   clear(currentPayload: Uint8Array, expectedReference: string): Uint8Array {
@@ -211,7 +212,8 @@ export class ServiceRelocationAuthorityPayloadCodec implements ServiceRelocation
 /** Returns the application authority payload hidden by relocation metadata. */
 export function serviceRelocationAuthorityApplicationPayload(payload: Uint8Array): Buffer {
   const canonical = decodeCanonicalAuthorityLayout(payload);
-  if (canonical !== undefined && canonical.slot.byteLength !== 0) {
+  if (canonical !== undefined) {
+    if (canonical.slot.byteLength === 0) return Buffer.from(payload);
     if (decodeCanonicalRelocationSlot(canonical.slot) === undefined) {
       throw new TypeError('Canonical authority relocation slot is invalid.');
     }
@@ -298,10 +300,9 @@ export function projectServiceRelocationAuthorityTargetReady(
 }
 
 function decodeCanonicalAuthorityPublication(
-  payload: Uint8Array
+  layout: CanonicalAuthorityLayout
 ): ServiceRelocationPublication | undefined {
-  const layout = decodeCanonicalAuthorityLayout(payload);
-  if (layout === undefined || layout.slot.byteLength === 0) return undefined;
+  if (layout.slot.byteLength === 0) return undefined;
   const slot = decodeCanonicalRelocationSlot(layout.slot);
   if (slot === undefined) return undefined;
   return {

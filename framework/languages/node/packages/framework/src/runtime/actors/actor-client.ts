@@ -44,6 +44,7 @@ import {
   type ZLinkSpotSerialTurn
 } from '../execution';
 import { remainingActorRequestTimeout, waitActorReply } from './actor-request-deadline';
+import type { ZLinkInternalActorTransportDeliveryGate } from './actor-transport-delivery-gate';
 import {
   createInternalFrameworkException,
   internalFrameworkErrorKind,
@@ -102,15 +103,7 @@ export interface ZLinkActorClientOptions {
     requestOperation?: PendingOperation<unknown>
   ) => Promise<unknown> | undefined;
   readonly sendErrorReporter?: (error: unknown) => void;
-  readonly transportDeliveryGate?: () =>
-    | {
-        waitBeforeSubmit(
-          actorId: string,
-          kind: 'oneWay' | 'request',
-          signal?: AbortSignal
-        ): Promise<number | void>;
-      }
-    | undefined;
+  readonly transportDeliveryGate?: () => ZLinkInternalActorTransportDeliveryGate | undefined;
 }
 
 export class DefaultZLinkActorClient implements ZLinkActorClient {
@@ -171,8 +164,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       const messageFollow = createActorMessageFollowContext(route, parts, false);
       routeFence = actorRouteInvalidationFence(route);
       const routedActor = attachActorMessageFollowContext(actor, messageFollow);
-      const submissionCopies =
-        (await this.options.transportDeliveryGate?.()?.waitBeforeSubmit(actorId, 'oneWay')) ?? 1;
+      const delivery = this.options.transportDeliveryGate?.();
+      if (delivery !== undefined) await delivery.waitBeforeSubmit(actorId, 'oneWay');
       const handoff = this.options.handoffCapture?.(
         meshName,
         actor.actorId,
@@ -181,18 +174,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         routedActor
       );
       if (handoff !== undefined) {
-        const submissions = [handoff];
-        for (let copy = 1; copy < submissionCopies; copy++) {
-          const duplicate = this.options.handoffCapture?.(
-            meshName,
-            actor.actorId,
-            parts,
-            false,
-            routedActor
-          );
-          if (duplicate !== undefined) submissions.push(duplicate);
-        }
-        await Promise.all(submissions);
+        await handoff;
         return;
       }
       requireOneWayCompletion(
@@ -274,10 +256,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
             const delivery = this.options
               .transportDeliveryGate?.()
               ?.waitBeforeSubmit(actorId, 'request', signal);
-            const submissionCopies =
-              delivery === undefined
-                ? 1
-                : ((await waitActorReply(delivery, actorId, requestOperation)) ?? 1);
+            if (delivery !== undefined) await waitActorReply(delivery, actorId, requestOperation);
             const handoff = this.options.handoffCapture?.(
               meshName,
               actor.actorId,
@@ -289,22 +268,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
               requestOperation
             );
             if (handoff !== undefined) {
-              const submissions = [handoff];
-              for (let copy = 1; copy < submissionCopies; copy++) {
-                const duplicate = this.options.handoffCapture?.(
-                  meshName,
-                  actor.actorId,
-                  parts,
-                  true,
-                  routedActor,
-                  deadlineUnixMs,
-                  onAdmitted,
-                  requestOperation
-                );
-                if (duplicate !== undefined) submissions.push(duplicate);
-              }
-              const replies = await Promise.all(submissions);
-              receiver.operationCompleted(requestOperation.id, replies[0], undefined);
+              const reply = await handoff;
+              receiver.operationCompleted(requestOperation.id, reply, undefined);
               return;
             }
             this.submitActorRequest<TReply>(
