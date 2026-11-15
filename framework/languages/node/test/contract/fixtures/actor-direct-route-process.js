@@ -10,7 +10,9 @@ const {
 const { Module, Injectable } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const f = require('@zlink-systems/framework');
-const { ZLinkHostServiceRelocationRuntime } = require('../../../packages/framework/dist/internal');
+const {
+  ServiceRelocationObjectRestoreOwner
+} = require('../../../packages/framework/dist/internal');
 const n = require('@zlink-systems/nestjs');
 const {
   ZLinkRedisLocationStore,
@@ -33,7 +35,6 @@ class Move {
 }
 let preparedResolve, resumeResolve, pendingDelivery;
 let releasePublication;
-let publication;
 const deliveryGate = { async waitBeforeSubmit() {} };
 class Notice {
   constructor(value = 'notice') {
@@ -209,19 +210,19 @@ async function execute(action) {
   const id = process.env.ZLINK_TEST_SPOT;
   switch (action) {
     case 'holdPublication': {
-      publication = new Promise((resolve) => {
-        releasePublication = resolve;
-      });
-      // Hold the actual target boundary; assertions use public Find and requests.
-      const normalize =
-        ZLinkHostServiceRelocationRuntime.prototype.clearTargetRelocationPublication;
-      ZLinkHostServiceRelocationRuntime.prototype.clearTargetRelocationPublication =
-        async function (...args) {
-          const authority = await normalize.apply(this, args);
-          send({ type: 'publication-held' });
-          await publication;
-          return authority;
+      const openAdmission = ServiceRelocationObjectRestoreOwner.prototype.openAdmission;
+      const publication = new Promise((resolve) => {
+        releasePublication = () => {
+          ServiceRelocationObjectRestoreOwner.prototype.openAdmission = openAdmission;
+          resolve();
         };
+      });
+      // Every committed target reaches admission, even when publication cleanup fails.
+      ServiceRelocationObjectRestoreOwner.prototype.openAdmission = async function (...args) {
+        send({ type: 'publication-held' });
+        await publication;
+        return await openAdmission.apply(this, args);
+      };
       return true;
     }
     case 'resumePublication':
