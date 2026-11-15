@@ -140,7 +140,11 @@ grpcBuilder.WebHost.ConfigureKestrel(options =>
 );
 grpcBuilder.Services.AddGrpc();
 await using var grpc = grpcBuilder.Build();
-grpc.MapGrpcService<DelayedEcho>();
+var errorTest = args is ["request-backpressure-error"];
+if (errorTest)
+    grpc.MapGrpcService<FailingEcho>();
+else
+    grpc.MapGrpcService<DelayedEcho>();
 await grpc.StartAsync();
 
 var statsBuilder = WebApplication.CreateBuilder();
@@ -172,7 +176,7 @@ BenchMeasurement.ConfigureThreadPool(submitConcurrency);
 foreach (
     var pattern in args.Length == 0
         ? ["request-serial", "request-window", "request-backpressure", "send-saturation"]
-        : args
+        : args.Select(static pattern => pattern == "request-backpressure-error" ? "request-backpressure" : pattern)
 )
 {
     string[] optionsArgs =
@@ -195,33 +199,36 @@ foreach (
     var options = BenchOptions.Parse(optionsArgs);
     var metrics = new SourceMetrics(latencySampleLimit);
     await using var transport = new GrpcBenchTransport(grpc.Urls.Single(), submitConcurrency);
-    var warmupTrigger = new BenchTriggerRequest
+    if (!errorTest)
     {
-        runId = "boundary",
-        cellId = "boundary",
-        pattern = pattern,
-        payloadBytes = payloadBytes,
-        phase = "warmup",
-        durationMs = DelayedEcho.WarmupWindowMilliseconds,
-        requestWindow = requestWindow,
-        submitConcurrency = submitConcurrency,
-    };
-    var warmupResult = await BenchMeasurement.RunActiveAsync(
-        transport,
-        metrics,
-        options,
-        warmupTrigger,
-        CancellationToken.None
-    );
-    if (
-        warmupResult.Completed == 0
-        || warmupResult.CompletedAtClose == 0
-        || metrics.Phase != BenchPhase.Warmup
-    )
-        throw new InvalidOperationException(
-            "Warmup did not complete the selected pattern during the warmup window."
+        var warmupTrigger = new BenchTriggerRequest
+        {
+            runId = "boundary",
+            cellId = "boundary",
+            pattern = pattern,
+            payloadBytes = payloadBytes,
+            phase = "warmup",
+            durationMs = DelayedEcho.WarmupWindowMilliseconds,
+            requestWindow = requestWindow,
+            submitConcurrency = submitConcurrency,
+        };
+        var warmupResult = await BenchMeasurement.RunActiveAsync(
+            transport,
+            metrics,
+            options,
+            warmupTrigger,
+            CancellationToken.None
         );
-    metrics = new SourceMetrics(latencySampleLimit);
+        if (
+            warmupResult.Completed == 0
+            || warmupResult.CompletedAtClose == 0
+            || metrics.Phase != BenchPhase.Warmup
+        )
+            throw new InvalidOperationException(
+                "Warmup did not complete the selected pattern during the warmup window."
+            );
+        metrics = new SourceMetrics(latencySampleLimit);
+    }
     var trigger = new BenchTriggerRequest
     {
         runId = "boundary",
@@ -253,34 +260,61 @@ foreach (
     }
     else
     {
-        var requestLimit = StreamDescription
-            .For(pattern, trigger.requestWindow, trigger.submitConcurrency)
-            .inFlightPerStream;
-        var submissionCountMatches = requestLimit is int limit
-            ? submitted == limit
-            : submitted > trigger.requestWindow;
-        if (
-            !submissionCountMatches
-            || completed == 0
-            || completed + result.Errors + result.Abandoned != submitted
-            || result.PeakInFlight != submitted
-            || result.Errors != 0
-            || result.ServerErrors != 0
-            || result.CompletedAtClose != 0
-            || throughput != 0
-            || latency != 0
-            || result.P95Micros != 0
-            || result.P99Micros != 0
-            || (requestLimit is not null && result.Abandoned != 0)
-        )
-            throw new InvalidOperationException("Request boundary accounting failed: " + result);
+        if (errorTest)
+        {
+            if (
+                result.Errors != 1
+                || result.Completed + result.Errors + result.Abandoned != result.Submitted
+                || result.ErrorSummary.Count != 1
+                || result.ErrorSummary[0].Count != 1
+                || result.ErrorSummary[0].Type != typeof(RpcException).FullName
+                || !result.ErrorSummary[0].Message.Contains("boundary-injected-server-error", StringComparison.Ordinal)
+            )
+                throw new InvalidOperationException("Injected server error was misclassified: " + result);
+            try
+            {
+                VerifyRequestBoundary(result, trigger);
+            }
+            catch (InvalidOperationException error) when (error.Message.StartsWith("Request boundary accounting failed:", StringComparison.Ordinal))
+            {
+                Console.WriteLine($"request-backpressure-error: Errors={result.Errors}, {result.ErrorSummary[0]} rejected by boundary accounting PASS");
+                continue;
+            }
+            throw new InvalidOperationException("Boundary accounting accepted a server error.");
+        }
+        VerifyRequestBoundary(result, trigger);
     }
     Console.WriteLine(
         $"{pattern}: completed={completed}, submitted={submitted}, active rate={throughput}, latency={latency} PASS"
     );
 }
 
-sealed class DelayedEcho : BenchService.BenchServiceBase
+static void VerifyRequestBoundary(BenchResult result, BenchTriggerRequest trigger)
+{
+    var requestLimit = StreamDescription
+        .For(trigger.pattern, trigger.requestWindow, trigger.submitConcurrency)
+        .inFlightPerStream;
+    var submissionCountMatches = requestLimit is int limit
+        ? result.Submitted == limit
+        : result.Submitted > trigger.requestWindow;
+    if (
+        !submissionCountMatches
+        || result.Completed == 0
+        || result.Completed + result.Errors + result.Abandoned != result.Submitted
+        || result.PeakInFlight != result.Submitted
+        || result.Errors != 0
+        || result.ServerErrors != 0
+        || result.CompletedAtClose != 0
+        || result.Throughput != 0
+        || result.MeanMicros != 0
+        || result.P95Micros != 0
+        || result.P99Micros != 0
+        || (requestLimit is not null && result.Abandoned != 0)
+    )
+        throw new InvalidOperationException("Request boundary accounting failed: " + result);
+}
+
+class DelayedEcho : BenchService.BenchServiceBase
 {
     public const int DelayMilliseconds = 500;
     public const int WarmupWorkerStartupAllowanceMilliseconds = 1_000;
@@ -300,5 +334,16 @@ sealed class DelayedEcho : BenchService.BenchServiceBase
     {
         await Task.Delay(DelayMilliseconds, context.CancellationToken);
         return new Google.Protobuf.WellKnownTypes.Empty();
+    }
+}
+
+sealed class FailingEcho : DelayedEcho
+{
+    public override async Task<BenchPayload> Echo(BenchPayload request, ServerCallContext context)
+    {
+        var reply = await base.Echo(request, context);
+        if (BenchMetricHeaders.TryDecode(request, out var header) && header.Sequence == 0)
+            throw new RpcException(new Status(StatusCode.Internal, "boundary-injected-server-error"));
+        return reply;
     }
 }
