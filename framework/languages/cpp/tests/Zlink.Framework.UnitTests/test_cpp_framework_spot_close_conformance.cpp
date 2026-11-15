@@ -2793,7 +2793,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, OtherGenerationCloseDuringClosingIsInv
         {"onClosingCalls", 1}}}});
 }
 
-TEST (ZLinkFrameworkSpotCloseConformance, RemoteJoinQueuedBehindCloseReturnsNotFound)
+TEST (ZLinkFrameworkSpotCloseConformance, RemoteJoinQueuedBehindCloseReturnsUnavailable)
 {
     run_and_check (nlohmann::json{{"name", "remote-join-queued-behind-close"},
                                   {"given", {{"authority", "Ready"}, {"remote", true}}},
@@ -2803,7 +2803,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, RemoteJoinQueuedBehindCloseReturnsNotF
                                     {"joinPendingBeforeRelease", true},
                                     {"closeResult", true},
                                     {"removedBeforeJoin", true},
-                                    {"joinResult", "NotFound"},
+                                    {"joinResult", "Unavailable"},
                                     {"joinsAdmitted", 0}}}});
 }
 
