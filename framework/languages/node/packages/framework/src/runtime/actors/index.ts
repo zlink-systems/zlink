@@ -709,17 +709,12 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     };
   }
 
-  adoptCreatedAuthority(
-    actorId: string,
-    authorityOwnerGeneration: bigint,
-    ownerLeaseGeneration: bigint
-  ): void {
+  adoptCreatedAuthority(actorId: string, authorityOwnerGeneration: bigint): void {
     const state = this.states.get(actorId);
     if (state === undefined) {
       throw new Error(`Actor '${actorId}' is not materialized.`);
     }
     state.setLocationGeneration(authorityOwnerGeneration);
-    state.setOwnerLeaseGeneration(ownerLeaseGeneration);
     state.markLocationOwned();
   }
 
