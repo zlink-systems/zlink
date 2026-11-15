@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.UnitTests;
@@ -68,55 +69,82 @@ public sealed class TypedJsonPayloadStorageTests
     }
 
     [Theory]
-    [InlineData("\"\"")]
-    [InlineData("\"AA==\"")]
-    [InlineData("\"AAA=\"")]
-    [InlineData("\"AAAA\"")]
-    [InlineData("\"/w==\"")]
-    [InlineData("\"//8=\"")]
-    [InlineData("\"AA== \"")]
-    [InlineData("\" AA==\"")]
-    [InlineData("\"A A = = \"")]
-    [InlineData("\"AAAA    \"")]
-    [InlineData("\"AA==\\n\"")]
-    [InlineData("\"\\u0041A==\"")]
-    [InlineData("\"\\/w==\"")]
-    [InlineData("\"A\"")]
-    [InlineData("\"AA\"")]
-    [InlineData("\"AAA\"")]
-    [InlineData("\"====\"")]
-    [InlineData("\"A===\"")]
-    [InlineData("\"AA=A\"")]
-    [InlineData("\"AA==AA==\"")]
-    [InlineData("\"!!!!\"")]
-    [InlineData("\"AA-_\"")]
-    [InlineData("0")]
-    [InlineData("{}")]
-    [InlineData("[]")]
-    [InlineData("null")]
-    public void Byte_decoder_preserves_existing_bcl_input_behavior(string json)
+    [InlineData("\"\"", true)]
+    [InlineData("\"AA==\"", true)]
+    [InlineData("\"AAA=\"", true)]
+    [InlineData("\"AAAA\"", true)]
+    [InlineData("\"/w==\"", true)]
+    [InlineData("\"//8=\"", true)]
+    [InlineData("\"AA== \"", false)]
+    [InlineData("\" AA==\"", false)]
+    [InlineData("\"A A = = \"", false)]
+    [InlineData("\"AAAA    \"", false)]
+    [InlineData("\"AA==\\n\"", false)]
+    [InlineData("\"AB==\"", false)]
+    [InlineData("\"AAF=\"", false)]
+    [InlineData("\"\\u0041A==\"", true)]
+    [InlineData("\"\\/w==\"", true)]
+    [InlineData("\"A\"", false)]
+    [InlineData("\"AA\"", false)]
+    [InlineData("\"AAA\"", false)]
+    [InlineData("\"====\"", false)]
+    [InlineData("\"A===\"", false)]
+    [InlineData("\"AA=A\"", false)]
+    [InlineData("\"AA==AA==\"", false)]
+    [InlineData("\"!!!!\"", false)]
+    [InlineData("\"AA-_\"", false)]
+    [InlineData("0", false)]
+    [InlineData("{}", false)]
+    [InlineData("[]", false)]
+    [InlineData("null", true)]
+    public void Byte_decoder_enforces_canonical_base64(string json, bool accept)
     {
         var encoded = Encoding.UTF8.GetBytes(json);
-        byte[]? expected;
-        try
+        var connector = new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Json, encoded);
+        if (accept)
         {
-            expected = JsonSerializer.Deserialize<byte[]>(encoded);
+            var expected = JsonSerializer.Deserialize<byte[]>(encoded);
+            Assert.Equal(expected, ZLinkFrameworkJsonPayloadCodec.Deserialize<byte[]>(encoded));
+            Assert.Equal(expected, connector.FromJson<byte[]>());
         }
-        catch (JsonException)
+        else
         {
             Assert.ThrowsAny<JsonException>(() =>
                 ZLinkFrameworkJsonPayloadCodec.Deserialize<byte[]>(encoded)
             );
-            Assert.ThrowsAny<JsonException>(() =>
-                new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Json, encoded).FromJson<byte[]>()
-            );
-            return;
+            Assert.ThrowsAny<JsonException>(() => connector.FromJson<byte[]>());
         }
-        Assert.Equal(expected, ZLinkFrameworkJsonPayloadCodec.Deserialize<byte[]>(encoded));
-        Assert.Equal(
-            expected,
-            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Json, encoded).FromJson<byte[]>()
-        );
+    }
+
+    [Fact]
+    public void Byte_decoder_checks_padding_bits_for_every_base64_symbol()
+    {
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        foreach (var prefix in new[] { "A", "AA" })
+        {
+            foreach (var symbol in alphabet)
+            {
+                var text = prefix + symbol + (prefix.Length == 1 ? "==" : "=");
+                var expected = Convert.FromBase64String(text);
+                var json = Encoding.UTF8.GetBytes("\"" + text + "\"");
+                var connector = new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Json, json);
+                if (Convert.ToBase64String(expected) == text)
+                {
+                    Assert.Equal(
+                        expected,
+                        ZLinkFrameworkJsonPayloadCodec.Deserialize<byte[]>(json)
+                    );
+                    Assert.Equal(expected, connector.FromJson<byte[]>());
+                }
+                else
+                {
+                    Assert.ThrowsAny<JsonException>(() =>
+                        ZLinkFrameworkJsonPayloadCodec.Deserialize<byte[]>(json)
+                    );
+                    Assert.ThrowsAny<JsonException>(() => connector.FromJson<byte[]>());
+                }
+            }
+        }
     }
 
     [Theory]
@@ -192,6 +220,65 @@ public sealed class TypedJsonPayloadStorageTests
                 warmup: calls
             ) / calls;
         Assert.True(allocated < 1024, $"Native JSON part allocated {allocated} B/call.");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(1024)]
+    [InlineData(4096)]
+    public void Framework_and_connector_replies_own_decoded_bytes(int size)
+    {
+        var expected = Bytes(size);
+        var request = new BytePayload(expected).ToJson();
+        var nativeRequest = Message.From(request.Payload.Span);
+        var serverValue = Assert.IsType<BytePayload>(
+            ZLinkEnvelopeCodec.DecodeBody(
+                nativeRequest,
+                typeof(BytePayload),
+                "application/json",
+                null
+            )
+        );
+        nativeRequest.Dispose();
+        var responseBytes = ZLinkFrameworkJsonPayloadCodec.Serialize(serverValue);
+        var connectorReply = new ZlinkStreamEncodedPayload(
+            ZlinkStreamCodec.Json,
+            responseBytes
+        ).FromJson<BytePayload>();
+        var responseHeader = ZLinkEnvelopeCodec.PrepareResponse(
+            "test",
+            typeof(BytePayload),
+            new ZLinkCodecRegistryBuilder()
+        ) with
+        {
+            CorrelationId = "typed-reply",
+        };
+        var response = ZLinkClientCallCodec.EncodeEnvelopeParts(responseHeader, serverValue, null);
+        var frameworkReply = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<BytePayload>(
+            response,
+            "empty",
+            "error",
+            null,
+            validateFlow: false
+        );
+        Array.Fill(responseBytes, (byte)'x');
+        if (
+            System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+                request.Payload,
+                out var requestArray
+            )
+        )
+            Array.Fill(requestArray.Array!, (byte)'x');
+        Assert.Equal(expected, serverValue.Body);
+        Assert.Equal(expected, connectorReply.Body);
+        Assert.Equal(expected, frameworkReply.Body);
+        Assert.Equal(
+            new BytePayload(expected).ToJson().Payload.ToArray(),
+            ZLinkFrameworkJsonPayloadCodec.Serialize(serverValue)
+        );
     }
 
     private static byte[] Bytes(int count) =>

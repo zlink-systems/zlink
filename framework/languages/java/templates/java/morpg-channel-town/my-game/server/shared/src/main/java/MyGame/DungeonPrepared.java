@@ -1,3 +1,5 @@
 package MyGame;
 
-public record DungeonPrepared(String dungeonId, String runId, String reason) {}
+import org.jspecify.annotations.Nullable;
+
+public record DungeonPrepared(String dungeonId, String runId, @Nullable String reason) {}
