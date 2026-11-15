@@ -717,7 +717,7 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var actor = new ProbeActor("b12-no-native-ref");
-            var failure = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await runtime.JoinActorAsync(
                     "b12-missing-target",
                     actor,
@@ -725,7 +725,8 @@ public sealed partial class EntrySpotActorDispatchTests
                     CancellationToken.None
                 )
             );
-            Assert.Equal("SPOT 'b12-missing-target' is not active.", failure.Message);
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            Assert.Equal("Actor Join target 'b12-missing-target' is not active.", failure.Message);
             Assert.Null(node.ActorJoinSubmittedParts);
             Assert.Null(actor.Context.SpotId);
             Assert.Null(runtime.GetOrCreateActorState(actor.ActorId).NativeActorRef);

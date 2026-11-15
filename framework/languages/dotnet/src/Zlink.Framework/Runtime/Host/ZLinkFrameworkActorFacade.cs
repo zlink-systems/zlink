@@ -82,9 +82,8 @@ internal sealed class ZLinkFrameworkActorFacade(
                     )
                     .ConfigureAwait(false);
         }
-        var localActivation = spots.GetActivationBySpotId(getState(), spotId);
+        var localActivation = runtime.ResolveActorHandoffTarget(spotId).UserSpot!;
         return await JoinLocalActorAsync(
-                spotId,
                 actor,
                 actorState,
                 localActivation,
@@ -140,10 +139,9 @@ internal sealed class ZLinkFrameworkActorFacade(
     }
 
     private async ValueTask<ZLinkActorJoinResult> JoinLocalActorAsync(
-        string spotId,
         IZLinkActor actor,
         ZLinkActorRuntimeState actorState,
-        ZLinkSpotActivation? localActivation,
+        ZLinkSpotActivation localActivation,
         ZLinkMessage request,
         CancellationToken cancellationToken,
         (DateTimeOffset Utc, TimeSpan Monotonic) deadline,
@@ -169,10 +167,7 @@ internal sealed class ZLinkFrameworkActorFacade(
             CancellationToken cancellationToken
         )
         {
-            var target =
-                localActivation
-                ?? throw new InvalidOperationException($"SPOT '{spotId}' is not active.");
-            var joinResult = await target
+            var joinResult = await localActivation
                 .JoinActorAsync(actor, request, cancellationToken, deadline.Utc)
                 .ConfigureAwait(false);
             var reply = joinResult.Reply ?? ZLinkMessage.Empty;

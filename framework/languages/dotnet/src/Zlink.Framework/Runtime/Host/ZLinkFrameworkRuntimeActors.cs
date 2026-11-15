@@ -517,11 +517,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         _locationRuntime?.EnsureRelocationAdmissionOpen();
         var authorityStore = Registration.Locations.ResolveStore();
-        var target =
-            ResolveActorHandoffTarget(spotId)
-            ?? throw new InvalidOperationException(
-                $"Actor handoff target '{spotId}' is not active."
-            );
+        var target = ResolveActorHandoffTarget(spotId);
         var stableType = await ResolveRoutedActorJoinStableTypeAsync(
                 request,
                 authorityStore,
@@ -874,12 +870,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        var target =
-            ResolveActorHandoffTarget(spotId)
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{request.ActorId}' handoff target '{spotId}' is not active."
-            );
+        var target = ResolveActorHandoffTarget(spotId);
         await _actorHandoffAdmissions.BeginCommitAsync(request, spotId).ConfigureAwait(false);
         var import = actorState.Handoff.Import(request);
         if (!import.OwnsImport)
@@ -926,12 +917,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        var target =
-            ResolveActorHandoffTarget(spotId)
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{request.ActorId}' handoff target '{spotId}' is not active."
-            );
+        var target = ResolveActorHandoffTarget(spotId);
         var actorRef =
             actorState.NativeActorRef
             ?? throw new ZLinkFrameworkException(
@@ -1159,13 +1145,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             // store-based recovery path. Callback traffic issued before the
             // session route commit is held by the session seal and released
             // when the route update lands (spec 15 §4.2 step 8).
-            var target =
-                ResolveActorHandoffTarget(spotId)
-                ?? throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor '{request.ActorId}' handoff target '{spotId}' "
-                        + "is not active during direct completion."
-                );
+            var target = ResolveActorHandoffTarget(spotId);
             await ZLinkActorTargetActivation
                 .CompleteAsync(
                     () => normalizeDurableAuthority(cancellationToken),
@@ -1390,12 +1370,7 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         try
         {
-            var target =
-                ResolveActorHandoffTarget(spotId)
-                ?? throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor '{request.ActorId}' handoff target '{spotId}' is not active during completion."
-                );
+            var target = ResolveActorHandoffTarget(spotId);
             var actorRef =
                 actorState.NativeActorRef
                 ?? throw new ZLinkFrameworkException(
@@ -2174,11 +2149,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         using (admissionLease)
         {
-            var target =
-                ResolveActorHandoffTarget(spotId)
-                ?? throw new InvalidOperationException(
-                    $"Actor handoff target '{spotId}' is not active."
-                );
+            var target = ResolveActorHandoffTarget(spotId);
 
             return await _actorHandoffAdmissions
                 .AdmitAsync(
@@ -2451,7 +2422,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         return _actorHandoffAdmissions.AbortReservationAsync(request, spotId, cancellationToken);
     }
 
-    private ActorHandoffTarget? ResolveActorHandoffTarget(string spotId)
+    internal ActorHandoffTarget ResolveActorHandoffTarget(string spotId)
     {
         var state =
             _state
@@ -2470,7 +2441,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
         if (entryNode?.EntrySpotActivation is { } entrySpot)
             return new ActorHandoffTarget(spotId, entryNode.Node.RoutingId, null, entrySpot);
-        return null;
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            $"Actor Join target '{spotId}' is not active."
+        );
     }
 
     /// <summary>
@@ -2581,12 +2555,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        var target =
-            ResolveActorHandoffTarget(request.TargetSpotId)
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{request.Actor.ActorId}' Join target '{request.TargetSpotId}' is not active."
-            );
+        var target = ResolveActorHandoffTarget(request.TargetSpotId);
         if (target.NodeRid != request.TargetNodeRid)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
@@ -3098,7 +3067,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         return actorState.AdmitDurablePrefix([record])[0];
     }
 
-    private readonly record struct ActorHandoffTarget(
+    internal readonly record struct ActorHandoffTarget(
         string TargetRid,
         RoutingId NodeRid,
         ZLinkSpotActivation? UserSpot,

@@ -3016,6 +3016,14 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         return actorId;
     }
 
+    internal ValueTask<ZLinkActorCreateResult> GetExistingActorAsync(string actorId) =>
+        _provider
+            .GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, ActorType)
+            .InMesh(MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Async();
+
     internal async Task JoinActorAsync(string spotId, string? actorId = null)
     {
         actorId ??= await CreateActorAsync();
