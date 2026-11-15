@@ -30,7 +30,7 @@ export class ZLinkEntryActorRuntimeService implements ZLinkEntryActorRuntime {
   }
 
   resolveActor(actorId: string): ZLinkActor | undefined {
-    return this.options.actorManager()?.getState(actorId)?.actor;
+    return this.options.actorManager()?.resolveLocalActor(actorId);
   }
 
   async releaseMembers(meshName: string): Promise<void> {
