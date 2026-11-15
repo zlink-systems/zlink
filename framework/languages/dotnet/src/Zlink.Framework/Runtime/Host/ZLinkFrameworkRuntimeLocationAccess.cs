@@ -109,7 +109,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ),
                 row.AuthorityOwnerGeneration,
                 _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),
-                () => rows.InvalidateSpotRoute(new ZLinkSpotLocationKey(address.SpotId))
+                () => rows.InvalidateSpotRouteAsync(new ZLinkSpotLocationKey(address.SpotId))
             )
         );
     }

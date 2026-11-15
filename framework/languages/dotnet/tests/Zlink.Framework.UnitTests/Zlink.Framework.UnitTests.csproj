@@ -295,6 +295,7 @@
         <Compile Include="Runtime/ActorHandoffTestRestoration.cs"/>
         <Compile Include="Runtime/RouteChangeProxy.cs"/>
         <Compile Include="Runtime/RelocationTargetShutdownTests.cs"/>
+        <Compile Include="Runtime/SpotRouteRecreateTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.Closing.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.Shutdown.cs"/>

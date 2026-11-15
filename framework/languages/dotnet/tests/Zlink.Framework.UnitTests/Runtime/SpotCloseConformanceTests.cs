@@ -63,20 +63,20 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             activation = (ZLinkSpotActivation)context;
             host.State.ContextCloseTask = context.CloseAsync().AsTask();
         };
-        var selected = new TaskCompletionSource<(bool Committed, bool Stopped)>(
+        var selected = new TaskCompletionSource<(int Pending, bool Committed, bool Stopped)>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var pendingAtStop = 0;
         host.State.OnInstanceClosing = _ =>
         {
             var gate = ZLinkSerialTurn.Current!.ExecutionGate!;
-            // Finalization cancels the incarnation before completing its queue.
-            // Submit at that existing boundary without holding either turn.
+            // Submit during finalization and observe the record on the gate.
+            // The consumer can finish before this cancellation callback returns.
             activation!.StopToken.Register(() =>
             {
                 gate.ConsumerSelected = () =>
                     selected.TrySetResult(
                         (
+                            gate.LifecyclePendingCount,
                             activation.HasCommittedClose,
                             activation.ExecutionStatus == ZLinkObjectExecutionStatus.Stopped
                         )
@@ -84,7 +84,6 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
                 host.State.JoinedContextCloseTask = catalog
                     .CloseFromContextAsync(activation, cancellation.Token)
                     .AsTask();
-                pendingAtStop = gate.LifecyclePendingCount;
                 if (cancelJoined)
                     cancellation.Cancel();
             });
@@ -104,9 +103,9 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
         var observed = await selected.Task.WaitAsync(Wait);
         output.WriteLine(
-            $"Unstarted record: pendingAtStop={pendingAtStop}, committed={observed.Committed}, stopped={observed.Stopped}"
+            $"Unstarted record: pendingAtSelection={observed.Pending}, committed={observed.Committed}, stopped={observed.Stopped}"
         );
-        Assert.Equal(1, pendingAtStop);
+        Assert.Equal(1, observed.Pending);
         Assert.True(observed.Committed);
         Assert.True(observed.Stopped);
         var joined = host.State.JoinedContextCloseTask!;
@@ -1145,8 +1144,9 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         try
         {
             await initialized.Task.WaitAsync(Wait);
-            host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
-                .InvalidateSpotRoute(new ZLinkSpotLocationKey(spotId));
+            await host
+                .Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+                .InvalidateSpotRouteAsync(new ZLinkSpotLocationKey(spotId));
             var before = GetIngressPermits();
             var arrivedDuringInitialization = host.RequestInstanceAsync(spotId, "after-pending");
             await ObserveMappedIngressAsync().WaitAsync(Wait);
@@ -2439,8 +2439,9 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             await ObserveOwnerAcceptanceAsync(closing).WaitAsync(Wait);
             host.State.ReleaseOnClosing.TrySetResult();
             Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
-            host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
-                .InvalidateSpotRoute(new ZLinkSpotLocationKey(spotId));
+            await host
+                .Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+                .InvalidateSpotRouteAsync(new ZLinkSpotLocationKey(spotId));
             var after = await host.RequestInstanceAsync(spotId, "after-ready-send").WaitAsync(Wait);
             Assert.NotEqual(first.Generation, after.Generation);
             Assert.Contains("ready-send", host.State.InstanceHandlerMarkers);
