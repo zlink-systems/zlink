@@ -4,7 +4,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_common.sh
 source "${HERE}/../runner_common.sh"
-bench_init java "grpc-java,zlink-java,zlink-framework-java" \
+bench_init java "grpc-java,zlink-java,zlink-framework-java,zlink-java-json,zlink-framework-java-json" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 cd "${HERE}"
 
@@ -57,6 +57,24 @@ for run in $(seq 1 "${RUNS}"); do
         target_command_endpoint=""
         target_stats_url="http://127.0.0.1:5255"
         target_command=("${FW_BIN}" --endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
+        ;;
+      zlink-java-json)
+        trigger_url="http://127.0.0.1:5245"
+        source_stats_url="http://127.0.0.1:5246"
+        target_endpoint="tcp://127.0.0.1:5247"
+        target_command_endpoint="tcp://127.0.0.1:5248"
+        target_stats_url="http://127.0.0.1:5249"
+        target_command=("${RAW_BIN}" --implementation "${impl}" --endpoint "${target_endpoint}" \
+          --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
+        ;;
+      zlink-framework-java-json)
+        trigger_url="http://127.0.0.1:5252"
+        source_stats_url="http://127.0.0.1:5253"
+        target_endpoint="tcp://127.0.0.1:5254"
+        target_command_endpoint=""
+        target_stats_url="http://127.0.0.1:5255"
+        target_command=("${FW_BIN}" --implementation "${impl}" --endpoint "${target_endpoint}" \
+          --metrics-url "${target_stats_url}")
         ;;
     esac
 

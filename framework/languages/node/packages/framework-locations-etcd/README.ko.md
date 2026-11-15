@@ -55,3 +55,26 @@ node --test test/contract/location-etcd-conformance.test.js
 실행기는 cluster 하나와 실제 관리 process를 사용하고, 결과·변형 시험·정리 결과를 로그 디렉터리에
 기록한다. 다른 언어 provider가 필요한 두 case는 #4082에서 실행한다. 현재 공통 coverage 검사기는
 35개 ID를 모두 요구하므로 이 단계의 33개 결과에는 그 두 ID의 누락을 보고한다.
+
+## etcd client
+
+2026-11-15 기준 저장소 선언과 잠금 상태다.
+
+| 항목 | 현재 상태 | 근거 |
+|---|---|---|
+| Client | 공식 etcd v3.6.16 proto를 `@grpc/proto-loader`로 읽고 `@grpc/grpc-js`로 직접 호출한다. | [client.ts:36](src/internal/client.ts) |
+| Version | 직접 dependency는 `@grpc/grpc-js` 1.14.7과 `@grpc/proto-loader` 0.8.1로 고정한다. | [package.json:22](package.json) |
+| Lockfile | Workspace의 `package-lock.json`이 client와 전이 의존성의 version·integrity를 기록한다. | [package-lock.json:1](../../package-lock.json) |
+
+Proto와 import의 원본 license는 [THIRD_PARTY_NOTICES.md:40](../../../../../THIRD_PARTY_NOTICES.md)에 기록되어 있다.
+
+다음 목록은 위 lockfile의 두 client package에서 시작해 `dependencies`를 재귀적으로 따라간 결과다. 중첩 package 경로를 우선하므로 workspace root의 다른 protobufjs 버전과 구분한다. Framework companion package와 workspace 개발 도구는 이 client 목록에 포함하지 않는다. License 표기는 lockfile의 metadata이며 원본 license 검토를 대신하지 않는다.
+
+| License | Client와 전이 의존성 |
+|---|---|
+| Apache-2.0 | `@grpc/grpc-js` 1.14.7, `@grpc/proto-loader` 0.8.1, `long` 5.3.2 |
+| BSD-3-Clause | `@protobufjs/aspromise` 1.1.2, `@protobufjs/base64` 1.1.2, `@protobufjs/codegen` 2.0.5, `@protobufjs/eventemitter` 1.1.1, `@protobufjs/fetch` 1.1.1, `@protobufjs/float` 1.0.2, `@protobufjs/path` 1.1.2, `@protobufjs/pool` 1.1.0, `@protobufjs/utf8` 1.1.2, `protobufjs` 7.6.6 |
+| ISC | `cliui` 8.0.1, `get-caller-file` 2.0.5, `y18n` 5.0.8, `yargs-parser` 21.1.1 |
+| MIT | `@js-sdsl/ordered-map` 4.4.2, `@types/node` 22.19.19, `ansi-regex` 5.0.1, `ansi-styles` 4.3.0, `color-convert` 2.0.1, `color-name` 1.1.4, `emoji-regex` 8.0.0, `escalade` 3.2.0, `is-fullwidth-code-point` 3.0.0, `lodash.camelcase` 4.3.0, `require-directory` 2.1.1, `string-width` 4.2.3, `strip-ansi` 6.0.1, `undici-types` 6.21.0, `wrap-ansi` 7.0.0, `yargs` 17.7.3 |
+
+[Client capability 결과](../../../../../scripts/etcd/README.ko.md#client-capability-결과)에서 시험 이름·명령·CI 원본과 미검증 범위를 확인한다.

@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../../../.." && pwd)"
 # shellcheck source=../runner_common.sh
 source "${HERE}/../runner_common.sh"
-bench_init node "grpc-node,zlink-node,zlink-framework-node" \
+bench_init node "grpc-node,zlink-node,zlink-framework-node,zlink-node-json,zlink-framework-node-json" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 cd "${HERE}"
 
@@ -47,6 +47,15 @@ for run in $(seq 1 "${RUNS}"); do
         target_command=(node zlink-raw-server/main.js --endpoint "${target_endpoint}" \
           --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
         ;;
+      zlink-node-json)
+        trigger_url="http://127.0.0.1:5225"
+        source_stats_url="http://127.0.0.1:5226"
+        target_endpoint="tcp://127.0.0.1:5227"
+        target_command_endpoint="tcp://127.0.0.1:5228"
+        target_stats_url="http://127.0.0.1:5229"
+        target_command=(node zlink-raw-server/main.js --endpoint "${target_endpoint}" \
+          --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}" --json-body)
+        ;;
       zlink-framework-node)
         trigger_url="http://127.0.0.1:5232"
         source_stats_url="http://127.0.0.1:5233"
@@ -55,6 +64,15 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_url="http://127.0.0.1:5235"
         target_command=(node zlink-framework-server/main.js --endpoint "${target_endpoint}" \
           --metrics-url "${target_stats_url}")
+        ;;
+      zlink-framework-node-json)
+        trigger_url="http://127.0.0.1:5232"
+        source_stats_url="http://127.0.0.1:5233"
+        target_endpoint="tcp://127.0.0.1:5234"
+        target_command_endpoint=""
+        target_stats_url="http://127.0.0.1:5235"
+        target_command=(node zlink-framework-server/main.js --endpoint "${target_endpoint}" \
+          --metrics-url "${target_stats_url}" --json-body)
         ;;
     esac
 
