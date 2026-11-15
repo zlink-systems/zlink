@@ -24,6 +24,7 @@ export interface ZLinkLocationRuntimeOwnerOptions {
   readonly fallbackNodeRid: RoutingId;
   readonly metrics: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly monotonicNowMs?: () => number;
+  readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
   readonly rewriteAuthorityPayloadForOwner?: import('../locations').ZLinkLocationRuntimeOptions['rewriteAuthorityPayloadForOwner'];
 }
 
@@ -117,7 +118,8 @@ export class ZLinkLocationRuntimeOwner {
       primaryMeshName ?? '',
       stores.authorityStore,
       stores.spotStore,
-      (spotId) => this.spotRouteInvalidator?.(spotId)
+      (spotId) => this.spotRouteInvalidator?.(spotId),
+      this.options.observeActorAuthorityVersion
     );
     return runtime;
   }

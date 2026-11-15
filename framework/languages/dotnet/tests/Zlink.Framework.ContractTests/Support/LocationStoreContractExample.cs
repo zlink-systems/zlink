@@ -6,6 +6,8 @@ namespace Zlink.Framework.ContractTests.Support;
 /// </summary>
 internal abstract class LocationStoreContractExample : IZLinkLocationRepository
 {
+    public virtual Func<ZLinkAuthorityKey, string?, ValueTask>? AuthorityObservedAsync { get; set; }
+
     public virtual ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,

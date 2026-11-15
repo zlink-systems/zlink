@@ -9596,7 +9596,11 @@ public sealed partial class EntrySpotActorDispatchTests
                         null
                     );
                 },
-                () => invalidations++
+                () =>
+                {
+                    invalidations++;
+                    return ValueTask.CompletedTask;
+                }
             );
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                 new ZLinkRouteSpotRequestCall<ProbeRouteMessage>(
@@ -9697,7 +9701,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             node.BeforeActorSendAsync = async () =>
             {
-                rows.InvalidateActorRoute(key);
+                await rows.InvalidateActorRouteAsync(key);
                 var replacementRid = RoutingId.From("replacement-send-node");
                 Assert.NotNull(
                     await AuthorityLocationTestFixture.PublishActorAsync(
@@ -9891,7 +9895,7 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
-            rows.InvalidateActorRoute(new ZLinkActorLocationKey(actor.ActorId));
+            await rows.InvalidateActorRouteAsync(new ZLinkActorLocationKey(actor.ActorId));
             var reply = await new ZLinkActorClient(runtime)
                 .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
                 .Timeout(TimeSpan.FromMilliseconds(500))
@@ -10110,7 +10114,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timeout.Kind);
 
-            rows.InvalidateActorRoute(key);
+            await rows.InvalidateActorRouteAsync(key);
             var replacementRid = RoutingId.From("replacement-node");
             Assert.NotNull(
                 await AuthorityLocationTestFixture.PublishActorAsync(

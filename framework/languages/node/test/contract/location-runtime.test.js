@@ -2087,7 +2087,7 @@ test('actor resolver keeps the current Actor route while its enclosing Spot proj
   assert.equal(current.objectGeneration, 6n);
 });
 
-test('Spot Message Follow invalidates only resolver entries for the source owner fence', async () => {
+test('Spot Message Follow invalidates only matching Spot routes and preserves the independent Actor owner route', async () => {
   const fence = {
     spotId: 'spot-follow',
     objectGeneration: 7n,
@@ -2136,19 +2136,7 @@ test('Spot Message Follow invalidates only resolver entries for the source owner
     ownerId: 'owner-a',
     ownerLeaseGeneration: fence.ownerLeaseGeneration,
     authorityOwnerGeneration: 9n,
-    authorityStoreVersion: 'actor-version',
-    enclosingSpotRoute: {
-      routerChannelId: 'play',
-      targetNodeRid: fence.targetNodeRid,
-      spotId: fence.spotId,
-      spotKind: framework.ZLinkSpotKind.User,
-      targetSpotGeneration: fence.objectGeneration,
-      targetNodeGeneration: fence.targetNodeGeneration,
-      authorityOwnerGeneration: fence.authorityOwnerGeneration,
-      targetOwnerId: 'owner-a',
-      ownerLeaseGeneration: fence.ownerLeaseGeneration,
-      authorityStoreVersion: 'spot-version'
-    }
+    authorityStoreVersion: 'actor-version'
   };
   const resolvers = await cachedFollowRoutes(spotRow, actorRow, directActorRoute);
 
@@ -2163,7 +2151,8 @@ test('Spot Message Follow invalidates only resolver entries for the source owner
   assert.equal(resolvers.invalidateSpotRouteIfMatches(fence), true);
   assert.equal(resolvers[inspectRuntime]().spotRouteKeys.length, 0);
   assert.equal(resolvers[inspectRuntime]().actorRouteKeys.length, 0);
-  assert.equal(resolvers[inspectRuntime]().directActorRouteKeys.length, 0);
+  assert.equal(resolvers[inspectRuntime]().directActorRouteKeys.length, 1);
+  assert.deepEqual((await resolvers.resolveDirectActorRoute(actorRow.actorId)).route.actorRef, actorRow.actorRef);
 });
 
 test('store location resolver returns a live remote ActorRef', async () => {
@@ -3486,10 +3475,6 @@ async function cachedFollowRoutes(spotRow, actorRow, route) {
   const { encodeActorAuthorityIdentity } = require(
     '../../packages/framework/dist/runtime/actors/actor-authority-publication'
   );
-  const { encodeServiceUserSpotAuthorityPayload } = require(
-    '../../packages/framework/dist/runtime/foundation/service-authority-payload-codec'
-  );
-  const enclosing = route.enclosingSpotRoute;
   const snapshot = (kind, generation, ownerGeneration, payload) => ({
     kind: 'snapshot',
     objectGeneration: generation,
@@ -3518,19 +3503,11 @@ async function cachedFollowRoutes(spotRow, actorRow, route) {
             meshName: route.meshName,
             ownerNodeGeneration: route.ownerNodeGeneration,
             owner: { ownerId: route.ownerId, leaseGeneration: route.ownerLeaseGeneration },
-            spotId: enclosing?.spotId ?? actorRow.spotId,
-            spotGeneration: enclosing?.targetSpotGeneration ?? actorRow.spotGeneration,
-            spotKind: enclosing ? framework.ZLinkSpotKind.User : framework.ZLinkSpotKind.Entry
+            spotId: actorRow.spotId,
+            spotGeneration: actorRow.spotGeneration,
+            spotKind: actorRow.spotKind
           }));
-      assert.ok(enclosing, 'only the enclosing Spot authority may be resolved');
-      assert.equal(key.value, authorityKeys.encodeAuthorityKey('user_spot', enclosing.spotId).value);
-      return snapshot('user_spot', enclosing.targetSpotGeneration, enclosing.authorityOwnerGeneration,
-        encodeServiceUserSpotAuthorityPayload({
-          state: 'ready', stableType: 'game', spotId: enclosing.spotId,
-          ownerId: route.ownerId, ownerLeaseGeneration: route.ownerLeaseGeneration,
-          ownerMeshName: route.meshName, ownerNodeRid: String(route.actorRef.nodeRid),
-          ownerNodeGeneration: route.ownerNodeGeneration
-        }));
+      assert.fail('An Actor direct route must read only the Actor authority record.');
     }
   };
   const resolver = new internal.ZLinkStoreLocationResolvers({

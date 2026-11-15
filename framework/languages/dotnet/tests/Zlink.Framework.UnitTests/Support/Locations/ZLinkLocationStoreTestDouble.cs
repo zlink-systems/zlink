@@ -4,6 +4,8 @@ namespace Zlink.Framework.UnitTests;
 
 internal abstract class ZLinkLocationStoreTestDouble : IZLinkLocationRepository
 {
+    public virtual Func<ZLinkAuthorityKey, string?, ValueTask>? AuthorityObservedAsync { get; set; }
+
     public virtual ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,
