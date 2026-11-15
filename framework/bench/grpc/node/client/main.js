@@ -13,11 +13,19 @@ const { argValue, argInt } = require('../shared/args');
 const { BenchPhaseController, startSourceHttp } = require('../shared/bench-http-application');
 const header = require('../shared/bench-metric-header');
 const rawWire = require('../shared/raw-wire');
+const rawJsonWire = require('../shared/raw-json-wire');
+const gamePayload = require('../shared/game-payload');
 const core = require('./bench-core');
 const { createFrameworkTransport } = require('./framework-transport');
 
 const PATTERNS = ['request-serial', 'request-window', 'request-backpressure', 'send-saturation'];
-const IMPLEMENTATIONS = ['grpc-node', 'zlink-node', 'zlink-framework-node'];
+const IMPLEMENTATIONS = [
+  'grpc-node',
+  'zlink-node',
+  'zlink-framework-node',
+  'zlink-node-json',
+  'zlink-framework-node-json'
+];
 
 function parseOptions(argv) {
   return {
@@ -44,6 +52,9 @@ function parseOptions(argv) {
 
 function validateOptions(options) {
   if (!IMPLEMENTATIONS.includes(options.implementation)) throw new Error('unknown implementation');
+  if (options.implementation.endsWith('-json')) {
+    gamePayload.itemCountForSize(options.payloadSize, options.implementation);
+  }
   if (!PATTERNS.includes(options.scenario)) throw new Error('unknown scenario');
   if (
     options.payloadSize < header.HEADER_SIZE ||
@@ -66,7 +77,7 @@ function validateOptions(options) {
     options.implementation === 'grpc-node' ? 'grpc:' : 'tcp:',
     'target endpoint'
   );
-  if (options.implementation === 'zlink-node') {
+  if (options.implementation === 'zlink-node' || options.implementation === 'zlink-node-json') {
     validateEndpoint(options.targetCommandEndpoint, 'tcp:', 'target command endpoint');
   }
 }
@@ -113,7 +124,10 @@ function createGrpcTransport(options) {
   const proto = grpc.loadPackageDefinition(definition).zlink.framework.bench.withgrpc;
   // §10.4: one unary stub per logical stream, all on one channel (one connection),
   // like the raw and Framework rows.
-  const channelOwner = new proto.BenchService(options.targetEndpoint, grpc.credentials.createInsecure());
+  const channelOwner = new proto.BenchService(
+    options.targetEndpoint,
+    grpc.credentials.createInsecure()
+  );
   const streamCount = options.scenario === 'request-serial' ? 1 : options.submitConcurrency;
   const stubs = Array.from({ length: streamCount }, (_, stream) =>
     stream === 0
@@ -133,12 +147,7 @@ function createGrpcTransport(options) {
       return reply.body;
     },
     send: async (stream, payload) => {
-      await grpcCall(
-        stubs[stream % stubs.length],
-        'Command',
-        payload,
-        options.requestTimeoutMs
-      );
+      await grpcCall(stubs[stream % stubs.length], 'Command', payload, options.requestTimeoutMs);
     },
     close: async () => {
       grpc.closeClient(channelOwner);
@@ -168,6 +177,21 @@ class RawBenchSocket {
 }
 
 function createRawTransport(options) {
+  const jsonBody = options.implementation === 'zlink-node-json';
+  const wire = jsonBody ? rawJsonWire : rawWire;
+  const serialize = jsonBody ? wire.encodeGameMessage : wire.encodeBenchPayloadMessage;
+  const deserialize = jsonBody ? wire.decodeGameMessage : wire.decodeBenchPayloadBody;
+  const createPayload = jsonBody
+    ? (size, run, phase, sequence) =>
+        gamePayload.createGameMessage(
+          size,
+          run,
+          phase,
+          sequence,
+          header.nowNs(),
+          options.implementation
+        )
+    : undefined;
   const context = zlink.createContext();
   const requestSocket =
     options.scenario === 'send-saturation'
@@ -237,14 +261,14 @@ function createRawTransport(options) {
   const submitRequest = (payload) => {
     const submission = requestSocket.socket
       .request(requestSocket.peer)
-      .message(rawWire.REQUEST_ENVELOPE)
-      .message(rawWire.encodeBenchPayloadMessage(payload))
+      .message(wire.REQUEST_ENVELOPE)
+      .message(serialize(payload))
       .timeout(options.requestTimeoutMs)
       .submit();
     const reply = submission.reply.then((parts) => {
       try {
         if (parts.length === 0) throw new Error('raw request returned no reply parts');
-        const body = rawWire.decodeBenchPayloadBody(parts[parts.length - 1].data());
+        const body = deserialize(parts[parts.length - 1].data());
         if (body === null) throw new Error('raw reply protobuf body is invalid');
         return body;
       } finally {
@@ -258,12 +282,13 @@ function createRawTransport(options) {
     const socket = sendSockets[stream % sendSockets.length];
     return socket.socket
       .send(socket.peer)
-      .message(rawWire.REQUEST_ENVELOPE)
-      .message(rawWire.encodeBenchPayloadMessage(payload))
+      .message(wire.REQUEST_ENVELOPE)
+      .message(serialize(payload))
       .submit();
   };
 
   return {
+    createPayload,
     request: async (_stream, payload) => {
       return awaitCompletion(requestCompletionPump, submitRequest(payload).reply);
     },
@@ -278,6 +303,17 @@ function createRawTransport(options) {
     },
     sendSubmission: (stream, payload) => submitSend(stream, payload),
     backpressuredResult: zlink.SubmitResult.Backpressured,
+    validateReply: jsonBody
+      ? (reply, run, phase, size, sequence) =>
+          gamePayload.assertGameMessageStamp(
+            reply,
+            run,
+            phase,
+            sequence,
+            size,
+            options.implementation
+          )
+      : undefined,
     close: async () => {
       requestCompletionPump?.close();
       sendCompletionPump?.close();
@@ -292,17 +328,24 @@ async function createTransport(options) {
   const transport =
     options.implementation === 'grpc-node'
       ? createGrpcTransport(options)
-      : options.implementation === 'zlink-framework-node'
+      : options.implementation === 'zlink-framework-node' ||
+          options.implementation === 'zlink-framework-node-json'
         ? await createFrameworkTransport(options)
         : createRawTransport(options);
-  const probeBody = header.createPayloadBytes(1024, 1, header.PHASE_WARMUP, 0);
+  const probeSize = options.implementation.endsWith('-json') ? options.payloadSize : 1024;
+  const probeBody =
+    transport.createPayload === undefined
+      ? header.createPayloadBytes(probeSize, 1, header.PHASE_WARMUP, 0)
+      : transport.createPayload(probeSize, 1, header.PHASE_WARMUP, 0);
   await core.waitForRouteReady(async () => {
     if (options.scenario === 'send-saturation') {
       await transport.send(0, probeBody);
       return;
     }
     const reply = await transport.request(0, probeBody);
-    if (!header.isExpected(header.decode(reply), 1, header.PHASE_WARMUP, 1024, 0)) {
+    if (typeof transport.validateReply === 'function') {
+      transport.validateReply(reply, 1, header.PHASE_WARMUP, probeSize, 0);
+    } else if (!header.isExpected(header.decode(reply), 1, header.PHASE_WARMUP, probeSize, 0)) {
       throw new Error('target probe returned an invalid payload');
     }
   }, options.routeReadyMs);

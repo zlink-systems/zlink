@@ -57,6 +57,21 @@ public final class BenchServerMetrics {
         }
     }
 
+    /** Records the application stamps carried by the JSON game-message body. */
+    public void record(BenchGamePayload payload) {
+        allPhaseMessages.incrementAndGet();
+        if (payload.phase() != 1L) {
+            return;
+        }
+        activeMessages.incrementAndGet();
+        long latency = BenchGamePayload.timestampNow() - payload.sentNs();
+        synchronized (latencyLock) {
+            if (latencyNs.size() < LATENCY_LIMIT) {
+                latencyNs.add(Math.max(latency, 0L));
+            }
+        }
+    }
+
     public void recordError() {
         errors.incrementAndGet();
     }
