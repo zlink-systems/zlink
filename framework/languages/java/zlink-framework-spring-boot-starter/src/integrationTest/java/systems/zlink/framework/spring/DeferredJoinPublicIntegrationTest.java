@@ -53,6 +53,8 @@ public class DeferredJoinPublicIntegrationTest {
                 var target = host("target", prefix)) {
             var s = source.getBean(ZLinkFrameworkRuntime.class);
             var t = target.getBean(ZLinkFrameworkRuntime.class);
+            ZLinkHostServing.await(s);
+            ZLinkHostServing.await(t);
             awaitPeer(s, "target");
             awaitPeer(t, "source");
             var room =
@@ -182,6 +184,9 @@ public class DeferredJoinPublicIntegrationTest {
                 Environment e, ZLinkRedisLocationStore l, ZLinkRedisRelocationStore r) {
             return o -> {
                 o.setDefaultRequestTimeout(Duration.ofSeconds(1));
+                // Fixed-RID hosts wait 3·margin before the first claim (MeshNode §3.3). This
+                // case checks Deferred Join, not that wait, as core RuntimeTestSupport does.
+                o.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
                 o.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 o.addLocationStore(l);
                 o.addRelocationStore(r);

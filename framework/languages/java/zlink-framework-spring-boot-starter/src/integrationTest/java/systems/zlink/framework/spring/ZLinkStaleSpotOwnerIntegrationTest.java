@@ -28,6 +28,7 @@ import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCod
 import systems.zlink.framework.spots.*;
 import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -41,6 +42,7 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
     private static final String INSTANCE_ID = "slot-hall-jackpot/MAJOR_GRAND";
     private static final String MESH = "slots";
     private static final int WAIT_SECONDS = 10;
+    private static volatile Duration renewInterval;
 
     @ParameterizedTest
     @CsvSource({"memory, false", "memory, true", "redis, false", "redis, true"})
@@ -68,7 +70,7 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                 if (spotFirst) {
                     // Location runtime §6.1: the Spot's only member also lost its owner, so the
                     // Spot is re-created and the member is released with it (Missing).
-                    getUserSpot(restarted);
+                    afterAuthorityReleaseWait(() -> getUserSpot(restarted), true);
                     assertTrue(
                             fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID))
                                             .objectGeneration()
@@ -81,11 +83,11 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                                     .toCompletableFuture()
                                     .get());
                 }
-                getActor(restarted);
+                afterAuthorityReleaseWait(() -> getActor(restarted), !spotFirst);
                 assertTrue(
                         fixture.authority(ZLinkAuthorityKeyCodec.actor(ACTOR_ID)).objectGeneration()
                                 > actorGeneration);
-                getUserSpot(restarted);
+                afterAuthorityReleaseWait(() -> getUserSpot(restarted), false);
                 assertTrue(
                         fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID))
                                         .objectGeneration()
@@ -137,6 +139,21 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                                         .toCompletableFuture()
                                         .get(WAIT_SECONDS, TimeUnit.SECONDS));
                 assertEquals(before.storeVersion(), fixture.authority(key).storeVersion());
+                // An instance intent during the release wait ends Unavailable without running
+                // the factory (Spot address messaging §4.1 step 4). A one-way send cannot
+                // report that, so an instance intent request observes the end of the wait.
+                afterAuthorityReleaseWait(
+                        () ->
+                                restarted
+                                        .runtime()
+                                        .route()
+                                        .requestToSpot(INSTANCE_ID, new Probe())
+                                        .instanceSpot(INSTANCE_SPOT_TYPE)
+                                        .inMesh(MESH)
+                                        .submit(Reply.class)
+                                        .toCompletableFuture()
+                                        .get(WAIT_SECONDS, TimeUnit.SECONDS),
+                        true);
                 assertTrue(instance(restarted) > generation);
             }
         }
@@ -157,6 +174,7 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
         @Bean
         public ZLinkFrameworkConfigurer framework(ZLinkRedisRelocationStore relocationStore) {
             return options -> {
+                renewInterval = options.configureLocations().ownerLeaseRenewInterval();
                 options.addRelocationStore(relocationStore);
                 options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 var server =
@@ -182,7 +200,7 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
         }
     }
 
-    private static Session start(ZLinkLocationStore store) {
+    private static Session start(ZLinkLocationStore store) throws Exception {
         var app =
                 new SpringApplicationBuilder(Config.class)
                         .web(WebApplicationType.NONE)
@@ -190,7 +208,9 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                                 context ->
                                         context.getBeanFactory().registerSingleton("store", store))
                         .run();
-        return new Session(app, app.getBean(ZLinkFrameworkRuntime.class));
+        var runtime = app.getBean(ZLinkFrameworkRuntime.class);
+        ZLinkHostServing.await(runtime);
+        return new Session(app, runtime);
     }
 
     private static void getActor(Session session) throws Exception {
@@ -235,6 +255,30 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                 .toCompletableFuture()
                 .get(WAIT_SECONDS, TimeUnit.SECONDS);
         return Jackpot.handled.get(WAIT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    // An ended owner's record is re-created only after the authority release wait (Location
+    // runtime §6.1, #3877). When firstMustWait is set the first attempt must report that wait;
+    // each attempt that reports it is repeated at the renew interval, and any other failure
+    // fails the case.
+    private static void afterAuthorityReleaseWait(
+            ThrowingOperation operation, boolean firstMustWait) throws Exception {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                operation.run();
+            } catch (ExecutionException failure) {
+                if (!(failure.getCause() instanceof ZLinkFrameworkException cause)
+                        || cause.kind() != ZLinkFrameworkErrorKind.UNAVAILABLE
+                        || !String.valueOf(cause.getMessage()).contains("authority release wait"))
+                    throw failure;
+                Thread.sleep(renewInterval.toMillis());
+                continue;
+            }
+            if (attempt == 0 && firstMustWait)
+                throw new AssertionError(
+                        "An ended owner's record was re-created before the authority release wait");
+            return;
+        }
     }
 
     private static void unavailable(ThrowingOperation operation) {
