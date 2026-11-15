@@ -473,8 +473,112 @@ void verify_field_masks ()
         assert (!p::try_decode<empty_dto> (text.begin (), text.end ()));
 }
 
+struct payload_contract_dto
+{
+    std::vector<std::byte> body;
+};
+template <> struct zlink::json::dto_traits<payload_contract_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("body", &payload_contract_dto::body)};
+};
+struct property_contract_dto
+{
+    std::vector<std::byte> body;
+};
+template <> struct zlink::json::dto_traits<property_contract_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("body", &property_contract_dto::body, zlink::json::defaulted)};
+};
+struct encode_string_dto
+{
+    std::string value;
+};
+template <> struct zlink::json::dto_traits<encode_string_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("wireValue", &encode_string_dto::value)};
+};
+struct encode_object_dto
+{
+    encode_string_dto value;
+};
+template <> struct zlink::json::dto_traits<encode_object_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("wireValue", &encode_object_dto::value)};
+};
+struct encode_nullable_dto
+{
+    std::optional<std::string> text;
+    std::optional<encode_string_dto> child;
+};
+template <> struct zlink::json::dto_traits<encode_nullable_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("text", &encode_nullable_dto::text),
+                 zlink::json::field ("child", &encode_nullable_dto::child)};
+};
+
+void verify_payload_contract ()
+{
+    namespace p = zlink::detail::json_profile;
+    std::ifstream input (ZLINK_PAYLOAD_CONTRACT_PATH);
+    assert (input);
+    std::string line;
+    int failures = 0;
+    while (std::getline (input, line)) {
+        if (line.empty () || line[0] == '#')
+            continue;
+        const auto a = line.find ('\t');
+        const auto b = line.find ('\t', a + 1);
+        const auto c = line.find ('\t', b + 1);
+        const auto text = line.substr (c + 1);
+        const auto shape = line.substr (b + 1, c - b - 1);
+        if (shape.starts_with ("encode-")) {
+            const bool expected = line.substr (a + 1, b - a - 1) == "accept";
+            if (shape == "encode-nullable") {
+                const auto wire = p::try_encode (encode_nullable_dto{});
+                std::cout << "ENCODE_CONTRACT " << line.substr (0, a)
+                          << " wire=" << wire.value_or ("<error>") << std::endl;
+                assert (expected && wire
+                        && nlohmann::json::parse (*wire) == nlohmann::json::parse (text));
+            } else {
+                // By-value string/DTO fields cannot contain null. Raw and smart pointers
+                // are not typed JSON candidates; optional<T> is the nullable declaration.
+                // Assigning a null C string violates std::string preconditions; it
+                // does not create a valid null string and must not be used as a probe.
+                static_assert (!std::is_assignable_v<encode_string_dto &, std::nullptr_t>);
+                static_assert (!p::is_json_candidate<std::string *> ());
+                static_assert (!p::is_json_candidate<std::shared_ptr<encode_string_dto>> ());
+                const bool representable =
+                  shape == "encode-string"
+                    ? p::try_decode<encode_string_dto> (text.begin (), text.end ()).has_value ()
+                    : p::try_decode<encode_object_dto> (text.begin (), text.end ()).has_value ();
+                std::cout << "ENCODE_CONTRACT " << line.substr (0, a)
+                          << " null-not-representable=" << !representable << std::endl;
+                assert (!expected && !representable);
+                assert (p::try_encode (encode_string_dto{""}) == "{\"wireValue\":\"\"}");
+                assert (p::try_encode (encode_object_dto{})
+                        == "{\"wireValue\":{\"wireValue\":\"\"}}");
+            }
+            continue;
+        }
+        const bool accepted =
+          line.substr (b + 1, c - b - 1) == "ctor"
+            ? p::try_decode<payload_contract_dto> (text.begin (), text.end ()).has_value ()
+            : p::try_decode<property_contract_dto> (text.begin (), text.end ()).has_value ();
+        const bool expected = line.substr (a + 1, b - a - 1) == "accept";
+        std::cout << "PAYLOAD_CONTRACT " << line.substr (0, a) << " accepted=" << accepted
+                  << " expected=" << expected << std::endl;
+        failures += accepted != expected;
+    }
+    assert (failures == 0);
+}
 int main ()
 {
+    verify_payload_contract ();
     verify_byte_sequence_wire ();
     verify_base64_padding ();
     verify_field_masks ();

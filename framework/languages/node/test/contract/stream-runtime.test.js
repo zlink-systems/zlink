@@ -9764,6 +9764,7 @@ function readyPoller() {
     waitForReadable() {
       return new Promise((resolve) => setImmediate(() => resolve(true)));
     },
+    wake() {},
     markDrained() {},
     dispose() {}
   };

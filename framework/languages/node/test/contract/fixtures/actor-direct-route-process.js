@@ -10,6 +10,7 @@ const {
 const { Module, Injectable } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const f = require('@zlink-systems/framework');
+const { ZLinkHostServiceRelocationRuntime } = require('../../../packages/framework/dist/internal');
 const n = require('@zlink-systems/nestjs');
 const {
   ZLinkRedisLocationStore,
@@ -31,6 +32,8 @@ class Move {
   }
 }
 let preparedResolve, resumeResolve, pendingDelivery;
+let releasePublication;
+let publication;
 const deliveryGate = { async waitBeforeSubmit() {} };
 class Notice {
   constructor(value = 'notice') {
@@ -205,6 +208,25 @@ async function start() {
 async function execute(action) {
   const id = process.env.ZLINK_TEST_SPOT;
   switch (action) {
+    case 'holdPublication': {
+      publication = new Promise((resolve) => {
+        releasePublication = resolve;
+      });
+      // Hold the actual target boundary; assertions use public Find and requests.
+      const normalize =
+        ZLinkHostServiceRelocationRuntime.prototype.clearTargetRelocationPublication;
+      ZLinkHostServiceRelocationRuntime.prototype.clearTargetRelocationPublication =
+        async function (...args) {
+          const authority = await normalize.apply(this, args);
+          send({ type: 'publication-held' });
+          await publication;
+          return authority;
+        };
+      return true;
+    }
+    case 'resumePublication':
+      releasePublication();
+      return true;
     case 'waitNewOwner':
     case 'waitRouteReady':
       for await (const x of routeMesh.observe(meshName, 64, AbortSignal.timeout(10000))) {

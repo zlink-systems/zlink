@@ -124,8 +124,7 @@ public final class QuestDomain {
                             nextVersion,
                             now));
             if (event.publish()) {
-                progressNotifications.add(
-                        new Messages.QuestProgressNotify(event.playerId(), null, next));
+                progressNotifications.add(new Messages.QuestProgressNotify(event.playerId(), next));
             }
         }
         if ((previous == null || !Messages.QuestStatuses.RewardGranted.equals(previous.status()))
@@ -158,7 +157,7 @@ public final class QuestDomain {
                             now));
             if (event.publish()) {
                 completedNotifications.add(
-                        new Messages.QuestCompletedNotify(event.playerId(), null, next, true));
+                        new Messages.QuestCompletedNotify(event.playerId(), next, true));
             }
         }
     }
@@ -214,7 +213,7 @@ public final class QuestDomain {
                         now));
         if (event.publish()) {
             completedNotifications.add(
-                    new Messages.QuestCompletedNotify(event.playerId(), null, next, true));
+                    new Messages.QuestCompletedNotify(event.playerId(), next, true));
         }
     }
 

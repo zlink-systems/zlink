@@ -7,6 +7,7 @@ using Zlink.Framework.Contracts.Dispatch;
 
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
+var gameJson = args.Contains("--game-json", StringComparer.Ordinal);
 
 var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
@@ -21,8 +22,14 @@ builder.Services.AddZLinkFramework(framework =>
         .AddRouteMesh("bench")
         .Listen(endpoint)
         .SetRoutingId(RoutingId.From("bench-server"));
-    mesh.AddRouteRequestHandler<EchoHandler, BenchPayload, BenchPayload>("BenchPayload")
-        .AddRouteSendHandler<CommandHandler, BenchPayload>("BenchPayload");
+    if (gameJson)
+        mesh.AddRouteRequestHandler<GameEchoHandler, BenchGameMessage, BenchGameMessage>(
+                "BenchGameMessage"
+            )
+            .AddRouteSendHandler<GameCommandHandler, BenchGameMessage>("BenchGameMessage");
+    else
+        mesh.AddRouteRequestHandler<EchoHandler, BenchPayload, BenchPayload>("BenchPayload")
+            .AddRouteSendHandler<CommandHandler, BenchPayload>("BenchPayload");
 });
 
 var app = builder.Build();
@@ -78,6 +85,34 @@ internal sealed class CommandHandler(BenchServerMetrics metrics)
 {
     public ValueTask HandleAsync(
         BenchPayload message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        metrics.Record(message);
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class GameEchoHandler(BenchServerMetrics metrics)
+    : IZLinkRouteRequestHandler<BenchGameMessage, BenchGameMessage>
+{
+    public ValueTask<BenchGameMessage> HandleAsync(
+        BenchGameMessage request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        metrics.RecordReceived(request);
+        return ValueTask.FromResult(request);
+    }
+}
+
+internal sealed class GameCommandHandler(BenchServerMetrics metrics)
+    : IZLinkRouteSendHandler<BenchGameMessage>
+{
+    public ValueTask HandleAsync(
+        BenchGameMessage message,
         ZLinkRouteMessageContext context,
         CancellationToken cancellationToken
     )

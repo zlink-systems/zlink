@@ -139,6 +139,8 @@ for (const scenario of [
         await next.ready;
         await next.command('waitRouteReady');
         await source.command('waitNewOwner');
+        // Fix this operation's route before relocation without relying on cache lifetime.
+        await source.command('prepareAsk');
         const terminal = await target.command('relocate');
         assert.equal(terminal.outcome, ZLinkFrameworkRelocationOutcome.Relocated);
         const current = await next.command('findActor');
@@ -148,7 +150,7 @@ for (const scenario of [
         // Preserve the old owner's actual terminal without resubmission. Only
         // the next application call may use the new authority record.
         await assert.rejects(
-          source.command('ask'),
+          source.command('resumeDelivery'),
           (error) =>
             JSON.parse(error.message).kind === ZLinkFrameworkErrorKind.NotFound &&
             JSON.parse(error.message).internalKind ===

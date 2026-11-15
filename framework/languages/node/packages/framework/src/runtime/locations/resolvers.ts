@@ -450,10 +450,7 @@ export class ZLinkStoreLocationResolvers
     if (current.kind !== 'snapshot' || current.allocation.state !== 'active') {
       return { kind: 'missing' };
     }
-    const decoded = decodeActorAuthorityIdentity(
-      serviceRelocationAuthorityApplicationPayload(current.payload),
-      current.objectGeneration
-    );
+    const decoded = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
     const currentOwner = {
       ownerId: current.ownerId,
       leaseGeneration: current.ownerLeaseGeneration

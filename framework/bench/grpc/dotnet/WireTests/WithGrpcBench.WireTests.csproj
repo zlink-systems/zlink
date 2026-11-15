@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../../languages/dotnet/src/Zlink.Framework/Zlink.Framework.csproj" />
     <ProjectReference Include="../Shared/WithGrpcBench.Shared.csproj" />
+    <ProjectReference Include="../../../../languages/dotnet/src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
+    <None Include="../../ladder-mixed-payload.json" Link="ladder-mixed-payload.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
