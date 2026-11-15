@@ -73,7 +73,17 @@ test(
     await target.command('holdPublication');
     next = target;
     relocation = owner.command('relocate');
-    await target.waitForEvent('publication-held');
+    // A successful source can report before the target's event arrives; only a source that
+    // ends without relocating ends the wait.
+    const held = target.waitForEvent('publication-held');
+    await Promise.race([
+      held,
+      relocation.then((result) => {
+        if (result.outcome !== ZLinkFrameworkRelocationOutcome.Relocated)
+          assert.fail(`relocation ended before publication-held: ${JSON.stringify(result)}`);
+        return held;
+      })
+    ]);
     assert.equal((await relocation).outcome, ZLinkFrameworkRelocationOutcome.Relocated);
     const current = await target.command('findActor');
     assert.equal(

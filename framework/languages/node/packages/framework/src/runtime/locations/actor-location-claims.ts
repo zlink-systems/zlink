@@ -36,8 +36,6 @@ export interface ZLinkActorClaimActivation<TActor> {
   readonly activated?: TActor;
   readonly existingLocation?: ZLinkActorLocation;
   readonly generation?: bigint;
-  /** Owner lease captured by the successful Actor Location claim. */
-  readonly ownerLeaseGeneration?: bigint;
 }
 
 export class ZLinkActorLocationClaims {
@@ -69,8 +67,7 @@ export class ZLinkActorLocationClaims {
     try {
       return {
         activated: await activate(),
-        generation: claim.generation,
-        ownerLeaseGeneration: claim.claimed?.leaseGeneration
+        generation: claim.generation
       };
     } catch (error) {
       await this.release(actorType, actorId);
@@ -324,66 +321,6 @@ export class ZLinkActorLocationClaims {
       })
     );
     return tracked === undefined ? undefined : { ...tracked.row };
-  }
-
-  async reclaimOwnerRows(
-    excluded?: import('./lifecycle-runtime').ZLinkPreservedAuthority
-  ): Promise<void> {
-    const owner = this.runtime.currentOwnerToken;
-    if (owner === undefined) {
-      throw new Error('Actor location recovery requires a claimed owner token.');
-    }
-    const failures: unknown[] = [];
-    for (const [canonical, tracked] of [...this.actors]) {
-      if (excluded?.(encodeAuthorityKey('actor', tracked.row.actorId), tracked.authority) === true)
-        continue;
-      const key = { meshName: tracked.row.meshName, actorId: tracked.row.actorId };
-      try {
-        const current = await this.actorStore.resolveActor(key);
-        if (this.actors.get(canonical) !== tracked) continue;
-        if (
-          current === undefined ||
-          current.ownerId !== owner.ownerId ||
-          (current.leaseGeneration !== tracked.row.leaseGeneration &&
-            current.leaseGeneration !== owner.leaseGeneration)
-        ) {
-          if (this.actors.get(canonical) !== tracked) continue;
-          this.forget(canonical);
-          const executionOwner = tracked.executionOwner?.deref();
-          if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
-          await tracked.deactivate?.();
-          continue;
-        }
-        if (current.leaseGeneration === owner.leaseGeneration) {
-          if (this.actors.get(canonical) !== tracked) continue;
-          tracked.row = { ...current };
-          continue;
-        }
-        if (this.actors.get(canonical) !== tracked) continue;
-        const result = await this.runtime.writeActor(current, ZLinkLocationWriteIntent.Takeover);
-        if (result.status !== ZLinkLocationWriteStatus.Stored) {
-          failures.push(
-            new Error(
-              `Actor location recovery for '${tracked.row.actorId}' was rejected with status ${result.status}.`
-            )
-          );
-          continue;
-        }
-        if (this.actors.get(canonical) !== tracked) continue;
-        tracked.row = {
-          ...current,
-          ownerId: owner.ownerId,
-          leaseGeneration: owner.leaseGeneration,
-          updatedAt: result.updatedAt
-        };
-        tracked.generation = result.generation;
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, 'One or more Actor locations failed lease recovery.');
-    }
   }
 
   confirmAuthority(

@@ -17,20 +17,6 @@ export interface ZLinkOwnershipLostEvent {
   readonly key: string;
 }
 
-export type ZLinkPreservedAuthority = (
-  key: import('./internal-location-contracts').ZLinkAuthorityKey,
-  incarnation?: Pick<
-    import('./internal-location-contracts').ZLinkAuthoritySnapshot,
-    'objectGeneration' | 'authorityOwnerGeneration'
-  >
-) => boolean;
-
-export type ZLinkAuthorityConfirmation = (
-  key: import('./internal-location-contracts').ZLinkAuthorityKey,
-  expected: import('./internal-location-contracts').ZLinkAuthoritySnapshot,
-  confirmed: import('./internal-location-contracts').ZLinkAuthoritySnapshot
-) => void;
-
 export interface ZLinkExecutionRecovery {
   readonly key: import('./internal-location-contracts').ZLinkAuthorityKey;
   readonly meshName: string;
@@ -57,11 +43,7 @@ export interface IZLinkLocationLifecycleRuntime {
   discardSteadyExecution?(owner: object): boolean;
   readonly ownerId: string;
   readonly currentOwnerToken?: ZLinkLocationOwnerToken;
-  reclaimOwnerAuthorities?(
-    publication?: Promise<void>,
-    signal?: AbortSignal,
-    onConfirmed?: ZLinkAuthorityConfirmation
-  ): Promise<ZLinkPreservedAuthority>;
+  reclaimOwnerAuthorities?(publication?: Promise<void>, signal?: AbortSignal): Promise<void>;
   addOwnershipLostHandler(handler: (event: ZLinkOwnershipLostEvent) => void): void;
   removeOwnershipLostHandler(handler: (event: ZLinkOwnershipLostEvent) => void): void;
   writeActor(
