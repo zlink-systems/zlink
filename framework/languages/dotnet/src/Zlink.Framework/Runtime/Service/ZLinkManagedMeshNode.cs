@@ -1529,38 +1529,62 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
         try
         {
-            var peer = await _lane
-                .RunAsync(() =>
-                {
-                    _peersByRid.TryGetValue(targetNodeRid, out var value);
-                    return value;
-                })
-                .ConfigureAwait(false);
-            if (peer is null || !peer.Admitted)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"MeshNode '{targetNodeRid}' is not connected.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
-                );
-            var wire = new List<ReadOnlyMemory<byte>>(payload.Count == 0 ? 1 : 2)
+            if (targetNodeRid == _routingId)
             {
-                ZLinkServiceWireCodec.EncodeReplyRelay(relay),
-            };
-            if (payload.Count != 0)
-                wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(payload));
-            try
-            {
-                await SendRoutedAsync(peer.PhysicalRoutingId, wire, cancellationToken)
+                var localTarget =
+                    RunState(() => _relocationReplyRelayTarget)
+                    ?? throw new InvalidOperationException(
+                        "Local relocation reply relay is unavailable."
+                    );
+                var acknowledgement = await localTarget
+                    .RelayAsync(
+                        relay,
+                        _routingId,
+                        _lifecycleGeneration,
+                        payload.Select(Message.From).ToArray(),
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
+                if (acknowledgement is { } accepted)
+                    ProcessReplyRelayAck(_routingId, _lifecycleGeneration, accepted);
             }
-            catch (ZlinkException exception)
+            else
             {
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Rejected,
-                    "The relocation reply relay could not be submitted.",
-                    ZLinkRetryAdvice.RetryAfterBackoff,
-                    exception
-                );
+                var peer = await _lane
+                    .RunAsync(() =>
+                    {
+                        _peersByRid.TryGetValue(targetNodeRid, out var value);
+                        return value;
+                    })
+                    .ConfigureAwait(false);
+                if (peer is null || !peer.Admitted)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        $"MeshNode '{targetNodeRid}' is not connected.",
+                        ZLinkRetryAdvice.RetryAfterBackoff
+                    );
+                var wire = new List<ReadOnlyMemory<byte>>(payload.Count == 0 ? 1 : 2)
+                {
+                    ZLinkServiceWireCodec.EncodeReplyRelay(relay),
+                };
+                if (payload.Count != 0)
+                    wire.Add(
+                        ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(payload)
+                    );
+                try
+                {
+                    await SendRoutedAsync(peer.PhysicalRoutingId, wire, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (ZlinkException exception)
+                {
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Rejected,
+                        "The relocation reply relay could not be submitted.",
+                        ZLinkRetryAdvice.RetryAfterBackoff,
+                        exception
+                    );
+                }
             }
             var effectiveTimeout =
                 timeout <= TimeSpan.Zero ? DefaultServiceRequestTimeout : timeout;

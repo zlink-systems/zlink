@@ -2479,6 +2479,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
   add_executable(test_cpp_framework_shared_infrastructure
     tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_infrastructure.cpp)
+  add_executable(test_cpp_framework_suspended_handler_worker
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_suspended_handler_worker.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_suspended_handler_worker)
+  target_link_libraries(test_cpp_framework_suspended_handler_worker PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_suspended_handler_worker PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_suspended_handler_worker
+    COMMAND test_cpp_framework_suspended_handler_worker
+    LABELS "framework-unit;framework-contract;execution"
+    TIER unit
+    TIMEOUT 30)
   target_use_zlink_gtest_main(test_cpp_framework_shared_infrastructure)
   target_compile_features(test_cpp_framework_shared_infrastructure PRIVATE cxx_std_20)
   target_link_libraries(test_cpp_framework_shared_infrastructure PRIVATE zlink::framework)

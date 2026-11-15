@@ -29,8 +29,13 @@ export class ZLinkActorSerialExecutor {
     );
   }
 
-  execute<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
+  execute<T>(
+    operation: () => Promise<T> | T,
+    workOptions?: ZLinkSerialWorkOptions,
+    capture?: () => Promise<T> | T
+  ): Promise<T> {
     const initial = currentApplicationJobPermit();
+    const context = capture === undefined ? undefined : bindApplicationJobPermit(capture);
     if (
       initial !== undefined &&
       workOptions?.lane !== 'lifecycle' &&
@@ -47,7 +52,7 @@ export class ZLinkActorSerialExecutor {
             runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
           ),
         workOptions,
-        undefined,
+        context,
         {
           prepare: async (signal) => {
             if (initial.reacquire === undefined) {
@@ -70,8 +75,8 @@ export class ZLinkActorSerialExecutor {
       runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
     );
     return initial !== undefined
-      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions)
-      : this.scheduler.submit(boundOperation, workOptions);
+      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, context)
+      : this.scheduler.submit(boundOperation, workOptions, context);
   }
 
   /**
@@ -103,6 +108,21 @@ export class ZLinkActorSerialExecutor {
         record.preparation
       )
     );
+  }
+
+  /** Moves accepted packet admissions into the active handoff in source FIFO order. */
+  capturePacketPrefix(): void {
+    while (this.scheduler.application.records.length > 0) {
+      const record = this.scheduler.application.records[0]!;
+      // Packet admissions retain their callback in the existing context slot.
+      // Other application work keeps its gate and FIFO position.
+      if (typeof record.context !== 'function') break;
+      const admission = record.context();
+      record.preparationController?.abort(new Error('Packet transferred to the Actor handoff.'));
+      record.preparation?.cancel();
+      this.scheduler.takeSelected(record);
+      void Promise.resolve(admission).then(record.resolve, record.reject).finally(record.release);
+    }
   }
 
   close(): Promise<void> {

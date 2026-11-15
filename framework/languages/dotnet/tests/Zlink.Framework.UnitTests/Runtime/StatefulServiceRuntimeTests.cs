@@ -4043,6 +4043,69 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Fact]
+    public async Task RelocationReplyRelayCompletesOnTheRequesterNodeAndValidatesItsAck()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "relay-local");
+        node.SetBind($"inproc://relay-local-{Guid.NewGuid():N}");
+        var source = new ZLinkServiceWireCodec.RequestSourceFence(
+            "request-owner",
+            17,
+            node.RoutingId,
+            node.Status().LifecycleGeneration
+        );
+        var target = new RecordingReplyRelayTarget(
+            source,
+            dropFirstAcknowledgement: false,
+            corruptSecondSource: true
+        );
+        node.SetRelocationReplyRelayTarget(target);
+        node.Start();
+        var relay = new ZLinkServiceWireCodec.ReplyRelayRecord(
+            new MeshOperationId(21, 22),
+            23,
+            new ZLinkServiceWireCodec.RelocationWireId(24, 25),
+            node.Status().LifecycleGeneration,
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                "request-owner",
+                17,
+                node.RoutingId,
+                node.Status().LifecycleGeneration,
+                "store-27"
+            ),
+            28,
+            29,
+            0,
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
+        using var payload = Message.From(new byte[] { 7, 8, 9 });
+        var ack = await node.RelayRelocationReplyAsync(
+            node.RoutingId,
+            relay,
+            source,
+            [payload],
+            TimeSpan.FromSeconds(3),
+            CancellationToken.None
+        );
+        Assert.Equal(source, ack.RequestSource);
+        Assert.Equal(relay.OperationId, ack.OperationId);
+        Assert.Equal(1, target.InvocationCount);
+        Assert.Equal(new byte[] { 7, 8, 9 }, payload.ToArray());
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await node.RelayRelocationReplyAsync(
+                node.RoutingId,
+                relay,
+                source,
+                [payload],
+                TimeSpan.FromMilliseconds(50),
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(2, target.InvocationCount);
+        Assert.Equal(new byte[] { 7, 8, 9 }, payload.ToArray());
+    }
+
+    [Fact]
     public async Task RelocationReplyRelayUsesRawCommandsAndRetriesAfterAckLoss()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
