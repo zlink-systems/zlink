@@ -17,8 +17,7 @@ import {
 import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 import {
   ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind
+  createInternalFrameworkException
 } from '../framework-errors-internal';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
@@ -147,8 +146,6 @@ export interface ZLinkResolvedActorRoute {
   readonly authorityStoreVersion: string;
   readonly spotId?: string;
   readonly spotGeneration?: bigint;
-  /** Exact enclosing User Spot authority used by remote Actor packet relay. */
-  readonly enclosingSpotRoute?: ZLinkSpotRouteTarget;
 }
 
 export type ZLinkDirectActorRouteResolution =
@@ -195,20 +192,11 @@ export class ZLinkStoreLocationResolvers
   private readonly actorRoutes = new Map<string, CachedReadyRoute<ZLinkActorLocation>>();
   private readonly directActorRoutes = new Map<string, CachedReadyRoute<ZLinkResolvedActorRoute>>();
   private readonly spotRoutes = new Map<string, CachedReadyRoute<ZLinkSpotLocation>>();
-  private readonly authoritySpotResolver: ZLinkAuthoritySpotRouteResolver;
   private nextActorPlacement = 0n;
 
   constructor(private readonly options: ZLinkStoreLocationResolversOptions) {
     this.liveRows = new ZLinkLiveRowFilter();
     this.monotonicNowMs = options.monotonicNowMs ?? (() => performance.now());
-    this.authoritySpotResolver = new ZLinkAuthoritySpotRouteResolver(
-      options.stores.authorityStore,
-      (meshName) => meshName,
-      undefined,
-      options.leaseTracker,
-      options.routeCacheMaxAgeMs,
-      this.monotonicNowMs
-    );
   }
 
   async listLivePeers(
@@ -502,20 +490,6 @@ export class ZLinkStoreLocationResolvers
       );
       return route === undefined ? { kind: 'missing' } : { kind: 'ready', route };
     }
-    let enclosingSpotRoute: ZLinkSpotRouteTarget | undefined;
-    if (decoded.spotKind === ZLinkSpotKind.User) {
-      try {
-        enclosingSpotRoute = await this.authoritySpotResolver.resolve(decoded.spotId, signal);
-      } catch (error) {
-        if (
-          error instanceof ZLinkFrameworkException &&
-          internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound
-        ) {
-          return { kind: 'missing' };
-        }
-        throw error;
-      }
-    }
     const route: ZLinkResolvedActorRoute = {
       meshName: current.allocation.descriptor.meshName,
       actorRef: {
@@ -531,8 +505,7 @@ export class ZLinkStoreLocationResolvers
       authorityStoreVersion: current.storeVersion.value,
       ...(decoded.spotKind === ZLinkSpotKind.User
         ? { spotId: decoded.spotId, spotGeneration: decoded.spotGeneration }
-        : {}),
-      enclosingSpotRoute
+        : {})
     };
     const cachedRoute = await this.cacheDirectActorRoute(actorId, route, remainingLeaseMs);
     return cachedRoute === undefined ? { kind: 'missing' } : { kind: 'ready', route: cachedRoute };
@@ -749,12 +722,6 @@ export class ZLinkStoreLocationResolvers
         invalidated = true;
       }
     }
-    for (const [key, cached] of this.directActorRoutes) {
-      if (resolvedActorEnclosingSpotMatchesFence(cached.row, fence)) {
-        this.directActorRoutes.delete(key);
-        invalidated = true;
-      }
-    }
     return invalidated;
   }
 
@@ -852,22 +819,6 @@ function actorEnclosingSpotMatchesFence(
     routingIdsEqual(route.ownerNodeRid, fence.targetNodeRid) &&
     route.ownerNodeGeneration === fence.targetNodeGeneration &&
     route.leaseGeneration === fence.ownerLeaseGeneration
-  );
-}
-
-function resolvedActorEnclosingSpotMatchesFence(
-  route: ZLinkResolvedActorRoute,
-  fence: ZLinkSpotRouteInvalidationFence
-): boolean {
-  const enclosing = route.enclosingSpotRoute;
-  return (
-    enclosing !== undefined &&
-    enclosing.spotId === fence.spotId &&
-    enclosing.targetSpotGeneration === fence.objectGeneration &&
-    routingIdsEqual(enclosing.targetNodeRid, fence.targetNodeRid) &&
-    enclosing.targetNodeGeneration === fence.targetNodeGeneration &&
-    enclosing.authorityOwnerGeneration === fence.authorityOwnerGeneration &&
-    enclosing.ownerLeaseGeneration === fence.ownerLeaseGeneration
   );
 }
 

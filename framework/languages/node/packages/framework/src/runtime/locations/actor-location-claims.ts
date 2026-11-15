@@ -48,7 +48,8 @@ export class ZLinkActorLocationClaims {
     private readonly runtime: IZLinkLocationLifecycleRuntime,
     private readonly actorStore: ZLinkActorLocationStore,
     private readonly entryMeshName: string,
-    private readonly authorityStore?: ZLinkAuthorityStore
+    private readonly authorityStore?: ZLinkAuthorityStore,
+    private readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void
   ) {}
 
   async executeClaimThenActivate<TActor>(
@@ -227,6 +228,8 @@ export class ZLinkActorLocationClaims {
     }
     const key = encodeAuthorityKey('actor', actorId);
     const current = await store.readAuthority(key, signal);
+    if (current.kind === 'snapshot')
+      this.observeActorAuthorityVersion?.(actorId, current.storeVersion.value);
     if (
       !matchesActorAuthority(current, actorRef, owner) ||
       current.allocation.stableType !== actorType ||
@@ -270,6 +273,8 @@ export class ZLinkActorLocationClaims {
       signal
     );
     if (result.kind !== 'stored') {
+      if (result.kind === 'conflict' && result.current.kind === 'snapshot')
+        this.observeActorAuthorityVersion?.(actorId, result.current.storeVersion.value);
       throw new ZLinkFrameworkException(
         result.kind === 'conflict'
           ? (result.membershipFailure ??
@@ -390,11 +395,12 @@ export class ZLinkActorLocationClaims {
       ZLinkLocationKeyCodec.encodeActorKey({ meshName: this.entryMeshName, actorId })
     );
     if (
-      tracked !== undefined &&
-      (expectedStoreVersion === undefined ||
-        tracked.authority?.storeVersion.value === expectedStoreVersion)
+      expectedStoreVersion !== undefined &&
+      tracked?.authority?.storeVersion.value !== expectedStoreVersion
     )
-      tracked.authority = authority;
+      return;
+    if (tracked !== undefined) tracked.authority = authority;
+    this.observeActorAuthorityVersion?.(actorId, authority.storeVersion.value);
   }
 
   recoveryAuthority(
