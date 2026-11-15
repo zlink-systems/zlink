@@ -418,12 +418,14 @@ Start small, but split roles so the game can scale out from the beginning. ZLink
 - The player's Actor decides the order between reconnecting and cleaning up a finished player. A login notifies the Actor before binding (marked as connecting in the Actor's turn), binds after the reply, and notifies again after binding. Cleanup is refused in the Actor's turn while the player is connecting or connected. If the Actor is notified only after binding, cleanup can arrive first in between.
 - If the login reply has a game to return to (resume), go to that game, not the lobby.
 - Clean up only with the ActorRef found during cleanup, inside that player's order. An ActorRef's generation tells creation incarnations apart and carries no binding.
+- When a login retry creates the Actor again, bind with the ActorRef the last attempt returned, not the one the first attempt returned. The first ref names the previous incarnation, and a session bound to it is attached to an Actor that no longer exists.
 
 ### 10.9 Handlers and Execution Order
 
 - Do not block in handlers or HTTP threads. Do not do other work while holding a transaction open (blocking bridge calls, idle in transaction).
 - Do not await your own Spot's or Actor's lifecycle operations (close, destroy) inside a handler. They wait on the same execution order and stall.
 - Do not send a request to another Actor or Spot and await its reply inside a turn. If the other side sends a request back, both wait until timeout, and other players' requests to the same Spot are blocked meanwhile. Send state notifications with send (no reply awaited) and let the state owner decide.
+- Do not rebuild request on top of send. A home-made correlation ID and reply table that holds back the next step brings the same wait back, and a waiter whose only exits are the reply or a disconnect never ends when the reply is lost. Only replies that must hold the game back (settlement, admission) are awaited; everything else is send only. A wait you keep needs its own end condition.
 - Propagating a versioned value such as a balance needs only send. If the other Actor does not exist, do not create it; it reads the database when it is next created.
 - The Spot class a handler targets must be exactly the actual Spot class. A handler targeting a base class does not receive messages for a derived Spot.
 - Tell acceptance replies from completion notices apart. An OK reply does not mean the work that starts afterwards has finished.
@@ -434,6 +436,7 @@ Start small, but split roles so the game can scale out from the beginning. ZLink
 - The Framework waits for remote request connections to become ready. Do not add sleeps, retries or longer timeouts in game code.
 - Do not paper over Framework defects in application code. Build a minimal reproduction that uses only the public API and file a ZLink issue.
 - One composition root decides startup order: ZLink first, application second. Otherwise the application stops after the runtime on shutdown.
+- On shutdown, close database connections only after the ZLink runtime has stopped, so Spot cleanup and the last round settlement still have a database. Do not set the shutdown-phase deadline shorter than the ZLink drain, and route outside database entry points (HTTP, batch) through one place that is closed on shutdown.
 - Before comparing versions, check the Framework and Core versions actually loaded.
 - Location Store keys use NUL as the separator, which looks like a space in logs. Do not build keys as strings yourself and compare them.
 
@@ -459,6 +462,9 @@ Start small, but split roles so the game can scale out from the beginning. ZLink
 - [ ] Stateful Actors use the state-preserving relocation policy and have a save/restore test with every field filled
 - [ ] No per-player remote requests on Spot entry
 - [ ] No blocking waits, sleeps or retries in handlers
+- [ ] No home-made request (correlation ID and reply table) on top of send, and every kept wait has an end condition
+- [ ] Database connections close after the ZLink runtime stops
+- [ ] A login retry binds the ActorRef from the last attempt
 - [ ] Money and reward notices are sent after the commit
 - [ ] Values single for the whole game (such as matchmaking) live in Instance Spots on the shared node, and game nodes do not register those factories
 - [ ] Shared values are not guarded by singletons, global maps or distributed locks
