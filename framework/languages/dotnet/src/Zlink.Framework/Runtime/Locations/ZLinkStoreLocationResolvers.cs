@@ -49,8 +49,6 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         _options = options ?? new ZLinkLocationOptions();
         _time = timeProvider ?? leaseTracker.TimeProvider;
         _liveRows = new ZLinkLiveLocationRows(leaseTracker);
-        if (store is ZLinkProviderLocationRepository repository)
-            repository.AuthorityObserved = ObserveAuthority;
     }
 
     public async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
@@ -186,7 +184,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             .ConfigureAwait(false);
         if (row is null)
         {
-            InvalidateSpotRoute(key);
+            await InvalidateSpotRouteAsync(key).ConfigureAwait(false);
             return (
                 null,
                 liveRowPresent,
@@ -199,7 +197,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
 
         if (IsClosingSpot(authority))
         {
-            InvalidateSpotRoute(key);
+            await InvalidateSpotRouteAsync(key).ConfigureAwait(false);
             var remaining = await _leaseTracker
                 .GetOwnerTokenRemainingAdmissionLifetimeAsync(
                     new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration),
@@ -216,7 +214,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 .ConfigureAwait(false)
         )
         {
-            InvalidateSpotRoute(key);
+            await InvalidateSpotRouteAsync(key).ConfigureAwait(false);
             return (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable, snapshot);
         }
         return (row, liveRowPresent, ZLinkLocationResolutionKind.Ready, null);
@@ -272,7 +270,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             row = row.ActorRef.ObjectGeneration > 0 ? row : null;
         if (row is null)
         {
-            InvalidateActorRoute(key);
+            await InvalidateActorRouteAsync(key).ConfigureAwait(false);
             return (
                 null,
                 liveRowPresent,
@@ -293,39 +291,39 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 .ConfigureAwait(false)
         )
         {
-            InvalidateActorRoute(key);
+            await InvalidateActorRouteAsync(key).ConfigureAwait(false);
             return (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable);
         }
         return (row, liveRowPresent, ZLinkLocationResolutionKind.Ready);
     }
 
-    internal void ObserveAuthority(ZLinkAuthorityKey key, string? storeVersion = null)
+    internal ValueTask ObserveAuthorityAsync(ZLinkAuthorityKey key, string? storeVersion = null)
     {
         if (!ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out var spotId))
-            return;
+            return ValueTask.CompletedTask;
         var spotKey = new ZLinkSpotLocationKey(spotId);
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                // StoreVersion is opaque: a different observation invalidates the snapshot.
-                if (
-                    _spotRoutes.TryGetValue(spotKey, out var cached)
-                    && !string.Equals(cached.StoreVersion, storeVersion, StringComparison.Ordinal)
-                )
-                    _spotRoutes.Remove(spotKey);
-            })
-        );
+        return _lane.RunAsync(() =>
+        {
+            // StoreVersion is opaque: a different observation invalidates the snapshot.
+            if (
+                _spotRoutes.TryGetValue(spotKey, out var cached)
+                && !string.Equals(cached.StoreVersion, storeVersion, StringComparison.Ordinal)
+            )
+                _spotRoutes.Remove(spotKey);
+        });
     }
 
-    internal void InvalidateSpotRoute(ZLinkSpotLocationKey key)
-    {
-        AwaitStateLane(_lane.RunAsync(() => _spotRoutes.Remove(key)));
-    }
+    internal ValueTask InvalidateSpotRouteAsync(ZLinkSpotLocationKey key) =>
+        _lane.RunAsync(() =>
+        {
+            _spotRoutes.Remove(key);
+        });
 
-    internal void InvalidateActorRoute(ZLinkActorLocationKey key)
-    {
-        AwaitStateLane(_lane.RunAsync(() => _actorRoutes.Remove(key)));
-    }
+    internal ValueTask InvalidateActorRouteAsync(ZLinkActorLocationKey key) =>
+        _lane.RunAsync(() =>
+        {
+            _actorRoutes.Remove(key);
+        });
 
     internal void InvalidateActorRoute(
         ZLinkActorLocationKey key,

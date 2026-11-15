@@ -8,6 +8,9 @@ namespace Zlink.Framework.Contracts.Locations;
 /// </summary>
 internal interface IZLinkLocationRepository
 {
+    // Await successful observations before exposing the operation result.
+    Func<ZLinkAuthorityKey, string?, ValueTask>? AuthorityObservedAsync { get; set; }
+
     ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,

@@ -138,7 +138,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                 await ReadStoreNowAsync(cancellationToken).ConfigureAwait(false)
             )
             : new ZLinkAuthorityReadResult.Found(stored.Snapshot);
-        AuthorityObserved?.Invoke(key, stored?.Snapshot.StoreVersion);
+        if (AuthorityObservedAsync is { } observed)
+            await observed(key, stored?.Snapshot.StoreVersion).ConfigureAwait(false);
         return result;
     }
 
@@ -493,10 +494,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                         current.Snapshot.OwnerLeaseGeneration
                     )
                 );
-            AuthorityObserved?.Invoke(
-                key,
-                meta is null ? null : applied.PutVersions[metaKey].Value
-            );
+            if (AuthorityObservedAsync is { } observed)
+                await observed(key, meta is null ? null : applied.PutVersions[metaKey].Value)
+                    .ConfigureAwait(false);
             return meta is null
                 ? new ZLinkAuthorityCompareExchangeResult.Deleted(
                     applied.PutVersions.Values.Single().Value,
@@ -4427,8 +4427,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                 return new ZLinkObjectCommitResult.Stale();
             if (!MatchesReservation(current, reservation))
             {
-                if (current.Meta.ReservedCreation is null)
-                    AuthorityObserved?.Invoke(reservation.Key, current.Snapshot.StoreVersion);
+                if (current.Meta.ReservedCreation is null && AuthorityObservedAsync is { } observed)
+                    await observed(reservation.Key, current.Snapshot.StoreVersion)
+                        .ConfigureAwait(false);
                 return current.Meta.ReservedCreation is null
                     ? new ZLinkObjectCommitResult.AlreadyCommitted(current.Snapshot)
                     : new ZLinkObjectCommitResult.Stale();
@@ -4515,10 +4516,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                 continue;
             }
             var applied = (ZLinkStoreWriteResult.Applied)result;
-            AuthorityObserved?.Invoke(
-                reservation.Key,
-                applied.PutVersions[AuthorityMetaKey(reservation.Key)].Value
-            );
+            if (AuthorityObservedAsync is { } committedObserver)
+                await committedObserver(
+                        reservation.Key,
+                        applied.PutVersions[AuthorityMetaKey(reservation.Key)].Value
+                    )
+                    .ConfigureAwait(false);
             return new ZLinkObjectCommitResult.Committed(
                 Snapshot(
                     meta,

@@ -1,16 +1,225 @@
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Xunit;
+using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class SpotRouteRecreateTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task Authority_read_yields_until_route_invalidation_completes()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spot = await host.CreateSpotAsync();
+        var rows = host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+        var repository = host.Runtime.Registration.Locations.ResolveStore()!;
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spot.SpotId);
+        var spotKey = new ZLinkSpotLocationKey(spot.SpotId);
+        var cached = await rows.ResolveSpotRowAsync(spotKey);
+        var external = new ZLinkProviderLocationRepository(host.Store);
+        var before = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(await external.ReadAuthorityAsync(key))
+            .Snapshot;
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+            await external.CompareExchangeAuthorityAsync(
+                key,
+                before.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    before.Payload,
+                    ZLinkAuthorityGenerationTransition.Preserve,
+                    null,
+                    null
+                )
+            )
+        );
+        await AssertYieldsWhileLaneOccupiedAsync(rows, () => repository.ReadAuthorityAsync(key));
+        Assert.NotSame(cached, await rows.ResolveSpotRowAsync(spotKey));
+    }
+
+    [Fact]
+    public async Task DI_connects_authority_observation_for_another_repository_implementation()
+    {
+        IZLinkLocationRepository repository = new ZLinkInMemoryLocationStore();
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(builder => builder.UseTestLocationStore());
+        services.AddSingleton(repository);
+        await using var provider = services.BuildServiceProvider();
+        var rows = provider.GetRequiredService<ZLinkStoreLocationResolvers>();
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("other-repository");
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+            await AssertYieldsWhileLaneOccupiedAsync(rows, () => repository.ReadAuthorityAsync(key))
+        );
+    }
+
+    [Fact]
+    public async Task Wrong_local_node_generation_remains_rejected()
+    {
+        await using var target = await SpotCloseHost.StartAsync();
+        var spot = await target.CreateSpotAsync();
+        var current = await target
+            .Runtime.Services.GetRequiredService<ZLinkLocationAddressResolvers>()
+            .ResolveSpotHandleAsync(spot.SpotId);
+        Assert.NotNull(current);
+        var snapshot = current.Snapshot with
+        {
+            NodeGeneration = current.Snapshot.NodeGeneration ^ 1UL,
+        };
+        var wrong = new ZLinkResolvedSpotHandle(
+            snapshot,
+            snapshot.Generation,
+            _ =>
+                throw new InvalidOperationException("A rejected request must not refresh or retry.")
+        );
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await new ZLinkRouteSpotRequestCall<SpotCloseProbeRequest>(
+                target.Runtime,
+                wrong,
+                new SpotCloseProbeRequest("wrong-node-generation")
+            )
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async<SpotCloseProbeReply>()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, failure.Kind);
+        Assert.Equal(0, target.State.HandlerCalls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Remote_admission_rejects_stale_node_or_inactive_Spot(bool inactive)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "admission");
+        await using var target = new ZLinkManagedMeshNode(context, "admission");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetRoutingId(RoutingId.From($"source-{suffix}"));
+        target.SetRoutingId(RoutingId.From($"target-{suffix}"));
+        source.SetBind($"inproc://source-{suffix}");
+        target.SetBind($"inproc://target-{suffix}");
+        var spot = (ZLinkManagedSpot)target.GetOrCreateSpot("admission-spot", out var created);
+        Assert.True(created);
+        source.Start();
+        target.Start();
+        source.ConnectPeer(target.Status().LocalEndpoint, target.RoutingId);
+        await WaitForAdmissionAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        if (inactive)
+        {
+            // Retain the disposed slot while an Actor still belongs to it.
+            spot.AddActor();
+            spot.Dispose();
+        }
+        try
+        {
+            using var head = Message.From(
+                ZLinkServiceWireCodec.EncodeSpot(
+                    ServiceWireConstants.Command.SpotRequest,
+                    1,
+                    new MeshOperationId(1, 1),
+                    "source-spot",
+                    spot.SpotId,
+                    spot.LifecycleGeneration,
+                    target.RoutingId,
+                    inactive
+                        ? target.Status().LifecycleGeneration
+                        : target.Status().LifecycleGeneration ^ 1UL,
+                    spot.AuthorityOwnerGeneration,
+                    1,
+                    hasMetadata: false
+                )
+            );
+            using var probe = Message.From("probe");
+            using var payload = Message.From(
+                ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart([probe])
+            );
+            var reply = await source.RequestDirectWireAsync(
+                target.RoutingId,
+                [head, payload],
+                TimeSpan.FromSeconds(5),
+                CancellationToken.None
+            );
+            try
+            {
+                Assert.True(
+                    ZLinkServiceWireCodec.TryDecodeReply(
+                        Assert.Single(reply).AsReadOnlySpan(),
+                        out var decoded,
+                        out var error
+                    )
+                );
+                Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+                Assert.Equal((int)RequestResult.Conflict, decoded.TerminalResult);
+                Assert.Equal(
+                    inactive
+                        ? ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
+                        : ServiceWireConstants.FrameworkErrorCode.ActorLocationStale,
+                    (ServiceWireConstants.FrameworkErrorCode)decoded.FailureCode
+                );
+            }
+            finally
+            {
+                foreach (var part in reply)
+                    part.Dispose();
+            }
+        }
+        finally
+        {
+            if (inactive)
+            {
+                spot.RemoveActor();
+                target.ReleaseSpot(spot);
+            }
+        }
+        async Task WaitForAdmissionAsync()
+        {
+            while (source.Status().AdmittedPeerCount != 1 || target.Status().AdmittedPeerCount != 1)
+                await Task.Yield();
+        }
+    }
+
+    private static async Task<T> AssertYieldsWhileLaneOccupiedAsync<T>(
+        ZLinkStoreLocationResolvers rows,
+        Func<ValueTask<T>> operation
+    )
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = rows
+            .Lane.RunAsync(async () =>
+            {
+                entered.SetResult();
+                await release.Task;
+            })
+            .AsTask();
+        await entered.Task;
+        var observing = Task.Run(async () =>
+        {
+            var pending = operation();
+            returned.SetResult();
+            return await pending;
+        });
+        try
+        {
+            await returned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(observing.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await holding;
+            await observing;
+        }
+        return await observing;
+    }
+
     [Fact]
     public async Task Message_Follow_keeps_its_previous_incarnation_authority_fence()
     {
@@ -288,11 +497,12 @@ public sealed class SpotRouteRecreateTests(Xunit.Abstractions.ITestOutputHelper 
                 null,
                 null
             );
-        var changed = await writer.CompareExchangeAuthorityAsync(
-            key,
-            before.StoreVersion,
-            mutation
-        );
+        var changed = throughRead
+            ? await writer.CompareExchangeAuthorityAsync(key, before.StoreVersion, mutation)
+            : await AssertYieldsWhileLaneOccupiedAsync(
+                rows,
+                () => writer.CompareExchangeAuthorityAsync(key, before.StoreVersion, mutation)
+            );
         if (delete)
             Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(changed);
         else
@@ -300,7 +510,10 @@ public sealed class SpotRouteRecreateTests(Xunit.Abstractions.ITestOutputHelper 
         if (throughRead)
         {
             Assert.Same(cached, await rows.ResolveSpotRowAsync(spotKey));
-            await repository.ReadAuthorityAsync(key);
+            await AssertYieldsWhileLaneOccupiedAsync(
+                rows,
+                () => repository.ReadAuthorityAsync(key)
+            );
         }
         var after = await rows.ResolveSpotRowAsync(spotKey);
         if (delete)
@@ -384,7 +597,10 @@ public sealed class SpotRouteRecreateTests(Xunit.Abstractions.ITestOutputHelper 
             Assert.IsType<ZLinkObjectCommitResult.Committed>(
                 await external.CommitAsync(reservation, previous.Payload)
             );
-        var committed = await repository.CommitAsync(reservation, previous.Payload);
+        var committed = await AssertYieldsWhileLaneOccupiedAsync(
+            rows,
+            () => repository.CommitAsync(reservation, previous.Payload)
+        );
         if (alreadyCommitted)
             Assert.IsType<ZLinkObjectCommitResult.AlreadyCommitted>(committed);
         else
