@@ -1,3 +1,5 @@
 package MyGame;
 
-public record SessionInfo(String sessionId, String actorId, long objectGeneration) {}
+import org.jspecify.annotations.Nullable;
+
+public record SessionInfo(String sessionId, @Nullable String actorId, long objectGeneration) {}

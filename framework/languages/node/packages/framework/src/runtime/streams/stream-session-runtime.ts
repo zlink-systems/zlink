@@ -885,7 +885,6 @@ export class ZLinkStreamSessionNodeRuntime {
   private readonly receiveAbortController = new AbortController();
   private receiveLoop: Promise<void> | undefined;
   private monitorLoop: Promise<void> | undefined;
-  private receiveWake: AbortController | undefined;
   private receiveWorkSinceYield = 0;
   constructor(
     private readonly options: ZLinkStreamSessionNodeRuntimeOptions & ZLinkStreamLivenessOptions
@@ -1501,21 +1500,12 @@ export class ZLinkStreamSessionNodeRuntime {
     });
   }
 
-  private async waitReceiveLoopWake(signal: AbortSignal): Promise<void> {
-    const wake = new AbortController();
-    this.receiveWake = wake;
-    try {
-      // Readiness, internal wake and shutdown share one cancellable wait;
-      // no losing Promise retains reactions across receive cycles.
-      await this.options.readablePoller.waitForReadable(AbortSignal.any([signal, wake.signal]));
-    } finally {
-      wake.abort();
-      this.receiveWake = undefined;
-    }
+  private waitReceiveLoopWake(signal: AbortSignal): Promise<boolean> {
+    return this.options.readablePoller.waitForReadable(signal);
   }
 
   private wakeReceiveLoop(): void {
-    this.receiveWake?.abort();
+    this.options.readablePoller.wake();
   }
 
   private getOrCreateSession(routingId: unknown): ZLinkStreamSessionRuntime | undefined {
