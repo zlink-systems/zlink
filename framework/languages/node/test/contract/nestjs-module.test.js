@@ -2636,6 +2636,7 @@ test('framework runtime host starts registered stream nodes and disposes their r
                   else signal?.addEventListener('abort', () => resolve(false), { once: true });
                 });
               },
+              wake() {},
               markDrained() {},
               dispose() {}
             };
@@ -2845,6 +2846,7 @@ test('framework runtime host attaches stream SessionRelay to registered SpotNode
                   else signal?.addEventListener('abort', () => resolve(false), { once: true });
                 });
               },
+              wake() {},
               markDrained() {},
               dispose() {}
             };

@@ -1,5 +1,7 @@
 package systems.zlink.samples.deliverydispatch.shared.contracts;
 
+import org.jspecify.annotations.Nullable;
+
 import systems.zlink.framework.actors.ActorRefSnapshot;
 import systems.zlink.framework.handlers.ZLinkPacket;
 
@@ -39,7 +41,7 @@ public final class Messages {
 
     @ZLinkPacket("BindCourierSessionReq")
     public record BindCourierSessionReq(
-            String courierId, ActorRefSnapshot actor, String sessionRoute) {
+            String courierId, @Nullable ActorRefSnapshot actor, @Nullable String sessionRoute) {
         public BindCourierSessionReq(String courierId) {
             this(courierId, null, null);
         }
@@ -56,7 +58,7 @@ public final class Messages {
     @ZLinkPacket("FindCourierActorReq")
     public record FindCourierActorReq(String courierId) {}
 
-    public record FindCourierActorRes(String courierId, ActorRefSnapshot actor) {}
+    public record FindCourierActorRes(String courierId, @Nullable ActorRefSnapshot actor) {}
 
     @ZLinkPacket("EnsureCourierActorReq")
     public record EnsureCourierActorReq(String courierId) {}
@@ -81,14 +83,18 @@ public final class Messages {
 
     @ZLinkPacket("OfferDeliveryResultMsg")
     public record OfferDeliveryResultMsg(
-            String deliveryId, String courierId, int attempt, boolean accepted, String reason) {}
+            String deliveryId,
+            String courierId,
+            int attempt,
+            boolean accepted,
+            @Nullable String reason) {}
 
     public record OfferDeliveryNotify(
             String courierId, String deliveryId, String pickupAddress, String dropoffAddress) {}
 
     @ZLinkPacket("CourierDecisionMsg")
     public record CourierDecisionMsg(
-            String deliveryId, String courierId, boolean accepted, String reason) {}
+            String deliveryId, String courierId, boolean accepted, @Nullable String reason) {}
 
     @ZLinkPacket("ReassignDeliveryMsg")
     public record ReassignDeliveryMsg(

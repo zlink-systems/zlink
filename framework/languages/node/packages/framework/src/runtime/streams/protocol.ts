@@ -20,6 +20,7 @@ import {
 } from '@zlink-systems/stream-wire';
 import type { ZLinkFlowOrigin } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
+import { ZLinkBufferMessage } from '../backend/runtime-message';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import { throwAlreadySubmitted } from '../messaging/submission-result';
 export {
@@ -47,6 +48,14 @@ export function streamCodecForContentType(contentType: string): ZLinkStreamCodec
 
 export const ZLINK_STREAM_HEARTBEAT_PING = ZlinkStreamControlPacket.HeartbeatPing;
 export const ZLINK_STREAM_HEARTBEAT_PONG = ZlinkStreamControlPacket.HeartbeatPong;
+
+// Transport submissions borrow these frames; closing a buffer message does not release its bytes.
+const HEARTBEAT_PING_FRAME = ZLinkBufferMessage.from(
+  encodeStreamControlFrame(ZLINK_STREAM_HEARTBEAT_PING)
+);
+const HEARTBEAT_PONG_FRAME = ZLinkBufferMessage.from(
+  encodeStreamControlFrame(ZLINK_STREAM_HEARTBEAT_PONG)
+);
 
 export interface ZLinkStreamFrameHeader {
   readonly kind: ZLinkStreamMessageKind;
@@ -90,7 +99,13 @@ export function encodeStreamFrame(header: ZLinkStreamFrameHeader, payload: Uint8
   return encodeStreamWireFrame(encodeStreamHeader(header), payload);
 }
 
-export function encodeStreamControlFrame(name: string): Uint8Array {
+export function streamControlFrame(name: string): Message {
+  if (name === ZLINK_STREAM_HEARTBEAT_PING) return HEARTBEAT_PING_FRAME;
+  if (name === ZLINK_STREAM_HEARTBEAT_PONG) return HEARTBEAT_PONG_FRAME;
+  return ZLinkBufferMessage.from(encodeStreamControlFrame(name));
+}
+
+function encodeStreamControlFrame(name: string): Uint8Array {
   return encodeStreamFrame(
     {
       kind: ZLinkStreamMessageKind.Control,

@@ -148,8 +148,31 @@ for (const path of [
     else if (path === 'Spot outbound Channel') call = outbound.requestToChannel('api', new Query());
     else {
       const actor = { meshName: 'mesh', actorId: 'actor', nodeRid: 'target', objectGeneration: 1n };
+      let actorReceiver;
       const actorClient = new framework.DefaultZLinkActorClient({
-        nodeProvider: () => ({ status: () => ({ routingId: 'source' }) }),
+        nodeProvider: () => ({
+          requestToActor(_actor, _parts, options) {
+            const entry = options.requestOperation;
+            submitBindingRequest({
+              message() { return this; },
+              submit: () => ({ result: zlink.SubmitResult.Backpressured,
+                admitted: admission.promise, reply: reply.promise })
+            }, [], undefined, undefined, options.onAdmitted, entry, {
+              operationCompleted(id, parts) {
+                actorReceiver.operationCompleted(id, { terminalResult: zlink.RequestResult.Ok,
+                  failureErrno: 0, parts }, undefined);
+              },
+              operationFailed(id, error) { actorReceiver.operationFailed(id, error, undefined); }
+            });
+            submitted.resolve();
+          }
+        }),
+        completionTableProvider: () => ({
+          submit(start, _signal, _entry, receiver) {
+            actorReceiver = receiver;
+            start();
+          }
+        }),
         locationResolver: () => ({
           resolveDirectActorRoute: async () => ({
             kind: 'ready',
@@ -168,7 +191,6 @@ for (const path of [
             }
           })
         }),
-        routeTransport: transport
       });
       call = actorClient.requestToActor('actor', new Query());
     }
@@ -195,7 +217,10 @@ for (const path of [
       admission.resolve();
       reply.resolve(
         path === 'Actor remote'
-          ? [ZLinkBufferMessage.from(Buffer.from(JSON.stringify({ ok: true, response: 'reply' })))]
+          ? [ZLinkBufferMessage.from(Buffer.from(framework.encodeStreamFrame({
+              kind: framework.ZLinkStreamMessageKind.Response, codec: framework.ZLinkStreamCodec.Json,
+              flags: framework.ZLinkStreamHeaderFlags.None, name: '', metadata: new Map()
+            }, Buffer.from(JSON.stringify('reply')))))]
           : []
       );
       assert.equal(await terminal, 'reply');

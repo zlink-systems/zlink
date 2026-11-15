@@ -77,11 +77,11 @@ import {
   ZLinkActorTransferRegistry
 } from '../actors';
 import { messageFollowOwnerNodeRid, ownerFence } from '../actors/actor-message-follow-context';
-import { ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET } from '../actors/actor-packet-relay-wire';
 import {
   ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE,
   type ZLinkInternalActorTransportDeliveryGate
 } from '../actors/actor-transport-delivery-gate';
+import { ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET } from '../actors/actor-packet-relay-wire';
 import { ZLinkRuntimeAdmissionGate, type ZLinkMeshDispatchAdmission } from '../admission';
 import {
   ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE,
@@ -276,6 +276,7 @@ export class ZLinkFrameworkRuntimeHost
       hasOwnerToken: this.locationOwner.currentRuntime?.currentOwnerToken !== undefined,
       ownerAdmissionOpen: this.admission.ownerAdmissionOpen(),
       channelRuntimeStarted: this.channelRuntime !== undefined,
+      actorRouteCache: this.actorClientLocationResolver?.[inspectRuntime](),
       fanoutStoreIsLocationStore:
         this.locationOwner.currentStores?.fanoutStore ===
         this.locationOwner.currentStores?.locationStore,
@@ -344,6 +345,7 @@ export class ZLinkFrameworkRuntimeHost
   );
   private cachedLocationSpotRouteResolver?: ZLinkSpotRouteResolver;
   private actorClientLocationResolver?: ZLinkStoreLocationResolvers;
+  private actorTransportDeliveryGate?: ZLinkInternalActorTransportDeliveryGate;
   // Shared, runtime-mutable message-flow mode cell — installed once so
   // setMessageFlowMode flips every surface live. Seeded from config at start().
   private readonly messageFlowModeCell: ZLinkMessageFlowModeCell = {
@@ -493,6 +495,8 @@ export class ZLinkFrameworkRuntimeHost
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics,
       fallbackNodeRid: `node-${randomUUID()}`,
+      observeActorAuthorityVersion: (actorId, storeVersion) =>
+        this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
       rewriteAuthorityPayloadForOwner
     });
     this.streamBindingRuntime = new ZLinkStreamBindingRuntime({
@@ -600,11 +604,7 @@ export class ZLinkFrameworkRuntimeHost
       },
       onMarker: (marker, actorId, index, context) => {
         if (marker === 'message_follow_relay' && context !== undefined) {
-          this.options.providerResolver
-            ?.get?.(
-              ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE as unknown as Type<ZLinkInternalActorTransportDeliveryGate>
-            )
-            ?.recordMessageFollowRelay?.(actorId, context);
+          this.actorTransportDeliveryGate?.recordMessageFollowRelay?.(actorId, context);
         }
         if (marker === 'message_follow_route_removed') {
           this.serviceRelocation.completeActorJoinSourceCleanup(actorId);
@@ -1551,6 +1551,10 @@ export class ZLinkFrameworkRuntimeHost
       return;
     }
 
+    // Nest invokes start after provider instances are ready; options can be created earlier.
+    this.actorTransportDeliveryGate = this.options.providerResolver?.get?.(
+      ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE as unknown as Type<ZLinkInternalActorTransportDeliveryGate>
+    );
     this.teardown = new RuntimeDisposal();
     this.shutdownOperation = undefined;
     this.shutdownOperationStartedAt = undefined;
@@ -2907,6 +2911,7 @@ export class ZLinkFrameworkRuntimeHost
   private actorRuntimeOptionsFactory(): ZLinkActorRuntimeOptionsFactory {
     return new ZLinkActorRuntimeOptionsFactory({
       requests: this.requests,
+      transportDeliveryGate: () => this.actorTransportDeliveryGate,
       discardActorActivation: (actor, error) => {
         this.spotNodeRuntime?.discardActorActivation(actor, error);
         this.spotManager?.discardActorActivation(actor, error);
@@ -2917,7 +2922,6 @@ export class ZLinkFrameworkRuntimeHost
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       routeTransport: this.routeTransport,
       streamBindingRuntime: this.streamBindingRuntime,
-      providerResolver: this.options.providerResolver,
       spotManager: () => this.spotManager,
       actorManager: () => this.actorManager,
       primaryMeshNode: () => this.requirePrimaryMeshNode(),
@@ -2975,10 +2979,6 @@ export class ZLinkFrameworkRuntimeHost
         this.locationOwner.currentLifecycle?.confirmAuthority(
           encodeAuthorityKey('actor', actorRef.actorId),
           authority
-        );
-        this.actorClientLocationResolver?.observeActorAuthorityVersion(
-          actorRef.actorId,
-          authority.storeVersion.value
         );
       },
       reportPostCommitError: (error) =>

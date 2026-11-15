@@ -1,7 +1,5 @@
 import type { RequestRuntime } from '../foundation/request-runtime';
 import type { ActorRef, RoutingId, ZLinkActor, ZLinkMessage } from '../../contracts';
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { Type } from '../../contracts/Common/CoreTypes';
 import {
   meshActorSessionNodeAdapter,
   type ZLinkBackendMeshNode,
@@ -19,10 +17,6 @@ import {
 } from '../actors';
 import type { ZLinkActorHandoffCoordinator } from '../actors';
 import { type ZLinkActorRoutedJoinTransport } from '../actors';
-import {
-  ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE,
-  type ZLinkInternalActorTransportDeliveryGate
-} from '../actors/actor-transport-delivery-gate';
 import type { ZLinkLocationLifecycle, ZLinkStoreLocationResolvers } from '../locations';
 import type {
   ZLinkNativeFallbackBoundSessionPort,
@@ -36,6 +30,9 @@ import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly requests?: RequestRuntime;
+  readonly transportDeliveryGate?: ConstructorParameters<
+    typeof DefaultZLinkActorClient
+  >[0]['transportDeliveryGate'];
   readonly discardActorActivation?: (actor: ZLinkActor, error: unknown) => void;
   readonly terminateActorActivation: (
     actor: ZLinkActor,
@@ -48,7 +45,6 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
   readonly streamBindingRuntime: ZLinkStreamActorLifecyclePort &
     ZLinkNativeFallbackBoundSessionPort;
-  readonly providerResolver?: ZLinkProviderResolver;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly primaryMeshNode: () => ZLinkBackendMeshNode;
@@ -271,11 +267,7 @@ export class ZLinkActorRuntimeOptionsFactory {
       nodeProvider: this.options.meshNode,
       completionTableProvider: this.options.meshCompletions,
       locationResolver: () => locationResolver,
-      routeTransport: this.options.routeTransport,
-      transportDeliveryGate: () =>
-        this.options.providerResolver?.get?.(
-          ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE as unknown as Type<ZLinkInternalActorTransportDeliveryGate>
-        ),
+      transportDeliveryGate: this.options.transportDeliveryGate,
       messageSerializers: this.options.registration.messageSerializers,
       defaultRequestTimeoutMs: this.options.registration.requestTimeoutMs,
       staleActorRefReporter: (_meshName, actorId) =>
