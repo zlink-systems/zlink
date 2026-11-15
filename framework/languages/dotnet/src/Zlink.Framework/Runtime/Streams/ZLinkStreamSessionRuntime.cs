@@ -373,11 +373,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             return await _lane
                 .RunAsync(() =>
                 {
-                    if (
-                        (_requireConnectionReady && !_connectionReady.Task.IsCompletedSuccessfully)
-                        || IsClosing
-                    )
-                        return false;
                     _liveness.RecordInbound();
                     ZLinkStreamControlFrames.Dispatch(Stream, decoded, payload, _logger);
                     return true;
@@ -709,35 +704,24 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     {
         TryScheduleTerminal(
             ZlinkStreamCloseReason.ProtocolError,
-            () => CloseForProtocolErrorCoreAsync(error)
+            () =>
+                CompleteSessionAsync(
+                    new ZLinkStreamError(ZLinkStreamSessionError.Internal, error.Message),
+                    notifyDisconnected: true
+                )
         );
-        await ValueTask.CompletedTask;
-    }
-
-    private async ValueTask CloseForProtocolErrorCoreAsync(Exception error)
-    {
         try
         {
-            ZLinkStreamFrameWriter.Write(
-                Stream,
-                ZlinkStreamSessionClosingCodec.CreateHeader(),
-                ZlinkStreamSessionClosingCodec.EncodeProtocolError().AsMemory(),
-                "Could not submit the protocol-error session-closing control packet."
-            );
+            ZLinkStreamControlFrames.SendProtocolError(Stream);
         }
         catch (Exception failure)
         {
             _runtime.ErrorSink.ReportRuntimeTaskException(
-                nameof(CloseForProtocolErrorCoreAsync),
+                nameof(CloseForProtocolErrorAsync),
                 failure
             );
         }
         _ = await TryCloseTransportAsync().ConfigureAwait(false);
-        await CompleteSessionAsync(
-                new ZLinkStreamError(ZLinkStreamSessionError.Internal, error.Message),
-                notifyDisconnected: true
-            )
-            .ConfigureAwait(false);
     }
 
     private async ValueTask CloseForLivenessTimeoutAsync(byte[] payload)
