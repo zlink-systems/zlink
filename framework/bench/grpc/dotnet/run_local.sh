@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_common.sh
 source "${ROOT_DIR}/../runner_common.sh"
-bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet" \
+bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet,zlink-dotnet-json,zlink-framework-dotnet-json" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 
 CONFIGURATION=Release
@@ -41,6 +41,15 @@ for run in $(seq 1 "${RUNS}"); do
         target_project="${ROOT_DIR}/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj"
         target_args=(--endpoint "${target_endpoint}" --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
         ;;
+      zlink-dotnet-json)
+        trigger_url="http://127.0.0.1:5205"
+        source_stats_url="http://127.0.0.1:5206"
+        target_endpoint="tcp://127.0.0.1:5207"
+        target_command_endpoint="tcp://127.0.0.1:5208"
+        target_stats_url="http://127.0.0.1:5209"
+        target_project="${ROOT_DIR}/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj"
+        target_args=(--endpoint "${target_endpoint}" --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}" --game-json)
+        ;;
       zlink-framework-dotnet)
         trigger_url="http://127.0.0.1:5212"
         source_stats_url="http://127.0.0.1:5213"
@@ -49,6 +58,15 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_url="http://127.0.0.1:5215"
         target_project="${ROOT_DIR}/ZLinkServer/WithGrpcBench.ZLinkServer.csproj"
         target_args=(--endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
+        ;;
+      zlink-framework-dotnet-json)
+        trigger_url="http://127.0.0.1:5212"
+        source_stats_url="http://127.0.0.1:5213"
+        target_endpoint="tcp://127.0.0.1:5214"
+        target_command_endpoint=""
+        target_stats_url="http://127.0.0.1:5215"
+        target_project="${ROOT_DIR}/ZLinkServer/WithGrpcBench.ZLinkServer.csproj"
+        target_args=(--endpoint "${target_endpoint}" --metrics-url "${target_stats_url}" --game-json)
         ;;
     esac
 

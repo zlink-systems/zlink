@@ -41,6 +41,23 @@ class BenchServerMetrics {
     }
   }
 
+  recordGamePayload(payload) {
+    this._allPhaseMessages += 1;
+    if (payload === null || typeof payload !== 'object') {
+      throw new Error('invalid JSON game payload');
+    }
+    const phase = Number(payload.phase);
+    const sentTimestampNs = BigInt(payload.sentNs);
+    if (!/^\d+$/.test(payload.run) || !/^\d+$/.test(payload.seq) || phase !== header.PHASE_ACTIVE) {
+      return;
+    }
+    this._activeMessages += 1;
+    if (this._latencyNs.length < this._latencyLimit) {
+      const latency = header.nowNs() - sentTimestampNs;
+      this._latencyNs.push(latency > 0n ? Number(latency) : 0);
+    }
+  }
+
   recordError() {
     this._errors += 1;
   }
