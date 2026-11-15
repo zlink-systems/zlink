@@ -24,3 +24,7 @@ escaped-whitespace	reject	ctor	{"body":"AA==\n"}
 missing-padding	reject	ctor	{"body":"AA"}
 trailing	reject	ctor	{"body":"AA=="} {}
 syntax	reject	ctor	{"body":"AA==",}
+# encode shapes construct DTOs directly; C++ non-nullable values cannot represent null.
+encode-null-string	reject	encode-string	{"wireValue":null}
+encode-null-object	reject	encode-object	{"wireValue":null}
+encode-nullable	accept	encode-nullable	{"text":null,"child":null}

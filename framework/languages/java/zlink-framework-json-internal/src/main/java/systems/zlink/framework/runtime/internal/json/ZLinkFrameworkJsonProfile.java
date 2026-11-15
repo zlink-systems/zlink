@@ -14,6 +14,7 @@ import com.fasterxml.jackson.core.io.IOContext;
 import com.fasterxml.jackson.core.io.InputDecorator;
 import com.fasterxml.jackson.core.util.JsonParserDelegate;
 import com.fasterxml.jackson.databind.AnnotationIntrospector;
+import com.fasterxml.jackson.databind.BeanDescription;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -23,6 +24,7 @@ import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategy;
+import com.fasterxml.jackson.databind.SerializationConfig;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
 import com.fasterxml.jackson.databind.deser.NullValueProvider;
@@ -33,9 +35,12 @@ import com.fasterxml.jackson.databind.introspect.Annotated;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMethod;
 import com.fasterxml.jackson.databind.introspect.AnnotatedParameter;
+import com.fasterxml.jackson.databind.introspect.BeanPropertyDefinition;
 import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
+import com.fasterxml.jackson.databind.ser.BeanPropertyWriter;
+import com.fasterxml.jackson.databind.ser.BeanSerializerModifier;
 import com.fasterxml.jackson.databind.util.AccessPattern;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
@@ -377,6 +382,46 @@ public final class ZLinkFrameworkJsonProfile {
                     @Override
                     public void setupModule(Module.SetupContext context) {
                         super.setupModule(context);
+                        ObjectMapper mapper = context.getOwner();
+                        context.addBeanSerializerModifier(
+                                new BeanSerializerModifier() {
+                                    @Override
+                                    public List<BeanPropertyWriter> changeProperties(
+                                            SerializationConfig config,
+                                            BeanDescription bean,
+                                            List<BeanPropertyWriter> writers) {
+                                        // Reuse decode null rules, including constructor
+                                        // annotations.
+                                        for (BeanPropertyDefinition property :
+                                                mapper.getDeserializationConfig()
+                                                        .introspect(bean.getType())
+                                                        .findProperties()) {
+                                            if (property.getMetadata().getValueNulls()
+                                                    != Nulls.FAIL) continue;
+                                            for (BeanPropertyWriter writer : writers) {
+                                                if (writer.getName().equals(property.getName())) {
+                                                    writer.assignNullSerializer(
+                                                            new JsonSerializer<>() {
+                                                                @Override
+                                                                public void serialize(
+                                                                        Object value,
+                                                                        JsonGenerator generator,
+                                                                        SerializerProvider provider)
+                                                                        throws IOException {
+                                                                    throw JsonMappingException.from(
+                                                                            generator,
+                                                                            "Property '"
+                                                                                    + writer
+                                                                                            .getName()
+                                                                                    + "' does not allow null.");
+                                                                }
+                                                            });
+                                                }
+                                            }
+                                        }
+                                        return writers;
+                                    }
+                                });
                         context.addValueInstantiators(
                                 new ValueInstantiators.Base() {
                                     @Override

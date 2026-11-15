@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Runtime.Messaging;
 
@@ -27,6 +28,44 @@ public sealed class TypedJsonPayloadContractTests
     [MemberData(nameof(Rows))]
     public void Shared_typed_contract(string id, bool accept, string shape, string json)
     {
+        if (shape.StartsWith("encode-", StringComparison.Ordinal))
+        {
+            object value = shape switch
+            {
+                "encode-string" => new StringPayload(null!),
+                "encode-object" => new ObjectPayload(null!),
+                "encode-nullable" => new NullableReferences(null, null),
+                _ => throw new InvalidOperationException(shape),
+            };
+            byte[]? wire = null;
+            var error = Record.Exception(() =>
+                wire = ZLinkFrameworkJsonPayloadCodec.Serialize(value, value.GetType())
+            );
+            Console.WriteLine(
+                $"ENCODE_CONTRACT {id} wire={Encoding.UTF8.GetString(wire ?? [])} error={error}"
+            );
+            Assert.Equal(accept, error is null);
+            if (accept)
+                Assert.Equal(json, Encoding.UTF8.GetString(wire!));
+            else
+                Assert.Equal(
+                    "Property 'wireValue' does not allow null.",
+                    Assert.IsAssignableFrom<JsonException>(error).Message
+                );
+            byte[]? connectorWire = null;
+            var encodeConnectorError = Record.Exception(() =>
+                connectorWire = value.ToJson().Payload.ToArray()
+            );
+            Assert.Equal(accept, encodeConnectorError is null);
+            if (accept)
+                Assert.Equal(json, Encoding.UTF8.GetString(connectorWire!));
+            else
+                Assert.Equal(
+                    "Property 'wireValue' does not allow null.",
+                    Assert.IsAssignableFrom<JsonException>(encodeConnectorError).Message
+                );
+            return;
+        }
         var bytes = Encoding.UTF8.GetBytes(json);
         var type = shape == "ctor" ? typeof(ConstructorPayload) : typeof(PropertyPayload);
         var frameworkError = Record.Exception(() =>
@@ -54,6 +93,14 @@ public sealed class TypedJsonPayloadContractTests
             Assert.IsAssignableFrom<JsonException>(connectorError);
         }
     }
+
+    public sealed record StringPayload([property: JsonPropertyName("wireValue")] string Value);
+
+    public sealed record Child(string Text);
+
+    public sealed record ObjectPayload([property: JsonPropertyName("wireValue")] Child Value);
+
+    public sealed record NullableReferences(string? Text, Child? Child);
 
     public sealed record ConstructorPayload(byte[] Body);
 
