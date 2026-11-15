@@ -1,10 +1,9 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const test = require('node:test');
-const { createClient } = require('redis');
 
 const fixture = path.join(__dirname, 'fixtures', 'user-spot-native-process.js');
-const redisUrl = process.env.ZLINK_TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
+const { testRedisUrl: redisUrl, connectTestRedis } = require('./helpers/test-redis');
 const { startChild, stopChild, deletePrefix } = require('./helpers/native-process-harness')(
   fixture,
   redisUrl
@@ -19,19 +18,8 @@ test(
     const keyPrefix = `zlink:test:m6b-node:${runId}:`;
     const targetRoutingId = `m6b-target-${runId}`;
     const children = [];
-    const redis = createClient({
-      url: redisUrl,
-      socket: { reconnectStrategy: false }
-    });
-    redis.on('error', () => {});
-    try {
-      await redis.connect();
-      await redis.ping();
-    } catch (error) {
-      if (redis.isOpen) redis.disconnect();
-      t.skip(`Redis is unavailable at ${redisUrl}: ${error.message}`);
-      return;
-    }
+    const redis = await connectTestRedis(t);
+    if (redis === undefined) return;
     t.after(async () => {
       await Promise.all(children.map(stopChild));
       await deletePrefix(redis, keyPrefix);
