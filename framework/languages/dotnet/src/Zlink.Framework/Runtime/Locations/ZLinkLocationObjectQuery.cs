@@ -67,6 +67,7 @@ internal sealed class ZLinkLocationObjectQuery(
                 : ZLinkAuthorityKeyKind.Spot
         );
         var items = new List<ZLinkLocationObjectEntry>(normalized.PageSize);
+        var itemRows = new List<(ZLinkAuthorityScanCursor? Start, int Rows)>();
         long encodedItemsBytes = 0;
         while (items.Count < normalized.PageSize)
         {
@@ -112,6 +113,7 @@ internal sealed class ZLinkLocationObjectQuery(
                     break;
                 }
                 items.Add(entry);
+                itemRows.Add((batchCursor, index + 1));
                 encodedItemsBytes = candidateItemsBytes;
             }
 
@@ -131,6 +133,30 @@ internal sealed class ZLinkLocationObjectQuery(
                     if (consumed is not ZLinkAuthorityScanResult.Page consumedPage)
                         throw Unavailable("The object location continuation token expired.");
                     cursor = consumedPage.Value.NextCursor;
+                }
+                while (
+                    EncodedPageSize(encodedItemsBytes, items.Count, cursor?.Encoded)
+                    > MaximumEncodedPageBytes
+                )
+                {
+                    encodedItemsBytes -= EncodedObjectSize(items[^1]);
+                    items.RemoveAt(items.Count - 1);
+                    var (start, rows) = itemRows[^1];
+                    itemRows.RemoveAt(itemRows.Count - 1);
+                    if (itemRows.Count == 0)
+                    {
+                        cursor = batchCursor;
+                        break;
+                    }
+                    var prior = await ReadAsync(
+                            "object-location-query-list",
+                            cancellationToken,
+                            token => store.ListAuthoritiesAsync(prefix, start, rows - 1, token)
+                        )
+                        .ConfigureAwait(false);
+                    if (prior is not ZLinkAuthorityScanResult.Page priorPage)
+                        throw Unavailable("The object location continuation token expired.");
+                    cursor = priorPage.Value.NextCursor;
                 }
                 break;
             }

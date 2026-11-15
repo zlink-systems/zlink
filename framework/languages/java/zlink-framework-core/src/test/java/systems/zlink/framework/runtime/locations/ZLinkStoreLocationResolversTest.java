@@ -870,6 +870,131 @@ final class ZLinkStoreLocationResolversTest {
     }
 
     @Test
+    void objectQueryRechecksCursorReturnedForConsumedRows() throws Exception {
+        String stableType = "r".repeat(4000);
+        List<String> expected =
+                java.util.stream.IntStream.range(0, 1050)
+                        .mapToObj(index -> "room-%04d-%s".formatted(index, "%".repeat(240)))
+                        .toList();
+        List<ZLinkAuthorityEntry> entries =
+                expected.stream()
+                        .map(
+                                id ->
+                                        new ZLinkAuthorityEntry(
+                                                ZLinkAuthorityKeyCodec.spot(id),
+                                                new ZLinkAuthoritySnapshot(
+                                                        "v1",
+                                                        new byte[0],
+                                                        1,
+                                                        1,
+                                                        "owner-a",
+                                                        1,
+                                                        new ZLinkPlacementAllocation(
+                                                                ZLinkPlacementAllocationState
+                                                                        .ACTIVE,
+                                                                ZLinkPlacementObjectKind.USER_SPOT,
+                                                                stableType,
+                                                                new ZLinkMeshNodeDescriptorKey(
+                                                                        "game", NODE),
+                                                                1,
+                                                                ZLinkPlacementCapacityBundle.spot(
+                                                                        ZLinkPlacementObjectKind
+                                                                                .USER_SPOT,
+                                                                        stableType,
+                                                                        1)),
+                                                        Optional.empty(),
+                                                        NOW)))
+                        .toList();
+        Map<Integer, Integer> callsByOffset = new java.util.HashMap<>();
+        AtomicInteger requeryCalls = new AtomicInteger();
+        ZLinkLocationRepository store =
+                repository(
+                        (method, arguments) -> {
+                            if (method.equals("list")) {
+                                String prefix = (String) arguments[0];
+                                @SuppressWarnings("unchecked")
+                                var cursor = (Optional<ZLinkAuthorityScanCursor>) arguments[1];
+                                int offset =
+                                        cursor.map(
+                                                        value ->
+                                                                Integer.parseInt(
+                                                                        value.encoded()
+                                                                                .split(":", 2)[0]))
+                                                .orElse(0);
+                                int callCount = callsByOffset.getOrDefault(offset, 0);
+                                callsByOffset.put(offset, callCount + 1);
+                                if (callCount > 0) requeryCalls.incrementAndGet();
+                                List<ZLinkAuthorityEntry> rows =
+                                        entries.stream()
+                                                .filter(entry -> entry.key().startsWith(prefix))
+                                                .toList();
+                                int end =
+                                        Math.min(
+                                                offset + Math.min((Integer) arguments[2], 256),
+                                                rows.size());
+                                String next = end < rows.size() ? Integer.toString(end) : null;
+                                if (callCount > 0 && next != null) next += ":" + "c".repeat(3000);
+                                return CompletableFuture.completedFuture(
+                                        new ZLinkAuthorityPage(
+                                                rows.subList(offset, end),
+                                                next == null
+                                                        ? Optional.empty()
+                                                        : Optional.of(
+                                                                new ZLinkAuthorityScanCursor(
+                                                                        next))));
+                            }
+                            if (method.equals("readOwnerLease"))
+                                return CompletableFuture.completedFuture(
+                                        new ZLinkOwnerLeaseMissing());
+                            throw new UnsupportedOperationException(method);
+                        });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            List<String> actual = new java.util.ArrayList<>();
+            String token = null;
+            do {
+                var page =
+                        query.listObjectLocations(
+                                        ZLinkLocationObjectFilter.of(
+                                                ZLinkPlacementObjectKind.USER_SPOT),
+                                        new ZLinkPageRequest(1000, token))
+                                .toCompletableFuture()
+                                .join();
+                var wirePage = new LinkedHashMap<String, Object>();
+                wirePage.put(
+                        "items",
+                        page.items().stream()
+                                .map(
+                                        entry ->
+                                                Map.of(
+                                                        "globalId", entry.globalId(),
+                                                        "objectGeneration",
+                                                                entry.objectGeneration(),
+                                                        "meshName", entry.meshName(),
+                                                        "nodeRid", entry.nodeRid().toString(),
+                                                        "state", entry.state().name(),
+                                                        "stableType", entry.stableType()))
+                                .toList());
+                wirePage.put("continuationToken", page.continuationToken());
+                var wire =
+                        new com.fasterxml.jackson.databind.ObjectMapper()
+                                .writeValueAsBytes(wirePage);
+                assertTrue(wire.length <= 4 * 1024 * 1024);
+                actual.addAll(
+                        page.items().stream().map(ZLinkLocationObjectEntry::globalId).toList());
+                token = page.continuationToken();
+            } while (token != null);
+            assertTrue(requeryCalls.get() > 0);
+            assertEquals(expected, actual);
+            assertEquals(actual.size(), new java.util.HashSet<>(actual).size());
+        }
+    }
+
+    @Test
     void firstPageUsesTheQueryDefaultSize() {
         assertEquals(100, ZLinkPageRequest.firstPage().pageSize());
     }

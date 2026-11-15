@@ -641,6 +641,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
             cursor.emplace (*page.continuation_token);
         location_page_t<location_object_entry_t> output;
         output.items.reserve (static_cast<std::size_t> (page.page_size));
+        std::vector<std::pair<std::optional<authority_scan_cursor_t>, std::size_t>> item_rows;
         const auto prefix = std::string (authority_key_codec_detail::prefix) + authority_kind + ":";
         std::size_t encoded_items_bytes = 0;
         do {
@@ -676,6 +677,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                     break;
                 }
                 output.items.push_back (std::move (projected));
+                item_rows.emplace_back (batch_cursor, index + 1);
                 encoded_items_bytes = candidate_items_bytes;
             }
             cursor = stored_page->next_cursor;
@@ -689,6 +691,27 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                         co_return co_await unavailable<location_page_t<location_object_entry_t>> (
                           "Location Store object scan cursor expired");
                     cursor = consumed_page->next_cursor;
+                }
+                while (
+                  encoded_object_page_size (
+                    encoded_items_bytes, output.items.size (),
+                    cursor ? std::optional<std::string_view> (cursor->encoded ()) : std::nullopt)
+                  > 4u * 1024u * 1024u) {
+                    const auto entry_bytes = encoded_object_size (output.items.back ());
+                    output.items.pop_back ();
+                    encoded_items_bytes -= entry_bytes;
+                    const auto [start, rows] = item_rows.back ();
+                    item_rows.pop_back ();
+                    if (item_rows.empty ()) {
+                        cursor = batch_cursor;
+                        break;
+                    }
+                    auto prior = co_await _store->list_authorities (prefix, start, rows - 1);
+                    const auto *prior_page = std::get_if<authority_page_t> (&prior);
+                    if (prior_page == nullptr)
+                        co_return co_await unavailable<location_page_t<location_object_entry_t>> (
+                          "Location Store object scan cursor expired");
+                    cursor = prior_page->next_cursor;
                 }
                 break;
             }

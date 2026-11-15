@@ -3499,6 +3499,96 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ObjectLocationPagesFollowSharedFixtu
     }
 }
 
+TEST (ZLinkFrameworkStoreLocationResolvers, ObjectPageRechecksCursorForConsumedRows)
+{
+    using namespace zlink::framework;
+    class cursor_fixture_store_t final : public test_location_repository_t
+    {
+      public:
+        std::vector<authority_entry_t> entries;
+        std::map<std::size_t, std::size_t> calls_by_offset;
+        std::size_t requery_calls = 0;
+
+        task_t<authority_scan_result_t>
+        list_authorities (std::string prefix,
+                          std::optional<authority_scan_cursor_t> cursor,
+                          std::size_t limit,
+                          std::stop_token = {}) override
+        {
+            const auto offset = cursor ? std::stoul (std::string (cursor->encoded ())) : 0u;
+            const auto calls = calls_by_offset[offset]++;
+            if (calls > 0)
+                ++requery_calls;
+            std::vector<authority_entry_t> rows;
+            for (const auto &entry : entries)
+                if (entry.key.value.starts_with (prefix))
+                    rows.push_back (entry);
+            const auto end = std::min (offset + std::min (limit, std::size_t{256}), rows.size ());
+            authority_page_t page;
+            page.items.assign (rows.begin () + offset, rows.begin () + end);
+            if (end < rows.size ()) {
+                auto next = std::to_string (end);
+                if (calls > 0)
+                    next += ":" + std::string (3000, 'c');
+                page.next_cursor.emplace (std::move (next));
+            }
+            co_return authority_scan_result_t{std::move (page)};
+        }
+    };
+
+    cursor_fixture_store_t store;
+    std::vector<std::string> expected;
+    const auto stable_type = std::string (4000, 'r');
+    for (std::size_t index = 0; index < 1050; ++index) {
+        auto id = "room-" + std::to_string (10000 + index) + "-" + std::string (240, '%');
+        expected.push_back (id);
+        authority_snapshot_t snapshot;
+        snapshot.store_version = "v1";
+        snapshot.object_generation = 1;
+        snapshot.authority_owner_generation = 1;
+        snapshot.owner = {"owner", 1};
+        snapshot.allocation.state = placement_allocation_state_t::active;
+        snapshot.allocation.object_kind = placement_object_kind_t::user_spot;
+        snapshot.allocation.stable_type = stable_type;
+        snapshot.allocation.target.mesh_name = "play";
+        snapshot.allocation.target.node_rid = node_rid_t::from_string ("node-1");
+        store.entries.push_back (
+          {zlink::framework::runtime::spot_authority_key (id), std::move (snapshot)});
+    }
+    location_options_t options;
+    location_runtime_t runtime (store, options, "owner-query");
+    store_location_runtime_query_t query (store, runtime, options);
+    std::vector<std::string> actual;
+    std::optional<std::string> cursor;
+    do {
+        auto result = query
+                        .list_object_locations ({.object_kind = location_object_kind_t::user_spot},
+                                                {.page_size = 1000, .continuation_token = cursor})
+                        .result ();
+        ASSERT_TRUE (result.has_value ());
+        const auto &page = result.value ();
+        nlohmann::json items = nlohmann::json::array ();
+        for (const auto &entry : page.items)
+            items.push_back (
+              {{"globalId", entry.global_id},
+               {"objectGeneration", entry.object_generation},
+               {"meshName", entry.mesh_name},
+               {"nodeRid", entry.node_rid.to_string ()},
+               {"state", entry.state == location_object_state_t::ready ? "ready" : "unavailable"},
+               {"stableType", entry.stable_type}});
+        const auto encoded = nlohmann::json{{"items", std::move (items)},
+                                            {"continuationToken", page.continuation_token}}
+                               .dump ();
+        ASSERT_LE (encoded.size (), 4u * 1024u * 1024u);
+        for (const auto &entry : page.items)
+            actual.push_back (entry.global_id);
+        cursor = page.continuation_token;
+    } while (cursor);
+    EXPECT_GT (store.requery_calls, 0u);
+    EXPECT_EQ (expected, actual);
+    EXPECT_EQ (actual.size (), std::set<std::string> (actual.begin (), actual.end ()).size ());
+}
+
 TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeObjectQueryMapsStoreFailureToUnavailable)
 {
     class fault_store_t final : public zlink::framework::location_store_t

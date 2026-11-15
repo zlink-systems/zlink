@@ -908,6 +908,82 @@ test('object location pages follow the shared continuation fixture', async (t) =
     });
 });
 
+test('object location page rechecks a cursor returned for its consumed rows', async () => {
+  const records = Array.from({ length: 1050 }, (_, index) => {
+    const globalId = `room-${String(index).padStart(4, '0')}-${'%'.repeat(240)}`;
+    return {
+      key: authorityKeys.encodeAuthorityKey('user_spot', globalId),
+      snapshot: {
+        storeVersion: { value: 'v1' },
+        payload: Buffer.alloc(0),
+        objectGeneration: 1n,
+        authorityOwnerGeneration: 1n,
+        ownerId: 'owner',
+        ownerLeaseGeneration: 1n,
+        allocation: {
+          state: 'active',
+          objectKind: 'user_spot',
+          stableType: 'r'.repeat(4000),
+          descriptor: { meshName: 'play', rid: rid('node-1') },
+          descriptorLifecycleGeneration: 1n
+        }
+      }
+    };
+  });
+  const calls = new Map();
+  let requeryCalls = 0;
+  const authorityStore = {
+    async listAuthorities(prefix, cursor, limit) {
+      const offset = cursor === undefined ? 0 : Number(cursor.encoded.split(':', 1)[0]);
+      const callCount = calls.get(offset) ?? 0;
+      calls.set(offset, callCount + 1);
+      if (callCount > 0) requeryCalls++;
+      const end = Math.min(offset + limit, records.length);
+      const rows = records.slice(offset, end);
+      const nextCursor =
+        end < records.length
+          ? {
+              encoded:
+                callCount === 0
+                  ? String(end)
+                  : `${end}:${'c'.repeat(Math.min(rows.at(-1).key.value.length * 4, 3000))}`
+            }
+          : undefined;
+      assert.equal(prefix, 'zla1:s:');
+      return { kind: 'page', items: rows, nextCursor };
+    }
+  };
+  const runtime = runtimeFor(testInMemoryLocationStore(), { authorityStore });
+  const all = [];
+  let continuationToken;
+  do {
+    const page = await runtime.listObjectLocations(
+      { objectKind: 'user_spot' },
+      { pageSize: 1000, continuationToken }
+    );
+    const wire = JSON.stringify({
+      items: page.items.map((entry) => ({
+        globalId: entry.globalId,
+        objectGeneration: Number(entry.objectGeneration),
+        meshName: entry.meshName,
+        nodeRid: entry.nodeRid.toString(),
+        state: entry.state,
+        stableType: entry.stableType
+      })),
+      continuationToken: page.continuationToken
+    });
+    assert.ok(Buffer.byteLength(wire) <= 4 * 1024 * 1024);
+    all.push(...page.items.map((entry) => entry.globalId));
+    continuationToken = page.continuationToken;
+  } while (continuationToken !== undefined);
+  assert.ok(requeryCalls > 0);
+  assert.deepEqual(
+    all,
+    records.map((record) => authorityKeys.decodeAuthorityKey(record.key).globalId)
+  );
+  assert.equal(new Set(all).size, records.length);
+});
+
 test('location lifecycle reclaims tracked Spot and Actor rows after an owner lease generation change', async () => {
   const store = testInMemoryLocationStore();
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });

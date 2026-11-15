@@ -432,9 +432,91 @@ public sealed class LocationRuntimeQueryTests
             };
     }
 
-    private sealed class ObjectPageFixtureStore(ZLinkAuthorityEntry[] entries, int storePageSize)
-        : ZLinkLocationStoreTestDouble
+    [Fact]
+    public async Task Object_List_Rechecks_The_Cursor_Returned_For_Consumed_Rows()
     {
+        var stableType = new string('r', 4000);
+        var expected = Enumerable
+            .Range(0, 1050)
+            .Select(index => $"room-{index:D4}-{new string('%', 240)}")
+            .ToArray();
+        var entries = expected
+            .Select(globalId =>
+            {
+                var allocation = new ZLinkPlacementAllocation(
+                    ZLinkPlacementAllocationState.Active,
+                    ZLinkPlacementObjectKind.UserSpot,
+                    stableType,
+                    new ZLinkMeshNodeDescriptorKey("play", RoutingId.From("node-1")),
+                    1,
+                    new ZLinkCapacityVector(0, 0, null)
+                );
+                return new ZLinkAuthorityEntry(
+                    ZLinkAuthorityKeyCodec.EncodeSpot(globalId),
+                    new ZLinkAuthoritySnapshot(
+                        "v1",
+                        ReadOnlyMemory<byte>.Empty,
+                        1,
+                        1,
+                        LiveOwner,
+                        1,
+                        allocation,
+                        null,
+                        DateTimeOffset.UtcNow
+                    )
+                );
+            })
+            .ToArray();
+        var store = new ObjectPageFixtureStore(entries, 256, inflateRequeryCursor: true);
+        var options = new ZLinkLocationOptions();
+        var query = new ZLinkLocationRuntimeQueryService(
+            options,
+            store,
+            RegisteredMeshes,
+            new ZLinkOwnerLeaseTracker(store, options),
+            new ZLinkLocationRuntime(options, store)
+        );
+        var actual = new List<string>();
+        string? cursor = null;
+        do
+        {
+            var page = await query.ListObjectLocationsAsync(
+                new ZLinkLocationObjectFilter(ZLinkLocationObjectKind.UserSpot),
+                new ZLinkPageRequest(1000, cursor)
+            );
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+                new
+                {
+                    items = page.Items.Select(entry => new
+                    {
+                        globalId = entry.GlobalId,
+                        objectGeneration = entry.ObjectGeneration,
+                        meshName = entry.MeshName,
+                        nodeRid = entry.NodeRid.ToString(),
+                        state = entry.State.ToString().ToLowerInvariant(),
+                        stableType = entry.StableType,
+                    }),
+                    continuationToken = page.ContinuationToken,
+                },
+                ObjectPageJsonOptions
+            );
+            Assert.True(bytes.Length <= 4 * 1024 * 1024);
+            actual.AddRange(page.Items.Select(entry => entry.GlobalId));
+            cursor = page.ContinuationToken;
+        } while (cursor is not null);
+        Assert.True(store.RequeryCalls > 0);
+        Assert.Equal(expected, actual);
+        Assert.Equal(actual.Count, actual.Distinct().Count());
+    }
+
+    private sealed class ObjectPageFixtureStore(
+        ZLinkAuthorityEntry[] entries,
+        int storePageSize,
+        bool inflateRequeryCursor = false
+    ) : ZLinkLocationStoreTestDouble
+    {
+        private readonly Dictionary<int, int> callsByOffset = [];
+
         public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
             string ownerId,
             CancellationToken cancellationToken = default
@@ -444,6 +526,7 @@ public sealed class LocationRuntimeQueryTests
             );
 
         public int ScanCalls { get; private set; }
+        public int RequeryCalls { get; private set; }
 
         public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
             string prefix,
@@ -457,13 +540,21 @@ public sealed class LocationRuntimeQueryTests
             var rows = entries
                 .Where(entry => entry.Key.Value.StartsWith(prefix, StringComparison.Ordinal))
                 .ToArray();
-            var offset = cursor is null ? 0 : int.Parse(cursor.Value.Encoded);
+            var offset = cursor is null ? 0 : int.Parse(cursor.Value.Encoded.Split(':', 2)[0]);
+            var callCount = callsByOffset.GetValueOrDefault(offset);
+            callsByOffset[offset] = callCount + 1;
+            if (callCount > 0)
+                RequeryCalls++;
             var end = Math.Min(offset + Math.Min(limit, storePageSize), rows.Length);
+            var nextCursor = end < rows.Length ? end.ToString() : null;
+            if (inflateRequeryCursor && callCount > 0 && nextCursor is not null)
+                nextCursor +=
+                    ":" + new string('c', Math.Min(rows[end - 1].Key.Value.Length * 4, 3000));
             return ValueTask.FromResult<ZLinkAuthorityScanResult>(
                 new ZLinkAuthorityScanResult.Page(
                     new ZLinkAuthorityPage(
                         rows[offset..end],
-                        end < rows.Length ? new ZLinkAuthorityScanCursor(end.ToString()) : null
+                        nextCursor is null ? null : new ZLinkAuthorityScanCursor(nextCursor)
                     )
                 )
             );

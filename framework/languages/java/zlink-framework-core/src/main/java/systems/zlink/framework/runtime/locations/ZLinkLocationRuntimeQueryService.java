@@ -150,7 +150,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                 new ZLinkAuthorityScanCursor(
                                         parseCursor(safe.continuationToken())));
         return unavailable(
-                loadObjectPage(filter, prefix, cursor, pageSize, new ArrayList<>(), 0),
+                loadObjectPage(
+                        filter, prefix, cursor, pageSize, new ArrayList<>(), 0, new ArrayList<>()),
                 "list object locations");
     }
 
@@ -183,7 +184,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
             Optional<ZLinkAuthorityScanCursor> cursor,
             int pageSize,
             List<ZLinkLocationObjectEntry> values,
-            int encodedBytes) {
+            int encodedBytes,
+            List<BatchPosition> itemPositions) {
         return stores.unifiedStore()
                 .list(prefix, cursor, pageSize - values.size(), OPEN)
                 .thenCompose(
@@ -249,6 +251,10 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                                                                 > MAX_OBJECT_PAGE_BYTES)
                                                                             return used;
                                                                         values.add(projected);
+                                                                        itemPositions.add(
+                                                                                new BatchPosition(
+                                                                                        cursor,
+                                                                                        row));
                                                                         bytes[0] =
                                                                                 candidateItemsBytes;
                                                                         return used + 1;
@@ -270,22 +276,22 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                                                         .orElse(null)));
                                             return stores.unifiedStore()
                                                     .list(prefix, cursor, used, OPEN)
-                                                    .thenApply(
+                                                    .thenCompose(
                                                             read -> {
                                                                 if (!(read
                                                                         instanceof
                                                                         ZLinkAuthorityPage partial))
-                                                                    throw new IllegalStateException(
-                                                                            "location scan cursor expired");
-                                                                return new ZLinkLocationPage<>(
-                                                                        List.copyOf(values),
-                                                                        partial.nextCursor()
-                                                                                .map(
-                                                                                        next ->
-                                                                                                encodeCursor(
-                                                                                                        next
-                                                                                                                .encoded()))
-                                                                                .orElse(null));
+                                                                    return CompletableFuture
+                                                                            .failedFuture(
+                                                                                    new IllegalStateException(
+                                                                                            "location scan cursor expired"));
+                                                                return fitObjectPage(
+                                                                        prefix,
+                                                                        values,
+                                                                        bytes[0],
+                                                                        itemPositions,
+                                                                        partial.nextCursor(),
+                                                                        cursor);
                                                             });
                                         }
                                         if (values.size() >= pageSize
@@ -306,10 +312,53 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                                 batch.nextCursor(),
                                                 pageSize,
                                                 values,
-                                                bytes[0]);
+                                                bytes[0],
+                                                itemPositions);
                                     });
                         });
     }
+
+    private CompletionStage<ZLinkLocationPage<ZLinkLocationObjectEntry>> fitObjectPage(
+            String prefix,
+            List<ZLinkLocationObjectEntry> values,
+            int encodedBytes,
+            List<BatchPosition> itemPositions,
+            Optional<ZLinkAuthorityScanCursor> finalCursor,
+            Optional<ZLinkAuthorityScanCursor> batchStart) {
+        String token = finalCursor.map(next -> encodeCursor(next.encoded())).orElse(null);
+        if (encodedObjectPageBytes(encodedBytes, values.size(), token) <= MAX_OBJECT_PAGE_BYTES)
+            return CompletableFuture.completedFuture(
+                    new ZLinkLocationPage<>(List.copyOf(values), token));
+        if (itemPositions.isEmpty())
+            return CompletableFuture.completedFuture(
+                    new ZLinkLocationPage<>(
+                            List.of(),
+                            batchStart.map(next -> encodeCursor(next.encoded())).orElse(null)));
+        var removed = values.remove(values.size() - 1);
+        encodedBytes -= encodedObjectBytes(removed);
+        int remainingBytes = encodedBytes;
+        var position = itemPositions.remove(itemPositions.size() - 1);
+        if (itemPositions.isEmpty())
+            return fitObjectPage(
+                    prefix, values, remainingBytes, itemPositions, batchStart, batchStart);
+        return stores.unifiedStore()
+                .list(prefix, position.start(), position.rowsBefore(), OPEN)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthorityPage page))
+                                return CompletableFuture.failedFuture(
+                                        new IllegalStateException("location scan cursor expired"));
+                            return fitObjectPage(
+                                    prefix,
+                                    values,
+                                    remainingBytes,
+                                    itemPositions,
+                                    page.nextCursor(),
+                                    batchStart);
+                        });
+    }
+
+    private record BatchPosition(Optional<ZLinkAuthorityScanCursor> start, int rowsBefore) {}
 
     static int encodedObjectPageBytes(
             int encodedItemsBytes, int itemCount, String continuationToken) {

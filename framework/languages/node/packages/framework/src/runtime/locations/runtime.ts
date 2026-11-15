@@ -1558,6 +1558,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     let cursor =
       requestedCursor === undefined ? undefined : PublicAuthorityScanCursor.from(requestedCursor);
     const items: ZLinkLocationObjectEntry[] = [];
+    const itemRows: { start: ZLinkAuthorityScanCursor | undefined; rows: number }[] = [];
     let encodedItemsBytes = 0;
     const prefix = filter.objectKind === 'actor' ? 'zla1:a:' : 'zla1:s:';
     for (;;) {
@@ -1608,6 +1609,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           break;
         }
         items.push(projected);
+        itemRows.push({ start: batchCursor, rows: index + 1 });
         encodedItemsBytes = candidateItemsBytes;
       }
       cursor = result.nextCursor;
@@ -1623,6 +1625,27 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           if (consumed.kind === 'scanExpired')
             throw new Error('The authority query snapshot expired.');
           cursor = consumed.nextCursor;
+        }
+        while (
+          this.encodedObjectPageSize(encodedItemsBytes, items.length, cursor?.encoded) >
+          4 * 1024 * 1024
+        ) {
+          encodedItemsBytes -= this.encodedObjectSize(items.pop()!);
+          const position = itemRows.pop()!;
+          if (itemRows.length === 0) {
+            cursor = batchCursor;
+            break;
+          }
+          const prior = await this.stores.authorityStore.listAuthorities(
+            prefix,
+            position.start,
+            position.rows - 1,
+            signal
+          );
+          if (prior.kind === 'scanExpired') {
+            throw new Error('The authority query snapshot expired.');
+          }
+          cursor = prior.nextCursor;
         }
         return { items, continuationToken: cursor?.encoded };
       }
