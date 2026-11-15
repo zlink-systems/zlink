@@ -26,6 +26,9 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.time.Duration;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
@@ -39,6 +42,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.net.Socket;
 
 final class ZLinkJavaStreamSocketAsyncTerminalTest {
     @Test
@@ -387,6 +391,88 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
             assertTrue(
                     returnedBeforeRelease,
                     "async bound Session push waited for the socket state lane: " + blockedAt);
+        }
+    }
+
+    @Test
+    void receiveDoesNotWaitForSynchronousBoundSessionSubmitOnTheStateLane() throws Exception {
+        CountDownLatch sendEntered = new CountDownLatch(1);
+        CountDownLatch releaseSend = new CountDownLatch(1);
+        byte[] payload = "ready-before-send".getBytes(StandardCharsets.UTF_8);
+        byte[] rawRecord =
+                ByteBuffer.allocate(6 + payload.length)
+                        .putShort((short) 0)
+                        .putInt(payload.length)
+                        .put(payload)
+                        .array();
+        try (var context = Zlink.createContext();
+                var stream =
+                        new ZLinkJavaStreamSocket(
+                                context.createStreamSocket(),
+                                null,
+                                (rid, parts, flags) -> {
+                                    sendEntered.countDown();
+                                    try {
+                                        if (!releaseSend.await(5, TimeUnit.SECONDS)) {
+                                            throw new AssertionError(
+                                                    "synchronous test submit was not released");
+                                        }
+                                    } catch (InterruptedException interrupted) {
+                                        Thread.currentThread().interrupt();
+                                        throw new AssertionError(
+                                                "synchronous test submit was interrupted",
+                                                interrupted);
+                                    }
+                                    return true;
+                                });
+                Message frame = Message.from("bound-session-frame")) {
+            stream.bind("tcp://127.0.0.1:0");
+            var endpoint = java.net.URI.create(stream.lastEndpoint());
+            try (Socket client = new Socket()) {
+                client.connect(
+                        new InetSocketAddress(endpoint.getHost(), endpoint.getPort()),
+                        (int) Duration.ofSeconds(5).toMillis());
+                client.getOutputStream().write(rawRecord);
+                client.getOutputStream().flush();
+                assertTrue(stream.waitForReadable(Duration.ofSeconds(5)));
+
+                CompletableFuture<Boolean> send =
+                        CompletableFuture.supplyAsync(
+                                () ->
+                                        stream.sendBoundSessionPush(
+                                                RoutingId.from("test-peer"),
+                                                List.of(frame),
+                                                SendFlags.NONE));
+                assertTrue(sendEntered.await(5, TimeUnit.SECONDS));
+
+                CountDownLatch recvStarted = new CountDownLatch(1);
+                CompletableFuture<
+                                systems.zlink.framework.runtime.internal.backend
+                                        .ZLinkBackendStreamReceived>
+                        receive =
+                                CompletableFuture.supplyAsync(
+                                        () -> {
+                                            recvStarted.countDown();
+                                            return stream.recv();
+                                        });
+                assertTrue(recvStarted.await(5, TimeUnit.SECONDS));
+                boolean receivedBeforeSendRelease = true;
+                try {
+                    var received = receive.get(1, TimeUnit.SECONDS);
+                    assertTrue(received != null);
+                    received.close();
+                } catch (java.util.concurrent.TimeoutException blocked) {
+                    receivedBeforeSendRelease = false;
+                } finally {
+                    releaseSend.countDown();
+                }
+                assertTrue(send.get(5, TimeUnit.SECONDS));
+                assertTrue(
+                        receivedBeforeSendRelease,
+                        "recv waited for a synchronous STREAM submit on the socket state lane");
+            }
+        } finally {
+            releaseSend.countDown();
         }
     }
 

@@ -149,7 +149,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     @Override
     public ZLinkBackendStreamReceived recv() {
-        return inStateLane(this::recvOnLane);
+        return recvOnLane();
     }
 
     private ZLinkBackendStreamReceived recvOnLane() {
