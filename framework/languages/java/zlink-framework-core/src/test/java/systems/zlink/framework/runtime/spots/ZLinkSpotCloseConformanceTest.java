@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -1193,7 +1194,7 @@ final class ZLinkSpotCloseConformanceTest {
 
     public record Probe(String spotId) {}
 
-    public record Reply(String spotId) {}
+    public record Reply(@Nullable String spotId) {}
 
     public record JoinRequest(String spotId) {}
 
