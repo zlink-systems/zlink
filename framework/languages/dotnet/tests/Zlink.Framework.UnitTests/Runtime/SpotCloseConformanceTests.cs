@@ -1144,8 +1144,9 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         try
         {
             await initialized.Task.WaitAsync(Wait);
-            host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
-                .InvalidateSpotRoute(new ZLinkSpotLocationKey(spotId));
+            await host
+                .Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+                .InvalidateSpotRouteAsync(new ZLinkSpotLocationKey(spotId));
             var before = GetIngressPermits();
             var arrivedDuringInitialization = host.RequestInstanceAsync(spotId, "after-pending");
             await ObserveMappedIngressAsync().WaitAsync(Wait);
@@ -2438,8 +2439,9 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             await ObserveOwnerAcceptanceAsync(closing).WaitAsync(Wait);
             host.State.ReleaseOnClosing.TrySetResult();
             Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
-            host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
-                .InvalidateSpotRoute(new ZLinkSpotLocationKey(spotId));
+            await host
+                .Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+                .InvalidateSpotRouteAsync(new ZLinkSpotLocationKey(spotId));
             var after = await host.RequestInstanceAsync(spotId, "after-ready-send").WaitAsync(Wait);
             Assert.NotEqual(first.Generation, after.Generation);
             Assert.Contains("ready-send", host.State.InstanceHandlerMarkers);
