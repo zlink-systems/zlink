@@ -164,9 +164,12 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   async find(actorId: string, signal?: AbortSignal): Promise<ActorRef | undefined> {
     throwIfAborted(signal);
-    if (this.relocationStaged.has(actorId)) return undefined;
     const state = this.states.get(actorId);
-    if (state?.actor !== undefined && state.nativeActorRef !== undefined) {
+    if (
+      !this.relocationStaged.has(actorId) &&
+      state?.actor !== undefined &&
+      state.nativeActorRef !== undefined
+    ) {
       return this.actorRefForState(state);
     }
     return await this.options.actorRefResolver?.resolveActorRef(actorId, signal);
