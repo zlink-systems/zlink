@@ -415,7 +415,8 @@ class stateful_object_runtime_t
     retained_relocation_source (object_ref_t owner) const;
 
     task_t<std::pair<stateful_error_t, membership_token_t>>
-    begin_membership_move_async (const object_ref_t &actor, const object_ref_t &target_spot);
+    begin_membership_move_async (const object_ref_t &actor,
+                                 std::optional<object_ref_t> target_spot);
     task_t<std::pair<stateful_error_t, membership_token_t>>
     begin_remote_membership_move_async (const object_ref_t &actor, object_ref_t target_spot);
     task_t<std::pair<stateful_error_t, object_ref_t>>
