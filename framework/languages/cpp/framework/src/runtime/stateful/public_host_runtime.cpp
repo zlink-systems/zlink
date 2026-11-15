@@ -218,8 +218,9 @@ std::pair<std::uint32_t, std::uint32_t> stateful_failure_pair (stateful::statefu
             return {static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
                     static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
         case stateful::stateful_error_t::unavailable:
-            return {static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
-                    static_cast<std::uint32_t> (protocol::framework_error_code::none)};
+            // Unavailable's representative code (error model §5); schema pins it to internalError.
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected)};
         case stateful::stateful_error_t::conflict:
             // Source-local conflicts are InvalidOperation (error model §2, §5).
             // A remote owner's unavailable result is classified at its boundary.
