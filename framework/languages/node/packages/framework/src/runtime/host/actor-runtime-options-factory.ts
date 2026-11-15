@@ -271,7 +271,6 @@ export class ZLinkActorRuntimeOptionsFactory {
       nodeProvider: this.options.meshNode,
       completionTableProvider: this.options.meshCompletions,
       locationResolver: () => locationResolver,
-      routeTransport: this.options.routeTransport,
       transportDeliveryGate: () =>
         this.options.providerResolver?.get?.(
           ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE as unknown as Type<ZLinkInternalActorTransportDeliveryGate>

@@ -53,13 +53,15 @@ export class ZLinkLocationLifecycle {
     entryMeshName = '',
     private readonly authorityStore?: ZLinkAuthorityStore,
     spotStore?: ZLinkSpotLocationStore,
-    invalidateSpotRoute?: (spotId: RoutingId) => void
+    invalidateSpotRoute?: (spotId: RoutingId) => void,
+    observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void
   ) {
     this.actorClaims = new ZLinkActorLocationClaims(
       runtime,
       actorStore,
       entryMeshName,
-      authorityStore
+      authorityStore,
+      observeActorAuthorityVersion
     );
     this.spotClaims = new ZLinkSpotLocationClaims(
       runtime,
