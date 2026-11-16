@@ -66,12 +66,17 @@ cross-language conformance mechanism: every generated codec, and every
 transitional handwritten codec until its swap, must accept and produce the same
 declared bytes and failures.
 
+The channel envelope header's normative source is `framework/runtime/protocol/channel-header-v1.proto`, not
+the service-wire schema. Each runtime's header codec is generated from that `.proto` by the official protobuf
+generator, and no handwritten encode/decode path exists. Header value validation and format-change rules are
+owned by [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract).
+
 ### Normative Format by Layer
 
 | Layer | Normative format | Owner and interpretation |
 |---|---|---|
 | Location Store records | Canonical JSON envelope | [Location runtime §2.4](../05-location-relocation/01-location-runtime.en.md) defines the JSON record's byte layout precisely; the provider treats it as opaque bytes. |
-| ClientServer application records | JSON `0xF2` channel envelope | The one-directional service boundary where a Client starts a send/request and a Server runs the handler and reply, the [ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel) ([details](03-client-server-channel.en.md)), owns this envelope's application-record contract and its JSON semantics. |
+| ClientServer application records | protobuf `ChannelHeader` channel envelope | The one-directional service boundary where a Client starts a send/request and a Server runs the handler and reply, the [ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel) ([details](03-client-server-channel.en.md)), owns this envelope's application-record contract, its value validation, and its semantics. |
 | Internal mesh commands and relocation direct-transfer stream | `service-wire-v1.schema.json` binary formats | Generated codecs own command frames; `relocation-envelope-v1` is its big-endian logical stream. |
 | Application payload bytes | Opaque, application-owned bytes | The Framework validates only the declared envelope boundary and does not assign business meaning to the bytes. |
 
@@ -394,7 +399,7 @@ owns physical pipe selection and replacement.
 
 - A ClientServer connection fixes a single application-attached channel name, the [ChannelName](../00-foundation/02-glossary.en.md#channelname), and a client-to-server direction.
 - The only service-wire records on a ClientServer connection are the infrastructure commands: the client starts `hello` as a Core request and sends/answers the liveness pair; the server answers `admit`/`reject` only on that hello request's reply leg and pushes `update` and liveness.
-- Application records on a ClientServer connection do not use service-wire commands. They ride the channel envelope — the two-frame record `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` all four runtimes share for channel messaging. A request rides the Core request envelope and its response/error rides the matching reply leg; a one-way command is a plain send. `channelSend`(18)/`channelRequest`(19) and the command 20 reply travel only on RouteMesh connections.
+- Application records on a ClientServer connection do not use service-wire commands. They ride the channel envelope — the two-frame record `[protobuf ChannelHeader, payload]` all four runtimes share for channel messaging. A request rides the Core request envelope and its response/error rides the matching reply leg; a one-way command is a plain send. `channelSend`(18)/`channelRequest`(19) and the command 20 reply travel only on RouteMesh connections. The first part of the application payload carried by RouteMesh `channelSend`(18)/`channelRequest`(19) and `spotSend`(21)/`spotRequest`(22) is the same `ChannelHeader`.
 - [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract) defines the internal wire representation of ClientServer application metadata.
 - Reusing a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
 

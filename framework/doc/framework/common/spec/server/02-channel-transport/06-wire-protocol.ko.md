@@ -59,12 +59,17 @@ self-test, generated-asset check, decoder-fixture check와 schema의 golden fixt
 수단이다. 생성된 모든 codec과 교체 전의 전환 손작성 codec은 선언한 같은 bytes와 failure를 만들고
 받아들여야 한다.
 
+Channel envelope header는 service wire schema가 아니라 `framework/runtime/protocol/channel-header-v1.proto`가
+규범 기준이다. 네 runtime의 header codec은 이 `.proto`에서 공식 protobuf 생성기로 만들며 손으로 쓴
+encode/decode 경로를 두지 않는다. Header의 값 검증과 형식 변경 규칙은
+[ClientServer Channel §5.3](03-client-server-channel.ko.md#53-application-record-계약)이 소유한다.
+
 ### 계층별 규범 형식
 
 | 계층 | 규범 형식 | 소유자와 해석 |
 |---|---|---|
 | Location Store record | canonical JSON envelope | [Location runtime §2.4](../05-location-relocation/01-location-runtime.ko.md)가 JSON record의 byte 배치를 정확히 정의하며 provider는 opaque bytes로 취급한다. |
-| ClientServer application record | JSON `0xF2` channel envelope | Client가 send/request를 시작하고 Server가 handler 실행과 reply를 담당하는 단방향 service 경계인 [ClientServer Channel](../00-foundation/02-glossary.ko.md#clientserver-channel)([상세](03-client-server-channel.ko.md))의 application-record 계약이 이 envelope와 JSON 의미를 소유한다. |
+| ClientServer application record | protobuf `ChannelHeader` channel envelope | Client가 send/request를 시작하고 Server가 handler 실행과 reply를 담당하는 단방향 service 경계인 [ClientServer Channel](../00-foundation/02-glossary.ko.md#clientserver-channel)([상세](03-client-server-channel.ko.md))의 application-record 계약이 이 envelope의 값 검증과 의미를 소유한다. |
 | Internal mesh command와 relocation 직접 전송 stream | `service-wire-v1.schema.json` binary format | 생성된 codec이 command frame을 소유하며 `relocation-envelope-v1`은 그 big-endian logical stream이다. |
 | Application payload bytes | opaque, application 소유 bytes | Framework는 선언한 envelope 경계만 검증하며 bytes에 업무 의미를 부여하지 않는다. |
 
@@ -354,7 +359,7 @@ physical pipe 선택·교체는 [Core ROUTER §10.1](../../../../../../../core/d
 
 - ClientServer connection은 application이 붙인 채널 이름인 [ChannelName](../00-foundation/02-glossary.ko.md#channelname) 하나와 client-to-server 방향을 고정한다.
 - ClientServer connection에서 service wire record는 infrastructure command에만 사용한다. client는 `hello`를 Core request로 시작하고 liveness 쌍을 주고받으며, server는 그 hello request의 reply leg로만 `admit`/`reject`를 돌려주고 `update`와 liveness를 push한다.
-- ClientServer connection의 application record는 service wire command를 사용하지 않는다. 네 runtime이 channel messaging에 공유하는 channel envelope — `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` 두 frame record — 를 탄다. request는 Core request envelope을 타고 response/error는 그 reply leg로 돌아오며, one-way command는 plain send다. `channelSend`(18)/`channelRequest`(19)와 command 20 reply는 RouteMesh connection에서만 오간다.
+- ClientServer connection의 application record는 service wire command를 사용하지 않는다. 네 runtime이 channel messaging에 공유하는 channel envelope — `[protobuf ChannelHeader, payload]` 두 frame record — 를 탄다. request는 Core request envelope을 타고 response/error는 그 reply leg로 돌아오며, one-way command는 plain send다. `channelSend`(18)/`channelRequest`(19)와 command 20 reply는 RouteMesh connection에서만 오간다. RouteMesh의 `channelSend`(18)/`channelRequest`(19)와 `spotSend`(21)/`spotRequest`(22)가 싣는 application payload의 첫 part도 같은 `ChannelHeader`다.
 - ClientServer application metadata의 내부 wire 표현은 [ClientServer Channel §5.3](03-client-server-channel.ko.md#53-application-record-계약)이 정한다.
 - node 여럿이 이름으로 서로를 찾는 [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh)의 record를 ClientServer connection에 재사용하거나 반대로 재사용하면 protocol error다.
 

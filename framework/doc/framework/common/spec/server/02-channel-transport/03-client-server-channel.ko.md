@@ -384,42 +384,47 @@ reply의 연결 정보를 원래 ClientServer request의 값으로 바꾸지 않
 
 ### 5.3 Application record 계약
 
-ClientServer application record의 내부 wire 계약은 JSON header의 `metadata` 필드에
-[application metadata](02-channel-messaging.ko.md#9-metadata와-관측)를 string→string 객체로
-담는 것이다. 필드가 없으면 빈 metadata로 해석한다. 문자·크기 상한·오류·reply 규칙은 channel
-messaging §9를 따른다. 그 절의 전체 크기는 key와 value 및 구조 overhead를 포함한 metadata 객체
-전체의 UTF-8 JSON encoding 길이다. Header의 `metadata` field 이름과 다른 field는 이 크기에 포함하지
-않는다. 이 길이는 최소 escape 표현으로 잰다 — key와 value 문자열에서 `"`, `\`와 U+0001–U+001F만
-escape하고(제어 문자는 `\b` `\f` `\n` `\r` `\t`가 있으면 그것을, 없으면 소문자 `\u00xx`를 쓴다) 나머지
-문자는 UTF-8 그대로 쓰며, 구조 문자 사이에 공백을 두지 않는다. 송신은 이 표현으로 쓰고, 수신은 받은 값을
-이 표현으로 다시 잰 길이로 판정한다. 업무 payload frame에는 metadata를 넣지 않는다.
+ClientServer application record의 header frame은 `framework/runtime/protocol/channel-header-v1.proto`의
+`ChannelHeader` message를 protobuf로 encoding한 bytes다. 네 runtime의 header codec은 이 `.proto`에서 공식
+protobuf 생성기로 만든다([wire protocol §1](06-wire-protocol.ko.md#1-schema와-생성-경계)). Header의 `metadata`
+field는 [application metadata](02-channel-messaging.ko.md#9-metadata와-관측)를 `MetadataEntry`(key, value)
+목록으로 담는다. Entry가 없으면 빈 metadata다. 송신은 key의 UTF-8 byte 오름차순으로 쓰고, 수신은 순서와
+관계없이 받는다. 문자·크기 상한·오류·reply 규칙은 channel messaging §9를 따르며, 그 절의 전체 크기는
+`metadata` entry들의 protobuf encoded 길이의 합이다. 업무 payload frame에는 metadata를 넣지 않는다.
 
 <a id="envelope-header-grammar"></a>
-**Header 문법.** JSON header frame은 BOM 없는 UTF-8로 쓴 [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) JSON
-object 하나다. 위반은 protocol error이며, 그 request에 reply를 보낼지는
-[channel messaging §8](02-channel-messaging.ko.md#reply-route-remains)이 정한다.
+**Header 문법.** Header frame을 `ChannelHeader`로 parse하지 못하면 protocol error이며, 그 request에 reply를
+보낼지는 [channel messaging §8](02-channel-messaging.ko.md#reply-route-remains)이 정한다.
 
 <a id="envelope-header-structure"></a>
-구조 규칙은 header를 object 하나로 읽을 수 있는지를 정한다.
+값 규칙은 decode 뒤 Framework 검증 한 곳이 판정한다. Protobuf runtime이 parse 단계에서 거절하는 입력도 같은
+protocol error로 처리한다.
 
-- Object 뒤에는 JSON 공백만 올 수 있다. NUL을 포함한 다른 byte가 오면 위반이다.
-- 문자열은 유효한 Unicode여야 한다. 짝이 없는 surrogate를 나타내는 `\u` escape는 위반이다.
-- Field 이름은 아래 표의 이름과 대소문자까지 일치해야 한다. 표의 field가 한 object에 두 번 나오거나
-  `metadata` object에 같은 key가 두 번 나오면 위반이다. 표에 없는 key는 몇 번 나오든 값과 함께 무시한다.
+- 문자열 field는 유효한 UTF-8이며 NUL을 포함하지 않는다.
+- `kind`가 `CHANNEL_KIND_UNSPECIFIED`이거나 `channel_name`·`message_name`·`content_type`이 비어 있으면 위반이다.
+- Enum field에 정의되지 않은 값이 오면 위반이다.
+- `metadata`에 같은 key가 두 번 나오면 위반이다.
+- 정의되지 않은 field 번호는 protobuf 규칙대로 건너뛴다.
 
-Field 규칙은 표의 각 field 값을 정한다. 정수 field의 값은 소수점과 지수가 없는 정수 literal이며 표의 값
-집합에 속해야 한다. `flowId`와 `flowOrigin`의 값을 검사하는지는
+`flow_id`와 `flow_origin`의 값을 검사하는지는
 [Request 연결과 업무 흐름 식별 §4](../06-observability/04-flow-correlation.ko.md#4-flow를-만드는-시점)가
-정하며, 이 표는 그 절이 검사를 요구할 때 적용한다.
+정하며, 아래 표는 그 절이 검사를 요구할 때 적용한다.
 
-| Field | JSON 값 |
-|---|---|
-| `formatMarker` | 정수 `242`(`0xF2`) |
-| `kind` | 정수 `1` request, `2` response, `3` command, `4` publish, `5` error |
-| `channelName`, `messageName`, `contentType` | 문자열 |
-| `correlationId`, `deadline`, `errorCode`, `errorMessage`, `flowId`, `source`, `topic` | 문자열 또는 `null` |
-| `flowOrigin` | 정수 `1` inbound, `2` timer, `3` application, `4` lifecycle 또는 `null` |
-| `metadata` | 값이 모두 문자열인 object |
+| Field | 번호 | 값 |
+|---|---|---|
+| `kind` | 1 | `REQUEST`(1), `RESPONSE`(2), `COMMAND`(3), `PUBLISH`(4), `ERROR`(5) |
+| `channel_name`, `message_name`, `content_type` | 2, 3, 4 | 문자열 |
+| `correlation_id`, `deadline`, `error_code`, `error_message` | 5, 6, 7, 8 | 선택 문자열 |
+| `flow_id` | 9 | 선택 문자열 |
+| `flow_origin` | 10 | 선택. `INBOUND`(1), `TIMER`(2), `APPLICATION`(3), `LIFECYCLE`(4) |
+| `source`, `topic` | 11, 12 | 선택 문자열 |
+| `metadata` | 13 | `MetadataEntry` 목록 |
+
+<a id="envelope-header-evolution"></a>
+**형식 변경 규칙.** 같은 service protocol version 안에서 허용하는 변경은 새 field 번호로 선택 field를 추가하는
+것 하나다. Field 번호 재사용, 타입이나 의미 변경, 필수 field 추가·삭제와 필수 여부 변경, enum 값 추가는
+service protocol version을 올리며, 다른 version의 peer는 hello에서 거절한다. 삭제한 field 번호는 `reserved`로
+막고 다시 쓰지 않는다.
 
 이 문법은 field가 있어야 하는지와 그 값의 의미를 바꾸지 않는다. 그것은 이 문서와
 [channel messaging](02-channel-messaging.ko.md)의 각 절이 정한다.
