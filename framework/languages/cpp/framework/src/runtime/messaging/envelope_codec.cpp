@@ -216,8 +216,11 @@ using channel_header_proto_t = zlink::framework::channel::v1::ChannelHeader;
 result_t<void> validate_protocol_header (const envelope_header_t &header,
                                          bool capture_flow,
                                          const channel_header_proto_t *proto = nullptr,
-                                         bool parser_validated_utf8 = false)
+                                         bool parser_validated_utf8 = false,
+                                         bool *metadata_invalid = nullptr)
 {
+    if (metadata_invalid)
+        *metadata_invalid = false;
     const auto channel_name =
       proto ? std::string_view (proto->channel_name ()) : std::string_view (header.channel_name);
     const auto message_name =
@@ -242,7 +245,6 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
     const auto has_source = proto ? proto->has_source () : header.source.has_value ();
     const auto has_topic = proto ? proto->has_topic () : header.topic.has_value ();
     if (!valid_text (channel_name) || !valid_text (message_name) || !valid_text (content_type)
-        || !valid_text (correlation_id)
         || !valid_optional (has_deadline, proto             ? std::string_view (proto->deadline ())
                                           : header.deadline ? std::string_view (*header.deadline)
                                                             : std::string_view{})
@@ -264,19 +266,28 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
                 || !(parser_validated_utf8 ? valid_proto_string (entry.key ())
                                            : valid_string (entry.key ()))
                 || !(parser_validated_utf8 ? valid_proto_string (entry.value ())
-                                           : valid_string (entry.value ())))
+                                           : valid_string (entry.value ()))) {
+                if (metadata_invalid)
+                    *metadata_invalid = true;
                 return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                                 "ZLink envelope metadata key/value is invalid");
+            }
             for (int previous = 0; previous < index; ++previous) {
-                if (proto->metadata (previous).key () == entry.key ())
+                if (proto->metadata (previous).key () == entry.key ()) {
+                    if (metadata_invalid)
+                        *metadata_invalid = true;
                     return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                                     "ZLink envelope metadata key is duplicated");
+                }
             }
             const auto entry_size = entry.ByteSizeLong ();
             if (entry_size
-                > protocol::metadataBytes - std::min (encoded_size, protocol::metadataBytes))
+                > protocol::metadataBytes - std::min (encoded_size, protocol::metadataBytes)) {
+                if (metadata_invalid)
+                    *metadata_invalid = true;
                 return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                                 "ZLink envelope metadata exceeds 1024 bytes");
+            }
             encoded_size += entry_size;
         }
     } else {
@@ -362,18 +373,31 @@ channel_header_proto_t to_proto (const envelope_header_t &header,
     return proto;
 }
 
-zlink::message_t serialize_header (const channel_header_proto_t &proto)
+std::size_t serialized_header_size (const channel_header_proto_t &proto)
 {
     const auto size = proto.ByteSizeLong ();
     if (size > static_cast<std::size_t> (std::numeric_limits<int>::max ()))
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "ZLink envelope header is too large");
+    return size;
+}
+
+void serialize_header_into (const channel_header_proto_t &proto, std::span<std::byte> destination)
+{
+    const auto size = serialized_header_size (proto);
+    if (destination.size () != size
+        || !proto.SerializeToArray (destination.data (), static_cast<int> (size)))
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "ZLink envelope header cannot be encoded");
+}
+
+zlink::message_t serialize_header (const channel_header_proto_t &proto)
+{
+    const auto size = serialized_header_size (proto);
     auto message = zlink::message_t::allocate (size);
     if (!message.valid ())
         throw std::bad_alloc ();
-    if (!proto.SerializeToArray (message.data (), static_cast<int> (size)))
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "ZLink envelope header cannot be encoded");
+    serialize_header_into (proto, {message.data (), size});
     return message;
 }
 
@@ -450,19 +474,36 @@ decode_header_bytes (std::span<const std::byte> bytes,
             header.flow_origin = static_cast<flow_origin_t> (proto.flow_origin ());
     }
 
-    auto valid = validate_protocol_header (header, capture_flow, &proto, true);
+    bool metadata_invalid = false;
+    auto valid = validate_protocol_header (header, capture_flow, &proto, true, &metadata_invalid);
     if (!valid) {
         if (rejection_context) {
-            if (proto.has_error_code ())
+            if (!valid_proto_string (proto.channel_name ()))
+                header.channel_name.clear ();
+            if (!valid_proto_string (proto.message_name ()))
+                header.message_name.clear ();
+            if (!valid_proto_string (proto.content_type ()))
+                header.content_type.clear ();
+            if (!valid_correlation_id (proto.correlation_id ()))
+                header.correlation_id.clear ();
+            if (proto.has_deadline () && valid_proto_string (proto.deadline ()))
+                header.deadline = header_text_t::view (proto.deadline ());
+            else
+                header.deadline.reset ();
+            if (proto.has_error_code () && valid_proto_string (proto.error_code ()))
                 header.error_code = proto.error_code ();
-            if (proto.has_error_message ())
+            if (proto.has_error_message () && valid_proto_string (proto.error_message ()))
                 header.error_message = proto.error_message ();
-            if (proto.has_source ())
+            if (proto.has_source () && valid_proto_string (proto.source ()))
                 header.source = proto.source ();
-            if (proto.has_topic ())
+            if (proto.has_topic () && valid_proto_string (proto.topic ()))
                 header.topic = proto.topic ();
-            if (capture_flow && proto.has_flow_id ())
+            if (!metadata_invalid) {
+                header.flow_id.reset ();
+                header.flow_origin.reset ();
+            } else if (capture_flow && proto.has_flow_id ()) {
                 header.flow_id = proto.flow_id ();
+            }
             *rejection_context = header;
         }
         return result_t<envelope_header_t>::failure (valid.error_kind (), valid.error ()->what ());
@@ -566,11 +607,11 @@ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_paylo
       std::move (proto), std::move (body));
     return [state] (const std::optional<std::string> &flow_id,
                     std::optional<flow_origin_t> flow_origin) {
-        auto message = serialize_header (state->first);
+        const auto header_size = serialized_header_size (state->first);
         return protocol::encode_application_envelope_message (
-          message.size (),
-          [&] (std::span<std::byte> destination) {
-              std::memcpy (destination.data (), message.data (), message.size ());
+          header_size,
+          [state] (std::span<std::byte> destination) {
+              serialize_header_into (state->first, destination);
           },
           state->second.bytes (), flow_id, flow_origin);
     };

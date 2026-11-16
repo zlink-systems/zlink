@@ -23,10 +23,6 @@ endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(Threads REQUIRED)
-find_package(protobuf CONFIG QUIET)
-if(NOT protobuf_FOUND)
-  find_package(Protobuf MODULE REQUIRED)
-endif()
 
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
@@ -39,6 +35,10 @@ option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP cli
 if(ZLINK_FRAMEWORK_CPP_TEST_PROBES AND ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   message(FATAL_ERROR
     "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
+endif()
+find_package(protobuf CONFIG QUIET)
+if(NOT protobuf_FOUND)
+  find_package(Protobuf MODULE REQUIRED)
 endif()
 option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
   "Stage Core and the C++ binding in a standalone Framework install" ON)
@@ -3401,7 +3401,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_sources(test_cpp_framework_route_payload_ownership PRIVATE
     tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_route_payload_ownership PRIVATE
-    framework/src ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    framework/src ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(test_cpp_framework_route_payload_ownership PRIVATE
+    protobuf::libprotobuf)
+  add_dependencies(test_cpp_framework_route_payload_ownership
+    zlink_framework_channel_header_proto)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_route_payload_ownership
     COMMAND test_cpp_framework_route_payload_ownership

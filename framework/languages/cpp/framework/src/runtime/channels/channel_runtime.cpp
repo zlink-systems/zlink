@@ -1895,10 +1895,9 @@ void route_client_t::submit_request_reply_message_erased (
     const auto deadline = request_started + effective_timeout;
     {
         runtime::messaging::client_call_codec_t codec;
-        // The endpoint and serializer plans already own the wire names.
-        // Only per-request fields belong in the deferred envelope header.
+        // Preserve the selected route and packet names in the deferred header.
         auto header = codec.create_envelope (
-          runtime::messaging::message_kind_t::request, {}, {},
+          runtime::messaging::message_kind_t::request, decode.router_channel_id, decode.packet_name,
           runtime::messaging::remaining_request_timeout (deadline), std::nullopt, std::nullopt, {});
         header.metadata = metadata;
         if (detail::message_flow_tracer_t (state->runtime->dispatch)
