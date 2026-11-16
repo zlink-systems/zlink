@@ -427,6 +427,34 @@ task_t<void> stateful_object_runtime_t::confirm_location_ready (
     return _lane.run_task (std::move (confirm));
 }
 
+task_t<std::vector<std::pair<authority_key_t, authority_snapshot_t>>>
+stateful_object_runtime_t::discard_location_execution (
+  runtime::serial_execution_queue_t::execution_admission_t lost)
+{
+    return _lane.run_task ([this, lost = std::move (lost)] {
+        std::vector<std::pair<authority_key_t, authority_snapshot_t>> authorities;
+        for (auto &[_, object] : _objects) {
+            const auto gate = object.execution_gate.lock ();
+            if (!gate
+                || lost (*gate)
+                     != runtime::serial_execution_queue_t::execution_status_t::ownership_lost)
+                continue;
+            // cancel_pending installs the existing terminal before scheduling
+            // cancellation. It also works while admission is temporarily closed.
+            gate->cancel_pending (
+              runtime::serial_execution_queue_t::execution_status_t::ownership_lost);
+            if (object.location_fence) {
+                authorities.emplace_back (object.reference.kind == object_kind_t::actor
+                                            ? actor_authority_key (object.reference.key)
+                                            : spot_authority_key (object.reference.key),
+                                          std::move (*object.location_fence));
+                object.location_fence.reset ();
+            }
+        }
+        return authorities;
+    });
+}
+
 task_t<void> stateful_object_runtime_t::recover_location_execution (
   std::shared_ptr<stateful_object_runtime_t> self,
   std::function<task_t<runtime::serial_execution_queue_t::execution_operation_t> (

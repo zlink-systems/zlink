@@ -1339,6 +1339,7 @@ public_host_runtime_t::accepted_record_authority (
         // The execution owner checks a Spot's current incarnation. Actor admission
         // validates the native object fence here, independently of sender availability.
         if ((query.target.kind == stateful::object_kind_t::actor
+             && query.requested_object_generation == query.target.object_generation
              && query.requested_authority_owner_generation
                   != query.target.authority_owner_generation)
             || query.target_node_routing_id != local.node_routing_id
