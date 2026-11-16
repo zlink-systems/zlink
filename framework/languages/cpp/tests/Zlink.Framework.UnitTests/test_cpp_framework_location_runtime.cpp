@@ -7994,6 +7994,30 @@ TEST_P (StoreOutageRetention, StaleOutsideEpisodeStillClaimsImmediately)
     registered_owner (false, false, -60);
 }
 
+TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardCanEnterLeaseLane)
+{
+    location_runtime_t runtime (store (), options, "discard-lane-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto token = *lease_access::snapshot (runtime)->token;
+    unsigned discards = 0;
+    runtime
+      .on_execution_discard ([&] (auto) {
+          return lease_access::lane (runtime).run_task ([&] {
+              ++discards;
+              EXPECT_FALSE (lease_access::snapshot (runtime)->token);
+              EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+          });
+      })
+      .result ()
+      .value ();
+    store ().release_owner_lease (token).result ().value ();
+    lease_access::heartbeat (runtime, clock_now.load ());
+    EXPECT_EQ (1u, discards);
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_NE (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+}
+
 TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardsSpotWideBeforeClaim)
 {
     registered_owner (true, false, -60);

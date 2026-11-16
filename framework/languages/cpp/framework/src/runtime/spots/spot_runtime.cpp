@@ -15257,8 +15257,9 @@ task_t<void> spot_node_runtime_t::request_location_execution_discard (
         return std::pair{state->native_node.lock (), state->discarded_authority_cleanup};
     });
     const auto &native = preparation.first;
-    auto authorities = native ? co_await native->objects ().discard_location_execution (allowed)
-                              : std::vector<std::pair<authority_key_t, authority_snapshot_t>>{};
+    std::vector<std::pair<authority_key_t, authority_snapshot_t>> authorities;
+    if (native)
+        authorities = co_await native->objects ().discard_location_execution (allowed);
     auto settled = std::make_shared<task_completion_source_t<void>> ();
     co_await state->lane.run_task ([state, allowed = std::move (allowed), settled] {
         auto spots = std::make_shared<std::vector<discarded_spot_t>> ();

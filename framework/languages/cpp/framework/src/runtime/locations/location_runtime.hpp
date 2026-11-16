@@ -482,20 +482,22 @@ class location_runtime_t
                   // discard and accepted membership additions to settle.
                   operation->submitted.complete (result_t<void>::success ());
                   detail::observe_task_terminal (
-                    operation->settled, [lane, lease, owner, operation] (const auto &) {
-                        lane->try_post ([lease, owner, operation] {
+                    operation->settled, [lane, lease, now, owner, operation] (const auto &) {
+                        auto progress = [lease, now, owner, operation] {
                             if (owner->stop.load (std::memory_order_acquire))
                                 return;
                             const auto current =
                               std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
-                            if (current->token)
+                            // During an outage, heartbeat_accept owns Store recovery
+                            // confirmation and progresses the registered cleanup.
+                            if (!current->outage && owner_lease_usable (*current, (*now) ()))
                                 operation->progress (*current->token);
-                        });
+                        };
+                        if (lane->is_on_lane ())
+                            progress ();
+                        else
+                            lane->try_post (std::move (progress));
                     });
-                  const auto current =
-                    std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
-                  if (owner_lease_usable (*current, (*now) ()))
-                      operation->progress (*current->token);
               });
         };
     }
@@ -1801,16 +1803,16 @@ class location_runtime_t
                         if (!expired)
                             co_return outcome;
                     } else {
-                        auto discards = co_await lease_lane (attempt, [runtime] {
-                            auto discards = std::make_shared<std::vector<task_t<void>>> ();
-                            for (const auto &observer : *runtime->_execution_discard_requests)
-                                discards->push_back (observer.discard ([] (const auto &) {
-                                    return serial_execution_queue_t::execution_status_t::
-                                      ownership_lost;
-                                }));
-                            return discards;
-                        });
-                        for (auto &discard : *discards)
+                        const auto observers = co_await lease_lane (
+                          attempt, [runtime] { return *runtime->_execution_discard_requests; });
+                        // Discard registers authority cleanup on the lease lane.
+                        // Invoke it after leaving that lane, including inline completions.
+                        std::vector<task_t<void>> discards;
+                        for (const auto &observer : observers)
+                            discards.push_back (observer.discard ([] (const auto &) {
+                                return serial_execution_queue_t::execution_status_t::ownership_lost;
+                            }));
+                        for (auto &discard : discards)
                             co_await discard;
                     }
                 } else {
