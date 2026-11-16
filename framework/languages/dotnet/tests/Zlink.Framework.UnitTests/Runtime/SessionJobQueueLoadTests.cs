@@ -15,6 +15,13 @@ public sealed class SessionJobQueueLoadTests
     [InlineData(true)]
     public async Task Stream_reply_terminal_closes_wrapper(bool handlerFailure)
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Stream_reply_terminal_closes_wrapper)
+            )
+        )
+            return;
         using var probe = new MessageFinalizerProbe();
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<SessionCount>();
