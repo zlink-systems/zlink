@@ -291,22 +291,47 @@ void receive_pressure_contract (int level)
         auto part = ladder::message ("permit");
         source.send (rid).message (part).submit ();
     }
-    auto held = jobs->try_reserve_supply_batch (2);
-    require (held && held.size () == 2, "could not occupy the queue capacity");
     std::atomic<bool> stop{false};
     std::atomic<unsigned> received{0};
     std::exception_ptr failure;
     ladder::receive_permit_evidence_t evidence;
+    unsigned long long running_before_release = 0;
+    unsigned long long resume_before_release = 0;
+    const auto check = [&] (bool condition, const char *reason) {
+        if (!condition) {
+            const auto pressure = jobs->pressure_metrics_snapshot ();
+            const auto peer = source_monitor.status ();
+            std::fprintf (
+              stderr,
+              "L%d permit pressure failure: paused_transition_count=%llu "
+              "running_transition_count=%llu flow_state_config_failure_count=%llu "
+              "flow_paused_connections=%llu flow_pause_applied_total=%llu "
+              "flow_resume_applied_total=%llu received=%u evidence.received=%llu "
+              "running_before_release=%llu resume_before_release=%llu\n",
+              level, static_cast<unsigned long long> (pressure.paused_transition_count),
+              static_cast<unsigned long long> (pressure.running_transition_count),
+              static_cast<unsigned long long> (pressure.flow_state_config_failure_count),
+              static_cast<unsigned long long> (peer.flow_paused_connections),
+              static_cast<unsigned long long> (peer.flow_pause_applied_total),
+              static_cast<unsigned long long> (peer.flow_resume_applied_total), received.load (),
+              static_cast<unsigned long long> (evidence.received), running_before_release,
+              resume_before_release);
+        }
+        require (condition, reason);
+    };
+    auto held = jobs->try_reserve_supply_batch (2);
+    check (held && held.size () == 2, "could not occupy the queue capacity");
     std::jthread receiver ([&] (std::stop_token token) {
         std::stop_callback cancel (token, [&] { stop = true; owner.signal_activity (); });
         try {
             evidence = ladder::receive_reserved (owner, jobs, stop,
               [&] (zlink::received_t &record, queue_t::permit_t *permit) {
-                  require (permit && static_cast<bool> (*permit)
-                               && jobs->snapshot ().permits_in_use != 0,
-                           "capacity shortage allowed receive without a permit");
-                  require (record.parts ().size () == 1 && record.parts ()[0].to_string () == "permit",
-                           "pressure contract payload changed");
+                  check (permit && static_cast<bool> (*permit)
+                           && jobs->snapshot ().permits_in_use != 0,
+                         "capacity shortage allowed receive without a permit");
+                  check (record.parts ().size () == 1
+                           && record.parts ()[0].to_string () == "permit",
+                         "pressure contract payload changed");
                   permit->release_for_handler_entry ();
                   if (++received == 5)
                       stop = true;
@@ -321,7 +346,21 @@ void receive_pressure_contract (int level)
         std::this_thread::yield ();
     const bool waited_without_receive = jobs->snapshot ().capacity_waiters == 1 && received == 0;
     const bool peer_paused = source_monitor.status ().flow_paused_connections != 0;
+    resume_before_release =
+      static_cast<unsigned long long> (source_monitor.status ().flow_resume_applied_total);
+    running_before_release =
+      static_cast<unsigned long long> (jobs->pressure_metrics_snapshot ().running_transition_count);
     held.release_without_handler ();
+    while (jobs->pressure_metrics_snapshot ().running_transition_count <= running_before_release
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const bool running_transition =
+      jobs->pressure_metrics_snapshot ().running_transition_count > running_before_release;
+    while (source_monitor.status ().flow_resume_applied_total <= resume_before_release
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const bool peer_resumed =
+      source_monitor.status ().flow_resume_applied_total > resume_before_release;
     while (!stop && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
     stop = true;
@@ -329,22 +368,19 @@ void receive_pressure_contract (int level)
     receiver.join ();
     if (failure)
         std::rethrow_exception (failure);
-    require (waited_without_receive, "full queue did not withhold ordinary receive");
-    require (peer_paused, "owner queue pressure did not reach the peer socket");
-    require (received == 5 && evidence.received == 5, "supply wake did not resume receive");
+    check (waited_without_receive, "full queue did not withhold ordinary receive");
+    check (peer_paused, "owner queue pressure did not reach the peer socket");
+    check (received == 5 && evidence.received == 5, "supply wake did not resume receive");
     const auto status = jobs->snapshot ();
     const auto pressure = jobs->pressure_metrics_snapshot ();
-    require (status.capacity_wait_count != 0 && status.permits_in_use == 0
-               && status.capacity_waiters == 0, "reservation or waiter leaked");
-    require (pressure.paused_transition_count != 0 && pressure.running_transition_count != 0
-               && pressure.flow_state_config_failure_count == 0,
-             "owner receive-flow pressure application failed");
-    while (source_monitor.status ().flow_paused_connections != 0
-           && std::chrono::steady_clock::now () < deadline)
-        std::this_thread::yield ();
-    const auto peer = source_monitor.status ();
-    require (peer.flow_paused_connections == 0 && peer.flow_resume_applied_total != 0,
-             "owner permit return did not resume the peer socket");
+    check (status.capacity_wait_count != 0 && status.permits_in_use == 0
+             && status.capacity_waiters == 0,
+           "reservation or waiter leaked");
+    check (pressure.paused_transition_count != 0 && pressure.running_transition_count != 0
+             && pressure.flow_state_config_failure_count == 0,
+           "owner receive-flow pressure application failed");
+    check (running_transition && peer_resumed,
+           "owner permit return did not resume the peer socket");
     std::printf ("L%d permit pressure: zero receive while full; supply wake resumed 5 records; "
                  "receive-flow pause/resume; no leaked permits/waiters\n", level);
 }
