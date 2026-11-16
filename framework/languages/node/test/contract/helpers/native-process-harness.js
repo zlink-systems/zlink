@@ -1,7 +1,7 @@
 const { fork } = require('node:child_process');
 const path = require('node:path');
 
-module.exports = function nativeProcessHarness(fixture, redisUrl) {
+module.exports = function nativeProcessHarness(fixture) {
   function startChild(children, options) {
     const child = fork(fixture, [], {
       cwd: path.resolve(__dirname, '../../..'),
@@ -19,7 +19,6 @@ module.exports = function nativeProcessHarness(fixture, redisUrl) {
         ZLINK_TEST_ENDPOINT: options.endpoint,
         ZLINK_TEST_ROUTING_ID: options.routingId,
         ZLINK_TEST_TARGET_ROUTING_ID: options.targetRoutingId,
-        ZLINK_TEST_REDIS_URL: redisUrl,
         ZLINK_TEST_REDIS_PREFIX: options.keyPrefix,
         ...(options.targetEndpoint === undefined
           ? {}

@@ -3,8 +3,58 @@ using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class RemoteRelayFrameAssemblerTests
+public sealed class RemoteRelayFrameAssemblerTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task SuccessfulRelayCompletionDoesNotThrowCancellation()
+    {
+        var cancellations = 0;
+        void Observe(
+            object? sender,
+            System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e
+        )
+        {
+            if (
+                e.Exception is OperationCanceledException
+                && new System.Diagnostics.StackTrace()
+                    .GetFrames()
+                    .Any(frame =>
+                        frame.GetMethod()?.DeclaringType?.DeclaringType
+                        == typeof(ZLinkRemoteRelayFrameAssembler)
+                    )
+            )
+                Interlocked.Increment(ref cancellations);
+        }
+        AppDomain.CurrentDomain.FirstChanceException += Observe;
+        try
+        {
+            var time = new ControllableTimeProvider();
+            using var assembler = new ZLinkRemoteRelayFrameAssembler(
+                TimeSpan.FromMinutes(1),
+                static () => CancellationToken.None,
+                time
+            );
+            for (ulong index = 0; index < 1_000; index++)
+            {
+                var armed = time.WaitForNextTimerAsync(TimeSpan.FromMinutes(1));
+                await AppendAsync(assembler, Key(index), [1], true);
+                await armed.WaitAsync(TimeSpan.FromSeconds(5));
+                var completed = await AppendAsync(assembler, Key(index), [2], false);
+                await assembler.CommitAsync(completed!);
+            }
+            await Task.Delay(100);
+            Assert.Equal(0, time.ActiveTimerCount);
+            output.WriteLine(
+                $"cancellation exceptions: {cancellations}; active timers: {time.ActiveTimerCount}"
+            );
+            Assert.True(cancellations == 0, $"relay cancellation exceptions: {cancellations}");
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= Observe;
+        }
+    }
+
     [Fact]
     public void RemoteRequestAdmissionBoundsProcessAndBindingIndependently()
     {

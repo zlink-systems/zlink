@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
-const { createClient } = require('redis');
+const { testRedisUrl, connectTestRedis } = require('./helpers/test-redis');
 const framework = require('../../packages/framework/dist');
 const redisLocations = require('../../packages/framework-locations-redis/dist');
 const frameworkInternal = require('../../packages/framework/dist/internal');
@@ -1847,36 +1847,8 @@ function userSpotCapacity(count) {
 }
 
 async function redisFixture(t) {
-  const candidates = [
-    process.env.ZLINK_REDIS_LOCATION_ENDPOINT,
-    process.env.ZLINK_REDIS_TEST_ENDPOINT,
-    '127.0.0.1:16379',
-    '127.0.0.1:6379'
-  ].filter(Boolean);
-  for (const endpoint of candidates) {
-    const url = endpoint.startsWith('redis://') ? endpoint : `redis://${endpoint}`;
-    const client = createClient({
-      url,
-      socket: { connectTimeout: 300, reconnectStrategy: false }
-    });
-    client.on('error', () => {});
-    try {
-      await Promise.race([
-        client.connect(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Redis probe timeout')), 500)
-        )
-      ]);
-      await client.ping();
-      return { url, client };
-    } catch {
-      try {
-        if (client.isOpen) await client.disconnect();
-      } catch {}
-    }
-  }
-  t.skip('Redis is not reachable.');
-  return undefined;
+  const client = await connectTestRedis(t);
+  return client === undefined ? undefined : { url: testRedisUrl, client };
 }
 
 async function cleanup(client, prefix) {

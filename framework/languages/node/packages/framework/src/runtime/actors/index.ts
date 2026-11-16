@@ -164,12 +164,8 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   async find(actorId: string, signal?: AbortSignal): Promise<ActorRef | undefined> {
     throwIfAborted(signal);
-    const state = this.states.get(actorId);
-    if (
-      !this.relocationStaged.has(actorId) &&
-      state?.actor !== undefined &&
-      state.nativeActorRef !== undefined
-    ) {
+    const state = this.publishedState(actorId);
+    if (state?.actor !== undefined && state.nativeActorRef !== undefined) {
       return this.actorRefForState(state);
     }
     return await this.options.actorRefResolver?.resolveActorRef(actorId, signal);
@@ -404,8 +400,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   /** @internal Uses the relocation owner's publication boundary for local dispatch. */
   resolveLocalActor(actorId: string): ZLinkActor | undefined {
-    if (this.relocationStaged.has(actorId)) return undefined;
-    return this.states.get(actorId)?.actor;
+    return this.publishedState(actorId)?.actor;
   }
 
   requireRelocationActorFactory(actorType: string): void {
@@ -720,6 +715,11 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   getState(actorId: string): ZLinkActorRuntimeState | undefined {
     return this.states.get(actorId);
+  }
+
+  /** @internal Returns state only when the Actor is published. */
+  publishedState(actorId: string): ZLinkActorRuntimeState | undefined {
+    return this.relocationStaged.has(actorId) ? undefined : this.states.get(actorId);
   }
 
   snapshotStates(): readonly ZLinkActorRuntimeState[] {

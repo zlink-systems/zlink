@@ -2,7 +2,6 @@ package systems.zlink.framework.locations.redis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -40,6 +39,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacity
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -167,10 +167,7 @@ final class ZLinkRedisAggregateRelocationCapacityLiveTest {
         }
 
         static Fixture open(String label) throws Exception {
-            String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-            assumeTrue(
-                    endpoint != null && !endpoint.isBlank(),
-                    "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+            String endpoint = ZLinkTestRedis.endpoint();
             var store =
                     new ZLinkRedisLocationStore(
                             new ZLinkRedisLocationOptions()
