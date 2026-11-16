@@ -1,7 +1,0 @@
-{
-  "RedisEndpoint": "127.0.0.1:22001",
-  "RedisKeyPrefix": "engine-lobby-1794836115-84632",
-  "MeshEndpoint": "tcp://127.0.0.1:22101",
-  "StreamEndpoint": "ws://127.0.0.1:22701",
-  "HttpEndpoint": "http://127.0.0.1:23300"
-}
