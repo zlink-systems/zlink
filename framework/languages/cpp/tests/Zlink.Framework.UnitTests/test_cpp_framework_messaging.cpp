@@ -131,201 +131,64 @@ int main ()
         if (no_deadline.deadline)
             return 175;
     }
-    // Pin the pre-streaming encoder's sorted fields, escaping, and null shape.
+    // ChannelHeader generated protobuf preserves Framework values and rejects invalid input.
     {
         namespace msg = zlink::framework::runtime::messaging;
         msg::envelope_codec_t codec;
         msg::envelope_header_t header;
-        const std::string empty_wire =
-          R"({"channelName":"","contentType":"application/json","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"formatMarker":242,"kind":1,"messageName":"","metadata":{},"source":null,"topic":null})";
-        for (int attempt = 0; attempt < 5; ++attempt) {
-            if (codec.encode_header (header).to_string () != empty_wire)
-                return 170;
+        header.kind = msg::message_kind_t::command;
+        header.channel_name = "orders";
+        header.message_name = "CreateOrder";
+        header.content_type = "application/json";
+        header.deadline = "2026-11-16T00:00:00.000Z";
+        header.metadata = {{"tenant", "t-1"}, {"locale", "ko-KR"}};
+        const auto encoded = codec.encode_header (header);
+        const auto decoded = codec.decode_header (encoded);
+        if (!decoded || decoded.value ().kind != header.kind
+            || decoded.value ().channel_name != header.channel_name
+            || decoded.value ().message_name != header.message_name
+            || decoded.value ().content_type != header.content_type
+            || decoded.value ().deadline != header.deadline
+            || decoded.value ().metadata != header.metadata) {
+            return 170;
         }
-        header.kind = msg::message_kind_t::error;
-        header.channel_name = "a\"\\\n\t\b\f\r";
-        header.message_name = "한글/😀";
-        header.content_type = "application/octet-stream";
-        header.correlation_id = "corr";
-        header.deadline = "2026-09-10T00:00:00Z";
-        header.error_code = "internal_failure";
-        header.error_message = std::string ("N\0", 2) + '\x1f';
-        header.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
-        header.flow_origin = zlink::framework::flow_origin_t::inbound;
-        header.metadata = {{"z", ""}, {"a\"", "한글"}};
-        header.source = "";
-        header.topic = "topic";
-        const std::string full_wire =
-          R"({"channelName":"a\"\\\n\t\b\f\r","contentType":"application/octet-stream","correlationId":"corr","deadline":"2026-09-10T00:00:00Z","errorCode":"internal_failure","errorMessage":"N\u0000\u001f","flowId":"01890a5d-ac96-774b-bcce-b302099a8057","flowOrigin":1,"formatMarker":242,"kind":5,"messageName":"한글/😀","metadata":{"a\"":"한글","z":""},"source":"","topic":"topic"})";
-        for (int attempt = 0; attempt < 5; ++attempt) {
-            if (codec.encode_header (header).to_string () != full_wire)
-                return 171;
-        }
-        // Exercise all ASCII escapes and valid UTF-8 boundaries against the
-        // original JSON serializer, including embedded NUL and long strings.
-        std::string text;
-        for (int value = 0; value < 128; ++value)
-            text.push_back (static_cast<char> (value));
-        text += "\xc2\x80\xdf\xbf\xe0\xa0\x80\xed\x9f\xbf\xef\xbf\xbf"
-                "\xf0\x90\x80\x80\xf4\x8f\xbf\xbf";
-        text += std::string (2048, 'x');
-        header.channel_name = text;
-        auto expected = nlohmann::json::parse (full_wire);
-        expected["channelName"] = text;
-        if (codec.encode_header (header).to_string () != expected.dump ())
-            return 172;
-        header.channel_name = "a\"\\\n\t\b\f\r";
-        if (codec.encode_header (header).to_string () != full_wire)
-            return 184;
-        for (const std::string invalid : {"\x80", "\xc0\x80", "\xc2", "\xe0\x80\x80",
-                                          "\xed\xa0\x80", "\xf4\x90\x80\x80", "\xf5\x80\x80\x80"}) {
+        for (const std::string invalid : {std::string ("\x80", 1), std::string ("a\0b", 3)}) {
             header.channel_name = invalid;
             bool rejected = false;
             try {
                 (void) codec.encode_header (header);
             }
-            catch (const nlohmann::json::type_error &error) {
-                rejected = error.id == 316;
+            catch (const zlink::framework::framework_exception_t &error) {
+                rejected =
+                  error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
             }
             if (!rejected)
                 return 173;
         }
-        // A failed replacement tuple must not be published as a cache hit;
-        // the prior valid tuple must encode exactly when rebuilt.
-        header.channel_name = "a\"\\\n\t\b\f\r";
-        if (codec.encode_header (header).to_string () != full_wire)
-            return 183;
-
-        const auto duplicate_fields = codec.decode_header (zlink::message_t::from (
-          R"({"unknown":{"nested":[1,true]},"metadata":{},"channelName":1,"formatMarker":242,"kind":3,"messageName":false,"contentType":"application/custom","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"source":null,"topic":null,"channelName":"last","messageName":"last-message"})"));
-        if (duplicate_fields
-            || duplicate_fields.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error
-            || std::string (duplicate_fields.error ()->what ())
-                   .find ("duplicate envelope header field")
-                 == std::string::npos) {
-            return 176;
+        header.channel_name = "orders";
+        header.metadata = {{"", "value"}};
+        bool rejected_empty_key = false;
+        try {
+            (void) codec.encode_header (header);
         }
-        // Field order and unknown fields do not affect a valid header.
-        const auto reordered = codec.decode_header (zlink::message_t::from (
-          R"({"unknown":{"nested":[1,true]},"metadata":{},"formatMarker":242,"kind":3,"contentType":"application/custom","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"source":null,"topic":null,"channelName":"last","messageName":"last-message"})"));
-        if (!reordered || reordered.value ().kind != msg::message_kind_t::command
-            || reordered.value ().channel_name != "last"
-            || reordered.value ().message_name != "last-message"
-            || reordered.value ().content_type != "application/custom"
-            || !reordered.value ().metadata.empty () || !reordered.value ().correlation_id.empty ()
-            || reordered.value ().deadline || reordered.value ().topic || reordered.value ().source
-            || reordered.value ().error_code || reordered.value ().error_message
-            || reordered.value ().flow_id || reordered.value ().flow_origin) {
-            return 176;
+        catch (const zlink::framework::framework_exception_t &error) {
+            rejected_empty_key =
+              error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
         }
-        const auto invalid_utf8 = codec.decode_header (zlink::message_t::from (
-          std::string (R"({"formatMarker":242,"kind":3,"channelName":"api","messageName":")")
-          + std::string ("\xc3\x28", 2) + R"(","contentType":"application/json","metadata":{}})"));
-        if (invalid_utf8
-            || invalid_utf8.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
-            return 1;
-        }
-        const auto scalar_metadata = codec.decode_header (zlink::message_t::from (
-          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":42})"));
-        if (scalar_metadata
-            || scalar_metadata.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
-            return 189;
-        }
-        const auto invalid_kind = codec.decode_header (zlink::message_t::from (
-          R"({"formatMarker":242,"kind":"3","channelName":"c","messageName":"m"})"));
-        if (invalid_kind
-            || invalid_kind.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
-            return 177;
-        }
-        const auto invalid_metadata = codec.decode_header (zlink::message_t::from (
-          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"number":1}})"));
-        if (invalid_metadata
-            || invalid_metadata.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
-            return 178;
-        }
-        const auto duplicate_metadata = codec.decode_header (zlink::message_t::from (
-          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":42,"metadata":{"last":"value"}})"));
-        if (duplicate_metadata
-            || duplicate_metadata.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error
-            || std::string (duplicate_metadata.error ()->what ())
-                   .find ("duplicate envelope header field")
-                 == std::string::npos) {
-            return 179;
-        }
-        const auto empty_metadata_key = codec.decode_header (zlink::message_t::from (
-          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":"value"}})"));
-        if (empty_metadata_key
-            || empty_metadata_key.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
+        if (!rejected_empty_key)
             return 185;
+        header.metadata.clear ();
+        header.kind = static_cast<msg::message_kind_t> (9);
+        bool rejected_unknown_kind = false;
+        try {
+            (void) codec.encode_header (header);
         }
-        const auto invalid_empty_metadata_key = codec.decode_header (zlink::message_t::from (
-          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":1}})"));
-        if (invalid_empty_metadata_key
-            || invalid_empty_metadata_key.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
-            return 186;
+        catch (const zlink::framework::framework_exception_t &error) {
+            rejected_unknown_kind =
+              error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
         }
-        const auto restored_empty_metadata_key = codec.decode_header (zlink::message_t::from (
-          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":1,"":"value"}})"));
-        if (restored_empty_metadata_key
-            || restored_empty_metadata_key.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
-            return 187;
-        }
-        const auto invalidated_empty_metadata_key = codec.decode_header (zlink::message_t::from (
-          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":"value","":1}})"));
-        if (invalidated_empty_metadata_key
-            || invalidated_empty_metadata_key.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
-            return 188;
-        }
-
-        // Envelope kind uses the protocol's integer enum, without numeric coercion.
-        for (const char *kind_value : {"0", "6", "3.75", "true", "4294967297"}) {
-            const std::string wire = std::string (R"({"formatMarker":242,"kind":)") + kind_value
-                                     + R"(,"channelName":"c","messageName":"m"})";
-            const auto decoded = codec.decode_header (zlink::message_t::from (wire));
-            if (decoded
-                || decoded.error_kind ()
-                     != zlink::framework::framework_error_kind_t::protocol_error) {
-                return 180;
-            }
-        }
-        for (const char *content_type : {static_cast<const char *> (nullptr), "null", "17"}) {
-            const std::string wire =
-              content_type == nullptr
-                ? R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m"})"
-                : std::string (
-                    R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","contentType":)")
-                    + content_type + "}";
-            bool dom_accepts = true;
-            std::string dom_content_type;
-            try {
-                const auto dom = nlohmann::json::parse (wire);
-                dom_content_type = dom.value<std::string> (
-                  "contentType", msg::envelope_codec_t::default_content_type);
-            }
-            catch (const nlohmann::json::exception &) {
-                dom_accepts = false;
-            }
-            const auto decoded = codec.decode_header (zlink::message_t::from (wire));
-            if (static_cast<bool> (decoded) != dom_accepts
-                || (decoded && decoded.value ().content_type != dom_content_type)) {
-                return 181;
-            }
-        }
-        const auto malformed_flow = zlink::message_t::from (
-          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","flowId":{"nested":"invalid"},"flowOrigin":[1]})");
-        if (!codec.decode_header (malformed_flow, false) || codec.decode_header (malformed_flow)) {
-            return 182;
-        }
+        if (!rejected_unknown_kind)
+            return 180;
     }
 
     {
@@ -538,15 +401,8 @@ int main ()
         wire_error_header.correlation_id = "request-2";
         wire_error_header.error_code = "not_found";
         wire_error_header.error_message = "missing handler";
-        const auto wire_error_json = envelope_codec.encode_header (wire_error_header).to_string ();
-        if (wire_error_json.find (R"("kind":5)") == std::string::npos
-            || wire_error_json.find (R"("errorCode":"not_found")") == std::string::npos
-            || wire_error_json.find (R"("errorMessage":"missing handler")") == std::string::npos
-            || wire_error_json.find (R"("status")") != std::string::npos) {
-            return 53;
-        }
         const auto decoded_wire_error =
-          envelope_codec.decode_header (zlink::message_t::from (wire_error_json));
+          envelope_codec.decode_header (envelope_codec.encode_header (wire_error_header));
         if (!decoded_wire_error
             || decoded_wire_error.value ().kind
                  != zlink::framework::runtime::messaging::message_kind_t::error
@@ -560,12 +416,13 @@ int main ()
         wire_response_header.channel_name = "profile";
         wire_response_header.message_name = "ProfileReq";
         wire_response_header.correlation_id = "request-3";
-        const auto wire_response_json =
-          envelope_codec.encode_header (wire_response_header).to_string ();
-        if (wire_response_json.find (R"("kind":2)") == std::string::npos
-            || wire_response_json.find (R"("errorCode":null)") == std::string::npos
-            || wire_response_json.find (R"("errorMessage":null)") == std::string::npos
-            || wire_response_json.find (R"("status")") != std::string::npos) {
+        const auto decoded_wire_response =
+          envelope_codec.decode_header (envelope_codec.encode_header (wire_response_header));
+        if (!decoded_wire_response
+            || decoded_wire_response.value ().kind
+                 != zlink::framework::runtime::messaging::message_kind_t::response
+            || decoded_wire_response.value ().error_code
+            || decoded_wire_response.value ().error_message) {
             return 55;
         }
 
@@ -1107,10 +964,6 @@ int main ()
         if (!plain || plain.value ().flow_id || plain.value ().flow_origin) {
             return 40;
         }
-        if (codec.encode_header (header).to_string ().find ("\"formatMarker\":242")
-            == std::string::npos) {
-            return 41;
-        }
 
         const auto created = rt::flow_id_t::create ();
         if (!rt::flow_id_t::is_valid (created) || created.size () != 36 || created[14] != '7') {
@@ -1222,23 +1075,19 @@ int main ()
             }
         }
 
-        /* Marker/pair validation is fail-closed. */
-        auto missing_marker = codec.decode_header (
-          zlink::message_t::from ("{\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\"}"));
-        if (missing_marker
-            || missing_marker.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
-            return 49;
+        /* Header validation rejects a flow pair with only one member. */
+        auto half_flow = header;
+        half_flow.flow_id = rt::flow_id_t::create ();
+        bool rejected_half_flow = false;
+        try {
+            (void) codec.encode_header (half_flow);
         }
-        auto lonely_flow = codec.decode_header (
-          zlink::message_t::from ("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\","
-                                  "\"messageName\":\"m\",\"flowId\":\""
-                                  + created + "\"}"));
-        if (lonely_flow
-            || lonely_flow.error_kind ()
-                 != zlink::framework::framework_error_kind_t::protocol_error) {
+        catch (const zlink::framework::framework_exception_t &error) {
+            rejected_half_flow =
+              error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        if (!rejected_half_flow)
             return 50;
-        }
 
         /* MFLOW-EXT-014: an async continuation re-enters the flow captured at
          * registration even when the task completes from a flow-less thread,

@@ -953,8 +953,7 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithout
                    index.nodes.emplace (
                      "concurrent-route",
                      detail::channel_runtime_state_t::node_transport_index_t::entry_t{
-                       std::shared_ptr<detail::route_channel_runtime_t>{},
-                       detail::prepare_request_channel ("concurrent-route")});
+                       std::shared_ptr<detail::route_channel_runtime_t>{}});
                });
                EXPECT_TRUE (state->spot_mesh_requesters.contains ("retry"));
                signalled = true;

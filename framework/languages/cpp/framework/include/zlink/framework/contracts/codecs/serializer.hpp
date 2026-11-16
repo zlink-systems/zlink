@@ -35,20 +35,10 @@ class codec_registration_context_t;
 
 namespace detail
 {
-struct prepared_header_fragment_t
-{
-    std::string bytes;
-    std::exception_ptr error;
-};
 struct request_type_plan_t
 {
     std::string content_type;
-    std::string prefix;
-    std::string middle;
-    std::exception_ptr error;
 };
-prepared_header_fragment_t prepare_request_channel (std::string_view channel);
-request_type_plan_t prepare_request_type (std::string_view name, std::string content_type);
 
 inline constexpr std::size_t serializer_send_type_cache_capacity = 1024;
 class serializer_registry_state_t;
@@ -236,9 +226,8 @@ template <typename T> class serializer_t
     serializer_t (serialize_fn_t serialize,
                   deserialize_fn_t deserialize,
                   std::string content_type) :
-        _state (std::make_shared<const state_t> (state_t{
-          std::move (serialize), std::move (deserialize),
-          detail::prepare_request_type (detail::message_name<T> (), std::move (content_type))}))
+        _state (std::make_shared<const state_t> (
+          state_t{std::move (serialize), std::move (deserialize), std::move (content_type)}))
     {
     }
 

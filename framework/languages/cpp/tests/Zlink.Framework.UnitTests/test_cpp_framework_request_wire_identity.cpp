@@ -4,12 +4,9 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
-#include <zlink/framework/detail/binary_text_codec.hpp>
-
 #include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
 
-#include <fstream>
+#include <memory>
 #include <string>
 
 namespace
@@ -17,15 +14,6 @@ namespace
 namespace fw = zlink::framework;
 namespace messaging = fw::runtime::messaging;
 namespace protocol = fw::runtime::protocol;
-
-const nlohmann::json &wire_fixtures ()
-{
-    static const auto fixtures = [] {
-        std::ifstream input (ZLINK_REQUEST_WIRE_FIXTURE_PATH);
-        return nlohmann::json::parse (input);
-    }();
-    return fixtures.at ("cases");
-}
 
 messaging::envelope_header_t request_header (int scenario)
 {
@@ -62,59 +50,52 @@ fw::encoded_payload_t request_payload ()
 messaging::message_parts_t encode_request (messaging::envelope_header_t header, bool service)
 {
     auto type = std::make_shared<const fw::detail::request_type_plan_t> (
-      fw::detail::prepare_request_type (std::string_view (header.message_name),
-                                        std::string (std::string_view (header.content_type))));
-    auto channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
-      fw::detail::prepare_request_channel (std::string_view (header.channel_name)));
+      fw::detail::request_type_plan_t{header.content_type});
     messaging::client_call_codec_t codec;
     return service ? codec.encode_service_payload_parts (std::move (header), request_payload (),
-                                                         std::move (type), std::move (channel))
+                                                         std::move (type))
                    : codec.encode_payload_parts (std::move (header), request_payload (),
-                                                 std::move (type), std::move (channel));
-}
-
-std::string frame_hex (const zlink::message_t &frame)
-{
-    return fw::detail::encode_hex (frame.bytes ());
+                                                 std::move (type));
 }
 
 class RequestWireIdentity : public testing::TestWithParam<int>
 {
 };
 
-TEST_P (RequestWireIdentity, PreparedServiceAndRouteMatchMainEncoderBytes)
+TEST_P (RequestWireIdentity, ServiceAndRoutePreserveHeaderAndBody)
 {
     const auto scenario = GetParam ();
-    const auto &fixture = wire_fixtures ().at (scenario);
-    SCOPED_TRACE (fixture.at ("name").get<std::string> ());
-    const auto expected = fixture.at ("application_payload_hex").get<std::string> ();
-    EXPECT_EQ (frame_hex (protocol::encode_node_request_header_message (0x123abc)),
-               fixture.at ("service_header_hex").get<std::string> ());
+    const auto expected_header = request_header (scenario);
+    SCOPED_TRACE (scenario);
     for (const bool service : {false, true}) {
         SCOPED_TRACE (service ? "MeshNode" : "RouteChannel");
-        auto parts = encode_request (request_header (scenario), service);
+        auto parts = encode_request (expected_header, service);
         auto application = std::move (parts).take_application_payload ();
         auto frame = protocol::encode_application_payload_message (application);
-        EXPECT_EQ (frame_hex (frame), expected);
-        EXPECT_EQ (fw::detail::encode_hex (std::span<const std::uint8_t> (
-                     protocol::encode_application_payload (application))),
-                   expected);
+        const auto decoded_application =
+          protocol::decode_application_payload (protocol::message_bytes (frame));
+        const auto decoded_parts = protocol::decode_application_parts (decoded_application);
+        ASSERT_EQ (decoded_parts.size (), 2u);
+        const auto decoded_header = messaging::envelope_codec_t{}.decode_header (decoded_parts[0]);
+        ASSERT_TRUE (decoded_header);
+        EXPECT_EQ (decoded_header.value ().kind, expected_header.kind);
+        EXPECT_EQ (decoded_header.value ().channel_name, expected_header.channel_name);
+        EXPECT_EQ (decoded_header.value ().message_name, expected_header.message_name);
+        EXPECT_EQ (decoded_header.value ().content_type, expected_header.content_type);
+        EXPECT_EQ (decoded_header.value ().correlation_id, expected_header.correlation_id);
+        EXPECT_EQ (decoded_header.value ().deadline, expected_header.deadline);
+        EXPECT_EQ (decoded_header.value ().topic, expected_header.topic);
+        EXPECT_EQ (decoded_header.value ().source, expected_header.source);
+        EXPECT_EQ (decoded_header.value ().error_code, expected_header.error_code);
+        EXPECT_EQ (decoded_header.value ().error_message, expected_header.error_message);
+        EXPECT_EQ (decoded_header.value ().metadata, expected_header.metadata);
+        EXPECT_EQ (decoded_header.value ().flow_id, expected_header.flow_id);
+        EXPECT_EQ (decoded_header.value ().flow_origin, expected_header.flow_origin);
+        EXPECT_EQ (decoded_parts[1].to_string (), request_payload ().to_string ());
     }
 }
 
 INSTANTIATE_TEST_SUITE_P (MainEncoderFixtures, RequestWireIdentity, testing::Range (0, 6));
-
-TEST (RequestWireIdentity, ChangedByteDoesNotMatchFixture)
-{
-    auto parts = encode_request (request_header (0), true);
-    auto frame =
-      protocol::encode_application_payload_message (std::move (parts).take_application_payload ());
-    const auto expected =
-      wire_fixtures ().at (0).at ("application_payload_hex").get<std::string> ();
-    ASSERT_EQ (frame_hex (frame), expected);
-    reinterpret_cast<std::byte *> (frame.data ())[frame.size () - 1] ^= std::byte{1};
-    EXPECT_NE (frame_hex (frame), expected);
-}
 
 TEST (RequestWireIdentity, InvalidMetadataFailsBeforeServicePacking)
 {
@@ -131,7 +112,6 @@ TEST (RequestWireIdentity, InvalidMetadataFailsBeforeServicePacking)
     }
 }
 
-
 TEST (RequestWireIdentity, InvalidStaticTextFailsBeforeServicePacking)
 {
     for (const bool service : {false, true}) {
@@ -143,7 +123,7 @@ TEST (RequestWireIdentity, InvalidStaticTextFailsBeforeServicePacking)
                 header.message_name = std::string (1, '\xff');
             else
                 header.content_type = std::string (1, '\xff');
-            EXPECT_THROW (encode_request (std::move (header), service), nlohmann::json::type_error);
+            EXPECT_THROW (encode_request (std::move (header), service), fw::framework_exception_t);
         }
     }
 }
@@ -156,10 +136,16 @@ TEST (RequestWireIdentity, ServiceRetainsSubmitFlowAfterAmbientScopeEnds)
           fw::message_flow_log_mode_t::normal});
         return encode_request (request_header (0), true);
     }();
-    auto frame =
-      protocol::encode_application_payload_message (std::move (parts).take_application_payload ());
-    EXPECT_EQ (frame_hex (frame),
-               wire_fixtures ().at (3).at ("application_payload_hex").get<std::string> ());
+    auto application = std::move (parts).take_application_payload ();
+    auto frame = protocol::encode_application_payload_message (application);
+    auto decoded_application =
+      protocol::decode_application_payload (protocol::message_bytes (frame));
+    auto decoded_parts = protocol::decode_application_parts (decoded_application);
+    ASSERT_EQ (decoded_parts.size (), 2u);
+    const auto decoded_header = messaging::envelope_codec_t{}.decode_header (decoded_parts[0]);
+    ASSERT_TRUE (decoded_header);
+    EXPECT_EQ (decoded_header.value ().flow_id, "019a55d5-0000-7000-8000-000000000001");
+    EXPECT_EQ (decoded_header.value ().flow_origin, fw::flow_origin_t::application);
 }
 
 TEST (RequestWireIdentity, CopiesCanMaterializePartsAndReleaseWithoutEncoding)
@@ -173,8 +159,6 @@ TEST (RequestWireIdentity, CopiesCanMaterializePartsAndReleaseWithoutEncoding)
       protocol::application_payload_t::from_parts (std::move (copied).take_items ());
     EXPECT_EQ (application_copy, materialized);
     EXPECT_EQ (application, application_copy);
-    EXPECT_EQ (frame_hex (protocol::encode_application_payload_message (materialized)),
-               wire_fixtures ().at (2).at ("application_payload_hex").get<std::string> ());
 
     unsigned encoded = 0;
     auto discarded =

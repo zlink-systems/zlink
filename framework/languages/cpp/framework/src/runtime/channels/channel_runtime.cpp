@@ -790,7 +790,7 @@ void channel_runtime_t::bind_mesh_node_transport (
                   index.nodes.insert_or_assign (
                     mesh_name,
                     channel_runtime_state_t::node_transport_index_t::entry_t{
-                      transport, prepare_request_channel (mesh_name),
+                      transport,
                       &runtime::messaging::client_call_codec_t::encode_service_payload_parts});
           });
       })
@@ -1919,10 +1919,8 @@ void route_client_t::submit_request_reply_message_erased (
               });
         }
         auto [payload, type_plan] = encode_payload (*state->serializers);
-        parts = (codec.*endpoint->second.encode_request) (
-          std::move (header), std::move (payload), std::move (type_plan),
-          std::shared_ptr<const detail::prepared_header_fragment_t> (index,
-                                                                     &endpoint->second.channel));
+        parts = (codec.*endpoint->second.encode_request) (std::move (header), std::move (payload),
+                                                          std::move (type_plan));
     }
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
