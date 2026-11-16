@@ -40,11 +40,6 @@ final class NativeMessageRuntime {
             }
 
             @Override
-            public boolean messageScopeAlive(Object scope) {
-                return ((Arena) scope).scope().isAlive();
-            }
-
-            @Override
             public void closeMessageScope(Object scope) {
                 ((Arena) scope).close();
             }
