@@ -452,7 +452,7 @@ One place, Framework validation after decode, judges the value rules. Input that
 parse time is handled as the same protocol error.
 
 - String fields are valid UTF-8 and contain no NUL.
-- `kind` equal to `CHANNEL_KIND_UNSPECIFIED`, or an empty `channel_name`, `message_name`, or `content_type`, is a violation.
+- `kind` equal to `CHANNEL_KIND_UNSPECIFIED` is a violation. Whether another field must carry a value is defined by each section, not by this grammar.
 - An undefined value in an enum field is a violation.
 - A key that appears twice in `metadata` is a violation.
 - Undefined field numbers are skipped under protobuf rules.

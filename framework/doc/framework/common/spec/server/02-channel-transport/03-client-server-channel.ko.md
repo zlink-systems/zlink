@@ -401,7 +401,7 @@ field는 [application metadata](02-channel-messaging.ko.md#9-metadata와-관측)
 protocol error로 처리한다.
 
 - 문자열 field는 유효한 UTF-8이며 NUL을 포함하지 않는다.
-- `kind`가 `CHANNEL_KIND_UNSPECIFIED`이거나 `channel_name`·`message_name`·`content_type`이 비어 있으면 위반이다.
+- `kind`가 `CHANNEL_KIND_UNSPECIFIED`이면 위반이다. 다른 field에 값이 있어야 하는지는 이 문법이 아니라 각 절이 정한다.
 - Enum field에 정의되지 않은 값이 오면 위반이다.
 - `metadata`에 같은 key가 두 번 나오면 위반이다.
 - 정의되지 않은 field 번호는 protobuf 규칙대로 건너뛴다.
