@@ -6588,6 +6588,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         actor_query.target = *native->objects ().find (stateful::object_kind_t::actor, "early");
         actor_query.requested_authority_owner_generation =
           actor_query.target.authority_owner_generation;
+        actor_query.requested_object_generation = actor_query.target.object_generation;
         actor_query.target_node_routing_id = descriptor.rid.to_bytes ();
         actor_query.target_node_generation = 1;
         actor_query.source_node_routing_id = descriptor.rid.to_bytes ();
