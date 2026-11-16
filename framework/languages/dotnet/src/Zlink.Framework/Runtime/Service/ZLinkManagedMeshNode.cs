@@ -8028,7 +8028,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     "The command 40 relocation terminal could not be submitted on its reply leg.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
-            message = null;
         }
         catch (ZlinkException exception)
         {
@@ -9276,7 +9275,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         if (replyParts is not { Count: > 0 })
             return Array.Empty<ReadOnlyMemory<byte>>();
-        var messages = replyParts.Select(static part => Message.From(part.Span)).ToArray();
+        var messages = ZLinkRawRouterServicePort.CreateMessages(replyParts);
         try
         {
             ZLinkEnvelopeHeader header;
@@ -10266,7 +10265,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     return false;
                 socket.Reply(target, replyToken).Message(message).Submit();
-                message = null;
             }
             return true;
         }
@@ -11001,13 +10999,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private ValueTask SendDirectWireAsync(
+    private async ValueTask SendDirectWireAsync(
         RoutingId target,
         IReadOnlyList<Message> messages,
         CancellationToken cancellationToken
     )
     {
-        var ownershipTransferred = false;
         try
         {
             Task admission;
@@ -11028,22 +11025,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .Messages(messages)
                     .Async(cancellationToken)
                     .EnsureAcceptedAsync();
-                ownershipTransferred = true;
             }
             // Spec 01 §10, 08 §3 E3: a send whose admission is decided by the
             // submit result completes from it without a completion-table entry.
             // Only an admission that arrives later registers before it is observed.
             if (admission.IsCompleted)
-                return new ValueTask(admission);
+            {
+                await admission.ConfigureAwait(false);
+                return;
+            }
             var pending = Completions.RegisterSend(NextStandaloneOperationId());
             pending.Observe(admission);
-            return pending.Completion;
+            await pending.Completion.ConfigureAwait(false);
         }
-        catch (Exception failure)
+        finally
         {
-            if (!ownershipTransferred)
-                DisposeParts(messages);
-            return ValueTask.FromException(failure);
+            DisposeParts(messages);
         }
     }
 
@@ -11378,7 +11375,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        var ownershipTransferred = false;
         try
         {
             admission ??= _channelSelection.DirectPeer(target)?.Liveness;
@@ -11395,14 +11391,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     cancellationToken,
                     requestAdmission: requestAdmission
                 );
-                ownershipTransferred = true;
             }
             return new ValueTask<IReadOnlyList<Message>>(request);
         }
         finally
         {
-            if (!ownershipTransferred)
-                DisposeParts(messages);
+            DisposeParts(messages);
         }
     }
 
@@ -12706,7 +12700,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             pending,
             RequestResult.Ok,
             0,
-            replyParts.Select(Message.From).ToArray()
+            ZLinkRawRouterServicePort.CreateMessages(replyParts, static part => Message.From(part))
         );
     }
 
@@ -13639,7 +13633,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 .EnsureAcceptedAsync();
             if (admission.IsCanceled)
                 return false;
-            message = null;
             await admission.ConfigureAwait(false);
             return true;
         }
@@ -13793,13 +13786,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 nameof(parts)
             );
 
-        var messages = new Message[parts.Count];
-        var created = 0;
-        var ownershipTransferred = false;
+        var messages = ZLinkRawRouterServicePort.CreateMessages(parts);
         try
         {
-            for (; created < messages.Length; created++)
-                messages[created] = Message.From(parts[created]);
             Task admission;
             lock (_socketGate)
             {
@@ -13807,16 +13796,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
                 var operation = socket.Send(target).Messages(messages);
-                ownershipTransferred = true;
                 admission = operation.Async(cancellationToken).EnsureAcceptedAsync();
             }
             await admission.ConfigureAwait(false);
         }
         finally
         {
-            if (!ownershipTransferred)
-                for (var index = 0; index < created; index++)
-                    messages[index].Dispose();
+            DisposeParts(messages);
         }
     }
 
@@ -15002,7 +14988,10 @@ internal sealed class ZLinkManagedStreamSessionService(
     )
     {
         EnsureStarted();
-        var retained = parts.Select(Message.From).ToArray();
+        var retained = ZLinkRawRouterServicePort.CreateMessages(
+            parts,
+            static part => Message.From(part)
+        );
         try
         {
             return stream
