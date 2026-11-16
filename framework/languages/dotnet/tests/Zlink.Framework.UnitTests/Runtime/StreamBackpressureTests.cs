@@ -21,6 +21,13 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
     [InlineData(2)]
     public async Task Native_retry_closes_once_after_admission_and_detects_bad_close(int badClose)
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Native_retry_closes_once_after_admission_and_detects_bad_close)
+            )
+        )
+            return;
         await using var fixture = await SaturatedStream.CreateAsync(output);
         using var probe = new MessageFinalizerProbe();
         var count = await probe.CountAsync(async () =>
