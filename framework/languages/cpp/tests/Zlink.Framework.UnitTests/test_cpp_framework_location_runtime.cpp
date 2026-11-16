@@ -8010,6 +8010,18 @@ TEST_P (StoreOutageRetention, DiscardRequestPostsCloseBeforeFollowingLaneTurn)
     node->spot_contexts_by_id.emplace ("discard-post-spot",
                                        detail::spot_context_access_t::create (context));
     auto gate = context->ensure_spot_serial_executor ()->spot_queue ();
+    auto timer_queue = std::make_shared<serial_execution_queue_t> (*scheduler);
+    timer_queue->attach_spot_gate (gate);
+    std::atomic<bool> admission_open = true;
+    timer_queue->set_execution_policy ([&] { return admission_open.load (); });
+    auto timer = std::make_shared<detail::timer_state_t> ();
+    timer->name = "discard-post-timer";
+    timer->serial_queue = timer_queue;
+    context->timers.push_back (timer);
+    scheduler->run_all ();
+    int timer_calls = 0;
+    ASSERT_TRUE (timer_queue->try_post ("before-discard", [&] { ++timer_calls; }));
+    admission_open = false;
     auto finished = std::make_shared<task_completion_source_t<bool>> ();
     context->merged_close_results.push_back (
       [finished] (result_t<bool> result) { finished->complete (std::move (result)); });
@@ -8030,6 +8042,7 @@ TEST_P (StoreOutageRetention, DiscardRequestPostsCloseBeforeFollowingLaneTurn)
     // It must observe the actual close, rather than only a preparation lookup.
     EXPECT_TRUE (node->lane.try_post ([&] {
         EXPECT_TRUE (gate->closed ());
+        EXPECT_TRUE (timer_queue->closed ());
         EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
                    gate->execution_status ());
     }));
@@ -8039,9 +8052,14 @@ TEST_P (StoreOutageRetention, DiscardRequestPostsCloseBeforeFollowingLaneTurn)
     ASSERT_TRUE (applied.result_for (auto_connect_wait));
     EXPECT_TRUE (applied.result ());
     EXPECT_FALSE (finished->task ().await_ready ());
+    EXPECT_FALSE (timer->disposed.load ());
+    admission_open = true;
     auto closed = finished->task ();
     ASSERT_TRUE (scheduler->run_until (closed, auto_connect_wait));
     EXPECT_TRUE (closed.result ().value ());
+    EXPECT_EQ (0, timer_calls);
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+               timer_queue->execution_status ());
     scheduler->retire ();
     context->node.reset ();
     node->spot_contexts_by_id.clear ();

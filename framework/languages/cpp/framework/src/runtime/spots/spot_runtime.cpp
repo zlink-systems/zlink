@@ -15297,8 +15297,14 @@ task_t<void> spot_node_runtime_t::request_location_execution_discard (
                       && allowed (*spot->serial_queue)
                            != runtime::serial_execution_queue_t::execution_status_t::allowed) {
                       std::vector<task_t<void>> completions;
-                      spot->spot_serial_executor->close (&completions,
-                                                         allowed (*spot->serial_queue));
+                      const auto status = allowed (*spot->serial_queue);
+                      // Timer state can retain a queue outside the coordinator's named queues.
+                      // Apply its terminal before a new lease can reopen execution admission.
+                      for (const auto &timer : spot->timers)
+                          if (timer->serial_queue)
+                              completions.push_back (
+                                timer->serial_queue->cancel_pending_async (status));
+                      spot->spot_serial_executor->close (&completions, status);
                       spots->emplace_back (spot, std::move (completions));
                       continue;
                   }
