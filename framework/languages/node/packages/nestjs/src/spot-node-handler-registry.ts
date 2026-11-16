@@ -56,18 +56,29 @@ export class SpotNodeHandlerRegistry {
     entrySpotType: NonNullable<ZLinkSpotNodeOptions['entrySpotType']>,
     missingMessage: string
   ): readonly MutableSpotNode[] {
-    return this.requireTargets((node) => node.entrySpotType === entrySpotType, missingMessage);
+    const exact = Object.values(this.nodes).filter((node) => node.entrySpotType === entrySpotType);
+    if (exact.length > 0) return exact;
+    return this.requireTargets(
+      (node) =>
+        node.entrySpotType !== undefined && node.entrySpotType.prototype instanceof entrySpotType,
+      missingMessage
+    );
   }
 
   spotTargets(
     spotType: Type<ZLinkSpot | ZLinkInstanceSpot>,
     missingMessage: string
   ): readonly MutableSpotNode[] {
+    const exact = Object.values(this.nodes).filter((node) =>
+      [...(node.spotFactories ?? []), ...Object.values(node.instanceSpotFactories ?? {})].includes(
+        spotType as Type<ZLinkSpot>
+      )
+    );
+    if (exact.length > 0) return exact;
     return this.requireTargets(
       (node) =>
-        (node.spotFactories ?? []).includes(spotType as Type<ZLinkSpot>) ||
-        Object.values(node.instanceSpotFactories ?? {}).includes(
-          spotType as Type<ZLinkInstanceSpot>
+        [...(node.spotFactories ?? []), ...Object.values(node.instanceSpotFactories ?? {})].some(
+          (type) => type.prototype instanceof spotType
         ),
       missingMessage
     );
