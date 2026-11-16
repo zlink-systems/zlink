@@ -97,18 +97,8 @@ internal abstract partial class ZLinkSpotActivation
     {
         if (state.Item2 is not null)
         {
-            ValueTask? members = null;
-            try
-            {
-                if (discardMembers is not null)
-                    members = discardMembers();
-            }
-            catch (Exception exception)
-            {
-                members = ValueTask.FromException(exception);
-            }
             _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-                Task.Run(() => CompleteFinalizationAsync(state.Item2, members))
+                Task.Run(() => CompleteFinalizationAsync(state.Item2, discardMembers))
             );
         }
         return new ValueTask(state.Item1);
@@ -184,7 +174,7 @@ internal abstract partial class ZLinkSpotActivation
 
     private async Task CompleteFinalizationAsync(
         TaskCompletionSource completion,
-        ValueTask? discardedMembers
+        Func<ValueTask>? discardedMembers
     )
     {
         try
@@ -198,14 +188,24 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    private async Task FinalizeAsync(ValueTask? discardedMembers)
+    private async Task FinalizeAsync(Func<ValueTask>? discardedMembers)
     {
         var failures = new List<Exception>();
         Capture(CancelActiveOperations);
+        await CaptureAsync(async () =>
+            {
+                var publication = await _lane
+                    .RunAsync(() => _membershipPublication)
+                    .ConfigureAwait(false);
+                await publication.ConfigureAwait(false);
+            })
+            .ConfigureAwait(false);
         await CaptureAsync(DrainNativeRoutesAsync).ConfigureAwait(false);
         // Closing callbacks have finished with membership intact. Actor terminal
         // barriers still need this parent's gate before its executor can end.
-        await CaptureAsync(() => discardedMembers ?? _runtime.InvalidateSpotActorRuntimeAsync(this))
+        await CaptureAsync(() =>
+                discardedMembers?.Invoke() ?? _runtime.InvalidateSpotActorRuntimeAsync(this)
+            )
             .ConfigureAwait(false);
         Capture(_serial.RequestStop);
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
