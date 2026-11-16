@@ -506,9 +506,16 @@ final class ZLinkCommittedActorLocalIngressTest {
                                     node.sendToActorAsync(route, List.of(header, payload))
                                             .toCompletableFuture()
                                             .get(WAIT_SECONDS, TimeUnit.SECONDS));
-            assertEquals(
-                    SubmitResult.NOT_FOUND,
-                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause()).getResult());
+            // Raw admission rejects a different node incarnation; a different Actor
+            // incarnation passes raw AOG matching (routing §2.6) and the unpublished
+            // staging Actor is rejected by Framework admission instead.
+            if (failure.getCause() instanceof ZlinkSubmitException submit) {
+                assertEquals(SubmitResult.NOT_FOUND, submit.getResult());
+            } else {
+                assertEquals(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            }
         }
         assertFalse(handled.isDone());
         assertEquals(List.of(), RECEIVED);
