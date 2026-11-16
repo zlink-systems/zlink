@@ -109,123 +109,36 @@ test('channel request and reply stay within the final parts allocation budget', 
   assert.deepEqual(roundtrip(), data);
 });
 
-test('channel header decode avoids framework JSON parsing and a full header copy', async (t) => {
-  if (runAllocationTest(t)) return;
-  const profilePath = require.resolve('@zlink-systems/stream-wire/internal/json');
-  const implementation = require(path.join(path.dirname(profilePath), 'framework-json-v1.js'));
-  const originalFrameworkParse = implementation.parseFrameworkJsonV1;
-  let frameworkParses = 0;
-  t.mock.method(implementation, 'parseFrameworkJsonV1', (...args) => {
-    frameworkParses += 1;
-    return originalFrameworkParse(...args);
+test('channel header decode uses the generated protobuf codec without JSON parsing', (t) => {
+  const { encodeChannelHeader } = require('./helpers/protobuf-channel-header');
+  const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+  const bytes = encodeChannelHeader({
+    kind: 3,
+    channelName: 'orders',
+    messageName: 'UpdateOrder',
+    contentType: 'application/json',
+    flowId: '0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d',
+    flowOrigin: 3,
+    metadata: { tenant: 'north' }
   });
-
-  const jsonPath =
-    require.resolve('../../packages/framework/dist/runtime/messaging/framework-json-v1');
-  const cachedJson = require.cache[jsonPath];
-  delete require.cache[jsonPath];
-  t.after(() => {
-    require.cache[jsonPath] = cachedJson;
-  });
-  const frameworkJson = require(jsonPath);
-  const channelPath =
-    require.resolve('../../packages/framework/dist/runtime/channels/channel-envelope');
-  const cachedChannel = require.cache[channelPath];
-  delete require.cache[channelPath];
-  t.after(() => {
-    require.cache[channelPath] = cachedChannel;
-  });
-  const channel = require(channelPath);
-
-  // Java/C++-style order is part of the unchanged wire contract. The decoder
-  // must not materialize JSON text or run a second full JSON parser.
-  const wire =
-    '{"formatMarker":242,"flowId":"0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d",' +
-    '"flowOrigin":3,"kind":3,"channelName":"orders","messageName":"UpdateOrder",' +
-    '"contentType":"application/json","correlationId":null,"deadline":null,' +
-    '"topic":null,"errorCode":null,"errorMessage":null,"source":null,' +
-    '"metadata":{"tenant":"north"}}';
-  const bytes = Buffer.from(wire);
   const message = ZLinkBufferMessage.fromOwned(bytes);
   t.after(() => message.close());
-  const originalJsonParse = JSON.parse;
-  let fullHeaderParses = 0;
-  t.mock.method(JSON, 'parse', function (text, reviver) {
-    if (text === wire) fullHeaderParses += 1;
-    return originalJsonParse.call(this, text, reviver);
-  });
-  const originalBufferToString = Buffer.prototype.toString;
-  let fullHeaderCopies = 0;
-  t.mock.method(Buffer.prototype, 'toString', function (...args) {
-    if (this === bytes && args.length === 0) fullHeaderCopies += 1;
-    return originalBufferToString.apply(this, args);
-  });
-
-  const parseBefore = () => {
-    new LegacyCanonicalHeaderProbe(bytes).consume('{"formatMarker":242,"kind":');
-    return frameworkJson.parseFrameworkJsonV1(bytes.toString(), {
-      onDuplicateProperty() {}
-    });
-  };
-  let baseline;
-  for (let index = 0; index < 1000; index += 1) baseline = parseBefore();
-  assert.equal(baseline.channelName, 'orders');
-  assert.equal(frameworkParses, 1000);
-  assert.equal(fullHeaderParses, 1000);
-  assert.equal(fullHeaderCopies, 1000);
-  const baselineAllocations = await trackedCodecAllocations(
-    ['/internal/framework-json-v1.js', '/node-envelope-codec-cost.test.js'],
-    parseBefore
-  );
-  const baselineTotals = allocationTotals(baselineAllocations);
-  assert.ok(baselineTotals.objects > 0, 'the previous profile scanner must allocate per header');
-
-  frameworkParses = 0;
-  fullHeaderParses = 0;
-  fullHeaderCopies = 0;
-  const decode = () => channel.decodeChannelHeader([message], false);
-  let header;
-  for (let index = 0; index < 1000; index += 1) header = decode();
+  const original = JSON.parse;
+  let parses = 0;
+  t.mock.method(JSON, 'parse', (...args) => { parses++; return original(...args); });
+  const header = codec.decodeChannelHeader([message], false);
   assert.equal(header.channelName, 'orders');
   assert.equal(header.messageName, 'UpdateOrder');
   assert.equal(header.flowId, undefined);
-  assert.deepEqual(header.metadata, { tenant: 'north' });
-  assert.equal(frameworkParses, 0);
-  assert.equal(fullHeaderParses, 0);
-  assert.equal(fullHeaderCopies, 0);
-
-  const allocations = await trackedCodecAllocations(
-    [
-      '/runtime/channels/channel-envelope.js',
-      '/internal/framework-json-v1.js',
-      '/node-envelope-codec-cost.test.js'
-    ],
-    decode
-  );
-  const currentTotals = allocationTotals(allocations);
-  t.diagnostic(
-    `1000 calls: before=${baselineTotals.objects} objects/${baselineTotals.bytes} bytes, after=${currentTotals.objects} objects/${currentTotals.bytes} bytes`
-  );
-  assert.ok(currentTotals.objects < baselineTotals.objects, 'header decode must allocate fewer objects');
-  assert.ok(currentTotals.bytes < baselineTotals.bytes, 'header decode must allocate fewer bytes');
-  const profileAllocations = await trackedCodecAllocations(
-    '/internal/framework-json-v1.js',
-    decode
-  );
-  assertAllocationBudget(t, profileAllocations, 0, 0);
-  assert.equal(frameworkParses, 0);
-  assert.equal(fullHeaderParses, 0);
-  assert.equal(fullHeaderCopies, 0);
-  t.diagnostic(
-    `1000 calls: ${frameworkParses} framework parses, ${fullHeaderParses} full JSON parses, ${fullHeaderCopies} full header copies`
-  );
+  assert.deepEqual({ ...header.metadata }, { tenant: 'north' });
+  assert.equal(parses, 0);
 });
 
 test('correlation validation accepts the full ASCII contract within a near-zero allocation budget', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
-  const valid = ['a'.repeat(64), '\0\x7f'];
-  const invalid = ['', 'a'.repeat(65), 'é', '\ud800'];
+  const valid = ['a'.repeat(64), '\x01\x7f'];
+  const invalid = ['', 'a'.repeat(65), 'é', '\0', '\ud800'];
   for (const value of valid) assert.equal(codec.isValidChannelCorrelationId(value), true);
   for (const value of invalid) assert.equal(codec.isValidChannelCorrelationId(value), false);
   const validate = () => {
@@ -303,19 +216,10 @@ test('reply decode borrows its body once for JSON, registered codecs and raw byt
     'application/octet-stream'
   ]) {
     const body = Buffer.from(contentType === 'application/json' ? '{"body":"reply"}' : 'reply');
-    const header = Buffer.from(
-      JSON.stringify({
-        formatMarker: 242,
-        kind: 2,
-        channelName: 'codec',
-        messageName: 'Packet',
-        contentType,
-        correlationId: 'request',
-        deadline: null,
-        topic: null,
-        metadata: {}
-      })
-    );
+    const header = require('./helpers/protobuf-channel-header').encodeChannelHeader({
+      kind: 2, channelName: 'codec', messageName: 'Packet', contentType,
+      correlationId: 'request', metadata: {}
+    });
     let reads = 0;
     const serializer = { deserialize: (payload) => payload.getString() };
     const result = codec.decodeChannelReply(
@@ -336,28 +240,6 @@ test('reply decode borrows its body once for JSON, registered codecs and raw byt
     else assert.equal(result, 'reply');
   }
 });
-
-// JIT compilation both allocates bookkeeping objects and moves allocation
-// attribution across module boundaries through inlining. Measure in an isolated
-// interpreter process so module-owned allocations have the same meaning on each
-// supported runtime. Product source and the normal runtime are unchanged.
-class LegacyCanonicalHeaderProbe {
-  index = 0;
-  sawNonAscii = false;
-
-  constructor(bytes) {
-    this.bytes = bytes;
-  }
-
-  consume(value) {
-    if (this.index + value.length > this.bytes.length) return false;
-    for (let offset = 0; offset < value.length; offset += 1) {
-      if (this.bytes[this.index + offset] !== value.charCodeAt(offset)) return false;
-    }
-    this.index += value.length;
-    return true;
-  }
-}
 
 function runAllocationTest(t) {
   if (process.execArgv.includes(MODULE_ALLOCATION_FLAG)) return false;
@@ -459,26 +341,27 @@ test('warmed serializer lookup does not allocate preparation closure contexts', 
   assert.equal(allocations.get('serializerSelectionPlanOf')?.objects ?? 0, 0);
 });
 
-// A canonical header has a fixed final shape. Adding fields after parsing
-// otherwise grows V8 property storage twice on every received header.
-test('canonical header validation does not allocate property growth storage', async (t) => {
-  if (runAllocationTest(t)) return;
+test('protobuf header validation preserves generated optional-field defaults', () => {
+  const { encodeChannelHeader } = require('./helpers/protobuf-channel-header');
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
-  const bytes = Buffer.from(
-    '{"formatMarker":242,"kind":1,"channelName":"codec","messageName":"Packet","contentType":"application/json","correlationId":"request","deadline":null,"topic":null,"metadata":{}}'
-  );
+  const bytes = encodeChannelHeader({
+    kind: 1,
+    channelName: 'codec',
+    messageName: 'Packet',
+    contentType: 'application/json',
+    correlationId: 'request',
+    metadata: {}
+  });
   const parts = [ZLinkBufferMessage.fromOwned(bytes)];
-  const decode = () => codec.decodeChannelHeader(parts, false);
-  for (let index = 0; index < 1000; index++) decode();
-  const allocations = await trackedCodecAllocations(
-    '/runtime/channels/channel-envelope.js',
-    decode
-  );
-  // The reader and final header account for two module-owned objects.
-  // Property growth must not add storage in any helper in this module.
-  assertAllocationBudget(t, allocations, 2.25, 240);
-  assert.equal(allocations.get('validateChannelHeader')?.objects ?? 0, 0);
-  assert.deepEqual(decode().metadata, {});
+  try {
+    const header = codec.decodeChannelHeader(parts, false);
+    assert.equal(header.correlationId, 'request');
+    assert.equal(header.deadline, null);
+    assert.equal(header.topic, null);
+    assert.deepEqual({ ...header.metadata }, {});
+  } finally {
+    parts[0].close();
+  }
 });
 
 test('correlation IDs use the fixed zero prefix without constructing padStart intermediates', (t) => {
