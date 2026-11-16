@@ -13,7 +13,7 @@ import java.util.Map;
 final class ZLinkEnvelopeCanonicalReaderTest {
     @Test
     void generatedParserRejectsMalformedInputAndPreservesStartPosition() {
-        ByteBuffer input = ByteBuffer.wrap(new byte[] {42, 0x08, 1}).position(1);
+        ByteBuffer input = ByteBuffer.wrap(new byte[] {42, 0x08, (byte) 0x80}).position(1);
         assertThrows(
                 ZLinkFrameworkException.class,
                 () -> ZLinkChannelEnvelope.decodeHeader(input, false));

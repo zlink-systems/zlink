@@ -242,8 +242,7 @@ public final class ZLinkChannelEnvelope {
             PreparedNames names,
             PreparedNames contentNames) {
         validateFlowPair(header.flowId(), header.flowOrigin());
-        if (header.metadata().containsKey(""))
-            throw protocolError("ZLink envelope metadata key is required", null);
+        validateMetadata(header.metadata());
         var builder = ChannelHeader.newBuilder().setKindValue(header.kind());
         if (channelNames != null && Objects.equals(channelNames.channelName, header.channelName()))
             builder.setChannelNameBytes(channelNames.channelNameBytes);
@@ -410,26 +409,27 @@ public final class ZLinkChannelEnvelope {
         requireString("topic", header.topic());
         if (header.correlationId() != null && !header.canCorrelateReply())
             throw protocolError("ZLink envelope correlationId must be 1..64 byte ASCII", null);
-        for (var entry : header.metadata().entrySet()) {
+        validateMetadata(header.metadata());
+        validateFlowPair(header.flowId(), header.flowOrigin());
+    }
+
+    private static void validateMetadata(Map<String, String> metadata) {
+        for (var entry : metadata.entrySet()) {
             if (entry.getKey().isEmpty())
                 throw protocolError("ZLink envelope metadata key is required", null);
             requireString("metadata key", entry.getKey());
             requireString("metadata value", entry.getValue());
-        }
-        if ((header.flowId() == null) != (header.flowOrigin() == null))
-            throw protocolError("ZLink envelope flow id and origin must be present together", null);
-        if (header.flowId() != null) {
-            requireString("flowId", header.flowId());
-            if (!ZLinkFlowContext.isValidFlowId(header.flowId()))
-                throw protocolError("ZLink envelope flow id must be UUIDv7", null);
         }
     }
 
     private static void validateFlowPair(String flowId, ZLinkFlowOrigin flowOrigin) {
         if ((flowId == null) != (flowOrigin == null))
             throw protocolError("ZLink envelope flow id and origin must be present together", null);
-        if (flowId != null && !ZLinkFlowContext.isValidFlowId(flowId))
-            throw protocolError("ZLink envelope flow id must be UUIDv7", null);
+        if (flowId != null) {
+            requireString("flowId", flowId);
+            if (!ZLinkFlowContext.isValidFlowId(flowId))
+                throw protocolError("ZLink envelope flow id must be UUIDv7", null);
+        }
     }
 
     private static void requireString(String field, String value) {

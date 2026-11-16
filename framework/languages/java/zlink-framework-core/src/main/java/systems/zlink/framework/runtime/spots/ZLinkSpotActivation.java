@@ -351,38 +351,27 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         trackRouteReceived(received);
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
         //  flow) only while capture is enabled; at Off suppress flow state.
-        ZLinkFlowContext.State inboundFlow = null;
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope = null;
         boolean captureFlow = host.flowCaptureEnabled();
-        if (captureFlow) {
-            try {
-                envelope =
-                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
-                                .decodeDispatchHeader(received.parts(), true);
-                inboundFlow = ZLinkSpotFlowFrame.fromEnvelopeHeader(envelope);
-            } catch (ZLinkFrameworkException invalidFlow) {
-                failRouteInvalidFlow(received, invalidFlow);
-                return CompletableFuture.completedFuture(null);
-            }
+        if (ZLinkSpotRuntime.isProbeFrame(received.parts())) {
+            closeRouteReceived(received);
+            return CompletableFuture.completedFuture(null);
         }
+        ParsedPacket packet;
+        try {
+            packet = ZLinkSpotRuntime.parsePacket(received.parts(), captureFlow);
+        } catch (ZLinkFrameworkException invalidEnvelope) {
+            failRouteInvalidFlow(received, invalidEnvelope);
+            return CompletableFuture.completedFuture(null);
+        }
+        ZLinkFlowContext.State inboundFlow =
+                captureFlow && packet.header() != null
+                        ? ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header())
+                        : null;
         var flowScope =
                 captureFlow
                         ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
                         : ZLinkFlowContext.suppress();
         try {
-            if (ZLinkSpotRuntime.isProbeFrame(received.parts())) {
-                closeRouteReceived(received);
-                return CompletableFuture.completedFuture(null);
-            }
-            ParsedPacket packet;
-            try {
-                packet = ZLinkSpotRuntime.parsePacket(received.parts(), envelope);
-            } catch (ZLinkFrameworkException invalidEnvelope) {
-                //  A frame that cannot be parsed and validated as ChannelHeader is a protocol
-                // error.
-                failRouteInvalidFlow(received, invalidEnvelope);
-                return CompletableFuture.completedFuture(null);
-            }
             host.traceSpotRouteFlow(
                     ZLinkMessageFlowOutcome.RECEIVED,
                     received.requestSeq().isPresent()
