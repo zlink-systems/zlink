@@ -49,11 +49,11 @@ for (const [id, request, header, action] of rows) {
         if (replies.length) {
           const result = decodeChannelHeader(Buffer.from(replies[0][0]));
           assert.equal(result.kind, 5);
-          assert.equal(result.errorCode, 'protocol_error');
+          assert.equal(result.errorCode, id === 'content-type' ? 'not_found' : 'protocol_error');
           assert.equal(result.correlationId, fixtureHeader.correlationId);
         }
         assert.equal(errors.length, 1);
-        assert.equal(errors[0].reason, 'invalid_frame');
+        assert.equal(errors[0].reason, id === 'content-type' ? 'no_handler' : 'invalid_frame');
         const expectedAction = id === 'correlation-control' ? 'drop' : action;
         assert.equal(errors[0].action, expectedAction);
       });
