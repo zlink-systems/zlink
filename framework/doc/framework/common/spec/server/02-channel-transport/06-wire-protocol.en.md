@@ -105,7 +105,7 @@ node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
 ```
 
-The wire major is `1` and the required capability is `framework-service-v13`.
+The wire major is `1` and the required capability is `framework-service-v14`.
 The build stops if the schema and golden fixtures diverge, or if the
 validator finds an undefined type, a duplicate ID, or an invalid
 enum/bound/conditional field.
@@ -738,9 +738,10 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   the retained store paths below) uses the same CRC-32C (Castagnoli) convention:
   polynomial `0x1EDC6F41`, initial value `0xFFFFFFFF`, reflected input and output, XOR
   output `0xFFFFFFFF`, and `check("123456789") == 0xE3069283`.
-- The wire major is `1` and the required capability is `framework-service-v13` — bumped
-  from v12 for commands 52/53 and the Prepare/Cutover manifest fields, with all four
-  runtimes bumped together.
+- The wire major is `1` and the required capability is `framework-service-v14` — bumped
+  from v13 when the channel envelope header moved from JSON to the protobuf `ChannelHeader`
+  (v13 was bumped from v12 for commands 52/53 and the Prepare/Cutover manifest fields). All
+  four runtimes are bumped together.
 - A target's effective inbound chunk-byte limit is negotiated in the admission-accept
   reply's `receiveChunkLimitBytes` field, or via host preflight where that reply is
   unavailable. Where no negotiation path exists (`JoinEntrySpot`), the effective limit is

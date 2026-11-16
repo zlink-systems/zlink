@@ -94,7 +94,7 @@ node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
 ```
 
-Wire major는 `1`이고 required capability는 `framework-service-v13`이다. Schema와 golden fixture가 다르거나
+Wire major는 `1`이고 required capability는 `framework-service-v14`이다. Schema와 golden fixture가 다르거나
 validator가 undefined type, 중복 ID, 잘못된 enum·bound·conditional field를 발견하면 build를 중단한다.
 
 ### Location Store authority key 형식
@@ -664,8 +664,9 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   chunk·manifest checksum)은 같은 CRC-32C(Castagnoli) 규약을 사용한다: polynomial
   `0x1EDC6F41`, initial value `0xFFFFFFFF`, reflected input·output, XOR output
   `0xFFFFFFFF`, `check("123456789") == 0xE3069283`.
-- Wire major는 `1`이고 required capability는 `framework-service-v13`이다 — command 52·53과
-  Prepare·Cutover manifest field 때문에 v12에서 올렸으며 네 runtime을 동시에 승급했다.
+- Wire major는 `1`이고 required capability는 `framework-service-v14`이다 — channel envelope header를
+  JSON에서 protobuf `ChannelHeader`로 바꾸며 v13에서 올렸다(v13은 command 52·53과 Prepare·Cutover
+  manifest field 때문에 v12에서 올렸다). 네 runtime을 동시에 승급한다.
 - Target의 유효 수신 chunk-byte 상한은 admission-accept reply의 `receiveChunkLimitBytes`
   field로 협상하거나, 그 reply가 없으면 host preflight로 협상한다. 협상 경로가 없는
   `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 사용한다. 이 형태와 상한은

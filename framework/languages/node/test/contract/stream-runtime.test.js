@@ -10029,7 +10029,7 @@ function testServiceNodeDescriptor(nodeRoutingId, lifecycleGeneration) {
     state: 'serving',
     securityIdentity: 'test',
     applicationVersion: 1n,
-    protocolCapabilities: ['framework-service-v13'],
+    protocolCapabilities: ['framework-service-v14'],
     objectRole: 'server',
     placementWeight: 100,
     activeCapacityLimit: 100,
