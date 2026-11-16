@@ -18,6 +18,51 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task ClientServer_hello_and_admission_reply_close_wrappers()
+    {
+        using var probe = new MessageFinalizerProbe();
+        await using var server = CreateServer(0);
+        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            var endpoint = (
+                await GetServerBundle(state, "work").ClientServerServer!.ReadAsync()
+            ).AdvertisedEndpoint;
+            var count = await probe.CountAsync(async () =>
+            {
+                for (var index = 0; index < 8; index++)
+                {
+                    await using var client = CreateClient(endpoint);
+                    var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+                    await clientRuntime.StartAsync(CancellationToken.None);
+                    try
+                    {
+                        var transport = clientRuntime.GetClientServerClientRuntime("work");
+                        await WaitUntilAsync(
+                            transport,
+                            () => transport.ReadyCount == 1,
+                            TimeSpan.FromSeconds(10)
+                        );
+                        Assert.Equal(1, transport.ReadyCount);
+                    }
+                    finally
+                    {
+                        await clientRuntime.StopAsync(CancellationToken.None);
+                    }
+                }
+            });
+            output.WriteLine($"hello and admission reply finalizers={count}");
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(false, false, true)]
