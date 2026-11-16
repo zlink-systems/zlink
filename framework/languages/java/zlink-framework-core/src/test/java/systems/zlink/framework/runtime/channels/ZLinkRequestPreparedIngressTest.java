@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistra
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.lang.foreign.MemorySegment;
@@ -106,7 +107,10 @@ final class ZLinkRequestPreparedIngressTest {
                         ZLinkHandlerActivator.reflection(),
                         Runnable::run);
         var errors = new ZLinkChannelDispatchReporter(reporter, new ZLinkCodecRegistration());
-        var parts = new OwnedParts(List.of(Message.from("Request"), Message.from("request")));
+        var parts =
+                new OwnedParts(
+                        requestParts(
+                                "orders", "Request", ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE));
         codec.expectedAddress = MemorySegment.ofBuffer(parts.get(1).dataBuffer()).address();
         var replies = new AtomicInteger();
         var received =
@@ -245,7 +249,7 @@ final class ZLinkRequestPreparedIngressTest {
                                     null,
                                     null),
                             receive,
-                            List.of(Message.from("String"), Message.from("request")),
+                            requestParts("", "String", "application/x-request-test"),
                             reply -> {
                                 try {
                                     assertEquals("reply", reply.getFirst().toUtf8String());
@@ -263,6 +267,19 @@ final class ZLinkRequestPreparedIngressTest {
                 "serializer preparation never runs on a request");
         assertEquals(5, activations.get(), "each request still creates its own handler instance");
         assertEquals(5, calls.get());
+    }
+
+    private static List<Message> requestParts(String channel, String name, String contentType) {
+        return ZLinkChannelEnvelope.encode(
+                ZLinkChannelEnvelope.create(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        channel,
+                        name,
+                        contentType,
+                        null,
+                        Map.of(),
+                        null),
+                Message.from("request"));
     }
 
     private static final class OwnedParts extends AbstractList<Message> implements AutoCloseable {

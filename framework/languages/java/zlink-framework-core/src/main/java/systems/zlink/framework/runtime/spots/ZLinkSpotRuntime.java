@@ -7689,27 +7689,27 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return reason + " for packet '" + packetName + "'";
     }
 
-    /** Parses an inbound SPOT route message from its ChannelHeader and payload frames. */
+    /** Parses an inbound SPOT route message from its ChannelHeader or internal Actor packet. */
     static ParsedPacket parsePacket(List<Message> parts) {
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
-                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(
-                        parts, false);
-        return parsePacket(parts, header);
+        return parsePacket(parts, false);
     }
 
-    static ParsedPacket parsePacket(
-            List<Message> parts,
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
+    static ParsedPacket parsePacket(List<Message> parts, boolean captureFlow) {
         if (parts.size() < 2) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "SPOT route envelope payload is missing");
         }
+        if (parts.getFirst().size() > 0 && parts.getFirst().dataBuffer().get(0) == '_') {
+            String internalPacket = parts.getFirst().toUtf8String();
+            if (ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(internalPacket)
+                    || ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(internalPacket)) {
+                return new ParsedPacket(internalPacket, parts.get(1), null);
+            }
+        }
         var decoded =
-                header == null
-                        ? systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
-                                .decodeDispatchHeader(parts, false)
-                        : header;
+                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(
+                        parts, captureFlow);
         return new ParsedPacket(decoded.messageName(), parts.get(1), decoded);
     }
 
