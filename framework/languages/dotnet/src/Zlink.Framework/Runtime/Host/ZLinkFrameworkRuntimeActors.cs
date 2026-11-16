@@ -3376,7 +3376,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             if (
                 RoutingId.From(request.Actor.TargetNodeRid.Value) != targetNodeRid
-                || node.MeshStatus().LifecycleGeneration != request.Actor.TargetNodeGeneration.Value
+                || node.LifecycleGeneration != request.Actor.TargetNodeGeneration.Value
                 || current.IsDispatchBlocked
                 || current.Actor is null
                 || current.NativeActorRef != actorRef
@@ -4155,14 +4155,14 @@ internal sealed partial class ZLinkFrameworkRuntime
         //  exception never reaches the original requester: the frame just
         //  disappears and the caller waits out its deadline.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"remote_frame_dispatch actor={actorId} node_gen={targetNode.MeshStatus().LifecycleGeneration}/{targetNodeGeneration} authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}"
+            $"remote_frame_dispatch actor={actorId} node_gen={targetNode.LifecycleGeneration}/{targetNodeGeneration} authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}"
         );
         var hasBoundSessionFence = ZLinkActorBoundSessionHandoffMetadata.TryDecode(
             applicationMetadata,
             out var boundSessionFence
         );
         if (
-            targetNode.MeshStatus().LifecycleGeneration != targetNodeGeneration
+            targetNode.LifecycleGeneration != targetNodeGeneration
             || authorityOwnerGeneration == 0
             || (!hasBoundSessionFence && ownerLeaseGeneration == 0)
         )
