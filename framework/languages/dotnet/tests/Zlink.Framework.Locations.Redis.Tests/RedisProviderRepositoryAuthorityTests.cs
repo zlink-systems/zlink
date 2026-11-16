@@ -115,7 +115,14 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
     {
         Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
         await using var store = fixture.CreateStore(out _);
-        var repository = new ZLinkProviderLocationRepository(store);
+        // The ended owner is reclaimed only after the three-margin release wait
+        // (#3877); the monotonic clock is controlled as in the Node Redis test.
+        var monotonic = new MonotonicTimeProvider();
+        var repository = new ZLinkProviderLocationRepository(
+            store,
+            monotonic,
+            TimeSpan.FromSeconds(5)
+        );
         var oldOwner = await ClaimAsync(repository, "spot-old-owner");
         var oldDescriptor = SpotDescriptor("source", oldOwner);
         Assert.Equal(
@@ -197,7 +204,7 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
                 .DisabledPolicy,
         };
 
-        if (liveMember)
+        async Task ReserveIsUnavailableAsync()
         {
             var error =
                 await Assert.ThrowsAsync<Zlink.Framework.Contracts.Errors.ZLinkFrameworkException>(
@@ -208,6 +215,13 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
                 Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind.Unavailable,
                 error.Kind
             );
+        }
+
+        await ReserveIsUnavailableAsync();
+        if (liveMember)
+        {
+            monotonic.Advance(TimeSpan.FromSeconds(15));
+            await ReserveIsUnavailableAsync();
             Assert.Equal(
                 spot.Reservation.ObjectGeneration,
                 Assert
@@ -221,6 +235,9 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
             );
             return;
         }
+        monotonic.Advance(TimeSpan.FromMilliseconds(14_999));
+        await ReserveIsUnavailableAsync();
+        monotonic.Advance(TimeSpan.FromMilliseconds(1));
         var recreated = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await repository.ReserveAsync(next)
         );
@@ -358,5 +375,18 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
             new byte[] { 0x11 },
             new ZLinkCapacityVector(1, 0, null)
         );
+    }
+
+    /// <summary>Controls only the monotonic clock the release wait reads;
+    /// wall-clock time stays real.</summary>
+    private sealed class MonotonicTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp() => Interlocked.Read(ref _timestamp);
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public void Advance(TimeSpan delta) => Interlocked.Add(ref _timestamp, delta.Ticks);
     }
 }
