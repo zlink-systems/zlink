@@ -7705,7 +7705,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "SPOT route envelope payload is missing");
         }
-        return new ParsedPacket(header.messageName(), parts.get(1), header);
+        var decoded =
+                header == null
+                        ? systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                .decodeDispatchHeader(parts, false)
+                        : header;
+        return new ParsedPacket(decoded.messageName(), parts.get(1), decoded);
     }
 
     static boolean isProbeFrame(List<Message> parts) {
