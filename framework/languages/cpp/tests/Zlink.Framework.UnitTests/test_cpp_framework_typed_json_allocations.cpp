@@ -42,11 +42,40 @@ struct nested_allocation_dto_t
     std::map<std::string, std::vector<std::optional<int>>> values;
     std::vector<std::byte> bytes;
 };
+struct bytes_encode_dto_t
+{
+    std::vector<std::byte> bytes;
+};
+struct multi_bytes_encode_dto_t
+{
+    std::vector<std::byte> first;
+    std::vector<std::byte> second;
+};
+struct double_encode_dto_t
+{
+    double value;
+};
 template <> struct zlink::json::dto_traits<nested_allocation_dto_t>
 {
     static constexpr auto fields =
       std::tuple{zlink::json::field ("values", &nested_allocation_dto_t::values),
                  zlink::json::field ("bytes", &nested_allocation_dto_t::bytes)};
+};
+template <> struct zlink::json::dto_traits<bytes_encode_dto_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("bytes", &bytes_encode_dto_t::bytes)};
+};
+template <> struct zlink::json::dto_traits<multi_bytes_encode_dto_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("first", &multi_bytes_encode_dto_t::first),
+                 zlink::json::field ("second", &multi_bytes_encode_dto_t::second)};
+};
+template <> struct zlink::json::dto_traits<double_encode_dto_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &double_encode_dto_t::value)};
 };
 
 void verify_byte_sequence_allocations ()
@@ -57,8 +86,7 @@ void verify_byte_sequence_allocations ()
         const std::vector<std::byte> input (size, std::byte{0xab});
         std::string wire;
         const auto enc = count_allocations ([&] { wire = encode (input); });
-        // The writer owns its initial buffer and at most one growth for this field.
-        assert (enc <= 2);
+        assert (enc <= 1);
         std::vector<std::byte> decoded;
         const auto dec = count_allocations ([&] {
             assert (decode_bytes (std::string_view (wire).substr (1, wire.size () - 2), decoded));
@@ -71,9 +99,35 @@ void verify_byte_sequence_allocations ()
     }
 }
 
+void verify_scalar_encode_allocations ()
+{
+    using zlink::detail::json_profile::encode;
+    using zlink::framework::tests::count_allocations;
+    const bytes_encode_dto_t bytes{std::vector<std::byte> (127, std::byte{0xab})};
+    const double_encode_dto_t number{3.141592653589793};
+    std::string bytes_wire;
+    const auto bytes_new = count_allocations ([&] { bytes_wire = encode (bytes); });
+    std::string number_wire;
+    const auto number_new = count_allocations ([&] { number_wire = encode (number); });
+    const multi_bytes_encode_dto_t multi_bytes{bytes.bytes, bytes.bytes};
+    std::string multi_bytes_wire;
+    const auto multi_bytes_new =
+      count_allocations ([&] { multi_bytes_wire = encode (multi_bytes); });
+    std::cerr << "bytes127_dto_encode_new=" << bytes_new
+              << " multi_bytes127_dto_encode_new=" << multi_bytes_new
+              << " double_dto_encode_new=" << number_new << '\n';
+    assert (bytes_wire.size () == 184);
+    assert (number_wire == "{\"value\":3.141592653589793}");
+    assert (multi_bytes_wire.size () == 368);
+    assert (bytes_new == 1);
+    assert (multi_bytes_new == 1);
+    assert (number_new == 1);
+}
+
 int main (int argc, char **argv)
 {
     verify_byte_sequence_allocations ();
+    verify_scalar_encode_allocations ();
     const std::string_view injection = argc > 1 ? argv[1] : "";
     const auto inject = [&] (std::string_view direction) {
         if (injection == direction) {
@@ -113,19 +167,15 @@ int main (int argc, char **argv)
     assert (decoded && encoded == wire && decoded->name == input.name && decoded->id == input.id);
     std::cout << "encode_new=" << enc << " decode_new=" << dec << " encode_dom=" << enc_dom
               << " decode_dom=" << dec_dom << " positive_control_new=" << control << std::endl;
-    // Measure the required writer/parser work on this STL. The public helpers
-    // must add neither a buffer copy nor a DOM to those primitives.
+    // Public helpers must add no allocation or nlohmann DOM to codec primitives.
     std::string reference_encoded;
-    const auto reference_enc = zlink::framework::tests::count_allocations ([&] {
-        reference_encoded.reserve (initial_output_capacity);
-        assert (write_value (input, reference_encoded, nullptr));
-    });
+    const auto reference_enc = zlink::framework::tests::count_allocations (
+      [&] { assert (write_value (input, reference_encoded, nullptr)); });
     std::optional<allocation_dto_t> reference_decoded;
     const auto parse_reference = [&] () -> std::optional<allocation_dto_t> {
         allocation_dto_t value;
         typed_sax handler (value, nullptr);
-        if (!nlohmann::json::sax_parse (wire.begin (), wire.end (), &handler)
-            || !handler.complete ())
+        if (!read_json (wire, handler) || !handler.complete ())
             return std::nullopt;
         return value;
     };
@@ -134,7 +184,9 @@ int main (int argc, char **argv)
     std::cout << "reference_encode_new=" << reference_enc
               << " reference_decode_new=" << reference_dec << std::endl;
     assert (reference_encoded == encoded && reference_decoded);
+    assert (enc == 1);
     assert (enc == reference_enc);
+    assert (dec == 3);
     assert (dec == reference_dec);
     std::vector<std::uint8_t> payload;
     const auto payload_allocations = zlink::framework::tests::count_allocations ([&] {
@@ -152,7 +204,7 @@ int main (int argc, char **argv)
     assert (decoded->description == input.description && decoded->count == input.count
             && decoded->rank == input.rank && decoded->flags == input.flags
             && decoded->status == input.status && decoded->optional == input.optional);
-#ifdef ZLINK_JSON_EXPECT_DOM_FREE
+#ifdef ZLINK_JSON_EXPECT_NLOHMANN_FREE
     const nested_allocation_dto_t nested{{{"z", {1, std::nullopt, 2}}, {"a", {3}}},
                                          {std::byte{0}, std::byte{255}}};
     before = zlink_dom_constructions;
@@ -166,7 +218,7 @@ int main (int argc, char **argv)
     assert (!try_decode<nested_allocation_dto_t> (invalid.begin (), invalid.end ()));
     assert (zlink_dom_constructions == before);
 #endif
-#ifdef ZLINK_JSON_EXPECT_DOM_FREE
+#ifdef ZLINK_JSON_EXPECT_NLOHMANN_FREE
     assert (enc_dom == 0 && dec_dom == 0);
 #endif
 }

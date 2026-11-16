@@ -6,10 +6,10 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <nlohmann/json.hpp>
+#include <zlink/detail/json_profile/string_primitives.hpp>
 #include <service_wire_constants.hpp>
 
 #include <algorithm>
-#include <bit>
 #include <charconv>
 #include <cstdint>
 #include <cstring>
@@ -208,27 +208,8 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
     return result_t<void>::success ();
 }
 
-// The caller has consumed the lead byte. Consume its continuation bytes in
-// the same traversal that recognizes JSON escapes and string boundaries.
-bool consume_utf8 (std::string_view value, std::size_t &index, unsigned char lead) noexcept
-{
-    const auto remaining = lead >= 0xc2 && lead <= 0xdf   ? 1
-                           : lead >= 0xe0 && lead <= 0xef ? 2
-                           : lead >= 0xf0 && lead <= 0xf4 ? 3
-                                                          : 0;
-    if (remaining == 0 || value.size () - index < static_cast<std::size_t> (remaining))
-        return false;
-    const auto second = static_cast<unsigned char> (value[index]);
-    if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second >= 0xa0)
-        || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second >= 0x90))
-        return false;
-    for (int part = 0; part < remaining; ++part) {
-        const auto byte = static_cast<unsigned char> (value[index++]);
-        if (byte < 0x80 || byte > 0xbf)
-            return false;
-    }
-    return true;
-}
+using zlink::detail::json_profile::consume_utf8;
+using zlink::detail::json_profile::plain_ascii_prefix;
 
 // The envelope has a fixed field order. Count the escaped bytes first, then
 // write directly into the destination frame.
@@ -730,31 +711,8 @@ template <bool Borrow> class canonical_header_reader_t
         std::size_t decoded_size = 0;
         bool escaped = false;
         while (index < _remaining.size () && _remaining[index] != '"') {
-            // Full words and the space-padded tail use the same byte predicate.
-            // Stop before control, quote, backslash or non-ASCII bytes; their
-            // validation and decoding remain with the handlers below.
-            constexpr std::uint64_t high_bits = 0x8080808080808080ULL;
-            constexpr std::uint64_t ones = 0x0101010101010101ULL;
-            constexpr std::uint64_t spaces = 0x2020202020202020ULL;
-            const auto remaining = _remaining.size () - index;
-            std::uint64_t word = spaces;
-            std::size_t count;
-            if (remaining >= sizeof (word)) {
-                std::memcpy (&word, _remaining.data () + index, sizeof (word));
-                count = sizeof (word);
-            } else {
-                std::memcpy (&word, _remaining.data () + index, remaining);
-                count = remaining;
-            }
-            const auto quotes = word ^ 0x2222222222222222ULL;
-            const auto slashes = word ^ 0x5c5c5c5c5c5c5c5cULL;
-            const std::uint64_t special = (word & high_bits) | ((word - spaces) & ~word & high_bits)
-                                          | ((quotes - ones) & ~quotes & high_bits)
-                                          | ((slashes - ones) & ~slashes & high_bits);
-            const auto leading = std::endian::native == std::endian::little
-                                   ? std::countr_zero (special)
-                                   : std::countl_zero (special);
-            const auto plain = std::min (count, static_cast<std::size_t> (leading / 8));
+            const auto plain =
+              plain_ascii_prefix (_remaining.data () + index, _remaining.size () - index);
             if (plain != 0) {
                 index += plain;
                 decoded_size += plain;

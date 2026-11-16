@@ -3,6 +3,12 @@
 
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
+#include <zlink/detail/json_profile/string_primitives.hpp>
+#include <yyjson.h>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <utility>
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -266,6 +272,7 @@ inline constexpr auto base64_values = [] {
         values[static_cast<unsigned char> (base64_alphabet[i])] = static_cast<unsigned char> (i);
     return values;
 }();
+
 inline bool decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
 {
     if (text.size () % 4)
@@ -301,37 +308,13 @@ inline bool decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
 inline bool valid_utf8 (std::string_view text)
 {
     for (std::size_t i = 0; i < text.size ();) {
-        const auto first = static_cast<unsigned char> (text[i++]);
-        if (first < 0x80)
-            continue;
-        unsigned count = 0, value = 0, minimum = 0;
-        if (first >= 0xc2 && first <= 0xdf) {
-            count = 1;
-            value = first & 0x1f;
-            minimum = 0x80;
-        } else if (first >= 0xe0 && first <= 0xef) {
-            count = 2;
-            value = first & 0x0f;
-            minimum = 0x800;
-        } else if (first >= 0xf0 && first <= 0xf4) {
-            count = 3;
-            value = first & 7;
-            minimum = 0x10000;
-        } else
-            return false;
-        if (count > text.size () - i)
-            return false;
-        while (count--) {
-            const auto next = static_cast<unsigned char> (text[i++]);
-            if ((next & 0xc0) != 0x80)
-                return false;
-            value = (value << 6) | (next & 0x3f);
-        }
-        if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff))
+        const auto lead = static_cast<unsigned char> (text[i++]);
+        if (lead >= 0x80 && !consume_utf8 (text, i, lead))
             return false;
     }
     return true;
 }
+
 inline bool has_valid_strings (const nlohmann::json &value)
 {
     if (value.is_string ())
@@ -364,7 +347,10 @@ class byte_output
     {
         bytes.insert (bytes.end (), value.begin (), value.end ());
     }
-    void append (const char *begin, const char *end) { bytes.insert (bytes.end (), begin, end); }
+    void append (const char *begin, std::size_t count)
+    {
+        bytes.insert (bytes.end (), begin, begin + count);
+    }
 };
 
 // Generated RFC 4648 symbols need no JSON escaping or UTF-8 validation.
@@ -401,54 +387,11 @@ template <typename Output> void write_bytes (const std::vector<std::byte> &bytes
     *text = '"';
 }
 
-template <typename Output>
-bool write_string (std::string_view value, Output &out, std::string *error)
-{
-    if (!valid_utf8 (value))
-        return fail (error, "invalid UTF-8 string");
-    constexpr char hex[] = "0123456789abcdef";
-    out += '"';
-    for (const unsigned char ch : value) {
-        switch (ch) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\b':
-                out += "\\b";
-                break;
-            case '\f':
-                out += "\\f";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if (ch < 0x20) {
-                    out += "\\u00";
-                    out += hex[ch >> 4];
-                    out += hex[ch & 15];
-                } else
-                    out += static_cast<char> (ch);
-        }
-    }
-    out += '"';
-    return true;
-}
-
 template <typename T, typename Output> void write_integer (T value, Output &out)
 {
     char buffer[32];
     auto result = std::to_chars (buffer, buffer + sizeof buffer, value);
-    out.append (buffer, result.ptr);
+    out.append (buffer, static_cast<std::size_t> (result.ptr - buffer));
 }
 
 template <typename T> bool read_decimal (std::string_view text, T &out, std::string *error)
@@ -517,93 +460,177 @@ template <typename Output> void write_float (double value, Output &out)
     }
     char buffer[64];
     const auto converted = std::to_chars (buffer, buffer + sizeof buffer, value);
-    out.append (buffer, converted.ptr);
+    out.append (buffer, static_cast<std::size_t> (converted.ptr - buffer));
 }
+
+class fixed_text_buffer
+{
+    char text[64];
+    std::size_t length = 0;
+
+  public:
+    void append (const char *value, std::size_t size)
+    {
+        std::memcpy (text + length, value, size);
+        length += size;
+    }
+    void operator+= (std::string_view value) { append (value.data (), value.size ()); }
+    const char *data () const { return text; }
+    std::size_t size () const { return length; }
+};
+
+// yyjson owns syntax and escaping; the profile owns typed representation.
+template <typename T, typename Output>
+yyjson_mut_val *encode_node (const T &value, yyjson_mut_doc *doc, Output *staging,
+                             std::size_t staging_start, std::string *error)
+{
+    if constexpr (!std::is_same_v<T, std::string_view>)
+        static_assert (validate_type<T> ());
+    if constexpr (std::is_same_v<T, nlohmann::json>) {
+        if (!has_finite_numbers (value) || !has_valid_strings (value)) {
+            fail (error, "invalid JSON value");
+            return nullptr;
+        }
+        const auto text = dump (value);
+        return yyjson_mut_rawncpy (doc, text.data (), text.size ());
+    } else if constexpr (optional_type<T>::value) {
+        return value ? encode_node (*value, doc, staging, staging_start, error)
+                     : yyjson_mut_null (doc);
+    } else if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::string_view>) {
+        return yyjson_mut_strn (doc, value.data (), value.size ());
+    } else if constexpr (std::is_same_v<T, bool>) {
+        return yyjson_mut_bool (doc, value);
+    } else if constexpr (std::is_integral_v<T>) {
+        if constexpr (sizeof (T) == 8) {
+            char text[32];
+            const auto end = std::to_chars (text, text + sizeof text, value).ptr;
+            return yyjson_mut_strncpy (doc, text, static_cast<std::size_t> (end - text));
+        } else if constexpr (std::is_signed_v<T>) {
+            return yyjson_mut_sint (doc, value);
+        } else {
+            return yyjson_mut_uint (doc, value);
+        }
+    } else if constexpr (std::is_floating_point_v<T>) {
+        if (!valid_float (value)) {
+            fail (error, "non-finite number");
+            return nullptr;
+        }
+        fixed_text_buffer text;
+        write_float (static_cast<double> (value), text);
+        return yyjson_mut_rawncpy (doc, text.data (), text.size ());
+    } else if constexpr (std::is_enum_v<T>) {
+        yyjson_mut_val *node = nullptr;
+        if (!visit_enum_entry<T> ([&] (auto entry) { return entry.value == value; },
+                                  [&] (auto entry) {
+                                      node = yyjson_mut_strn (doc, entry.name.data (),
+                                                              entry.name.size ());
+                                  }))
+            fail (error, "undeclared enum value");
+        return node;
+    } else if constexpr (std::is_same_v<T, std::vector<std::byte>>) {
+        staging->resize (staging_start);
+        write_bytes (value, *staging);
+        const auto size = staging->size () - staging_start - 2;
+        const auto *text = reinterpret_cast<const char *> (staging->data ()) + staging_start + 1;
+        auto *node = yyjson_mut_strncpy (doc, text, size);
+        staging->resize (staging_start);
+        return node;
+    } else if constexpr (vector_type<T>::value) {
+        auto *array = yyjson_mut_arr (doc);
+        if (!array)
+            return nullptr;
+        for (const auto &element : value) {
+            auto *node = encode_node<typename vector_type<T>::value_type> (
+              element, doc, staging, staging_start, error);
+            if (!node || !yyjson_mut_arr_append (array, node))
+                return nullptr;
+        }
+        return array;
+    } else {
+        auto *object = yyjson_mut_obj (doc);
+        if (!object)
+            return nullptr;
+        const auto field = [&] (std::string_view name, const auto &element) {
+            auto *key = yyjson_mut_strn (doc, name.data (), name.size ());
+            auto *node = encode_node (element, doc, staging, staging_start, error);
+            return key && node && yyjson_mut_obj_add (object, key, node);
+        };
+        if constexpr (map_type<T>::value) {
+            std::vector<const typename T::value_type *> entries;
+            entries.reserve (value.size ());
+            for (const auto &entry : value)
+                entries.push_back (&entry);
+            std::sort (entries.begin (), entries.end (),
+                       [] (auto a, auto b) { return a->first < b->first; });
+            for (const auto *entry : entries)
+                if (!field (entry->first, entry->second))
+                    return nullptr;
+        } else {
+            using layout = dto_layout<T>;
+            if (![&]<std::size_t... I> (std::index_sequence<I...>) {
+                    return (field (std::get<layout::order[I]> (layout::fields).name,
+                                   value.*(std::get<layout::order[I]> (layout::fields).member))
+                            && ...);
+                }(std::make_index_sequence<layout::count>{}))
+                return nullptr;
+        }
+        return object;
+    }
+}
+
+// 0.12 writes hexadecimal escapes in uppercase. Preserve the profile's bytes
+// in place, skipping escaped backslashes so literal text stays unchanged.
+inline void canonical_escapes (char *text, std::size_t size)
+{
+    auto *cursor = text;
+    const auto *end = text + size;
+    while (cursor < end) {
+        auto *escape =
+          static_cast<char *> (std::memchr (cursor, '\\', static_cast<std::size_t> (end - cursor)));
+        if (!escape)
+            break;
+        cursor = escape + 2;
+        if (escape[1] == 'u') {
+            for (unsigned i = 0; i < 4; ++i, ++cursor)
+                if (*cursor >= 'A' && *cursor <= 'F')
+                    *cursor += 'a' - 'A';
+        }
+    }
+}
+
 template <typename T, typename Output>
 bool write_value (const T &value, Output &out, std::string *error)
 {
-    static_assert (validate_type<T> ());
     if constexpr (std::is_same_v<T, nlohmann::json>) {
         if (!has_finite_numbers (value) || !has_valid_strings (value))
             return fail (error, "invalid JSON value");
         out += dump (value);
-    } else if constexpr (optional_type<T>::value) {
-        if (value)
-            return write_value (*value, out, error);
-        out += "null";
-    } else if constexpr (std::is_same_v<T, std::string>)
-        return write_string (value, out, error);
-    else if constexpr (std::is_same_v<T, bool>)
-        out += value ? "true" : "false";
-    else if constexpr (std::is_integral_v<T>) {
-        if constexpr (sizeof (T) == 8)
-            out += '"';
-        write_integer (value, out);
-        if constexpr (sizeof (T) == 8)
-            out += '"';
-    } else if constexpr (std::is_floating_point_v<T>) {
-        if (!valid_float (value))
-            return fail (error, "non-finite number");
-        write_float (static_cast<double> (value), out);
-    } else if constexpr (std::is_enum_v<T>) {
-        bool written = false;
-        const auto found = visit_enum_entry<T> (
-          [&] (auto entry) { return entry.value == value; },
-          [&] (auto entry) { written = write_string (entry.name, out, error); });
-        return (found && written) || fail (error, "undeclared enum value");
-    } else if constexpr (std::is_same_v<T, std::vector<std::byte>>)
-        write_bytes (value, out);
-    else if constexpr (vector_type<T>::value) {
-        out += '[';
-        bool first = true;
-        for (const auto &element : value) {
-            if (!first)
-                out += ',';
-            first = false;
-            if (!write_value<typename vector_type<T>::value_type> (element, out, error))
-                return false;
-        }
-        out += ']';
-    } else if constexpr (map_type<T>::value) {
-        out += '{';
-        bool first = true;
-        // JSON object order is lexical even when the application's map comparator differs.
-        std::vector<const typename T::value_type *> entries;
-        entries.reserve (value.size ());
-        for (const auto &entry : value)
-            entries.push_back (&entry);
-        std::sort (entries.begin (), entries.end (),
-                   [] (auto a, auto b) { return a->first < b->first; });
-        for (const auto entry : entries) {
-            if (!first)
-                out += ',';
-            first = false;
-            if (!write_string (entry->first, out, error))
-                return false;
-            out += ':';
-            if (!write_value (entry->second, out, error))
-                return false;
-        }
-        out += '}';
+        return true;
     } else {
-        using layout = dto_layout<T>;
-        out += '{';
-        const auto write_field = [&]<std::size_t Position> () {
-            constexpr auto field = std::get<layout::order[Position]> (layout::fields);
-            if constexpr (Position != 0)
-                out += ',';
-            if (!write_string (field.name, out, error))
-                return false;
-            out += ':';
-            return write_value (value.*(field.member), out, error);
-        };
-        if (![&]<std::size_t... I> (std::index_sequence<I...>) {
-                return (write_field.template operator()<I> () && ...);
-            }(std::make_index_sequence<layout::count>{}))
+        const std::unique_ptr<yyjson_mut_doc, decltype (&yyjson_mut_doc_free)> doc (
+          yyjson_mut_doc_new (nullptr), &yyjson_mut_doc_free);
+        if (!doc)
+            return fail (error, "JSON allocation failed");
+        const auto staging_start = out.size ();
+        auto *root = encode_node (value, doc.get (), &out, staging_start, error);
+        if (!root)
             return false;
-        out += '}';
+        yyjson_mut_doc_set_root (doc.get (), root);
+        std::size_t size = 0;
+        const std::unique_ptr<char, decltype (&std::free)> text (
+          yyjson_mut_write (doc.get (), 0, &size), &std::free);
+        if (!text)
+            return fail (error, "invalid UTF-8 string");
+        canonical_escapes (text.get (), size);
+        out.append (text.get (), size);
+        return true;
     }
-    return true;
+}
+
+template <typename Output>
+bool write_string (std::string_view value, Output &out, std::string *error)
+{
+    return write_value (value, out, error);
 }
 
 enum class sax_kind
@@ -627,7 +654,8 @@ struct sax_event
     std::string_view text{};
 };
 
-class typed_sax final : public nlohmann::json_sax<nlohmann::json>
+
+class typed_sax final
 {
     struct destination
     {
@@ -641,7 +669,6 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         destination (*child) (frame &);
         bool (*finish) (typed_sax &, frame &);
         std::vector<std::string> keys;
-        bool pending_key = false;
         bool (*key) (frame &, std::string_view) = &remember_key;
         destination next{nullptr, &skip_value};
         std::uint64_t seen = 0;
@@ -702,25 +729,37 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             return parent.next;
         }
     }
+    static bool remember_key (frame &parent, std::string_view key, std::size_t index)
+    {
+        const bool known = index != std::numeric_limits<std::size_t>::max ();
+        auto *word = known ? &parent.seen_word (index / field_mask_bits) : nullptr;
+        const auto bit = std::uint64_t{1} << (index % field_mask_bits);
+        const bool duplicate =
+          known ? ((*word & bit) != 0)
+                : std::find (parent.keys.begin (), parent.keys.end (), key) != parent.keys.end ();
+        if (duplicate)
+            return false;
+        if (known)
+            *word |= bit;
+        else
+            parent.keys.emplace_back (key);
+        return true;
+    }
     static bool remember_key (frame &parent, std::string_view key)
     {
-        if (std::find (parent.keys.begin (), parent.keys.end (), key) != parent.keys.end ())
-            return false;
-        parent.keys.emplace_back (key);
-        return true;
+        return remember_key (parent, key, std::numeric_limits<std::size_t>::max ());
     }
     template <typename T> static bool dto_key (frame &parent, std::string_view key)
     {
         using layout = dto_layout<T>;
         const auto index = layout::find (key);
         parent.next = {nullptr, &skip_value};
-        if (index == layout::count)
-            return remember_key (parent, key);
-        auto &word = parent.seen_word (index / field_mask_bits);
-        const auto bit = std::uint64_t{1} << (index % field_mask_bits);
-        if (word & bit)
+        if (!remember_key (parent, key,
+                           index == layout::count ? std::numeric_limits<std::size_t>::max ()
+                                                  : index))
             return false;
-        word |= bit;
+        if (index == layout::count)
+            return true;
         using select = destination (*) (T &);
         static constexpr auto targets = []<std::size_t... I> (std::index_sequence<I...>) {
             return std::array<select, layout::count>{
@@ -803,21 +842,21 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             if constexpr (sizeof (T) == 8) {
                 if (event.kind != sax_kind::string)
                     return in.reject ("expected 64-bit decimal string");
-                return read_decimal (event.text, out, in.error);
+                return in.healthy = read_decimal (event.text, out, in.error);
             } else {
-                if (event.kind == sax_kind::unsigned_integer) {
-                    if (event.unsigned_integer
-                        > static_cast<std::uint64_t> (std::numeric_limits<T>::max ()))
+                using integer_type = std::conditional_t<std::is_signed_v<T>, std::make_signed_t<T>,
+                                                        std::make_unsigned_t<T>>;
+                const auto assign = [&] (auto value) {
+                    if (!std::in_range<integer_type> (value))
                         return in.reject ("integer out of range");
-                    out = static_cast<T> (event.unsigned_integer);
-                } else if (event.kind == sax_kind::integer) {
-                    if (event.integer < static_cast<std::int64_t> (std::numeric_limits<T>::min ())
-                        || event.integer
-                             > static_cast<std::int64_t> (std::numeric_limits<T>::max ()))
-                        return in.reject ("integer out of range");
-                    out = static_cast<T> (event.integer);
-                } else
-                    return in.reject ("expected integer number");
+                    out = static_cast<T> (value);
+                    return true;
+                };
+                if (event.kind == sax_kind::unsigned_integer)
+                    return assign (event.unsigned_integer);
+                if (event.kind == sax_kind::integer)
+                    return assign (event.integer);
+                return in.reject ("expected integer number");
             }
         } else if constexpr (std::is_floating_point_v<T>) {
             double value{};
@@ -829,7 +868,9 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
                 value = event.floating;
             else
                 return in.reject ("expected finite number");
-            if (!valid_float<T> (value))
+            // Number tokens have already passed the reader's finite decision.
+            if (value < -static_cast<double> (std::numeric_limits<T>::max ())
+                || value > static_cast<double> (std::numeric_limits<T>::max ()))
                 return in.reject ("floating point out of range");
             out = static_cast<T> (value);
         } else if constexpr (std::is_enum_v<T>) {
@@ -857,24 +898,15 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             return false;
         destination next = root;
         if (frames.empty ()) {
-            if (started)
-                return reject ("trailing JSON value");
             started = true;
         } else {
             auto &parent = frames.back ();
-            if (parent.kind == sax_kind::object) {
-                if (!parent.pending_key)
-                    return reject ("missing property name");
-                parent.pending_key = false;
-            }
             next = parent.child (parent);
         }
         return next.accept (*this, next.value, event);
     }
-    bool end (sax_kind kind)
+    bool end ()
     {
-        if (frames.empty () || frames.back ().kind != kind)
-            return reject ("unexpected container end");
         if (!frames.back ().finish (*this, frames.back ()))
             return false;
         frames.pop_back ();
@@ -888,64 +920,106 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         frames.reserve (initial_frame_capacity);
     }
     bool complete () const { return healthy && started && frames.empty (); }
-    bool null () override { return dispatch ({sax_kind::null}); }
-    bool boolean (bool value) override
+    bool syntax_error () { return !healthy ? false : reject ("invalid JSON"); }
+    bool null () { return dispatch ({sax_kind::null}); }
+    bool boolean (bool value)
     {
         sax_event e{sax_kind::boolean};
         e.boolean = value;
         return dispatch (e);
     }
-    bool number_integer (number_integer_t value) override
+    bool number_integer (std::int64_t value)
     {
         sax_event e{sax_kind::integer};
         e.integer = value;
         return dispatch (e);
     }
-    bool number_unsigned (number_unsigned_t value) override
+    bool number_unsigned (std::uint64_t value)
     {
         sax_event e{sax_kind::unsigned_integer};
         e.unsigned_integer = value;
         return dispatch (e);
     }
-    bool number_float (number_float_t value, const string_t &) override
+    bool number_float (double value)
     {
-        if (!valid_float (value))
-            return reject ("non-finite number");
         sax_event e{sax_kind::floating};
         e.floating = value;
         return dispatch (e);
     }
-    bool string (string_t &value) override
+    bool borrowed_string (std::string_view value)
     {
         sax_event e{sax_kind::string};
         e.text = value;
         return dispatch (e);
     }
-    bool binary (binary_t &) override { return reject ("expected JSON value"); }
-    bool start_object (std::size_t) override { return dispatch ({sax_kind::object}); }
-    bool key (string_t &value) override
+    bool borrowed_key (std::string_view value)
     {
-        if (frames.empty () || frames.back ().kind != sax_kind::object)
-            return reject ("unexpected property name");
         auto &parent = frames.back ();
         if (!parent.key (parent, value))
             return reject ("framework-json-v1 rejects duplicate properties");
-        parent.pending_key = true;
         return true;
     }
-    bool end_object () override { return end (sax_kind::object); }
-    bool start_array (std::size_t) override { return dispatch ({sax_kind::array}); }
-    bool end_array () override { return end (sax_kind::array); }
-    bool parse_error (std::size_t, const std::string &, const nlohmann::json::exception &) override
-    {
-        return reject ("invalid JSON");
-    }
+    bool start_object () { return dispatch ({sax_kind::object}); }
+    bool end_object () { return end (); }
+    bool start_array () { return dispatch ({sax_kind::array}); }
+    bool end_array () { return end (); }
 };
+// Walk every parsed value, including unknown properties, through the same
+// duplicate-key and finite-number decisions as typed destinations.
+inline bool visit_json (yyjson_val *value, typed_sax &handler)
+{
+    if (yyjson_is_obj (value)) {
+        if (!handler.start_object ())
+            return false;
+        std::size_t index, count;
+        yyjson_val *key, *child;
+        yyjson_obj_foreach (value, index, count, key, child)
+        {
+            if (!handler.borrowed_key ({yyjson_get_str (key), yyjson_get_len (key)})
+                || !visit_json (child, handler))
+                return false;
+        }
+        return handler.end_object ();
+    }
+    if (yyjson_is_arr (value)) {
+        if (!handler.start_array ())
+            return false;
+        std::size_t index, count;
+        yyjson_val *child;
+        yyjson_arr_foreach (value, index, count, child)
+        {
+            if (!visit_json (child, handler))
+                return false;
+        }
+        return handler.end_array ();
+    }
+    if (yyjson_is_str (value))
+        return handler.borrowed_string ({yyjson_get_str (value), yyjson_get_len (value)});
+    if (yyjson_is_uint (value))
+        return handler.number_unsigned (yyjson_get_uint (value));
+    if (yyjson_is_sint (value))
+        return handler.number_integer (yyjson_get_sint (value));
+    if (yyjson_is_real (value)) {
+        const double number = yyjson_get_real (value);
+        return std::isfinite (number) && handler.number_float (number);
+    }
+    if (yyjson_is_bool (value))
+        return handler.boolean (yyjson_get_bool (value));
+    return handler.null ();
+}
+inline bool read_json (std::string_view text, typed_sax &handler)
+{
+    // Preserve the existing reader's NUL-as-EOF behavior.
+    text = text.substr (0, text.find ('\0'));
+    const std::unique_ptr<yyjson_doc, decltype (&yyjson_doc_free)> doc (
+      yyjson_read (text.data (), text.size (), 0), &yyjson_doc_free);
+    return doc && visit_json (yyjson_doc_get_root (doc.get ()), handler);
+}
 template <typename T>
 std::optional<std::string> try_encode (const T &value, std::string *error = nullptr)
 {
+    static_assert (validate_type<T> ());
     std::string out;
-    out.reserve (initial_output_capacity);
     if (!write_value (value, out, error))
         return std::nullopt;
     return out;
@@ -964,8 +1038,13 @@ std::optional<T> try_decode (Iterator begin, Iterator end, std::string *error)
     }
     T value{};
     typed_sax handler (value, error);
-    if (!nlohmann::json::sax_parse (begin, end, &handler) || !handler.complete ())
+    if (!read_json ({reinterpret_cast<const char *> (std::to_address (begin)),
+                     static_cast<std::size_t> (end - begin)},
+                    handler)
+        || !handler.complete ()) {
+        handler.syntax_error ();
         return std::nullopt;
+    }
     return value;
 }
 

@@ -63,7 +63,7 @@ target_include_directories(zlink_stream_connector PRIVATE
 zlink_framework_cpp_add_boost_headers(zlink_stream_connector)
 zlink_framework_cpp_add_asio_system_libraries(zlink_stream_connector)
 target_link_libraries(zlink_stream_connector
-  PUBLIC nlohmann_json::nlohmann_json
+  PUBLIC nlohmann_json::nlohmann_json yyjson::yyjson
   PRIVATE Threads::Threads)
 if(ZLINK_STREAM_CONNECTOR_WITH_TLS AND OpenSSL_FOUND)
   target_compile_definitions(zlink_stream_connector PRIVATE
@@ -99,7 +99,7 @@ target_include_directories(zlink_stream_connector_codecs INTERFACE
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(zlink_stream_connector_codecs INTERFACE
   zlink::stream_connector
-  nlohmann_json::nlohmann_json)
+  nlohmann_json::nlohmann_json yyjson::yyjson)
 
 if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
   add_library(zlink_stream_e2e_client INTERFACE)

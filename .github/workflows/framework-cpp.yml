@@ -138,6 +138,7 @@ jobs:
           set -euo pipefail
           mkdir -p "${APT_CACHE_DIR}"
           sudo install -d -o _apt -g root -m 0755 "${APT_CACHE_DIR}/partial"
+          # yyjson 0.12.0 has no Ubuntu package; CMake uses the pinned source fallback.
           # Self-hosted WSL runners share one dpkg lock; wait for it instead of failing.
           sudo apt-get -o DPkg::Lock::Timeout=600 update
           sudo apt-get -o DPkg::Lock::Timeout=600 \
