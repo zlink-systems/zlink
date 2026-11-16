@@ -975,13 +975,6 @@ final class ZLinkStreamRuntimeIngressTest {
                 assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
                 assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
             }
-            awaitCondition(
-                    () ->
-                            lastRegistration
-                                            .applicationJobQueue()
-                                            .snapshot()
-                                            .reservedSupplyPermits()
-                                    == 0);
             assertEquals(created, TestSession.createdCount.get());
             if (state.equals("absent")) assertNull(TestSession.lastSession.get());
             if (state.equals("pre-ready")) assertFalse(preparing.isDone());
@@ -991,6 +984,13 @@ final class ZLinkStreamRuntimeIngressTest {
             if (session != null) session.firstDispatch.complete(null);
             if (preparing != null) preparing.get(5, TimeUnit.SECONDS);
         }
+        runtime.closeAsync().toCompletableFuture().join();
+        runtimes.remove(runtime);
+        awaitCondition(
+                () ->
+                        lastRegistration.applicationJobQueue().snapshot().reservedSupplyPermits()
+                                == 0,
+                "reserved supply permits remained after the receive loop stopped");
     }
 
     @Test

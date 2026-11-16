@@ -2332,7 +2332,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         ZLinkBackendActorRef currentActor = nativeStay.actor();
         long currentAuthority = nativeStay.authority().authorityOwnerGeneration();
         long currentOwnerLease = nativeStay.authority().ownerLeaseGeneration();
-        if (currentAuthority != header.target().authorityOwnerGeneration()
+        if ((currentActor.generation() == actor.generation()
+                        && currentAuthority != header.target().authorityOwnerGeneration())
                 || currentOwnerLease != header.target().ownerLeaseGeneration()) {
             return null;
         }

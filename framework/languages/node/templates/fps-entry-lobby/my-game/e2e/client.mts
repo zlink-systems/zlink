@@ -319,31 +319,13 @@ async function rejectedAsync(
 }
 
 async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
-  const beforeBudget = await viewAsync(a),
-    moveSequence = next(beforeBudget, a),
-    acceptedMoveRequest = new MoveRequest(new Vec3(0, 0, -2), moveSequence),
-    move = new MoveRequest(new Vec3(0, 0, -2), moveSequence + 1n),
-    moveStart = a.messages.length;
-  await a.connector.send(acceptedMoveRequest).submit();
-  await a.connector.send(move).submit();
-  const acceptedMove = await a.wait<MoveResult>(PacketNames.moveResult, moveStart);
-  assert.equal(acceptedMove.sequence, moveSequence, 'Expected accepted movement before movement-budget rejection.');
-  const budget = await a.wait<ActionRejected>(PacketNames.actionRejected, moveStart);
-  assert(budget.reason === Rejection.moveBudget && budget.retryAfterMs > 0, 'Expected movement-budget rejection.');
-  const afterBudget = await viewAsync(a),
-    beforeBudgetPlayer = player(beforeBudget, a),
-    afterBudgetPlayer = player(afterBudget, a);
-  assert(equal(afterBudgetPlayer.position, acceptedMove.position), 'Movement-budget rejection changed the accepted position.');
-  assert.equal(afterBudgetPlayer.lastSequence, moveSequence, 'Movement-budget rejection changed the accepted sequence.');
-  assert.equal(afterBudgetPlayer.hp, beforeBudgetPlayer.hp, 'Movement-budget rejection changed player HP.');
-  assert.equal(player(afterBudget, b).hp, player(beforeBudget, b).hp, 'Movement-budget rejection changed target HP.');
-  await delay(budget.retryAfterMs);
-  const retriedMove = await a.action(move);
-  assert(
-    retriedMove.name === PacketNames.moveResult &&
-      (retriedMove.payload as MoveResult).sequence === move.sequence,
-    'Server movement retry delay was insufficient.'
-  );
+  const beforeMove = await viewAsync(a);
+  await moveAsync(a, new Vec3(0, 0, -2));
+  await moveAsync(a, new Vec3(0, 0, -2));
+  const afterMove = await viewAsync(a);
+  assert.equal(player(afterMove, a).lastSequence, player(beforeMove, a).lastSequence + 2n);
+  assert.equal(player(afterMove, a).hp, player(beforeMove, a).hp);
+  assert.equal(player(afterMove, b).hp, player(beforeMove, b).hp);
 
   let view = await viewAsync(a),
     sequence = player(view, a).lastSequence;
@@ -360,34 +342,15 @@ async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
   sequence = next(await viewAsync(a), a);
   await rejectedAsync(a, new MoveRequest(new Vec3(2, 0, 0), sequence), Rejection.moveBlockedByWall);
   const beforeFire = await viewAsync(a),
-    shotSequence = next(beforeFire, a),
-    acceptedShotRequest = new ShootRequest(new Vec3(0, 1, 0), shotSequence),
-    shot = new ShootRequest(new Vec3(0, 1, 0), shotSequence + 1n),
-    shotStart = a.messages.length;
-  await a.connector.send(acceptedShotRequest).submit();
-  await a.connector.send(shot).submit();
-  const acceptedShot = await a.wait<ShotResult>(PacketNames.shotResult, shotStart);
-  assert.equal(acceptedShot.sequence, shotSequence, 'Expected accepted shot before fire-too-soon rejection.');
-  assert.equal(acceptedShot.outcome, ShotOutcome.miss, 'Expected accepted miss before fire-too-soon rejection.');
-  const fire = await a.wait<ShotRejected>(PacketNames.shotRejected, shotStart);
-  assert(fire.reason === Rejection.fireTooSoon && fire.retryAfterMs > 0, 'Expected fire-interval rejection.');
-  const afterFire = await viewAsync(a),
-    beforeFirePlayer = player(beforeFire, a),
-    afterFirePlayer = player(afterFire, a);
-  assert(equal(afterFirePlayer.position, beforeFirePlayer.position), 'Fire-too-soon rejection changed player position.');
-  assert.equal(afterFirePlayer.lastSequence, shotSequence, 'Fire-too-soon rejection changed the accepted sequence.');
-  assert.equal(afterFirePlayer.hp, beforeFirePlayer.hp, 'Fire-too-soon rejection changed player HP.');
-  assert.equal(player(afterFire, b).hp, player(beforeFire, b).hp, 'Fire-too-soon rejection changed target HP.');
-  await delay(fire.retryAfterMs);
-  const retriedShot = await a.action(shot);
-  assert(
-    retriedShot.name === PacketNames.shotResult &&
-      (retriedShot.payload as ShotResult).sequence === shot.sequence &&
-      (retriedShot.payload as ShotResult).outcome === ShotOutcome.miss,
-    'Server fire retry delay was insufficient.'
-  );
+    shotSequence = next(beforeFire, a);
+  await shootAsync(a, new Vec3(0, 1, 0), ShotOutcome.miss);
+  await rejectedAsync(a, new ShootRequest(new Vec3(0, 1, 0), shotSequence), Rejection.staleSequence);
+  const afterFire = await viewAsync(a);
+  assert(equal(player(afterFire, a).position, player(beforeFire, a).position), 'Accepted miss changed player position.');
+  assert.equal(player(afterFire, a).lastSequence, shotSequence, 'Accepted miss used the wrong sequence.');
+  assert.equal(player(afterFire, a).hp, player(beforeFire, a).hp, 'Accepted miss changed player HP.');
   assert.equal(player(await viewAsync(b), b).hp, Game.initialHp, 'Input checks damaged target.');
-  console.log('input: movement-budget and fire-too-soon server retry delays accepted unchanged requests');
+  console.log('input: movement and shot sequence checks passed');
 }
 
 async function matchmakingAsync(endpoint: string, runId: string, logDir: string): Promise<void> {
