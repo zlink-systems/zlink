@@ -5554,7 +5554,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 continue;
             }
             if (spotType != null) {
-                if (handler.spotType().isAssignableFrom(spotType)) {
+                if (handler.spotType() == spotType) {
                     return handler;
                 }
                 continue;

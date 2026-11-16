@@ -98,7 +98,7 @@ internal static class ZLinkSpotActorDescriptorBuilder
         if (expectedActorType is null)
             return;
 
-        ZLinkHandlerContractDescriptorSupport.RequireAssignableFrom(
+        ZLinkHandlerContractDescriptorSupport.RequireExactType(
             handlerType,
             expectedActorType,
             actualActorType,
