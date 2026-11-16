@@ -984,6 +984,13 @@ final class ZLinkStreamRuntimeIngressTest {
             if (session != null) session.firstDispatch.complete(null);
             if (preparing != null) preparing.get(5, TimeUnit.SECONDS);
         }
+        runtime.closeAsync().toCompletableFuture().join();
+        runtimes.remove(runtime);
+        awaitCondition(
+                () ->
+                        lastRegistration.applicationJobQueue().snapshot().reservedSupplyPermits()
+                                == 0,
+                "reserved supply permits remained after the receive loop stopped");
     }
 
     @Test
