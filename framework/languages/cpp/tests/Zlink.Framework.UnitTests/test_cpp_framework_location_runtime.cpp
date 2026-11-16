@@ -7994,6 +7994,110 @@ TEST_P (StoreOutageRetention, StaleOutsideEpisodeStillClaimsImmediately)
     registered_owner (false, false, -60);
 }
 
+TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardsWithMainApi)
+{
+    using status_t = serial_execution_queue_t::execution_status_t;
+    location_runtime_t runtime (store (), options, "stale-outside-discard-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto token = *lease_access::snapshot (runtime)->token;
+
+    auto node = test::runtime_failure_fixture<detail::spot_node_builder_state_t> (
+      "stale-outside-discard-node");
+    auto scheduler = std::make_shared<test::manual_internal_scheduler_t> ();
+    node->worker_executor = scheduler;
+    auto context = std::make_shared<detail::spot_context_state_t> ();
+    context->node = node;
+    context->lane_owner = node;
+    context->serial_executor = scheduler;
+    context->spot_id = spot_id_t ("stale-outside-discard-spot");
+    context->spot_name = "room";
+    context->mesh_name = "stale-outside-discard-node";
+    context->node_rid = node_rid_t::from_string ("stale-outside-discard-node");
+    context->execution_mode = user_spot_execution_mode_t::per_actor;
+    context->object_generation = 1;
+    context->authority_owner_generation = 1;
+    context->actor_count = 1;
+    node->spot_contexts_by_id.emplace ("stale-outside-discard-spot",
+                                       detail::spot_context_access_t::create (context));
+    node->actor_types_by_id["early"] = "player";
+    node->actor_spot_ids["player:early"] = context->spot_id;
+    node->actor_generations["player:early"] = 1;
+    node->actor_instances["player:early"] = std::make_shared<int> (0);
+
+    detail::spot_node_runtime_t owner (node);
+    location_lifecycle_t lifecycle (runtime);
+    owner.bind_location_lifecycle (lifecycle);
+    runtime
+      .on_execution_discard ([&] (auto policy) {
+          // Keep the callback void for origin/main; the branch also returns a task here.
+          static_cast<void> (owner.request_location_execution_discard (std::move (policy)));
+      })
+      .result ()
+      .value ();
+
+    auto executor = context->ensure_spot_serial_executor ();
+    auto spot = executor->spot_queue ();
+    auto actor = executor->actor_executor ("player:early")->queue ();
+    spot->confirm_execution_ready (clock_now.load ());
+    actor->confirm_execution_ready (clock_now.load ());
+    scheduler->run_all ();
+    ASSERT_EQ (status_t::allowed, actor->execution_status ());
+
+    // A spot timer keeps its own queue; the discard must stop it as well.
+    auto timer_queue = std::make_shared<serial_execution_queue_t> (*scheduler);
+    timer_queue->attach_spot_gate (spot);
+    timer_queue->set_execution_policy (runtime.execution_policy ());
+    timer_queue->confirm_execution_ready (clock_now.load ());
+    serializer_registry_t serializers;
+    context->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+    context->channel_runtime->serializers = &serializers;
+    auto timer = std::make_shared<detail::timer_state_t> ();
+    timer->name = "stale-outside-discard-timer";
+    timer->serial_queue = timer_queue;
+    auto handler = std::make_shared<int> (0);
+    timer->handler_instance = handler;
+    int actor_calls = 0, timer_calls = 0;
+    timer->handler_invoker = [&] (void *, void *, serializer_registry_t &, const timer_tick_t &) {
+        ++timer_calls;
+        return task_t<zlink::message_t> (result_t<zlink::message_t>::success ({}));
+    };
+    context->timers.push_back (timer);
+    scheduler->run_all ();
+
+    ASSERT_TRUE (actor->try_post ("before-stale", [&] { ++actor_calls; }));
+    detail::timer_runtime_t::post_fire_count (context, timer, timer_queue, 1);
+    move_to (*lease_access::snapshot (runtime)->admission_deadline + 1ms);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    ASSERT_EQ (status_t::stopped, actor->execution_status ());
+
+    store ().release_owner_lease (token).result ().value ();
+    auto renewal = lease_access::heartbeat_async (runtime, clock_now.load ());
+    ASSERT_TRUE (renewal.result_for (auto_connect_wait));
+    renewal.result ().value ();
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_NE (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+    EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+
+    // Apply the posted discard before the scheduler releases the queued Actor turn.
+    node->lane.run_sync ([] {});
+    scheduler->run_all ();
+    EXPECT_EQ (0, actor_calls);
+    EXPECT_EQ (0, timer_calls);
+    EXPECT_EQ (status_t::ownership_lost, actor->execution_status ());
+
+    runtime.stop ();
+    std::vector<task_t<void>> completions;
+    executor->close (&completions);
+    for (auto &completion : completions) {
+        ASSERT_TRUE (scheduler->run_until (completion, auto_connect_wait));
+        completion.result ().value ();
+    }
+    scheduler->retire ();
+    context->node.reset ();
+    node->spot_contexts_by_id.clear ();
+}
+
 TEST_P (StoreOutageRetention, DiscardRequestPostsCloseBeforeFollowingLaneTurn)
 {
     auto node = test::runtime_failure_fixture<detail::spot_node_builder_state_t> ("discard-post");
