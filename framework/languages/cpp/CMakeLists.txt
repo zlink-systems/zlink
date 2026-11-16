@@ -2983,6 +2983,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIMEOUT 30)
   endforeach()
 
+  foreach(_control_name "$zlink.heartbeat.ping" "$zlink.actor.bound" "$zlink.actor.unbound" "unknown.control")
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_stream_control_closing_${_control_name}
+      COMMAND test_cpp_stream_control_contract "closing:${_control_name}"
+      LABELS "framework-unit;framework-contract;stream;liveness"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
+
   add_zlink_framework_test(
     test_cpp_framework_stream_liveness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness.cpp
