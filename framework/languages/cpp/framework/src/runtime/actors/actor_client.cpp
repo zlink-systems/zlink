@@ -802,12 +802,12 @@ class actor_client_impl_t final : public actor_client_t,
             operation.registry->fail (operation.id,
                                       runtime::foundation::operation_terminal_t::transport_failed,
                                       detail::result_access_t::failure<zlink::message_t> (failure));
-            // Registration consumes operation.receiver. Only a rejection before
-            // that transfer has no physical producer and needs local delivery.
-            if (operation.receiver)
-                operation.receive (
-                  detail::result_access_t::failure<detail::host::operation_completion_t> (failure),
-                  false);
+            // Without a physical producer, the registry's terminal is the result.
+            // A rejected continuation may follow a timeout whose callback is queued.
+            if (operation.receiver) {
+                auto completion = operation.completion->task ();
+                detail::observe_task_terminal (completion, std::move (operation.receiver));
+            }
         }
     }
 

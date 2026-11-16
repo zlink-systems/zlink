@@ -67,6 +67,10 @@ struct raw_mesh_node_owner_test_access_t
         injected_registry_now =
           foundation::operation_registry_t::clock_t::now () + std::chrono::hours (1);
     }
+    static void schedule_registry (raw_mesh_node_owner_t &owner)
+    {
+        owner._operations = foundation::operation_registry_t::create_scheduled (owner._lane);
+    }
     static task_t<bool>
     submit_unadmitted (raw_mesh_node_owner_t &owner,
                        std::shared_ptr<foundation::operation_registry_t> registry,
@@ -702,7 +706,9 @@ TEST_F (local_actor_receiver_t, ExpiredLocalContinuationPreservesTheRegisteredDe
         ASSERT_FALSE (result);
         EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
         auto physical = fw::detail::request_task_access_t::physical_reply (pending);
-        EXPECT_FALSE (physical.result ());
+        const auto physical_result = physical.result ();
+        EXPECT_FALSE (physical_result);
+        EXPECT_EQ (physical_result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
         EXPECT_EQ (runtime->pending_transport_operations (), 0u);
     }
 }
@@ -770,9 +776,10 @@ TEST_F (local_actor_receiver_t, LocalCompletionSinkConstructionFailureDeliversPh
 // that entry in the serializer gives a deterministic selection/submission boundary.
 TEST_F (local_actor_receiver_t, MissingDescriptorTimeoutPreservesEveryCachedFence)
 {
-    // This test expires a pending lookup explicitly; the expired-continuation
-    // contract above retains the fixture's future clock.
-    rt::mesh::injected_registry_now = fd::operation_registry_t::clock_t::now ();
+    // Wait for the registered deadline; a manual expiry would race the scheduler.
+    // The expired-continuation contract above retains the fixture's future clock.
+    rt::mesh::raw_mesh_node_owner_test_access_t::schedule_registry (
+      runtime->native_node ().transport ());
     for (int changed = -1; changed != 5; ++changed) {
         SCOPED_TRACE (changed);
         auto used = fence;
@@ -801,8 +808,6 @@ TEST_F (local_actor_receiver_t, MissingDescriptorTimeoutPreservesEveryCachedFenc
         auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
                          .timeout (5ms)
                          .async<std::string> ();
-        rt::mesh::raw_mesh_node_owner_test_access_t::end_local (
-          runtime->native_node ().transport (), {}, terminal_t::timed_out);
         const auto result = pending.result ();
         ASSERT_FALSE (result);
         EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
