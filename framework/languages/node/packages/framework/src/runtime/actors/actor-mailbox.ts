@@ -35,7 +35,7 @@ export class ZLinkActorSerialExecutor {
     capture?: () => Promise<T> | T
   ): Promise<T> {
     const initial = currentApplicationJobPermit();
-    const context = capture === undefined ? undefined : bindApplicationJobPermit(capture);
+    const packetAdmission = capture === undefined ? undefined : bindApplicationJobPermit(capture);
     if (
       initial !== undefined &&
       workOptions?.lane !== 'lifecycle' &&
@@ -52,7 +52,7 @@ export class ZLinkActorSerialExecutor {
             runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
           ),
         workOptions,
-        context,
+        undefined,
         {
           prepare: async (signal) => {
             if (initial.reacquire === undefined) {
@@ -66,7 +66,8 @@ export class ZLinkActorSerialExecutor {
             prepared.markApplicationQueued();
           },
           cancel
-        }
+        },
+        packetAdmission
       );
       initial.releaseAfterInternalProcessing();
       return terminal;
@@ -75,8 +76,8 @@ export class ZLinkActorSerialExecutor {
       runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
     );
     return initial !== undefined
-      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, context)
-      : this.scheduler.submit(boundOperation, workOptions, context);
+      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, undefined, packetAdmission)
+      : this.scheduler.submit(boundOperation, workOptions, undefined, packetAdmission);
   }
 
   /**
@@ -114,10 +115,8 @@ export class ZLinkActorSerialExecutor {
   capturePacketPrefix(): void {
     while (this.scheduler.application.records.length > 0) {
       const record = this.scheduler.application.records[0]!;
-      // Packet admissions retain their callback in the existing context slot.
-      // Other application work keeps its gate and FIFO position.
-      if (typeof record.context !== 'function') break;
-      const admission = record.context();
+      if (record.packetAdmission === undefined) break;
+      const admission = record.packetAdmission();
       record.preparationController?.abort(new Error('Packet transferred to the Actor handoff.'));
       record.preparation?.cancel();
       this.scheduler.takeSelected(record);

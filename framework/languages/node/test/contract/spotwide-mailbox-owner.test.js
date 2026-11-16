@@ -10,6 +10,9 @@ const {
 const {
   ZLinkSerialExecutionQueue
 } = require('../../packages/framework/dist/internal');
+const {
+  ZLinkActorSerialExecutor
+} = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
 
 function deferred() {
   let resolve;
@@ -37,6 +40,20 @@ test('a mailbox control failure retains its original cause', async () => {
   });
   await new Promise(setImmediate);
   assert.equal(observed, failure);
+});
+
+test('a callable scheduler context does not replace an Actor operation during packet capture', async () => {
+  const actor = new ZLinkActorSerialExecutor('actor-1', undefined);
+  const events = [];
+  const context = () => events.push('context');
+  const operation = () => events.push('operation');
+
+  const terminal = actor.scheduler.submit(operation, undefined, context);
+  actor.capturePacketPrefix();
+
+  await terminal;
+  await actor.close();
+  assert.deepEqual(events, ['operation']);
 });
 
 async function assertConsumerOwnership(injectIndependentConsumer = false) {
