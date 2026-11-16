@@ -125,6 +125,15 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     // Raw MeshNode status/peer snapshots (rid, generations, admission state)
     // backing the IZLinkRouteMeshRuntime monitoring surface (spec 50 §2).
+    ulong LifecycleGeneration { get; }
+
+    (
+        MeshNodeState State,
+        RoutingId RoutingId,
+        IReadOnlyList<MeshNodePeer> Peers,
+        IReadOnlyList<MeshPeerChannel>[] PeerChannels
+    ) MeshTopology();
+
     MeshNodeStatus MeshStatus();
 
     MeshOperationId AllocateOperationId();

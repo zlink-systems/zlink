@@ -2508,7 +2508,8 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
   actor_ref_t actor,
-  const runtime::spot_address_t &target,
+  spot_id_t target_spot,
+  std::shared_ptr<runtime::spot_address_resolver_t> resolver,
   const zlink::message_t &request,
   std::chrono::milliseconds timeout,
   std::optional<zlink::routing_id_t> bound_session_node_rid,
@@ -2518,6 +2519,25 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
 {
     spot_node_runtime_t spot_runtime (_state->spot_state);
     const auto completion_source_spot = spot_runtime.actor_spot (actor);
+    auto located = co_await resolver->resolve_spot_address ({}, target_spot);
+    if (!located || located->object_generation == 0) {
+        const auto reserved = spot_runtime.reserved_actor_transfer_id (actor);
+        const auto operation = spot_runtime.actor_join_operation_id (
+          reserved ? *reserved : spot_runtime.next_actor_transfer_id ());
+        const auto failure = result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::not_found, "target Spot location was not found");
+        const auto delivered = co_await deliver_actor_join (
+          actor, completion_source_spot, operation.first, operation.second, failure);
+        if (!delivered)
+            co_return detail::propagate_failure<actor_join_reply_t> (
+              delivered, "Actor Join resolution failure callback failed");
+        co_return failure;
+    }
+    const auto &target = *located;
+    if (target.owner.lease_generation > 0)
+        observe_spot_authority (target.node_rid, target.spot_id, target.object_generation,
+                                target.node_generation, target.authority_owner_generation,
+                                static_cast<std::uint64_t> (target.owner.lease_generation));
     const auto local_routing_id = co_await routing_id_async ();
     const bool remote =
       local_routing_id && local_routing_id->to_hex () != target.node_rid.to_hex ();

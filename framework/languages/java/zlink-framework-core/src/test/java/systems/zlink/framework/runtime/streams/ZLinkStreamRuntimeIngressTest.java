@@ -917,6 +917,119 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(new WirePayload("CUSTOM"), TestSession.decodedWirePayload.get());
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "absent, $zlink.heartbeat.ping",
+        "absent, $zlink.actor.bound",
+        "absent, $zlink.actor.unbound",
+        "absent, unknown.control",
+        "pre-ready, $zlink.heartbeat.ping",
+        "pre-ready, $zlink.actor.bound",
+        "pre-ready, $zlink.actor.unbound",
+        "pre-ready, unknown.control",
+        "closing, $zlink.heartbeat.ping",
+        "closing, $zlink.actor.bound",
+        "closing, $zlink.actor.unbound",
+        "closing, unknown.control"
+    })
+    void issue4345ControlDispatchIsIndependentOfSessionState(String state, String name)
+            throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+        CompletableFuture<Void> constructing = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        CompletableFuture<Void> preparing = null;
+        TestSession session = null;
+        try {
+            if (state.equals("pre-ready")) {
+                TestSession.constructionHook =
+                        () -> {
+                            constructing.complete(null);
+                            release.join();
+                        };
+                preparing =
+                        CompletableFuture.runAsync(
+                                () ->
+                                        stream.errorHandler.handle(
+                                                PEER_A,
+                                                MonitorEventType.CONNECTION_READY,
+                                                0,
+                                                "ready"));
+                constructing.get(5, TimeUnit.SECONDS);
+            } else if (state.equals("closing")) {
+                TestSession.holdFirstDispatch = true;
+                stream.enqueue(PEER_A, frame("held", "{}"));
+                session = awaitSession();
+                assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+                stream.errorHandler.handle(PEER_A, MonitorEventType.DISCONNECTED, 0, "closed");
+                assertFalse(session.transportClosed.isDone());
+            }
+            int created = TestSession.createdCount.get();
+            stream.enqueue(PEER_A, controlFrame(name));
+            if (name.equals(HEARTBEAT_PING)) {
+                assertTrue(stream.heartbeatPongAsyncAttempted.await(5, TimeUnit.SECONDS));
+                assertEquals(List.of(0), stream.heartbeatPongPayloadLengths);
+                assertEquals(0, stream.disconnectCalls.get());
+            } else {
+                assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
+                assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
+            }
+            awaitCondition(
+                    () ->
+                            lastRegistration
+                                            .applicationJobQueue()
+                                            .snapshot()
+                                            .reservedSupplyPermits()
+                                    == 0);
+            assertEquals(created, TestSession.createdCount.get());
+            if (state.equals("absent")) assertNull(TestSession.lastSession.get());
+            if (state.equals("pre-ready")) assertFalse(preparing.isDone());
+            if (session != null) assertFalse(session.firstDispatch.isDone());
+        } finally {
+            release.complete(null);
+            if (session != null) session.firstDispatch.complete(null);
+            if (preparing != null) preparing.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void controlReturnsItsPermitWhileTheSameSessionApplicationTurnAwaits() throws Exception {
+        TestSession.holdFirstDispatch = true;
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("held", "{}"));
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+        TestSession session = awaitSession();
+        try {
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+            awaitCondition(
+                    () ->
+                            lastRegistration
+                                            .applicationJobQueue()
+                                            .snapshot()
+                                            .reservedSupplyPermits()
+                                    == 0);
+            assertFalse(session.firstDispatch.isDone());
+            stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PING));
+            assertTrue(stream.heartbeatPongAsyncAttempted.await(5, TimeUnit.SECONDS));
+            awaitCondition(
+                    () ->
+                            lastRegistration
+                                            .applicationJobQueue()
+                                            .snapshot()
+                                            .reservedSupplyPermits()
+                                    == 0);
+            assertEquals(List.of(0), stream.heartbeatPongPayloadLengths);
+            assertEquals(
+                    0, lastRegistration.applicationJobQueue().snapshot().queuedApplicationJobs());
+            assertFalse(session.firstDispatch.isDone());
+            assertEquals(1, session.dispatchCount.get());
+        } finally {
+            session.firstDispatch.complete(null);
+        }
+    }
+
     @Test
     void continuesReceivingAcrossSerializedSessionDispatch() throws Exception {
         TestSession.holdFirstDispatch = true;
@@ -1134,7 +1247,8 @@ final class ZLinkStreamRuntimeIngressTest {
             TestSession session = awaitSession();
             assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
             assertEquals(List.of("good"), session.packetNames);
-            assertEquals(0, stream.disconnectCalls.get());
+            assertEquals(1, stream.disconnectCalls.get());
+            assertEquals(PEER_A, stream.disconnectedPeer.getNow(null));
             assertEquals(1, stream.sessionClosingSends.get());
             assertEquals(List.of(0), stream.heartbeatPongPayloadLengths);
             assertTrue(

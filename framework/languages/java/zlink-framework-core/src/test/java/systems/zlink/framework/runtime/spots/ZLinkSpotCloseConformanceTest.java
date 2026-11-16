@@ -93,6 +93,246 @@ final class ZLinkSpotCloseConformanceTest {
     private static final String SPOT_TYPE = "close-spot";
     private static final String ACTOR_ID = "close-player";
 
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.MethodSource("joinFailureCases")
+    void deferredJoinFailureContract(String name, String target, boolean warm, String expected)
+            throws Exception {
+        resetStatics();
+        String spotId = "join-failure-" + UUID.randomUUID();
+        FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
+        options.addLocationStore(store);
+        var node = options.addRouteMesh("close-mesh");
+        node.listen("inproc://" + spotId).setRoutingId(RoutingId.from(spotId));
+        var objects = node.objects().server();
+        objects.addEntrySpot(FailureEntry.class);
+        objects.addSpotFactory(
+                SPOT_TYPE, FailureRoom.class, factory -> factory.disableRelocation());
+        objects.addActorFactory(
+                "player",
+                FailurePlayer.class,
+                FailureFactory.class,
+                factory -> factory.disableRelocation());
+        failureCompletion = new CompletableFuture<>();
+        failureClosing = new CompletableFuture<>();
+        failureRelease = new CompletableFuture<>();
+        try (ZLinkFrameworkRuntime runtime = startReady(options)) {
+            SpotRef ref =
+                    runtime.spotManager()
+                            .getOrCreate(spotId, SPOT_TYPE)
+                            .submit()
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS)
+                            .spot();
+            store.captureReady = true;
+            // Read through the provider SPI to preserve the Ready authority, without warming a
+            // route.
+            var repository = new ZLinkProviderLocationRepository(store);
+            repository
+                    .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
+                    .toCompletableFuture()
+                    .get();
+            store.captureReady = false;
+            String joinId = target.equals("missing") ? "missing-" + spotId : spotId;
+            if (warm) {
+                if (target.equals("missing")) {
+                    var failure =
+                            assertThrows(
+                                    java.util.concurrent.ExecutionException.class,
+                                    () ->
+                                            request(runtime, joinId)
+                                                    .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                    assertEquals(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            assertInstanceOf(ZLinkFrameworkException.class, failure.getCause())
+                                    .kind());
+                } else {
+                    request(runtime, spotId).get(WAIT_SECONDS, TimeUnit.SECONDS);
+                }
+            }
+            runtime.actorManager()
+                    .getOrCreate(ACTOR_ID, "player")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            CompletableFuture<Boolean> close = closeStage(runtime, ref);
+            try {
+                failureClosing.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                if (!target.equals("closing")) {
+                    failureRelease.complete(null);
+                    assertTrue(close.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                    store.replayReady = target.equals("absent");
+                }
+                assertInstanceOf(
+                        ZLinkActorCreateResult.Existing.class,
+                        runtime.actorManager()
+                                .getOrCreate(ACTOR_ID, "player")
+                                .submit()
+                                .toCompletableFuture()
+                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                assertEquals(
+                        "scheduled",
+                        runtime.actorClient()
+                                .requestToActor(ACTOR_ID, new JoinRequest(joinId))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                var completion =
+                        assertInstanceOf(
+                                ZLinkActorJoinCompletion.Failed.class,
+                                failureCompletion.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                String actual =
+                        switch (completion.kind()) {
+                            case NOT_FOUND -> "NotFound";
+                            case UNAVAILABLE -> "Unavailable";
+                            default -> completion.kind().name();
+                        };
+                System.out.println("4510 " + name + " expected=" + expected + " actual=" + actual);
+                assertEquals(expected, actual);
+            } finally {
+                store.replayReady = false;
+                failureRelease.complete(null);
+                close.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> joinFailureCases()
+            throws Exception {
+        java.util.List<org.junit.jupiter.params.provider.Arguments> cases =
+                new java.util.ArrayList<>();
+        for (JsonNode row :
+                new ObjectMapper().readTree(sharedFixture().toFile()).path("joinFailureCases"))
+            cases.add(
+                    org.junit.jupiter.params.provider.Arguments.of(
+                            row.path("name").asText(),
+                            row.path("target").asText(),
+                            row.path("warmRoute").asBoolean(),
+                            row.path("errorKind").asText()));
+        return cases.stream();
+    }
+
+    private static volatile CompletableFuture<ZLinkActorJoinCompletion> failureCompletion;
+    private static volatile CompletableFuture<Void> failureClosing;
+    private static volatile CompletableFuture<Void> failureRelease;
+
+    public static final class FailurePlayer implements ZLinkActor {
+        private final ZLinkActorContext context;
+
+        public FailurePlayer(ZLinkActorContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public ZLinkActorContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion result) {
+            failureCompletion.complete(result);
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class FailureFactory implements ZLinkActorFactory {
+        @Override
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new FailurePlayer(context));
+        }
+    }
+
+    public static final class FailureEntry implements ZLinkEntrySpot<FailurePlayer> {
+        private final ZLinkEntrySpotContext context;
+
+        public FailureEntry(ZLinkEntrySpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(FailurePlayer actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(FailurePlayer actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public void configure() {
+            context.handlers().addHandler(FailureJoin.class);
+        }
+    }
+
+    public static final class FailureJoin
+            implements ZLinkEntrySpotActorRequestHandler<
+                    FailureEntry, FailurePlayer, JoinRequest, String> {
+        @Override
+        public CompletionStage<String> handle(
+                FailureEntry spot,
+                FailurePlayer actor,
+                ZLinkMessageContext context,
+                JoinRequest request) {
+            actor.context().joinSpot(request.spotId()).defer();
+            return CompletableFuture.completedFuture("scheduled");
+        }
+    }
+
+    public static final class FailureRoom implements ZLinkSpot<FailurePlayer> {
+        private final ZLinkSpotContext context;
+
+        public FailureRoom(ZLinkSpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public ZLinkSpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(FailurePlayer actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(FailurePlayer actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public void configure() {
+            context.handlers().addHandler(FailureProbe.class);
+        }
+
+        @Override
+        public CompletionStage<Void> onClosing(ZLinkSpotClosingContext context) {
+            failureClosing.complete(null);
+            return failureRelease;
+        }
+
+        @Override
+        public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+                String actorId, ZLinkMessage request) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+        }
+    }
+
+    public static final class FailureProbe
+            implements ZLinkSpotRequestHandler<FailureRoom, Probe, Reply> {
+        @Override
+        public CompletionStage<Reply> handle(FailureRoom spot, Probe request) {
+            return CompletableFuture.completedFuture(new Reply(request.spotId()));
+        }
+    }
+
     @Test
     void contextCloseMapsAnExactVersionRaceToPublicUnavailable() throws Exception {
         resetStatics();
@@ -1051,6 +1291,10 @@ final class ZLinkSpotCloseConformanceTest {
     private static final class FaultStore implements ZLinkLocationStore {
         private final ZLinkLocationStore inner;
         private final String spotId;
+        volatile boolean captureReady;
+        volatile boolean replayReady;
+        final java.util.Map<ZLinkStoreKey, ZLinkStoreReadResult> readyReads =
+                new java.util.concurrent.ConcurrentHashMap<>();
         final AtomicBoolean conflictNextAuthorityPut = new AtomicBoolean();
         final AtomicBoolean failNextAuthorityDelete = new AtomicBoolean();
         final AtomicBoolean holdNextAuthorityRead = new AtomicBoolean();
@@ -1074,7 +1318,15 @@ final class ZLinkSpotCloseConformanceTest {
                 authorityReadEntered.complete(null);
                 return releaseAuthorityRead.thenCompose(ignored -> inner.read(key, cancellation));
             }
-            return inner.read(key, cancellation);
+            if (replayReady && readyReads.containsKey(key))
+                return CompletableFuture.completedFuture(readyReads.get(key));
+            return inner.read(key, cancellation)
+                    .thenApply(
+                            result -> {
+                                if (captureReady && key.value().contains(spotId))
+                                    readyReads.put(key, result);
+                                return result;
+                            });
         }
 
         @Override

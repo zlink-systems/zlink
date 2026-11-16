@@ -9,6 +9,35 @@ internal static class ZLinkSpotStartupValidator
         ZLinkFrameworkRegistration registration
     )
     {
+        foreach (var handler in registration.ScannedHandlerCatalog.SpotHandlers)
+        {
+            var ownerTypes = registration
+                .SpotNodes.Values.Where(node =>
+                    handler.SpotNodeName is null || handler.SpotNodeName == node.SpotNodeName
+                )
+                .SelectMany(node =>
+                    node.SpotFactories.Concat(
+                            node.InstanceSpotFactories.Values.Select(factory => factory.SpotType)
+                        )
+                        .Concat(
+                            node.EntrySpotType is { } entry ? new[] { entry } : Array.Empty<Type>()
+                        )
+                );
+            var expectedOwner =
+                ownerTypes.FirstOrDefault(type => type == handler.SpotType)
+                ?? ownerTypes.FirstOrDefault(handler.SpotType.IsAssignableFrom);
+            if (expectedOwner is not null)
+                ZLinkHandlerContractDescriptorSupport.RequireExactType(
+                    handler.HandlerType,
+                    expectedOwner,
+                    handler.Kind
+                        is ZLinkScannedSpotHandlerKind.Packet
+                            or ZLinkScannedSpotHandlerKind.Subscription
+                        ? handler.Method?.DeclaringType ?? handler.SpotType
+                        : handler.SpotType,
+                    "SPOT handler"
+                );
+        }
         foreach (var node in registration.SpotNodes.Values)
         {
             ZLinkScopedHandlerInstanceOwner.Validate(
@@ -36,13 +65,9 @@ internal static class ZLinkSpotStartupValidator
                 spotTypes.Add(node.EntrySpotType);
             foreach (var handler in registration.ScannedHandlerCatalog.SpotHandlers)
             {
-                if (
-                    !spotTypes.Contains(handler.SpotType)
-                    || (
-                        handler.SpotNodeName is not null
-                        && handler.SpotNodeName != node.SpotNodeName
-                    )
-                )
+                if (handler.SpotNodeName is not null && handler.SpotNodeName != node.SpotNodeName)
+                    continue;
+                if (!spotTypes.Contains(handler.SpotType))
                     continue;
                 if (handler.Kind == ZLinkScannedSpotHandlerKind.Timer)
                     ZLinkSpotTimerRegistry.ValidateRegistration(

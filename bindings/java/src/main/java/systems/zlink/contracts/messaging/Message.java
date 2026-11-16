@@ -29,7 +29,6 @@ import java.util.concurrent.ArrayBlockingQueue;
 public final class Message implements AutoCloseable {
     private static final ContractAccess.NativeMessageAccess NATIVE_ACCESS;
 
-    private final Object scope;
     private final NativeMessageSlot ownedMsgSlot;
     private final Object msg;
     private final boolean wrapperPoolEligible;
@@ -156,22 +155,7 @@ public final class Message implements AutoCloseable {
         NATIVE_ACCESS = ContractAccess.nativeMessageAccessForRuntime();
     }
 
-    private Message(Object scope, boolean raw) {
-        this.scope = Objects.requireNonNull(scope, "scope");
-        this.ownedMsgSlot = null;
-        this.msg = ContractAccess.nativeMessageAllocate(scope);
-        this.wrapperPoolEligible = false;
-        this.wrapperPoolOwnerThreadId = 0L;
-        this.valid = false;
-        this.closed = false;
-        this.recvArmed = false;
-        this.more = false;
-        this.cachedSize = 0;
-        this.cachedPayload = null;
-    }
-
     private Message(Object adoptedMsg) {
-        this.scope = null;
         this.ownedMsgSlot = null;
         this.msg = Objects.requireNonNull(adoptedMsg, "adoptedMsg");
         this.wrapperPoolEligible = false;
@@ -189,7 +173,6 @@ public final class Message implements AutoCloseable {
 
     private Message(NativeMessageSlot ownedMsgSlot,
                     boolean wrapperPoolEligible) {
-        this.scope = null;
         this.ownedMsgSlot = Objects.requireNonNull(ownedMsgSlot,
             "ownedMsgSlot");
         this.msg = ownedMsgSlot.handle;
@@ -360,62 +343,33 @@ public final class Message implements AutoCloseable {
         return from(value.getBytes(StandardCharsets.UTF_8));
     }
 
-    static Message sharedFrom(byte[] data) {
-        return sharedFrom(data, 0, data.length);
-    }
-
-    static Message sharedFrom(byte[] data, int offset, int length) {
-        Objects.requireNonNull(data, "data");
-        validateRange(data.length, offset, length, "data");
-        Message msg = new Message(ContractAccess.nativeMessageOpenSharedScope(),
-            true);
-        int rc = ContractAccess.nativeMessageInitSize(msg.msg, length);
-        if (rc != 0) {
-            int errno = ContractAccess.nativeErrno();
-            ContractAccess.nativeMessageCloseScope(msg.scope);
-            msg.closed = true;
-            throw new ZlinkConfigException(ConfigResult.fromValue(rc), errno);
-        }
-        msg.valid = true;
-        msg.recvArmed = false;
-        msg.more = false;
-        msg.cachePayload(length);
-        if (length > 0) {
-            NATIVE_ACCESS.copyFromArray(data, offset, msg.cachedPayload, 0, length);
-        }
-        return msg;
-    }
-
     static Message sharedFrom(Message source) {
         Objects.requireNonNull(source, "source");
         source.requireValidNativeOwnership();
-        Message msg = new Message(ContractAccess.nativeMessageOpenSharedScope(),
-            true);
+        Message msg = new Message(true);
         int rc = ContractAccess.nativeMessageInit(msg.msg);
         if (rc != 0) {
             int errno = ContractAccess.nativeErrno();
-            ContractAccess.nativeMessageCloseScope(msg.scope);
-            msg.closed = true;
-            throw new ZlinkConfigException(ConfigResult.fromValue(rc), errno);
+            ZlinkConfigException failure = new ZlinkConfigException(ConfigResult.fromValue(rc), errno);
+            try {
+                msg.releaseOwnedResources();
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
         }
+        msg.valid = true;
         rc = ContractAccess.nativeMessageCopy(msg.msg, source.msg);
         if (rc != 0) {
             int errno = ContractAccess.nativeErrno();
             ZlinkConfigException failure = new ZlinkConfigException(ConfigResult.fromValue(rc), errno);
             try {
-                ContractAccess.nativeMessageClose(msg.msg);
+                msg.close();
             } catch (RuntimeException cleanupFailure) {
                 failure.addSuppressed(cleanupFailure);
             }
-            try {
-                ContractAccess.nativeMessageCloseScope(msg.scope);
-            } catch (RuntimeException cleanupFailure) {
-                failure.addSuppressed(cleanupFailure);
-            }
-            msg.closed = true;
             throw failure;
         }
-        msg.valid = true;
         msg.recvArmed = false;
         msg.more = source.more;
         msg.cachePayload(source.cachedSize);
@@ -694,12 +648,11 @@ public final class Message implements AutoCloseable {
      * method before filling and sending the same {@code Message} instance again.
      */
     void reset(int size) {
-        if (scope == null && ownedMsgSlot == null)
+        if (ownedMsgSlot == null)
             throw new IllegalStateException("message is not reusable");
         if (size < 0)
             throw new IllegalArgumentException("size must be >= 0");
-        if (closed || (scope != null
-            && !ContractAccess.nativeMessageScopeAlive(scope)))
+        if (closed)
             throw new IllegalStateException("message is closed");
         if (valid) {
             int closeRc = ContractAccess.nativeMessageClose(msg);
@@ -853,10 +806,9 @@ public final class Message implements AutoCloseable {
     }
 
     void resetForReuse() {
-        if (scope == null && ownedMsgSlot == null)
+        if (ownedMsgSlot == null)
             throw new IllegalStateException("message is not reusable");
-        if (closed || (scope != null
-            && !ContractAccess.nativeMessageScopeAlive(scope)))
+        if (closed)
             throw new IllegalStateException("message is closed");
         if (valid) {
             int rc = ContractAccess.nativeMessageClose(msg);
@@ -874,8 +826,7 @@ public final class Message implements AutoCloseable {
     }
 
     boolean isReusable() {
-        return !closed && (ownedMsgSlot != null
-            || (scope != null && ContractAccess.nativeMessageScopeAlive(scope)));
+        return !closed && ownedMsgSlot != null;
     }
 
     static Message adoptOwnedNative(Object nativeMsg) {
@@ -1050,9 +1001,7 @@ public final class Message implements AutoCloseable {
     }
 
     private void releaseOwnedResources() {
-        if (scope != null && ContractAccess.nativeMessageScopeAlive(scope)) {
-            ContractAccess.nativeMessageCloseScope(scope);
-        } else if (ownedMsgSlot != null) {
+        if (ownedMsgSlot != null) {
             MessageSlotPool.release(ownedMsgSlot);
         }
         closed = true;

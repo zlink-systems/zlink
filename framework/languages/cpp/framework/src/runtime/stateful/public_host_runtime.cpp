@@ -233,6 +233,10 @@ std::pair<std::uint32_t, std::uint32_t> stateful_failure_pair (stateful::statefu
         case stateful::stateful_error_t::none:
             return {static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
                     static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
+        case stateful::stateful_error_t::unavailable:
+            // Unavailable's representative code (error model §5); schema pins it to internalError.
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected)};
         case stateful::stateful_error_t::conflict:
             // Source-local conflicts are InvalidOperation (error model §2, §5).
             // A remote owner's unavailable result is classified at its boundary.
@@ -8747,10 +8751,8 @@ public_host_runtime_t::prepare_actor_transfer_async (const actor_transfer_prepar
                     _options.mesh.descriptor.mesh_name, prepare.target_node_rid.to_string ()});
     } else {
         auto target = co_await resolve_spot_async (prepare.target_spot_id);
-        if (!target)
-            co_return false;
         std::tie (error, membership) =
-          co_await _objects.begin_membership_move_async (*actor, *target);
+          co_await _objects.begin_membership_move_async (*actor, std::move (target));
     }
     if (error != stateful::stateful_error_t::none) {
         co_return false;
@@ -8957,9 +8959,9 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
         target->object_generation = target_spot_generation;
     auto [error, membership] =
       std::pair{stateful::stateful_error_t::not_found, stateful::membership_token_t{}};
-    if (current && target)
+    if (current)
         std::tie (error, membership) =
-          co_await _objects.begin_membership_move_async (*current, *target);
+          co_await _objects.begin_membership_move_async (*current, std::move (target));
     auto waiter = membership.value != 0 && _options.mesh.application_jobs
                     ? std::make_shared<application_job_queue_t::waiter_t> ()
                     : nullptr;

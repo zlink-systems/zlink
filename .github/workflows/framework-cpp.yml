@@ -284,6 +284,11 @@ jobs:
             sccache --show-stats
           fi
 
+      # Redis-backed tests fail instead of skipping once the job provides Redis (#4542).
+      - name: Start Redis for Redis-backed tests
+        if: ${{ !inputs.skip_tests }}
+        uses: ./.github/actions/test-redis
+
       - name: Run Framework C++ unit and contract tests
         if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/cpp
@@ -380,6 +385,10 @@ jobs:
           name: etcd-4x4-conformance-logs
           path: ${{ runner.temp }}/etcd-4x4/logs
           if-no-files-found: ignore
+
+      - name: Stop Redis for Redis-backed tests
+        if: always() && env.ZLINK_TEST_REDIS_CONTAINER != ''
+        run: docker rm -f "${ZLINK_TEST_REDIS_CONTAINER}"
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests

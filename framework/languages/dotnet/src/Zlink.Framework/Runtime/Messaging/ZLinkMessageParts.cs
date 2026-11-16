@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Diagnostics;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
@@ -14,12 +13,12 @@ internal static class ZLinkMessageParts
     internal static readonly AsyncLocal<Action<Message>?> DisposingObserver = new();
 #endif
 
-    [Conditional("DEBUG")]
-    private static void ObserveDisposing(Message part)
+    public static void Dispose(Message part)
     {
 #if DEBUG
         DisposingObserver.Value?.Invoke(part);
 #endif
+        part.Dispose();
     }
 
     public static IReadOnlyList<Message> Create(Message header, Message body)
@@ -34,8 +33,7 @@ internal static class ZLinkMessageParts
         for (var index = 0; index < parts.Count; index++)
         {
             var part = parts[index];
-            ObserveDisposing(part);
-            part.Dispose();
+            Dispose(part);
         }
     }
 

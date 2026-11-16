@@ -424,7 +424,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
         var reply = terminal.ReplyParts is null
             ? Array.Empty<Message>()
-            : terminal.ReplyParts.Select(static part => Message.From(part.Span)).ToArray();
+            : ZLinkRawRouterServicePort.CreateMessages(terminal.ReplyParts);
         return (completion, reply);
     }
 
@@ -589,7 +589,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
         var reply = terminal.ReplyParts is null
             ? Array.Empty<Message>()
-            : terminal.ReplyParts.Select(static part => Message.From(part.Span)).ToArray();
+            : ZLinkRawRouterServicePort.CreateMessages(terminal.ReplyParts);
         return (terminal.Completion, reply);
     }
 

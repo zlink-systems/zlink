@@ -371,7 +371,8 @@ class mesh_node_runtime_t
 
     task_t<actor_join_reply_t> join_application_actor_to_spot (
       actor_ref_t actor,
-      const runtime::spot_address_t &target,
+      spot_id_t target_spot,
+      std::shared_ptr<runtime::spot_address_resolver_t> resolver,
       const zlink::message_t &request,
       std::chrono::milliseconds timeout,
       std::optional<zlink::routing_id_t> bound_session_node_rid = std::nullopt,

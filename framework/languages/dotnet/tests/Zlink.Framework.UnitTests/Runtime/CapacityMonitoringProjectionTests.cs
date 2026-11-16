@@ -10,13 +10,13 @@ public sealed class CapacityMonitoringProjectionTests
     [Fact]
     public void Public_Monitoring_Surface_Does_Not_Expose_Publish_Target_Statistics()
     {
-        var contracts = typeof(ZLinkMeshNodeSnapshot).Assembly;
+        var contracts = typeof(ZLinkRouteMeshRuntimeService).Assembly;
         Assert.Null(
             contracts.GetType(
                 "Zlink.Framework.Contracts.Configuration.ZLinkLogicalMulticastSnapshot"
             )
         );
-        Assert.Null(typeof(ZLinkMeshNodeSnapshot).GetProperty("Multicast"));
+        Assert.Null(typeof(ZLinkRouteMeshStatus).GetProperty("Multicast"));
 
         var removedNames = new HashSet<string>(
             [

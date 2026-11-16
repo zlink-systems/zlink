@@ -41,7 +41,7 @@ internal static class ZLinkActorCreationTerminalCodec
                     ZLinkFrameworkErrorKind.ProtocolError,
                     "Actor creation reply envelope is incomplete."
                 );
-            var messages = reply.Select(static part => Message.From(part.Span)).ToArray();
+            var messages = ZLinkRawRouterServicePort.CreateMessages(reply);
             try
             {
                 var header = ZLinkEnvelopeCodec.DecodeHeader(messages);
