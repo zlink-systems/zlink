@@ -972,6 +972,15 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             .ToArray();
     }
 
+    public ulong LifecycleGeneration => _node.LifecycleGeneration;
+
+    public (
+        MeshNodeState State,
+        RoutingId RoutingId,
+        IReadOnlyList<MeshNodePeer> Peers,
+        IReadOnlyList<MeshPeerChannel>[] PeerChannels
+    ) MeshTopology() => _node.MeshTopology();
+
     public MeshNodeStatus MeshStatus()
     {
         return _node.Status();
