@@ -7994,6 +7994,71 @@ TEST_P (StoreOutageRetention, StaleOutsideEpisodeStillClaimsImmediately)
     registered_owner (false, false, -60);
 }
 
+TEST_P (StoreOutageRetention, DiscardRequestPostsCloseBeforeFollowingLaneTurn)
+{
+    auto node = test::runtime_failure_fixture<detail::spot_node_builder_state_t> ("discard-post");
+    auto scheduler = std::make_shared<test::manual_internal_scheduler_t> ();
+    node->worker_executor = scheduler;
+    auto context = std::make_shared<detail::spot_context_state_t> ();
+    context->node = node;
+    context->lane_owner = node;
+    context->serial_executor = scheduler;
+    context->spot_id = spot_id_t ("discard-post-spot");
+    context->spot_name = "room";
+    context->mesh_name = "discard-post";
+    context->node_rid = node_rid_t::from_string ("discard-post-node");
+    node->spot_contexts_by_id.emplace ("discard-post-spot",
+                                       detail::spot_context_access_t::create (context));
+    auto gate = context->ensure_spot_serial_executor ()->spot_queue ();
+    auto finished = std::make_shared<task_completion_source_t<bool>> ();
+    context->merged_close_results.push_back (
+      [finished] (result_t<bool> result) { finished->complete (std::move (result)); });
+    std::latch entered (1), release (1);
+    auto held = std::async (std::launch::async, [&] {
+        node->lane.run_sync ([&] {
+            entered.count_down ();
+            release.wait ();
+        });
+    });
+    entered.wait ();
+    detail::spot_node_runtime_t owner (node);
+    auto applied = owner.request_location_execution_discard (
+      [] (const auto &) { return serial_execution_queue_t::execution_status_t::ownership_lost; });
+    EXPECT_FALSE (applied.await_ready ());
+    EXPECT_FALSE (gate->closed ());
+    // This turn is already queued before preparation can resume off the busy lane.
+    // It must observe the actual close, rather than only a preparation lookup.
+    EXPECT_TRUE (node->lane.try_post ([&] {
+        EXPECT_TRUE (gate->closed ());
+        EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+                   gate->execution_status ());
+    }));
+    release.count_down ();
+    held.get ();
+    node->lane.run_sync ([] {});
+    ASSERT_TRUE (applied.result_for (auto_connect_wait));
+    EXPECT_TRUE (applied.result ());
+    EXPECT_FALSE (finished->task ().await_ready ());
+    auto closed = finished->task ();
+    ASSERT_TRUE (scheduler->run_until (closed, auto_connect_wait));
+    EXPECT_TRUE (closed.result ().value ());
+    scheduler->retire ();
+    context->node.reset ();
+    node->spot_contexts_by_id.clear ();
+}
+
+TEST_P (StoreOutageRetention, DiscardRequestRejectsClosedLane)
+{
+    auto node = test::runtime_failure_fixture<detail::spot_node_builder_state_t> ("discard-closed");
+    node->lane.close ();
+    auto applied = detail::spot_node_runtime_t (node).request_location_execution_discard (
+      [] (const auto &) { return serial_execution_queue_t::execution_status_t::ownership_lost; });
+    ASSERT_TRUE (applied.result_for (auto_connect_wait));
+    const auto result = applied.result ();
+    EXPECT_FALSE (result);
+    EXPECT_EQ (framework_error_kind_t::shutting_down, result.error_kind ());
+}
+
 TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardCanEnterLeaseLane)
 {
     location_runtime_t runtime (store (), options, "discard-lane-owner");
