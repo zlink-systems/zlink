@@ -3459,8 +3459,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIER integration
       TIMEOUT 120)
   endif()
-  # A build that does not install the framework (TEST_PROBES) has no package to consume.
-  if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  # TEST_PROBES forces INSTALL_FRAMEWORK=OFF, so that build has no package to consume.
+  if(NOT ZLINK_FRAMEWORK_CPP_TEST_PROBES)
     set(_zlink_framework_static_archives
       "$<TARGET_FILE_NAME:zlink_framework>;$<TARGET_FILE_NAME:zlink_framework_provider_abstractions>;$<TARGET_FILE_NAME:zlink_http_client>;$<TARGET_FILE_NAME:zlink_framework_locations_redis>;$<TARGET_FILE_NAME:zlink_stream_connector>")
     if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
