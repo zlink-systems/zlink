@@ -92,6 +92,13 @@ internal interface IZLinkLocationRepository
         CancellationToken cancellationToken = default
     );
 
+    ValueTask<bool> CleanupDiscardedAuthorityAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot discarded,
+        ZLinkLocationOwnerToken owner,
+        CancellationToken cancellationToken = default
+    ) => throw new NotSupportedException("Discarded authority cleanup is not supported.");
+
     ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,

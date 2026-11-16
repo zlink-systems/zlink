@@ -39,6 +39,16 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
                 ZLinkSpotActivation spot => SpotLocations.ReadPreservedAuthorityAsync(spot),
                 _ => ValueTask.FromResult<ZLinkAuthoritySnapshot?>(null),
             };
+        runtime.ForgetDiscardedAuthorityAsync = (execution, snapshot) =>
+            execution switch
+            {
+                ZLinkActorRuntimeState actor => ActorOwnership.ForgetTrackedAsync(actor, snapshot),
+                ZLinkSpotActivation spot => SpotLocations.ForgetTrackedAsync(
+                    spot.RuntimeSpotId,
+                    snapshot.ObjectGeneration
+                ),
+                _ => ValueTask.CompletedTask,
+            };
         runtime.ApplyRecoveredAuthorityAsync = (execution, snapshot) =>
             execution switch
             {

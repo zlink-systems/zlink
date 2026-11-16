@@ -10,6 +10,7 @@ import {
   type ZLinkSpotLocation,
   type ZLinkSpotLocationKey
 } from './internal-location-contracts';
+import { routingIdsEqual } from '../routing-id';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
 
 export interface ZLinkOwnershipLostEvent {
@@ -17,13 +18,50 @@ export interface ZLinkOwnershipLostEvent {
   readonly key: string;
 }
 
+export type ZLinkDiscardedAuthorityFence = Pick<
+  import('./internal-location-contracts').ZLinkAuthoritySnapshot,
+  'ownerId' | 'ownerLeaseGeneration' | 'objectGeneration' | 'authorityOwnerGeneration'
+> & {
+  readonly allocation: Pick<
+    import('./internal-location-contracts').ZLinkAuthoritySnapshot['allocation'],
+    'descriptor' | 'descriptorLifecycleGeneration'
+  >;
+};
+
+export function sameAuthorityIncarnation(
+  current: import('./internal-location-contracts').ZLinkAuthoritySnapshot,
+  fence: ZLinkDiscardedAuthorityFence
+): boolean {
+  return (
+    current.allocation.state === 'active' &&
+    current.ownerId === fence.ownerId &&
+    current.objectGeneration === fence.objectGeneration &&
+    current.authorityOwnerGeneration === fence.authorityOwnerGeneration &&
+    current.allocation.descriptor.meshName === fence.allocation.descriptor.meshName &&
+    routingIdsEqual(current.allocation.descriptor.rid, fence.allocation.descriptor.rid) &&
+    current.allocation.descriptorLifecycleGeneration ===
+      fence.allocation.descriptorLifecycleGeneration
+  );
+}
+
+export interface ZLinkDiscardedAuthorityStore {
+  cleanupDiscardedAuthority?(
+    key: import('./internal-location-contracts').ZLinkAuthorityKey,
+    fence: ZLinkDiscardedAuthorityFence,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<boolean>;
+}
+
 export interface ZLinkExecutionRecovery {
   readonly key: import('./internal-location-contracts').ZLinkAuthorityKey;
   readonly meshName: string;
+  readonly memberOf?: { readonly spotId: string; readonly objectGeneration: bigint };
   readonly incarnation: Pick<
     import('./internal-location-contracts').ZLinkAuthoritySnapshot,
     'objectGeneration' | 'authorityOwnerGeneration'
   >;
+  cleanup(owner: ZLinkLocationOwnerToken, signal?: AbortSignal): Promise<boolean>;
   run(
     owner: ZLinkLocationOwnerToken,
     canSubmit: () => boolean,
@@ -35,7 +73,7 @@ export interface IZLinkLocationLifecycleRuntime {
   trackExecution?(
     owner: object,
     steadyReady: () => boolean,
-    discard: (error: unknown) => void,
+    discard: (error: unknown) => void | Promise<void>,
     captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined
   ): void;
   forgetExecution?(owner: object): void;
