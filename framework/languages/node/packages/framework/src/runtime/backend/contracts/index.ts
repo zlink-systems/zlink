@@ -93,7 +93,8 @@ export interface ZLinkBackendMeshNode {
   setRoutingId(routingId: unknown): void;
   setBind(endpoint: string): void;
   setAdvertiseHost(host: string): void;
-  start(): void;
+  start(serviceState?: 'preparing' | 'serving'): void;
+  markServiceReady?(): Promise<void>;
   setMailboxRecordDroppedHandler?(
     handler: (record: {
       readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
@@ -673,6 +674,7 @@ export interface ZLinkBackendSubscriberSocket extends ZLinkBackendConnectableSoc
 export interface ZLinkBackendReadablePoller {
   wait(timeoutMs: number): boolean;
   waitForReadable(signal?: AbortSignal): Promise<boolean>;
+  wake(): void;
   markDrained(): void;
   dispose(): void;
 }

@@ -56,6 +56,8 @@
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Support/PerCallAllocation.cs"/>
+        <Compile Include="Support/MessageFinalizerProbe.cs"/>
+        <Compile Include="Runtime/MessageWrapperLifetimeTests.cs"/>
         <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/PrestartCallTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
@@ -197,6 +199,7 @@
         <Compile Include="Runtime/GenerationTokenRangeTests.cs"/>
         <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
         <Compile Include="Runtime/TypedJsonPayloadStorageTests.cs"/>
+        <Compile Include="Runtime/TypedJsonPayloadContractTests.cs"/>
         <Compile Include="Runtime/ConnectorJsonProfileTests.cs"/>
         <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
@@ -273,6 +276,8 @@
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
         <Compile Include="Runtime/StreamFrameWriteTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
+        <Compile Include="Runtime/StreamControlProgressTests.cs"/>
+        <Compile Include="../Common/StreamConnectionHarness.cs" Link="Common/StreamConnectionHarness.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
         <Compile Include="Runtime/ActivationReadyTests.cs"/>
         <Compile Include="Runtime/SpotHandlerInvokerTests.cs"/>
@@ -294,8 +299,11 @@
         <Compile Include="Runtime/ActorHandoffTestRestoration.cs"/>
         <Compile Include="Runtime/RouteChangeProxy.cs"/>
         <Compile Include="Runtime/RelocationTargetShutdownTests.cs"/>
+        <Compile Include="Runtime/SpotRouteRecreateTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.Closing.cs"/>
+        <Compile Include="Runtime/SpotCloseConformanceTests.JoinFailures.cs"/>
+        <Compile Include="Runtime/SpotCloseConformanceTests.Shutdown.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.SuccessorAdmission.cs"/>
         <Compile Include="Runtime/SpotCloseAdmissionSealTests.cs"/>
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>

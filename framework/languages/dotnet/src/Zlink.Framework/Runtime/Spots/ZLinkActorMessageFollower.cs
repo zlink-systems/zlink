@@ -429,10 +429,11 @@ internal sealed class ZLinkActorMessageFollower
         cancellationToken.ThrowIfCancellationRequested();
         if (pending.IsExpired)
             return ValueTask.FromResult(DirectReplyDeliveryResult.DeadlineExpired);
-        var messages = new Message[frames.Count];
+        var messages = ZLinkRawRouterServicePort.CreateMessages(
+            frames,
+            static frame => Message.From(frame)
+        );
         SubmitResult result;
-        for (var index = 0; index < frames.Count; index++)
-            messages[index] = Message.From(frames[index]);
         try
         {
             result = pending.Reply(messages);

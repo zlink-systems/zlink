@@ -5210,11 +5210,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         native.spotGeneration,
         native.membershipEpoch
       );
-      this.requireActorManager().adoptCreatedAuthority(
-        actorId,
-        current.authorityOwnerGeneration,
-        current.ownerLeaseGeneration
-      );
+      this.requireActorManager().adoptCreatedAuthority(actorId, current.authorityOwnerGeneration);
       hidden.targetAuthorityOwnerGeneration = current.authorityOwnerGeneration;
     } else if (hidden.activation !== undefined) {
       const registration = this.registration(

@@ -1,5 +1,7 @@
 package systems.zlink.samples.gamequest.shared.contracts;
 
+import org.jspecify.annotations.Nullable;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -76,14 +78,10 @@ public final class Messages {
 
     public record ItemCountSnapshot(String itemId, int count) {}
 
-    public record QuestProgressNotify(
-            String playerId, String targetConnectionId, QuestProgress progress) {}
+    public record QuestProgressNotify(String playerId, QuestProgress progress) {}
 
     public record QuestCompletedNotify(
-            String playerId,
-            String targetConnectionId,
-            QuestProgress progress,
-            boolean rewardGranted) {}
+            String playerId, QuestProgress progress, boolean rewardGranted) {}
 
     public record QuestProgress(
             String playerId,
@@ -91,7 +89,7 @@ public final class Messages {
             String status,
             int currentCount,
             int requiredCount,
-            String lastEventId,
+            @Nullable String lastEventId,
             long updatedAtUnixMs) {}
 
     public record GameplayMsg(

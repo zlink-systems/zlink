@@ -6,6 +6,7 @@ import MyGame.*;
 import MyGame.Geometry.Vec3;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
 import java.util.Comparator;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
@@ -40,5 +41,16 @@ final class ContractSerializationTest {
         for (var phase : MatchPhase.values()) {
             assertEquals("\"" + phase.name() + "\"", new String(serializer.serialize(phase).bytes(), StandardCharsets.UTF_8));
         }
+    }
+
+    @Test
+    void defaultTypedSerializerAcceptsNullShotTarget() {
+        var serializer = new ZLinkJsonMessageSerializer();
+        var result = serializer.deserializeBorrowed(
+                ByteBuffer.wrap("{\"outcome\":\"miss\",\"targetId\":null,\"sequence\":\"7\"}"
+                        .getBytes(StandardCharsets.UTF_8)),
+                ShotResult.class);
+
+        assertNull(result.targetId());
     }
 }

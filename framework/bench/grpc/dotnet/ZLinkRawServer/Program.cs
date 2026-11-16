@@ -5,6 +5,7 @@ using WithGrpcBench.Shared;
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5207";
 var commandEndpoint = ArgValue(args, "--command-endpoint") ?? "tcp://127.0.0.1:5208";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5209";
+var gameJson = args.Contains("--game-json", StringComparer.Ordinal);
 
 var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
@@ -42,8 +43,8 @@ requestRouter.Bind(endpoint);
 commandRouter.Bind(commandEndpoint);
 
 var stopping = app.Lifetime.ApplicationStopping;
-var requestReceiver = Task.Run(() => RunRequestRouter(requestRouter, metrics, stopping));
-var commandReceiver = Task.Run(() => RunCommandRouter(commandRouter, metrics, stopping));
+var requestReceiver = Task.Run(() => RunRequestRouter(requestRouter, metrics, stopping, gameJson));
+var commandReceiver = Task.Run(() => RunCommandRouter(commandRouter, metrics, stopping, gameJson));
 
 await app.RunAsync();
 await Task.WhenAll(requestReceiver, commandReceiver);
@@ -58,7 +59,8 @@ static void ConfigureQuietLogging(WebApplicationBuilder builder)
 static void RunRequestRouter(
     IRouterSocket router,
     BenchServerMetrics metrics,
-    CancellationToken stopping
+    CancellationToken stopping,
+    bool gameJson
 )
 {
     using var received = Received.Create();
@@ -72,16 +74,31 @@ static void RunRequestRouter(
             }
 
             var body = PayloadPart(received);
-            var payload = RawWire.Decode(body.AsReadOnlySpan());
-            metrics.RecordReceived(payload);
-            var reply = new BenchPayload { Body = payload.Body };
-            if (received.ReplyToken is not null)
+            BenchPayload? payload = null;
+            BenchGameMessage? game = null;
+            if (gameJson)
             {
-                ReplyMultipart(received, reply);
+                game = BenchGamePayloads.DecodeStandard(body.AsReadOnlySpan());
+                metrics.RecordReceived(game);
             }
             else
             {
-                SendMultipart(received, reply);
+                payload = RawWire.Decode(body.AsReadOnlySpan());
+                metrics.RecordReceived(payload);
+            }
+            if (received.ReplyToken is not null)
+            {
+                if (game is null)
+                    ReplyMultipart(received, new BenchPayload { Body = payload!.Body });
+                else
+                    ReplyJson(received, game);
+            }
+            else
+            {
+                if (game is null)
+                    SendMultipart(received, new BenchPayload { Body = payload!.Body });
+                else
+                    SendJson(received, game);
             }
         }
         catch (ZlinkRecvException ex) when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
@@ -116,10 +133,33 @@ static void SendMultipart(Received received, BenchPayload payload)
     received.Send().Message(header).Message(replyBody).Submit();
 }
 
+static void ReplyJson(Received received, BenchGameMessage payload)
+{
+    using var header = Message.From(RawEnvelopeHeaders.JsonResponse);
+    using var body = EncodeGamePayload(payload);
+    received.Reply().Message(header).Message(body).Submit();
+}
+
+static void SendJson(Received received, BenchGameMessage payload)
+{
+    using var header = Message.From(RawEnvelopeHeaders.JsonResponse);
+    using var body = EncodeGamePayload(payload);
+    received.Send().Message(header).Message(body).Submit();
+}
+
+static Message EncodeGamePayload(BenchGameMessage payload)
+{
+    var bytes = BenchGamePayloads.EncodeStandard(payload);
+    var message = Message.Allocate(bytes.Length);
+    bytes.CopyTo(message.AsSpan());
+    return message;
+}
+
 static void RunCommandRouter(
     IRouterSocket router,
     BenchServerMetrics metrics,
-    CancellationToken stopping
+    CancellationToken stopping,
+    bool gameJson
 )
 {
     using var received = Received.Create();
@@ -133,8 +173,10 @@ static void RunCommandRouter(
             }
 
             var body = PayloadPart(received);
-            var payload = RawWire.Decode(body.AsReadOnlySpan());
-            metrics.Record(payload);
+            if (gameJson)
+                metrics.Record(BenchGamePayloads.DecodeStandard(body.AsReadOnlySpan()));
+            else
+                metrics.Record(RawWire.Decode(body.AsReadOnlySpan()));
         }
         catch (ZlinkRecvException ex) when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
         {

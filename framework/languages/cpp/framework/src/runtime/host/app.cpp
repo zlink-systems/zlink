@@ -2766,26 +2766,9 @@ void app_t::_apply_zlink_framework ()
               const auto mesh = detail::lock_runtime_owner (weak_application_mesh);
               const auto gateway = detail::actor_gateway_runtime_t (
                 detail::lock_runtime_owner (weak_actor_gateway_runtime));
-              auto located = co_await resolver->resolve_spot_address ({}, target_spot);
-              if (!located) {
-                  co_return result_t<detail::actor_join_reply_t>::failure (
-                    framework_error_kind_t::not_found, "target Spot location was not found");
-              }
-              const auto &target = *located;
-              if (target.object_generation == 0) {
-                  co_return result_t<detail::actor_join_reply_t>::failure (
-                    framework_error_kind_t::not_found,
-                    "target Spot lifecycle generation was not published");
-              }
-              if (target.owner.lease_generation > 0) {
-                  mesh->observe_spot_authority (
-                    target.node_rid, target.spot_id, target.object_generation,
-                    target.node_generation, target.authority_owner_generation,
-                    static_cast<std::uint64_t> (target.owner.lease_generation));
-              }
               const auto bound_session = co_await gateway.bound_session_route_async (actor);
               co_return co_await mesh->join_application_actor_to_spot (
-                actor, target, request, timeout,
+                actor, std::move (target_spot), resolver, request, timeout,
                 bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
                 bound_session ? bound_session->session_rid : std::nullopt, std::move (packet_name),
                 std::move (content_type));

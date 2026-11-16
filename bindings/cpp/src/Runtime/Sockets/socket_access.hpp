@@ -11,6 +11,7 @@ namespace detail
 
 struct socket_access_t
 {
+    static socket_handle_t *native_owner (socket_t &socket_) noexcept;
     static void *native_handle (socket_t &socket_) noexcept;
     static const void *native_handle (const socket_t &socket_) noexcept;
     static std::shared_ptr<socket_runtime_state_t> runtime_state (socket_t &socket_) noexcept;

@@ -577,7 +577,11 @@ public sealed class LocationResolverTests
             new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-1"), "spot-unavailable", 1),
             1,
             _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),
-            () => invalidated = true
+            () =>
+            {
+                invalidated = true;
+                return ValueTask.CompletedTask;
+            }
         );
 
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
@@ -597,6 +601,42 @@ public sealed class LocationResolverTests
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         Assert.True(invalidated);
+    }
+
+    [Fact]
+    public async Task Spot_Handle_Stale_Terminal_Waits_For_Route_Invalidation()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminal = new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NotFound, "stale route");
+        var handle = new ZLinkResolvedSpotHandle(
+            new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-1"), "spot-stale", 1),
+            1,
+            _ => throw new InvalidOperationException("A stale call must not refresh or retry."),
+            async () =>
+            {
+                entered.SetResult();
+                await release.Task;
+            }
+        );
+        var call = ZLinkSpotHandleRequestExecution
+            .ExecuteAsync<bool>(
+                handle,
+                _ => ValueTask.FromException<bool>(terminal),
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(call.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        var observed = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => call);
+        Assert.Same(terminal, observed);
     }
 
     [Theory]
@@ -620,7 +660,11 @@ public sealed class LocationResolverTests
                     null
                 );
             },
-            () => invalidations++
+            () =>
+            {
+                invalidations++;
+                return ValueTask.CompletedTask;
+            }
         );
 
         var observed = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>

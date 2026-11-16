@@ -790,7 +790,7 @@ task_t<bool> stateful_object_runtime_t::contains_async (object_ref_t reference) 
 
 task_t<std::pair<stateful_error_t, membership_token_t>>
 stateful_object_runtime_t::begin_membership_move_async (const object_ref_t &actor,
-                                                        const object_ref_t &target_spot)
+                                                        std::optional<object_ref_t> target_spot)
 {
     return _lane.run_task ([this, actor,
                             target_spot] () -> std::pair<stateful_error_t, membership_token_t> {
@@ -799,12 +799,14 @@ stateful_object_runtime_t::begin_membership_move_async (const object_ref_t &acto
         if (actor_record == nullptr) {
             return {actor_error, {}};
         }
-        stateful_error_t spot_error = stateful_error_t::none;
-        auto *spot_record = find_record_locked (target_spot, spot_error);
+        stateful_error_t spot_error = stateful_error_t::not_found;
+        auto *spot_record = target_spot ? find_record_locked (*target_spot, spot_error) : nullptr;
         if (spot_record == nullptr) {
-            return {spot_error, {}};
+            return {spot_error == stateful_error_t::not_found ? stateful_error_t::unavailable
+                                                              : spot_error,
+                    {}};
         }
-        if (actor.kind != object_kind_t::actor || target_spot.kind != object_kind_t::user_spot) {
+        if (actor.kind != object_kind_t::actor || target_spot->kind != object_kind_t::user_spot) {
             return {stateful_error_t::invalid, {}};
         }
         if (state_on_lane (*actor_record) == object_state_t::moving) {

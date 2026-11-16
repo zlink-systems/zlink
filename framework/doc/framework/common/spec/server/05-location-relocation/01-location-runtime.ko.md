@@ -811,6 +811,8 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   수용 공간 변경은 제외한다. 기존 queue·timer·binding·지연 completion을 그대로 유지한다.
 - `T` 시각에는 mesh 상태나 turn 유무와 관계없이 폐기를 즉시 기록(latch)한다. 다음 turn 시작까지
   판정을 미루지 않는다. 기존 execution gate는 이 기록으로 이전 객체의 새 실행을 막는다.
+  아직 시작하지 않은 queue 작업과 timer는 callback을 실행하지 않고 실행권 상실(`NotFound`)로 끝난다.
+  정리 진행 순서는 이 결과를 바꾸지 않는다.
   Queue·timer·binding·지연 completion을 정리하고 보존 메모리 상태를 버린 뒤 빈 상태로
   재참여한다. Peer가 복구되거나 새 claim이 성공해도 폐기한 상태를 다시 열거나 복원하지 않는다.
   Store 후퇴를 감지하면 `T`와 관계없이 같은 정리를 수행한다. 다른 owner의 Store record 삭제나
