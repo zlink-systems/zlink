@@ -552,16 +552,19 @@ internal sealed class ZLinkLocationAutoConnectHost
             {
                 // Startup cleanup can dispose the generation before it returns.
                 // Keep failure notification bound to the generation that failed.
-                var reportFailure = deferred.State.ErrorSink.CaptureGenerationReporter();
+                var reportFailure = deferred.State.ErrorSink.CaptureRuntimeTaskReporter();
                 var failureHandling = startupFailure(exception);
-                reportFailure(exception);
+                reportFailure("location-descriptor-publication", exception);
                 try
                 {
                     await failureHandling.ConfigureAwait(false);
                 }
                 catch (Exception failureHandlingException)
                 {
-                    reportFailure(failureHandlingException);
+                    reportFailure(
+                        "location-descriptor-publication-failure-handling",
+                        failureHandlingException
+                    );
                 }
                 return;
             }
