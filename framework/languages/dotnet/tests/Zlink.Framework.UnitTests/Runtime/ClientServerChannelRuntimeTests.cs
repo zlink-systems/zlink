@@ -22,10 +22,18 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task ClientServer_hello_and_admission_reply_close_wrappers()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ClientServer_hello_and_admission_reply_close_wrappers)
+            )
+        )
+            return;
         using var probe = new MessageFinalizerProbe();
         await using var server = CreateServer(0);
         var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
+        var clients = new List<ServiceProvider>();
         try
         {
             var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
@@ -36,23 +44,17 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             {
                 for (var index = 0; index < 8; index++)
                 {
-                    await using var client = CreateClient(endpoint);
+                    var client = CreateClient(endpoint);
+                    clients.Add(client);
                     var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
                     await clientRuntime.StartAsync(CancellationToken.None);
-                    try
-                    {
-                        var transport = clientRuntime.GetClientServerClientRuntime("work");
-                        await WaitUntilAsync(
-                            transport,
-                            () => transport.ReadyCount == 1,
-                            TimeSpan.FromSeconds(10)
-                        );
-                        Assert.Equal(1, transport.ReadyCount);
-                    }
-                    finally
-                    {
-                        await clientRuntime.StopAsync(CancellationToken.None);
-                    }
+                    var transport = clientRuntime.GetClientServerClientRuntime("work");
+                    await WaitUntilAsync(
+                        transport,
+                        () => transport.ReadyCount == 1,
+                        TimeSpan.FromSeconds(10)
+                    );
+                    Assert.Equal(1, transport.ReadyCount);
                 }
             });
             output.WriteLine($"hello and admission reply finalizers={count}");
@@ -60,6 +62,19 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         }
         finally
         {
+            foreach (var client in clients)
+            {
+                try
+                {
+                    await client
+                        .GetRequiredService<ZLinkFrameworkRuntime>()
+                        .StopAsync(CancellationToken.None);
+                }
+                finally
+                {
+                    await client.DisposeAsync();
+                }
+            }
             await runtime.StopAsync(CancellationToken.None);
         }
     }
