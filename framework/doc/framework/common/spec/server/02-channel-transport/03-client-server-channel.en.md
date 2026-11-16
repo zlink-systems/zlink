@@ -444,14 +444,15 @@ channel messaging §9; the total size in that section is the sum of the protobuf
 entries. The business payload frame carries no metadata.
 
 <a id="envelope-header-grammar"></a>
-**Header grammar.** A header frame that does not parse as a `ChannelHeader` is a protocol error, and
+**Header grammar.** A header frame that does not parse as a `ChannelHeader` is a protocol error, and an invalid
+UTF-8 string field is part of that parse failure (each runtime's protobuf parser judges it), and
 [channel messaging §8](02-channel-messaging.en.md#reply-route-remains) defines whether that request gets a reply.
 
 <a id="envelope-header-structure"></a>
 One place, Framework validation after decode, judges the value rules. Input that the protobuf runtime rejects at
 parse time is handled as the same protocol error.
 
-- String fields are valid UTF-8 and contain no NUL.
+- String fields contain no NUL.
 - `kind` equal to `CHANNEL_KIND_UNSPECIFIED` is a violation. Whether another field must carry a value is defined by each section, not by this grammar.
 - An undefined value in an enum field is a violation.
 - A key that appears twice in `metadata` is a violation.
