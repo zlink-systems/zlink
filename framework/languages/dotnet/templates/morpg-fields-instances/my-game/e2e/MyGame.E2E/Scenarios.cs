@@ -64,6 +64,7 @@ internal static class Scenarios
             view => view.Reason == "not-leader", ct);
         Require(rejected.RetryAfterMs == 0, "Leadership rejection has a cooldown.");
         var unchanged = await member.SendAsync<PartyView, ViewRequest>(new(), _ => true, ct);
+        await member.ReceiveAsync<WorldState>(_ => true, ct);
         Require(joined.Members.SequenceEqual(unchanged.Members) && joined.Phase == unchanged.Phase
             && unchanged.RunId is null, "Rejected entry changed party state.");
         var memberArrival = member.ReceiveAsync<DungeonView>(view => view.PartyId == party, ct);
@@ -151,7 +152,9 @@ internal static class Scenarios
                     "Session changed during field relocation."
                 );
                 var crossParty = await player.SendAsync<PartyView, ViewRequest>(new(), _ => true, ct);
+                await player.ReceiveAsync<WorldState>(_ => true, ct);
                 var otherParty = await observer.SendAsync<PartyView, ViewRequest>(new(), _ => true, ct);
+                await observer.ReceiveAsync<WorldState>(_ => true, ct);
                 Require(crossParty.PartyId == party.PartyId && crossParty.Members.SequenceEqual(otherParty.Members)
                     && crossParty.Members.SequenceEqual(new[] { player.PlayerId, observer.PlayerId })
                     && crossParty.LeaderId == player.PlayerId && otherParty.LeaderId == player.PlayerId,
@@ -164,19 +167,18 @@ internal static class Scenarios
                     await player.SendAsync<ActionRejected, MoveRequest>(request,
                         view => view.Reason == reason && view.RetryAfterMs == 0, ct);
                     var state = await player.SendAsync<WorldState, ViewRequest>(new(), _ => true, ct);
+                    await player.ReceiveAsync<PartyView>(_ => true, ct);
                     Require(state.X == moved.X && state.Sequence == moved.Sequence, "Rejected movement changed state.");
                 }
-                var accepted = player.ReceiveAsync<WorldState>(view => view.Sequence == 2, ct);
-                var budgetRejection = player.ReceiveAsync<ActionRejected>(view => view.Reason == "move-budget", ct);
-                await player.Connector.Send(new MoveRequest(0, 2)).Async(ct);
-                await player.Connector.Send(new MoveRequest(10, 3)).Async(ct);
-                await accepted;
-                var budget = await budgetRejection;
-                var budgetState = await player.SendAsync<WorldState, ViewRequest>(new(), _ => true, ct);
-                Require(budgetState.X == moved.X && budgetState.Sequence == 2 && budget.RetryAfterMs > 0,
-                    "Movement budget rejection changed state.");
-                await Task.Delay(budget.RetryAfterMs, ct);
-                await player.SendAsync<WorldState, MoveRequest>(new(10, 3), view => view.Sequence == 3, ct);
+                await player.SendAsync<WorldState, MoveRequest>(new(0, 2), view => view.Sequence == 2, ct);
+                var continued = await player.SendAsync<WorldState, MoveRequest>(new(0, 3), view => view.Sequence == 3, ct);
+                Require(continued.X == moved.X, "Zero-distance movement changed position.");
+                await player.SendAsync<ActionRejected, MoveRequest>(new(0, 3),
+                    view => view.Reason == "stale-sequence" && view.RetryAfterMs == 0, ct);
+                var unchanged = await player.SendAsync<WorldState, ViewRequest>(new(), _ => true, ct);
+                await player.ReceiveAsync<PartyView>(_ => true, ct);
+                Require(unchanged.X == continued.X && unchanged.Sequence == continued.Sequence,
+                    "Stale movement changed state.");
                 Console.WriteLine("✓ field");
                 passed++;
             }

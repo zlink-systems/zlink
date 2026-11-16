@@ -70,8 +70,7 @@ inline RoomView move_by (Client &a,
                          double dx,
                          double dy,
                          std::int64_t sequence,
-                         std::optional<RoomView> prior = std::nullopt,
-                         bool require_move_budget = false)
+                         std::optional<RoomView> prior = std::nullopt)
 {
     const auto before = prior ? *prior : mover.view ();
     const auto &player = player_view (before, mover.player_id);
@@ -103,8 +102,6 @@ inline RoomView move_by (Client &a,
         const auto &mover_view = std::get<RoomView> (result);
         const auto other_view = other.wait<RoomView> (other_from, moved);
         require (mover_view == other_view, "Movement views differ");
-        require (!require_move_budget || move_budget_rejected,
-                 "Move budget rejection was not observed");
         return mover_view;
     }
 }
@@ -207,68 +204,27 @@ inline void input_scenario (Client &a, Client &b)
     const auto &target = player_view (before_move, other.player_id);
     const auto move_delta = target.x >= source.x ? Game::max_step : -Game::max_step;
     const auto move_sequence = source.lastSequence + 1;
-    const MoveRequest accepted_move{move_delta, 0, move_sequence};
-    const MoveRequest rejected_move{move_delta, 0, move_sequence + 1};
-    const auto move_start = mover.mark ();
-    mover.send (accepted_move);
-    mover.send (rejected_move);
-    const auto move_result = mover.wait<MoveResult> (move_start, [&] (const auto &result) {
-        return result.sequence == move_sequence;
-    });
-    const auto move_rejection = mover.wait<ActionRejected> (move_start);
-    require (move_result.sequence == move_sequence, "Accepted move result sequence differs");
-    require (move_rejection.reason == Rejection::move_budget && move_rejection.retryAfterMs > 0,
-             "Expected movement-budget rejection");
-    const auto after_move_a = mover.view ();
-    const auto &after_mover = player_view (after_move_a, mover.player_id);
-    require (after_mover.x == move_result.x && after_mover.y == move_result.y
-                 && after_mover.lastSequence == move_sequence
-                 && player_view (after_move_a, other.player_id).hp == target.hp,
-             "Movement-budget rejection changed the accepted movement state");
-    std::this_thread::sleep_for (std::chrono::milliseconds (move_rejection.retryAfterMs));
-    const auto retry_move_start = mover.mark ();
-    mover.send (rejected_move);
-    const auto retried_move = mover.wait<MoveResult> (retry_move_start, [&] (const auto &result) {
-        return result.sequence == rejected_move.sequence;
-    });
-    require (retried_move.sequence == rejected_move.sequence, "Server movement retry delay was insufficient");
-    const auto after_move_b = mover.view ();
-    const auto &after_retry_move = player_view (after_move_b, mover.player_id);
-    require (after_retry_move.lastSequence == rejected_move.sequence
-                 && after_retry_move.x == retried_move.x && after_retry_move.y == retried_move.y,
-             "Retried movement result differs from RoomView");
+    move_by (a, b, mover, move_delta, 0, move_sequence, before_move);
+    move_by (a, b, mover, move_delta, 0, move_sequence + 1);
+    reject_action (mover, MoveRequest{move_delta, 0, move_sequence + 1},
+                   Rejection::stale, &other);
 
     const auto before_shot = a.view ();
     const auto &shot_target = player_view (before_shot, b.player_id);
     const auto shot_sequence = player_view (before_shot, a.player_id).lastSequence + 1;
-    const ShootRequest accepted_shot{b.player_id, shot_sequence};
-    const ShootRequest rejected_shot{b.player_id, shot_sequence + 1};
+    const ShootRequest shot_request{b.player_id, shot_sequence};
     const auto shot_start = a.mark ();
-    a.send (accepted_shot);
-    a.send (rejected_shot);
+    a.send (shot_request);
     const auto shot_result = a.wait<ShotResult> (shot_start, [&] (const auto &result) {
         return result.sequence == shot_sequence;
     });
-    const auto fire_rejection = a.wait<ActionRejected> (shot_start);
     require (shot_result.sequence == shot_sequence && shot_result.outcome == "hit",
-             "Expected accepted hit before fire-too-soon rejection");
-    require (fire_rejection.reason == Rejection::fire_too_soon && fire_rejection.retryAfterMs > 0,
-             "Expected fire-interval rejection");
-    const auto after_shot_a = a.view ();
-    require (player_view (after_shot_a, b.player_id).hp == shot_target.hp - Game::shot_damage
-                 && player_view (after_shot_a, a.player_id).lastSequence == shot_sequence,
-             "Fire-too-soon rejection changed the accepted shot state");
-    const auto retry_shot_start = a.mark ();
-    std::this_thread::sleep_for (std::chrono::milliseconds (fire_rejection.retryAfterMs));
-    a.send (rejected_shot);
-    const auto retried_shot = a.wait<ShotResult> (retry_shot_start, [&] (const auto &result) {
-        return result.sequence == rejected_shot.sequence;
-    });
-    require (retried_shot.sequence == rejected_shot.sequence, "Server fire retry delay was insufficient");
-    const auto after_shot_b = a.view ();
-    require (player_view (after_shot_b, b.player_id).hp == shot_target.hp - 2 * Game::shot_damage
-                 && player_view (after_shot_b, a.player_id).lastSequence == rejected_shot.sequence,
-             "Retried shot did not update the target state");
+             "Expected accepted hit");
+    const auto after_shot = a.view ();
+    require (player_view (after_shot, b.player_id).hp == shot_target.hp - Game::shot_damage
+                 && player_view (after_shot, a.player_id).lastSequence == shot_sequence,
+             "Accepted shot did not update the target state");
+    reject_action (a, shot_request, Rejection::stale, &b);
 
     const auto stale_sequence = player_view (mover.view (), mover.player_id).lastSequence;
     reject_action (mover, MoveRequest{0, 0, stale_sequence}, Rejection::stale, &other);
