@@ -32,22 +32,28 @@ final class ReceivePlane {
     boolean recvInto(Received result, ReceiveFlag flags) {
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(flags, "flags");
-        prepareRecvLikeOperation();
-        RecvScratch scratch = socket.recvScratch();
-        Message[] parts = receivePartsOrNull(scratch, flags,
-            flags == ReceiveFlag.DONTWAIT);
-        if (parts == null) {
-            return false;
-        }
-        boolean adopted = false;
+
+        socket.socketCore().reserveNativeCall();
         try {
-            populate(result, parts, null, 0L, false);
-            adopted = true;
-            return true;
-        } finally {
-            if (!adopted) {
-                Message.closeAll(parts);
+            prepareRecvLikeOperation();
+            RecvScratch scratch = socket.recvScratch();
+            Message[] parts = receivePartsOrNull(scratch, flags,
+                flags == ReceiveFlag.DONTWAIT);
+            if (parts == null) {
+                return false;
             }
+            boolean adopted = false;
+            try {
+                populate(result, parts, null, 0L, false);
+                adopted = true;
+                return true;
+            } finally {
+                if (!adopted) {
+                    Message.closeAll(parts);
+                }
+            }
+        } finally {
+            socket.socketCore().releaseNativeCall();
         }
     }
 
@@ -133,24 +139,30 @@ final class ReceivePlane {
         if (state.hasPending()) {
             return state.poll();
         }
-        prepareRecvLikeOperation(state);
-        RecvScratch scratch = socket.recvScratch();
-        Message[] parts = receivePartsOrNull(scratch, flags, nonBlocking);
-        if (parts == null) {
-            return null;
-        }
-        Message routingFrame = NativeRoutingIds.readRoutingFrameOut(
-            scratch.sourceRidOut);
-        if (routingFrame != null) {
+
+        socket.socketCore().reserveNativeCall();
+        try {
+            prepareRecvLikeOperation(state);
+            RecvScratch scratch = socket.recvScratch();
+            Message[] parts = receivePartsOrNull(scratch, flags, nonBlocking);
+            if (parts == null) {
+                return null;
+            }
+            Message routingFrame = NativeRoutingIds.readRoutingFrameOut(
+                scratch.sourceRidOut);
+            if (routingFrame != null) {
+                state.replace(parts);
+                InternalAccess.messageSetMore(routingFrame, true);
+                return routingFrame;
+            }
+            if (parts.length == 1) {
+                return parts[0];
+            }
             state.replace(parts);
-            InternalAccess.messageSetMore(routingFrame, true);
-            return routingFrame;
+            return state.poll();
+        } finally {
+            socket.socketCore().releaseNativeCall();
         }
-        if (parts.length == 1) {
-            return parts[0];
-        }
-        state.replace(parts);
-        return state.poll();
     }
 
     void prepareRecvLikeOperation() {
@@ -188,24 +200,30 @@ final class ReceivePlane {
 
     private Received recvLazyOrNull(ReceiveFlag flags, boolean allowNoData) {
         Objects.requireNonNull(flags, "flags");
-        prepareRecvLikeOperation();
-        RecvScratch scratch = socket.recvScratch();
-        Message[] parts = receivePartsOrNull(scratch, flags, allowNoData);
-        if (parts == null) {
-            return null;
-        }
-        boolean adopted = false;
+
+        socket.socketCore().reserveNativeCall();
         try {
-            RoutingId routingId = NativeRoutingIds.readOut(
-                scratch.sourceRidOut);
-            Received received = InternalAccess.received(routingId, parts,
-                true, 0L, false, null, null);
-            adopted = true;
-            return received;
-        } finally {
-            if (!adopted) {
-                Message.closeAll(parts);
+            prepareRecvLikeOperation();
+            RecvScratch scratch = socket.recvScratch();
+            Message[] parts = receivePartsOrNull(scratch, flags, allowNoData);
+            if (parts == null) {
+                return null;
             }
+            boolean adopted = false;
+            try {
+                RoutingId routingId = NativeRoutingIds.readOut(
+                    scratch.sourceRidOut);
+                Received received = InternalAccess.received(routingId, parts,
+                    true, 0L, false, null, null);
+                adopted = true;
+                return received;
+            } finally {
+                if (!adopted) {
+                    Message.closeAll(parts);
+                }
+            }
+        } finally {
+            socket.socketCore().releaseNativeCall();
         }
     }
 
