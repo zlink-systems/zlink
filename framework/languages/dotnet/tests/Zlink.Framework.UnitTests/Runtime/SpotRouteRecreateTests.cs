@@ -2,7 +2,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Xunit;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Spots;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Locations;
@@ -14,6 +16,54 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class SpotRouteRecreateTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task Cached_ID_request_reaches_recreated_Actor_on_the_same_owner()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        await using var caller = await SpotCloseHost.StartAsync(host.Store, clientOnly: true);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await caller.WaitForPeerAsync(host, cancellation.Token);
+        var manager = host.Runtime.Services.GetRequiredService<IZLinkActorManager>();
+        var client = caller.Runtime.Services.GetRequiredService<IZLinkActorClient>();
+        var actorId = await host.CreateActorAsync();
+        var previous = await manager.FindAsync(actorId);
+        Assert.NotNull(previous);
+        var oldRoute = await host
+            .Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+            .ResolveActorRowAsync(new ZLinkActorLocationKey(actorId));
+        Assert.NotNull(oldRoute);
+        var first = await client
+            .RequestToActor(actorId, new SpotCloseActorGeneration())
+            .Async<SpotCloseProbeReply>();
+        Assert.Equal(previous.Value.ObjectGeneration.ToString(), first.Marker);
+        var routes = caller.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+        var cached = await routes.ResolveActorRowAsync(new ZLinkActorLocationKey(actorId));
+        Assert.True(await manager.DestroyAsync(previous.Value));
+        var current = Assert
+            .IsType<ZLinkActorCreateResult.Created>(await host.GetExistingActorAsync(actorId))
+            .Actor;
+        Assert.NotEqual(previous.Value.ObjectGeneration, current.ObjectGeneration);
+        Assert.Equal(previous.Value.NodeRid, current.NodeRid);
+        Assert.Same(cached, await routes.ResolveActorRowAsync(new ZLinkActorLocationKey(actorId)));
+        var second = await client
+            .RequestToActor(actorId, new SpotCloseActorGeneration())
+            .Async<SpotCloseProbeReply>();
+        Assert.Equal(current.ObjectGeneration.ToString(), second.Marker);
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await new ZLinkActorClient(caller.Runtime)
+                .RequestToActorExact(
+                    SpotCloseHost.MeshName,
+                    current,
+                    oldRoute.OwnerNodeGeneration,
+                    oldRoute.AuthorityOwnerGeneration,
+                    checked((ulong)oldRoute.LeaseGeneration),
+                    new SpotCloseActorGeneration()
+                )
+                .Async<SpotCloseProbeReply>()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+    }
+
     [Fact]
     public async Task Authority_read_yields_until_route_invalidation_completes()
     {

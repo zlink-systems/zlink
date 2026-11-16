@@ -5,6 +5,8 @@ namespace Zlink.Framework.UnitTests;
 
 internal sealed class MessageFinalizerProbe : EventListener
 {
+    // FinalizeObject reports every Message in this process. Callers run in
+    // IsolatedTestProcess so other tests' thread-local pools cannot enter the count.
     private long _finalizers;
 
     protected override void OnEventSourceCreated(EventSource source)

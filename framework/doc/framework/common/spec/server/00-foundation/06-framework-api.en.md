@@ -516,6 +516,9 @@ monitoring and message-flow observation, not by the application handler.
 A language providing runtime reflection can locate handlers within a specified assembly,
 module, or package scope. C++ uses compile-time type and explicit builder registration.
 Whichever method is used, the same dispatch key and duplicate-verification rules apply.
+The owner type that a Spot or Actor handler declares must be the same as the concrete Spot or Actor
+type it is registered for. A mismatch is a startup configuration error for both explicit and scan
+registration; the handler is never silently excluded.
 
 ## 10. Handler Filter
 

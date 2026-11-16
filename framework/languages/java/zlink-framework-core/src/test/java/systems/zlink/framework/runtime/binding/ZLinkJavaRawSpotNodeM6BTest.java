@@ -2047,6 +2047,58 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void directActorAdmissionDistinguishesIncarnationFromOwner() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("recreated-admission"));
+            node.setBind("inproc://recreated-admission-" + System.nanoTime());
+            node.start();
+            installLocalActorAuthority(node);
+            var target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef previous;
+            try (var create = Message.from("create")) {
+                previous = target.createActor("recreated", create);
+            }
+            target.rememberActorAuthority(previous, 41, 1, node.lifecycleGeneration());
+            var cached = actorRoute(node, previous);
+            target.destroyActor(previous, Duration.ofSeconds(1))
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS);
+            ZLinkBackendActorRef current;
+            try (var create = Message.from("create")) {
+                current = target.createActor("recreated", previous.generation() + 1, create);
+            }
+            target.rememberActorAuthority(current, 42, 1, node.lifecycleGeneration());
+            var source =
+                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                            node.routingId(), node.lifecycleGeneration(), "test-owner", 1);
+            try (var payload = Message.from("same-incarnation")) {
+                assertFalse(
+                        target.enqueueRemoteActor(
+                                source,
+                                new ZLinkServiceM6BWireCodec.ActorMessage(
+                                        false,
+                                        0,
+                                        null,
+                                        null,
+                                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                                current, node.lifecycleGeneration(), 41, 1)),
+                                List.of(payload),
+                                ignored -> {}));
+            }
+            try (var payload = Message.from("previous-incarnation")) {
+                assertTrue(
+                        target.enqueueRemoteActor(
+                                source,
+                                new ZLinkServiceM6BWireCodec.ActorMessage(
+                                        false, 0, null, null, cached),
+                                List.of(payload),
+                                ignored -> {}));
+            }
+        }
+    }
+
+    @Test
     void acceptedActorRequestCanReplyAfterSourceOwnershipMoves() throws Exception {
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {

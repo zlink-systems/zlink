@@ -92,7 +92,9 @@ class Client
     }
     PartyView party ()
     {
-        return exchange<ViewRequest, PartyView> ({}, [] (const auto &) { return true; });
+        const auto view = exchange<ViewRequest, PartyView> ({}, [] (const auto &) { return true; });
+        receive<WorldState> ([] (const auto &) { return true; });
+        return view;
     }
     DungeonView reconnect_dungeon ()
     {
