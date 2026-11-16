@@ -3,10 +3,11 @@ using StackExchange.Redis;
 namespace Zlink.Framework.Locations.Redis.Tests;
 
 /// <summary>
-/// Probes a real Redis once per test run. When no Redis is reachable the
-/// integration tests skip (never fail) with a message explaining how to
-/// start one. Every store created through the fixture gets its own key
-/// prefix under one run-unique namespace, and the whole namespace is
+/// Connects to the one Redis a test run uses (#4542). ZLINK_REDIS_TEST_ENDPOINT
+/// (host:port) names it in every language; when it is set an unreachable Redis
+/// fails the run. Without it the fixture tries 127.0.0.1:6379 and the tests
+/// skip when nothing answers. Every store created through the fixture gets its
+/// own key prefix under one run-unique namespace, and the whole namespace is
 /// deleted when the run ends (draft 22절: dedicated prefix + cleanup).
 /// </summary>
 public sealed class RedisTestFixture : IAsyncLifetime
@@ -24,41 +25,26 @@ public sealed class RedisTestFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        string?[] candidates =
-        [
-            Environment.GetEnvironmentVariable("ZLINK_REDIS_TEST_ENDPOINT"),
-            "127.0.0.1:16379",
-            "127.0.0.1:6379",
-        ];
-        foreach (var endpoint in candidates)
+        var provided = Environment.GetEnvironmentVariable("ZLINK_REDIS_TEST_ENDPOINT");
+        var endpoint = string.IsNullOrEmpty(provided) ? "127.0.0.1:6379" : provided;
+        try
         {
-            if (string.IsNullOrEmpty(endpoint))
-            {
-                continue;
-            }
-
-            try
-            {
-                var configuration = ConfigurationOptions.Parse(endpoint);
-                configuration.ConnectTimeout = 2000;
-                configuration.AbortOnConnectFail = true;
-                var connection = await ConnectionMultiplexer.ConnectAsync(configuration);
-                await connection.GetDatabase().PingAsync();
-                _cleanupConnection = connection;
-                ConnectionString = endpoint;
-                RedisAvailable = true;
-                return;
-            }
-            catch (Exception)
-            {
-                // Try the next candidate; unreachable Redis means skip.
-            }
+            var configuration = ConfigurationOptions.Parse(endpoint);
+            configuration.ConnectTimeout = 2000;
+            configuration.AbortOnConnectFail = true;
+            var connection = await ConnectionMultiplexer.ConnectAsync(configuration);
+            await connection.GetDatabase().PingAsync();
+            _cleanupConnection = connection;
+            ConnectionString = endpoint;
+            RedisAvailable = true;
         }
-
-        SkipReason =
-            "Redis is not reachable (tried ZLINK_REDIS_TEST_ENDPOINT, 127.0.0.1:16379, 127.0.0.1:6379). "
-            + "Start one with: docker run -d --rm --name zlink-redis-test "
-            + "-p 127.0.0.1:16379:6379 redis:7-alpine";
+        catch (Exception exception) when (string.IsNullOrEmpty(provided))
+        {
+            SkipReason =
+                $"Redis is not reachable at {endpoint}: {exception.Message}. "
+                + "Set ZLINK_REDIS_TEST_ENDPOINT (host:port) or start one with: "
+                + "docker run -d --rm --name zlink-redis-test -p 127.0.0.1:6379:6379 redis:7-alpine";
+        }
     }
 
     public async Task DisposeAsync()
