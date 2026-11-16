@@ -756,6 +756,8 @@ task_t<void> mesh_node_runtime_t::start (
     });
     const auto metric_provider = node_options.mesh.metric_provider;
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
+    if (_operation_owner_resolver)
+        node->transport ().set_operation_owner_resolver (_operation_owner_resolver);
     if (spot_state->location_lifecycle) {
         co_await spot_state->location_lifecycle->execution_runtime ().on_execution_discard (
           [weak = std::weak_ptr (spot_state)] (auto allowed) -> task_t<void> {
@@ -894,7 +896,10 @@ task_t<void> mesh_node_runtime_t::start (
                                      std::move (relocation_resume));
     // Retain partial startup in the lifecycle owner before any further await;
     // coroutine-frame destruction must not close a live completion owner.
-    _node = node;
+    {
+        std::lock_guard lock (_peer_callback_gate->mutex);
+        _node = node;
+    }
     co_await runtime::external_lifecycle_turn_t{};
     node->start ();
     if (_instance_spot_materializer)
@@ -1724,6 +1729,24 @@ std::optional<location_owner_token_t> mesh_node_runtime_t::session_route_owner (
     return _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
 }
 
+void mesh_node_runtime_t::configure_operation_owner_resolver (
+  runtime::mesh::raw_mesh_node_owner_t::operation_owner_resolver_t resolver)
+{
+    if (_node)
+        throw configuration_error (
+          "Request operation owners must be configured before MeshNode start");
+    _operation_owner_resolver = std::move (resolver);
+}
+
+std::optional<runtime::mesh::raw_mesh_node_owner_t::operation_owner_t>
+mesh_node_runtime_t::local_operation_owner (runtime::foundation::call_id_t operation,
+                                            std::uint64_t reply_route_id) const
+{
+    std::lock_guard lock (_peer_callback_gate->mutex);
+    return _node ? _node->transport ().local_operation_owner (operation, reply_route_id)
+                 : std::nullopt;
+}
+
 void mesh_node_runtime_t::configure_stateful_dispatch (
   stateful_dispatch_configuration_t configuration, runtime::live_location_reader_t *sources)
 {
@@ -1930,7 +1953,11 @@ void mesh_node_runtime_t::stop ()
     _node->close ();
     spot_runtime.detach_native_node ();
     spot_runtime.release_native_handles ();
-    _node.reset ();
+    std::shared_ptr<host::public_host_runtime_t> retired_node;
+    {
+        std::lock_guard lock (_peer_callback_gate->mutex);
+        retired_node = std::move (_node);
+    }
 }
 
 void mesh_node_runtime_t::configure_peer_reconcile (
@@ -4143,6 +4170,18 @@ catch (...) {
     return detail::current_exception_result<result_t<runtime::messaging::message_parts_t>> ();
 }
 
+}
+
+task_t<void> mesh_node_runtime_t::register_actor_request (
+  host::pending_operation_t &operation,
+  std::chrono::milliseconds timeout,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
+{
+    if (!_node)
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "Actor request source has not started");
+    co_await _node->register_actor_request (operation, timeout);
+    observe_request_failure (operation, admitted, "Actor request");
 }
 
 void mesh_node_runtime_t::prepare_actor_request_reply (
