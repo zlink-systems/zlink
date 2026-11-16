@@ -34,6 +34,9 @@ final class CompletionNativeFixture {
     volatile CountDownLatch admissionEntered = new CountDownLatch(1);
     volatile CountDownLatch releaseAdmission = new CountDownLatch(1);
     boolean omitRidEcho;
+    volatile boolean blockStreamReceive;
+    final CountDownLatch streamReceiveReturned = new CountDownLatch(1);
+    final CountDownLatch releaseStreamReceive = new CountDownLatch(1);
     final java.util.concurrent.atomic.AtomicInteger pollerDestroyBusy =
         new java.util.concurrent.atomic.AtomicInteger();
     final java.util.concurrent.atomic.AtomicInteger pollerWaitCalls =
@@ -121,6 +124,8 @@ final class CompletionNativeFixture {
         receive(core, linker, replacements, "zlink_xpub_recv", "xpubRecv",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG,
                 ADDRESS, JAVA_INT));
+        receive(core, linker, replacements, "zlink_stream_recv_packet", "streamRecv",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT));
         var lookupField = loader.getDeclaredField("LOOKUP");
         lookupField.setAccessible(true);
         lookupField.set(null, (SymbolLookup) name -> {
@@ -161,6 +166,20 @@ final class CompletionNativeFixture {
             return fault[0];
         }
         return (int) coreReceives.get(symbol).invokeWithArguments(args);
+    }
+
+    private int streamRecv(MemorySegment socket, MemorySegment rid,
+                           MemorySegment header, MemorySegment body, int flags) throws Throwable {
+        if (!blockStreamReceive) {
+            return scriptedReceive("zlink_stream_recv_packet", socket, rid, header, body, flags);
+        }
+        // Script the Core return boundary. The borrowed RID stays allocated even
+        // if the unfixed binding accepts close, so the negative test is safe.
+        MemorySegment borrowed = NativeRoutingIds.allocateBytes(arena, new byte[] {4, 5, 6});
+        rid.reinterpret(ADDRESS.byteSize()).set(ADDRESS, 0, borrowed);
+        streamReceiveReturned.countDown();
+        releaseStreamReceive.await();
+        return RecvResult.OK.value();
     }
 
     private int recvData(MemorySegment s, MemorySegment rid, MemorySegment parts,

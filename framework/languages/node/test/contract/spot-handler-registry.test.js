@@ -82,3 +82,66 @@ test('different Spot subscription registrations remain independent', () => {
 
   assert.equal(registry.snapshot().length, 3);
 });
+
+for (const kind of ['spotPacketHandlers', 'spotSubscriptionHandlers', 'spotActorSendHandlers', 'spotActorRequestHandlers', 'entrySpotPacketHandlers', 'entrySpotActorSendHandlers']) {
+  test(`${kind} rejects a base owner at startup and accepts an exact owner`, () => {
+    const { createFrameworkRegistration, ZLinkConfigurationException } = require('../../packages/framework/dist/internal');
+    class BaseSpot {}
+    class DerivedSpot extends BaseSpot {}
+    class OwnerHandler {}
+    class PlayerActor {}
+    const entry = kind.startsWith('entry');
+    const options = (concrete) => ({
+      spotNodes: { owner: {
+        router: { bind: 'tcp://127.0.0.1:0' },
+        ...(entry ? { entrySpotType: concrete } : { spotFactories: [concrete] }),
+        [kind]: [{
+          ...(entry ? { entrySpotType: BaseSpot } : { spotType: BaseSpot }),
+          handlerType: OwnerHandler, actorType: PlayerActor, packetName: 'owner-message',
+          channelName: 'events', topic: 'owner-topic', messageType: Object
+        }]
+      }}
+    });
+    assert.throws(() => createFrameworkRegistration(options(DerivedSpot)), (error) => {
+      assert.ok(error instanceof ZLinkConfigurationException);
+      for (const type of [OwnerHandler, BaseSpot, DerivedSpot]) assert.ok(error.message.includes(type.name), error.message);
+      return true;
+    });
+    assert.doesNotThrow(() => createFrameworkRegistration(options(BaseSpot)));
+    if (!entry) {
+      const both = options(BaseSpot);
+      both.spotNodes.owner.spotFactories.push(DerivedSpot);
+      assert.doesNotThrow(() => createFrameworkRegistration(both));
+    }
+  });
+}
+
+test('Nest handler scan rejects a base Spot owner through the startup validator', () => {
+  require('reflect-metadata');
+  const { createDiscoveredRegistration } = require('../../packages/nestjs/dist/registration-composer');
+  const { zlinkSpotPacketHandler } = require('../../packages/nestjs/dist/decorators');
+  const { ZLinkConfigurationException } = require('../../packages/framework/dist/internal');
+  class BaseSpot {}
+  class DerivedSpot extends BaseSpot {}
+  class ScannedOwnerHandler { async handle() {} }
+  zlinkSpotPacketHandler({ spot: () => BaseSpot, packetName: 'owner-message' })(ScannedOwnerHandler);
+  const discovery = { getProviders: () => [{ token: ScannedOwnerHandler, metatype: ScannedOwnerHandler }] };
+  const moduleRef = { get: () => undefined };
+  const registration = (concrete) => createDiscoveredRegistration({
+    spotNodes: { owner: { router: { bind: 'tcp://127.0.0.1:0' }, spotFactories: [concrete] } }
+  }, discovery, moduleRef);
+  assert.throws(() => registration(DerivedSpot), (error) => {
+    assert.ok(error instanceof ZLinkConfigurationException);
+    for (const type of [ScannedOwnerHandler, BaseSpot, DerivedSpot]) assert.ok(error.message.includes(type.name), error.message);
+    return true;
+  });
+  assert.doesNotThrow(() => registration(BaseSpot));
+  for (const sameNode of [false, true]) {
+    assert.doesNotThrow(() => createDiscoveredRegistration({
+      spotNodes: {
+        owner: { router: { bind: 'tcp://127.0.0.1:0' }, spotFactories: sameNode ? [BaseSpot, DerivedSpot] : [BaseSpot] },
+        ...(sameNode ? {} : { derived: { router: { bind: 'tcp://127.0.0.1:0' }, spotFactories: [DerivedSpot] } })
+      }
+    }, discovery, moduleRef));
+  }
+});

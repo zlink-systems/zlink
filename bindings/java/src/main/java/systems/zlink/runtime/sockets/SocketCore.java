@@ -269,7 +269,7 @@ final class SocketCore {
         Objects.requireNonNull(action, "action");
         synchronized (ownerLock) {
             ensureOpenForSubmitLocked();
-            reserveNativeCallLocked();
+            reserveNativeCall();
         }
         try {
             return action.get();
@@ -284,9 +284,19 @@ final class SocketCore {
                 NativeErrno.ESHUTDOWN);
     }
 
-    // Caller holds ownerLock and has checked open before fallible preparation.
-    void reserveNativeCallLocked() {
+    // Lock-free so receivers do not contend with submit preparation on ownerLock.
+    // closeNativeHandle checks activeNativeCalls under ownerLock before Native.close:
+    // a reservation taken before that check makes close BUSY; one taken after it
+    // either observes closed here or reaches Core after the accepted close and
+    // receives SHUTDOWN without a borrowed result. Submit callers have already
+    // checked open under ownerLock, so the closed branch only serves receivers.
+    void reserveNativeCall() {
         activeNativeCalls.incrementAndGet();
+        if (closed) {
+            activeNativeCalls.decrementAndGet();
+            throw new systems.zlink.contracts.errors.ZlinkRecvException(
+                RecvResult.INVALID_HANDLE, NativeErrno.EFAULT);
+        }
     }
 
     void releaseNativeCall() {

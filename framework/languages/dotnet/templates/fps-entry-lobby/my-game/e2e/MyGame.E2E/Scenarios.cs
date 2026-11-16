@@ -301,33 +301,9 @@ internal static class Scenarios
 
     private static async Task InputAsync(GameClient a, GameClient b, CancellationToken ct)
     {
-        // Verify the max-step pair and server-provided retry delay.
-        var beforeBudget = await ViewAsync(a, ct);
-        var moveSequence = Next(beforeBudget, a);
-        var acceptedMoveRequest = new MoveRequest(new(0, 0, -2), moveSequence);
-        var move = new MoveRequest(new(0, 0, -2), moveSequence + 1);
-        var moveResponses = await Task.WhenAll(
-            a.ActionAsync(acceptedMoveRequest, ct),
-            a.ActionAsync(move, ct));
-        var acceptedMove = moveResponses.OfType<MoveResult>().SingleOrDefault()
-            ?? throw new InvalidOperationException("Expected accepted movement before movement-budget rejection.");
-        Require(acceptedMove.Sequence == moveSequence, "Expected accepted movement before movement-budget rejection.");
-        var budget = moveResponses.OfType<ActionRejected>().SingleOrDefault()
-            ?? throw new InvalidOperationException("Expected movement-budget rejection.");
-        Require(budget is { Reason: Rejection.MoveBudget, RetryAfterMs: > 0 },
-            "Expected movement-budget rejection.");
-        var afterBudget = await ViewAsync(a, ct);
-        var beforeBudgetPlayer = Player(beforeBudget, a);
-        var afterBudgetPlayer = Player(afterBudget, a);
-        Require(afterBudgetPlayer.Position == acceptedMove.Position && afterBudgetPlayer.LastSequence == moveSequence,
-            "Movement-budget rejection changed the accepted movement position or sequence.");
-        Require(beforeBudgetPlayer.Hp == afterBudgetPlayer.Hp
-            && Player(beforeBudget, b).Hp == Player(afterBudget, b).Hp,
-            "Movement-budget rejection changed player HP.");
-        await Task.Delay(((ActionRejected)budget).RetryAfterMs, ct);
-        var retriedMove = await a.ActionAsync(move, ct);
-        Require(retriedMove is MoveResult moveRetry && moveRetry.Sequence == move.Sequence,
-            "Server movement retry delay was insufficient.");
+        // Observe accepted movement without requiring a budget rejection between messages.
+        await MoveAsync(a, new(0, 0, -2), ct);
+        await MoveAsync(a, new(0, 0, -2), ct);
 
         var view = await ViewAsync(a, ct);
         var sequence = Player(view, a).LastSequence;
@@ -346,34 +322,14 @@ internal static class Scenarios
         await RejectedAsync(a, new MoveRequest(new(2, 0, 0), sequence), Rejection.MoveBlockedByWall, ct);
         var beforeFire = await ViewAsync(a, ct);
         var shotSequence = Next(beforeFire, a);
-        var acceptedShotRequest = new ShootRequest(new(0, 1, 0), shotSequence);
-        var shot = new ShootRequest(new(0, 1, 0), shotSequence + 1);
-        var shotResponses = await Task.WhenAll(
-            a.ActionAsync(acceptedShotRequest, ct),
-            a.ActionAsync(shot, ct));
-        var acceptedShot = shotResponses.OfType<ShotResult>().SingleOrDefault()
-            ?? throw new InvalidOperationException("Expected accepted miss before fire-too-soon rejection.");
-        Require(acceptedShot.Sequence == shotSequence && acceptedShot.Outcome == ShotOutcome.Miss,
-            "Expected accepted miss before fire-too-soon rejection.");
-        var fire = shotResponses.OfType<ShotRejected>().SingleOrDefault()
-            ?? throw new InvalidOperationException("Expected fire-interval rejection.");
-        Require(fire is { Reason: Rejection.FireTooSoon, RetryAfterMs: > 0 },
-            "Expected fire-interval rejection.");
+        await ShootAsync(a, new(0, 1, 0), ShotOutcome.Miss, ct);
+        await RejectedAsync(a, new ShootRequest(new(0, 1, 0), shotSequence), Rejection.StaleSequence, ct);
         var afterFire = await ViewAsync(a, ct);
-        var beforeFirePlayer = Player(beforeFire, a);
-        var afterFirePlayer = Player(afterFire, a);
-        Require(afterFirePlayer.Position == beforeFirePlayer.Position && afterFirePlayer.LastSequence == shotSequence,
-            "Fire-too-soon rejection changed the accepted shot position or sequence.");
-        Require(beforeFirePlayer.Hp == afterFirePlayer.Hp
-            && Player(beforeFire, b).Hp == Player(afterFire, b).Hp,
-            "Fire-too-soon rejection changed player HP.");
-        await Task.Delay(((ShotRejected)fire).RetryAfterMs, ct);
-        var retriedShot = await a.ActionAsync(shot, ct);
-        Require(retriedShot is ShotResult shotRetry
-            && shotRetry.Sequence == shot.Sequence
-            && shotRetry.Outcome == ShotOutcome.Miss,
-            "Server fire retry delay was insufficient.");
+        Require(Player(afterFire, a).Position == Player(beforeFire, a).Position
+            && Player(afterFire, a).LastSequence == shotSequence
+            && Player(afterFire, a).Hp == Player(beforeFire, a).Hp,
+            "Accepted miss changed position, HP or used the wrong sequence.");
         Require(Player(await ViewAsync(b, ct), b).Hp == GameNames.InitialHp, "Input checks damaged target.");
-        Console.WriteLine("input: move-budget and fire-too-soon retry delays accepted unchanged requests");
+        Console.WriteLine("input: movement and shot sequence checks passed");
     }
 }

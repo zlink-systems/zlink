@@ -5978,16 +5978,16 @@ void verify_location_store_accepted_record_authority ()
 
     const auto resolver = stateful::make_location_store_authority_resolver (store);
     const auto resolved =
-      resolver (
-        {.target = {stateful::object_kind_t::actor, "actor-authority",
-                    committed.ready.object_generation, committed.ready.authority_owner_generation,
-                    "m6b-mesh", "raw-target"},
-         .source_node_routing_id = bytes ("raw-source"),
-         .source_node_generation = 1,
-         .target_node_routing_id = bytes ("raw-target"),
-         .target_node_generation = 1,
-         .source_kind = protocol::frozen_source_kind_t::node,
-         .requested_authority_owner_generation = committed.ready.authority_owner_generation})
+      resolver ({.target = {stateful::object_kind_t::actor, "actor-authority",
+                            committed.ready.object_generation,
+                            committed.ready.authority_owner_generation, "m6b-mesh", "raw-target"},
+                 .source_node_routing_id = bytes ("raw-source"),
+                 .source_node_generation = 1,
+                 .target_node_routing_id = bytes ("raw-target"),
+                 .target_node_generation = 1,
+                 .source_kind = protocol::frozen_source_kind_t::node,
+                 .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+                 .requested_object_generation = committed.ready.object_generation})
         .result ()
         .value ();
     assert (resolved);
@@ -6000,21 +6000,21 @@ void verify_location_store_accepted_record_authority ()
     // A bound-session query carries the session triple next to the owning
     // Actor identity so resolvers can fence-check the binding.
     const auto resolved_bound =
-      resolver (
-        {.target = {stateful::object_kind_t::actor, "actor-authority",
-                    committed.ready.object_generation, committed.ready.authority_owner_generation,
-                    "m6b-mesh", "raw-target"},
-         .source_node_routing_id = bytes ("raw-source"),
-         .source_node_generation = 1,
-         .target_node_routing_id = bytes ("raw-target"),
-         .target_node_generation = 1,
-         .source_kind = protocol::frozen_source_kind_t::bound_session,
-         .source_actor =
-           std::make_pair (std::string ("actor-authority"), committed.ready.object_generation),
-         .source_session_routing_id = bytes ("sess-1"),
-         .source_binding_generation = 5,
-         .source_session_sequence = 9,
-         .requested_authority_owner_generation = committed.ready.authority_owner_generation})
+      resolver ({.target = {stateful::object_kind_t::actor, "actor-authority",
+                            committed.ready.object_generation,
+                            committed.ready.authority_owner_generation, "m6b-mesh", "raw-target"},
+                 .source_node_routing_id = bytes ("raw-source"),
+                 .source_node_generation = 1,
+                 .target_node_routing_id = bytes ("raw-target"),
+                 .target_node_generation = 1,
+                 .source_kind = protocol::frozen_source_kind_t::bound_session,
+                 .source_actor = std::make_pair (std::string ("actor-authority"),
+                                                 committed.ready.object_generation),
+                 .source_session_routing_id = bytes ("sess-1"),
+                 .source_binding_generation = 5,
+                 .source_session_sequence = 9,
+                 .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+                 .requested_object_generation = committed.ready.object_generation})
         .result ()
         .value ();
     assert (resolved_bound);
@@ -6031,8 +6031,18 @@ void verify_location_store_accepted_record_authority ()
       .target_node_routing_id = bytes ("raw-target"),
       .target_node_generation = 1,
       .source_kind = protocol::frozen_source_kind_t::node,
-      .requested_authority_owner_generation = committed.ready.authority_owner_generation};
+      .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+      .requested_object_generation = committed.ready.object_generation};
     assert (!resolver (stale).result ().value ());
+
+    auto previous_incarnation = stale;
+    previous_incarnation.source_node_generation = 1;
+    previous_incarnation.requested_object_generation = committed.ready.object_generation + 1;
+    ++previous_incarnation.requested_authority_owner_generation;
+    assert (resolver (previous_incarnation).result ().value ());
+    auto same_incarnation_wrong_owner = previous_incarnation;
+    same_incarnation_wrong_owner.requested_object_generation = committed.ready.object_generation;
+    assert (!resolver (same_incarnation_wrong_owner).result ().value ());
 
     for (const auto kind :
          {placement_object_kind_t::user_spot, placement_object_kind_t::instance_spot}) {
