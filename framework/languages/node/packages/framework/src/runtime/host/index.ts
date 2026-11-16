@@ -694,7 +694,7 @@ export class ZLinkFrameworkRuntimeHost
         );
       },
       currentOwnerFence: (actorId) => {
-        const state = this.actorManager?.getState(actorId);
+        const state = this.actorManager?.publishedState(actorId);
         const current = state?.nativeActorRef;
         const owner = this.locationOwner.currentRuntime?.currentOwnerToken;
         const node =
