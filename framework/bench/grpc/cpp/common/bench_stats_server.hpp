@@ -3,7 +3,6 @@
 #define ZLINK_CPP_BENCH_STATS_SERVER_HPP
 
 #include "bench_common.hpp"
-#include "game_message.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -13,6 +12,7 @@
 #include <cstdio>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -63,32 +63,23 @@ class server_metrics_t
             _latency_ns.push_back (latency);
     }
 
-    void record_game (const game_message_t &payload)
+    void record_game (std::int64_t run, std::int64_t phase, std::int64_t seq,
+                      std::int64_t sent_ns)
     {
         std::lock_guard<std::mutex> lock (_gate);
         ++_all_phase_messages;
-        const auto valid_size = [&] {
-            try {
-                return payload.items.size () == game_item_count (1024)
-                       || payload.items.size () == game_item_count (4096);
-            }
-            catch (const std::invalid_argument &) {
-                return false;
-            }
-        };
-        if (!valid_size () || payload.run < 0 || payload.phase < phase_warmup
-            || payload.phase > phase_active || payload.seq < 0 || payload.sent_ns < 0) {
+        if (run <= 0 || run > std::numeric_limits<std::uint32_t>::max () || seq < 0
+            || (phase != phase_warmup && phase != phase_active) || sent_ns <= 0) {
             ++_errors;
             return;
         }
-        const uint64_t sent_ns = static_cast<uint64_t> (payload.sent_ns);
-        const uint64_t now = now_ns ();
-        const double latency = now >= sent_ns ? static_cast<double> (now - sent_ns) : 0.0;
-        if (payload.phase != phase_active)
+        if (phase != phase_active)
             return;
         ++_active_messages;
+        const auto now = now_ns ();
+        const auto sent = static_cast<std::uint64_t> (sent_ns);
         if (_latency_ns.size () < latency_sample_limit)
-            _latency_ns.push_back (latency);
+            _latency_ns.push_back (now >= sent ? static_cast<double> (now - sent) : 0.0);
     }
 
     void record_error ()

@@ -177,22 +177,6 @@ inline const char *response_envelope ()
            "null,\"errorMessage\":null,\"source\":null}";
 }
 
-inline const char *request_json_envelope ()
-{
-    return "{\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"GameMessage\",\"contentType\":"
-           "\"application/"
-           "json\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":"
-           "null,\"errorMessage\":null,\"source\":null}";
-}
-
-inline const char *response_json_envelope ()
-{
-    return "{\"kind\":2,\"channelName\":\"bench\",\"messageName\":\"GameMessage\",\"contentType\":"
-           "\"application/"
-           "json\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":"
-           "null,\"errorMessage\":null,\"source\":null}";
-}
-
 // ---------------------------------------------------------------------------
 // latency
 // ---------------------------------------------------------------------------

@@ -61,10 +61,15 @@ inline void control (zlink::router_socket_t &socket, const zlink::routing_id_t &
 inline bool handle_control (zlink::router_socket_t &socket, zlink::received_t &received,
                             const fw::runtime::mesh::service_node_descriptor_t &local,
                             std::atomic<bool> *admitted = nullptr,
-                            std::optional<std::uint64_t> *correlation = nullptr)
+                            std::optional<std::uint64_t> *correlation = nullptr,
+                            int level = 1)
 {
-    if (received.parts ().empty () || received.parts ()[0].size () == 0
-        || *reinterpret_cast<const char *> (received.parts ()[0].data ()) == '{')
+    if (received.parts ().empty () || received.parts ()[0].size () == 0)
+        return false;
+    const auto *first = reinterpret_cast<const std::uint8_t *> (received.parts ()[0].data ());
+    if (*first == '{' || (level >= 2 &&
+        (received.parts ()[0].size () < 2 || first[0] != protocol::magic[0]
+         || first[1] != protocol::magic[1])))
         return false;
     const auto wire = protocol::decode_header (protocol::message_bytes (received.parts ()[0]));
     const auto kind = wire.kind;
@@ -132,9 +137,7 @@ class encoder_t
         if (level >= 2 || level < 0) {
             if (!_type)
                 _type = std::make_shared<fw::detail::request_type_plan_t> (
-                  fw::detail::prepare_request_type ("BenchPayload", "application/x-protobuf"));
-            _channel = std::make_shared<fw::detail::prepared_header_fragment_t> (
-              fw::detail::prepare_request_channel ("bench"));
+                  fw::detail::request_type_plan_t{"application/x-protobuf"});
         }
     }
     std::array<zlink::message_t, 2> encode (size_t size, uint32_t run, phase_t phase,
@@ -179,10 +182,10 @@ class encoder_t
             // route_client_t::submit_request_reply_message_erased leaves names
             // and content type in the prepared plans, which outlive encoding.
             auto header = codec.create_envelope (
-              messaging::message_kind_t::request, {}, {}, timeout, {}, {}, {});
+              messaging::message_kind_t::request, _channel_name, _packet_name, timeout, {}, {}, {});
             envelope = (_level >= 3 || _level < 0)
-              ? codec.encode_service_payload_parts (std::move (header), std::move (encoded), _type, _channel)
-              : codec.encode_payload_parts (std::move (header), std::move (encoded), _type, _channel);
+              ? codec.encode_service_payload_parts (std::move (header), std::move (encoded), _type)
+              : codec.encode_payload_parts (header, std::move (encoded), _content_type);
         }
         if (_level >= 3 || _level < 0) {
             auto application = std::move (envelope).take_application_payload ();
@@ -197,7 +200,7 @@ class encoder_t
     int _level;
     payload_shape_t _shape;
     std::shared_ptr<const fw::detail::request_type_plan_t> _type;
-    std::shared_ptr<const fw::detail::prepared_header_fragment_t> _channel;
+    const std::string _content_type = "application/x-protobuf";
     const std::string _channel_name = "bench";
     const std::string _packet_name = "BenchPayload";
     const zlink::routing_id_t _target = zlink::routing_id_t::from ("bench-server");
@@ -514,7 +517,7 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
                 continue;
             while (socket.recv (received, zlink::recv_flags_t::dontwait) == 0) {
                 std::optional<std::uint64_t> correlation;
-                if (handle_control (socket, received, local, nullptr, &correlation))
+                if (handle_control (socket, received, local, nullptr, &correlation, level))
                     continue;
                 std::optional<messaging::envelope_header_t> header;
                 auto payload = handler.handle (received, header);
@@ -555,7 +558,8 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
         auto &state = *static_cast<state_t *> (opaque);
         std::optional<std::uint64_t> correlation;
         if (handle_control (state.owner.ablation_socket (), received,
-                            state.owner.startup_descriptor (), nullptr, &correlation))
+                            state.owner.startup_descriptor (), nullptr, &correlation,
+                            state.handler.level))
             return;
         // L0-L4: one fixed handler; activation/scope starts at L5_7.
         if (permit) {
