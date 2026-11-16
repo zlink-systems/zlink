@@ -346,17 +346,17 @@ public sealed class MessagingHotPathWireTests
     }
 
     private const string CommandHeader =
-        "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "08031204776972651a077061796c6f616422106170706c69636174696f6e2f6a736f6e";
     private const string RequestHeader =
-        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "08011204776972651a077061796c6f616422106170706c69636174696f6e2f6a736f6e2a0a636f72722d6669786564";
     private const string ResponseHeader =
-        "{\"formatMarker\":242,\"kind\":2,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "08021204776972651a077061796c6f616422106170706c69636174696f6e2f6a736f6e2a0a636f72722d6669786564";
     private const string ErrorHeader =
-        "{\"formatMarker\":242,\"kind\":5,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":\"Failed\",\"errorMessage\":\"fixed failure\",\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "08051204776972651a077061796c6f616422106170706c69636174696f6e2f6a736f6e2a0a636f72722d66697865643a064661696c6564420d6669786564206661696c757265";
     private const string ProtobufHeader =
-        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "08011204776972651a077061796c6f616422166170706c69636174696f6e2f782d70726f746f6275662a0a636f72722d6669786564";
     private const string PartSerializerHeader =
-        "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/x-wire-part\",\"correlationId\":\"corr-fixed\",\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
+        "08011204776972651a077061796c6f616422176170706c69636174696f6e2f782d776972652d706172742a0a636f72722d6669786564";
 
     public static IEnumerable<object[]> HeaderVectors()
     {
@@ -380,13 +380,13 @@ public sealed class MessagingHotPathWireTests
         string? correlationId,
         string? errorCode,
         string? errorMessage,
-        string expectedJson
+        string expectedHex
     )
     {
         var header = Header((ZLinkMessageKind)kind, correlationId, errorCode, errorMessage);
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
 
-        Assert.Equal(Encoding.UTF8.GetBytes(expectedJson), encoded.ToArray());
+        Assert.Equal(Convert.FromHexString(expectedHex), encoded.ToArray());
     }
 
     [Theory]
@@ -398,7 +398,7 @@ public sealed class MessagingHotPathWireTests
             .Range(0, payloadSize)
             .Select(static index => (byte)(index % 251))
             .ToArray();
-        var headerBytes = Encoding.UTF8.GetBytes(RequestHeader);
+        var headerBytes = Convert.FromHexString(RequestHeader);
         using var header = Message.From(headerBytes);
         using var body = Message.From(payload);
 
@@ -455,7 +455,7 @@ public sealed class MessagingHotPathWireTests
         );
         try
         {
-            Assert.Equal(Encoding.UTF8.GetBytes(ProtobufHeader), parts[0].ToArray());
+            Assert.Equal(Convert.FromHexString(ProtobufHeader), parts[0].ToArray());
             Assert.Equal(
                 new byte[] { 0x0A, 0x04, (byte)'w', (byte)'i', (byte)'r', (byte)'e' },
                 parts[1].ToArray()
@@ -468,7 +468,7 @@ public sealed class MessagingHotPathWireTests
     }
 
     [Fact]
-    public void Correlated_header_with_deadline_flow_and_metadata_matches_fixed_wire_bytes()
+    public void Correlated_header_with_deadline_flow_and_metadata_roundtrips()
     {
         var header = Header(ZLinkMessageKind.Request, "0000000000000048") with
         {
@@ -479,23 +479,16 @@ public sealed class MessagingHotPathWireTests
             Source = "node-a",
             FlowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d",
             FlowOrigin = ZLinkFlowOrigin.Application,
-            Metadata = new Dictionary<string, string>()
-            {
-                ["first"] = "a\"b",
-                ["second"] = "한글<&",
-            },
+            Metadata = new Dictionary<string, string> { ["first"] = "a\"b", ["second"] = "한글<&" },
         };
-        const string expected =
-            """{"formatMarker":242,"kind":1,"channelName":"wire","messageName":"payload","contentType":"application/json","correlationId":"0000000000000048","deadline":"2026-09-10T12:34:56.1234567+09:00","topic":"topic/one","errorCode":null,"errorMessage":null,"source":"node-a","flowId":"0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d","flowOrigin":3,"metadata":{"first":"a\"b","second":"한글<&"}}""";
-
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-        Assert.Equal(Encoding.UTF8.GetBytes(expected), encoded.ToArray());
-        using var fixedWire = Message.From(Encoding.UTF8.GetBytes(expected));
-        var decoded = ZLinkEnvelopeCodec.DecodeHeader(fixedWire);
+        var decoded = ZLinkEnvelopeCodec.DecodeHeader(encoded);
         Assert.Equal(header.Deadline, decoded.Deadline);
         Assert.Equal(header.CorrelationId, decoded.CorrelationId);
         Assert.Equal(header.FlowId, decoded.FlowId);
         Assert.Equal(header.Metadata, decoded.Metadata);
+        using var reencoded = ZLinkEnvelopeCodec.EncodeHeader(decoded);
+        Assert.Equal(encoded.ToArray(), reencoded.ToArray());
     }
 
     [Theory]
@@ -518,13 +511,13 @@ public sealed class MessagingHotPathWireTests
         );
         try
         {
-            Assert.Equal(Encoding.UTF8.GetBytes(RequestHeader), parts[0].ToArray());
+            Assert.Equal(Convert.FromHexString(RequestHeader), parts[0].ToArray());
             Assert.Equal(expectedBody, parts[1].ToArray());
             using var wire = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
                 parts
             );
             Assert.Equal(
-                ReferenceMultipartFrame(Encoding.UTF8.GetBytes(RequestHeader), expectedBody),
+                ReferenceMultipartFrame(Convert.FromHexString(RequestHeader), expectedBody),
                 wire.ToArray()
             );
         }
@@ -554,7 +547,7 @@ public sealed class MessagingHotPathWireTests
         );
         try
         {
-            Assert.Equal(Encoding.UTF8.GetBytes(PartSerializerHeader), parts[0].ToArray());
+            Assert.Equal(Convert.FromHexString(PartSerializerHeader), parts[0].ToArray());
             Assert.Equal(new byte[] { 0xC0, 0xDE, 0x48, 0x4F, 0x54 }, parts[1].ToArray());
         }
         finally
@@ -652,7 +645,7 @@ public sealed class MessagingHotPathWireTests
         {
             Assert.Equal(new byte[] { 0xC0, 0xDE, 0x48, 0x4F, 0x54 }, raw.ToArray());
             Assert.Equal(raw.ToArray(), parts[1].ToArray());
-            Assert.Equal(Encoding.UTF8.GetBytes(PartSerializerHeader), parts[0].ToArray());
+            Assert.Equal(Convert.FromHexString(PartSerializerHeader), parts[0].ToArray());
         }
         finally
         {

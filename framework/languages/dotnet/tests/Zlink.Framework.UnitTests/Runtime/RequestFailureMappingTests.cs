@@ -113,21 +113,11 @@ public sealed class RequestFailureMappingTests
     [Fact]
     public void Undefined_Envelope_Message_Kind_Is_A_Protocol_Error()
     {
-        var invalid = new ZLinkEnvelopeHeader(
-            (ZLinkMessageKind)99,
-            "route",
-            "Lookup",
-            ZLinkEnvelopeCodec.DefaultContentType,
-            null,
-            null,
-            null,
-            null,
-            null
-        )
-        {
-            FormatMarker = 0xF2,
-        };
-        using var encoded = ZLinkEnvelopeCodec.EncodePart(invalid);
+        using var encoded = Message.From(
+            Convert.FromHexString(
+                "08091205726f7574651a064c6f6f6b757022106170706c69636174696f6e2f6a736f6e"
+            )
+        );
 
         Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
             ZLinkEnvelopeCodec.DecodeHeader(encoded)
