@@ -463,6 +463,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
             }
             try (var f = new Fixture(provider, false)) {
                 f.store.renew = CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
+                f.store.onClaim = () -> assertEquals(1, f.disposed.get(), "terminal before claim");
                 assertTrue(await(f.runtime.renewOwnerLeaseOnce()));
                 assertEquals(2, f.store.claims, "stale outside an episode keeps immediate claim");
                 assertNull(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
@@ -475,6 +476,100 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
                 assertEquals(1, f.store.claims, "live lease resumes with the same token");
                 assertEquals(f.original, f.runtime.currentOwnerToken());
             }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void staleOutsideEpisodePermanentlyDiscardsQueuedWorkAndTimers(
+            boolean provider, boolean retention) {
+        var queue = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        var timer = ZLinkSerialExecutionQueue.spotTimer(Runnable::run, queue);
+        try (var f = new Fixture(provider, retention)) {
+            var called = new AtomicInteger();
+            var disposed = new AtomicInteger();
+            var execution =
+                    f.runtime.execution(
+                            () -> false,
+                            () -> {
+                                queue.discardApplications();
+                                timer.discardApplications();
+                                disposed.incrementAndGet();
+                            });
+            await(execution.ready());
+            queue.executionPolicy(execution);
+            var entered = new CompletableFuture<Void>();
+            var remote = new CompletableFuture<Void>();
+            var active =
+                    queue.enqueue(
+                            () -> {
+                                entered.complete(null);
+                                return remote;
+                            },
+                            null);
+            entered.join();
+            java.util.function.Supplier<CompletionStage<Void>> callback =
+                    () -> {
+                        called.incrementAndGet();
+                        return CompletableFuture.completedFuture(null);
+                    };
+            var pending = queue.enqueue(callback, null);
+            var timerEntered = new CompletableFuture<Void>();
+            var activeTimer =
+                    timer.enqueue(
+                            () -> {
+                                timerEntered.complete(null);
+                                return remote;
+                            },
+                            null);
+            timerEntered.join();
+            var tick = timer.enqueue(callback, null);
+            assertFalse(pending.toCompletableFuture().isDone());
+            assertFalse(tick.toCompletableFuture().isDone());
+            var claim = new CompletableFuture<ZLinkOwnerLeaseClaimResult>();
+            f.store.claim = claim;
+            f.store.renew = CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
+            f.store.onClaim =
+                    () -> {
+                        assertEquals(1, disposed.get());
+                        assertEquals(1, f.disposed.get());
+                        assertStale(pending);
+                        assertStale(tick);
+                        assertStale(queue.enqueue(callback, null));
+                        assertNull(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+                    };
+            var renewing = f.runtime.renewOwnerLeaseOnce();
+            assertFalse(renewing.toCompletableFuture().isDone(), f.runtime::lastError);
+            claim.complete(
+                    new ZLinkOwnerLeaseClaimed(
+                            new ZLinkLocationOwnerToken("owner", 2),
+                            Instant.EPOCH.plus(TTL),
+                            Instant.EPOCH));
+            assertTrue(await(renewing));
+            assertStale(queue.enqueue(callback, null));
+            assertStale(timer.enqueue(callback, null));
+            await(execution.ready());
+            assertStale(queue.enqueue(callback, null));
+            assertEquals(0, called.get());
+            assertEquals(1, disposed.get());
+            var fresh = f.runtime.execution(() -> true, () -> {});
+            await(fresh.ready());
+            fresh.check(true);
+            var freshQueue =
+                    new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+            try {
+                freshQueue.executionPolicy(fresh);
+                await(freshQueue.enqueue(callback, null));
+                assertEquals(1, called.get());
+            } finally {
+                freshQueue.close();
+            }
+            remote.complete(null);
+            await(active);
+            await(activeTimer);
+        } finally {
+            queue.close();
+            timer.close();
         }
     }
 

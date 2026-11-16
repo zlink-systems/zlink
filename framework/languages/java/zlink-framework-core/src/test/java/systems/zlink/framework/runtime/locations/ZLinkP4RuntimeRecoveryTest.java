@@ -586,6 +586,111 @@ final class ZLinkP4RuntimeRecoveryTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void discardedExecutionWithoutEpisodeDeletesAuthorityWithItsStillValidToken() {
+        for (boolean provider : new boolean[] {false, true}) {
+            try (var f = new RuntimeFixture(provider)) {
+                var disposed = new java.util.concurrent.atomic.AtomicInteger();
+                var execution =
+                        f.bind(
+                                "discarded",
+                                disposed,
+                                new java.util.concurrent.atomic.AtomicInteger());
+                String key = ZLinkAuthorityKeyCodec.spot("discarded");
+                execution.discard();
+                execution.close();
+                assertTrue(await(f.runtime.renewOwnerLeaseOnce()));
+                assertEquals(1, disposed.get());
+                assertEquals(1, f.cleanups);
+                assertInstanceOf(
+                        ZLinkAuthorityMissing.class, await(f.f.repository.read(key, () -> false)));
+                assertNull(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+            }
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void staleWithoutEpisodeKeepsDiscardedAuthorityUntilRepositoryReleaseWaitCompletes() {
+        for (boolean provider : new boolean[] {false, true}) {
+            try (var f = new RuntimeFixture(provider)) {
+                var disposed = new java.util.concurrent.atomic.AtomicInteger();
+                var applied = new java.util.concurrent.atomic.AtomicInteger();
+                var execution = f.bind("stale", disposed, applied);
+                String key = ZLinkAuthorityKeyCodec.spot("stale");
+                var original = f.f.read(key);
+                f.at(31, 0);
+                assertTrue(await(f.runtime.renewOwnerLeaseOnce()));
+                assertEquals(1, disposed.get());
+                assertEquals(0, applied.get());
+                assertNull(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+                assertEquals(original.storeVersion(), f.f.read(key).storeVersion());
+                assertEquals(1, f.cleanups);
+                f.at(31, MARGIN.multipliedBy(3).toNanos() - 1);
+                assertTrue(await(f.runtime.renewOwnerLeaseOnce()));
+                assertEquals(original.storeVersion(), f.f.read(key).storeVersion());
+                f.at(31, MARGIN.multipliedBy(3).toNanos());
+                assertTrue(await(f.runtime.renewOwnerLeaseOnce()));
+                assertInstanceOf(
+                        ZLinkAuthorityMissing.class, await(f.f.repository.read(key, () -> false)));
+                int cleanups = f.cleanups;
+                assertTrue(await(f.runtime.renewOwnerLeaseOnce()));
+                assertEquals(
+                        cleanups,
+                        f.cleanups,
+                        "completed cleanup is removed from the execution index");
+                var failure =
+                        assertThrows(ZLinkFrameworkException.class, () -> execution.check(true));
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                        failure.kind());
+                var fresh =
+                        f.bind("stale", new java.util.concurrent.atomic.AtomicInteger(), applied);
+                fresh.check(true);
+                assertThrows(ZLinkFrameworkException.class, () -> execution.check(true));
+            }
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void outageRecoveryResumesTheSameExecutionOnlyAfterDescriptorAndPreserveConfirmation() {
+        for (boolean provider : new boolean[] {false, true}) {
+            try (var f = new RuntimeFixture(provider)) {
+                var disposed = new java.util.concurrent.atomic.AtomicInteger();
+                var applied = new java.util.concurrent.atomic.AtomicInteger();
+                var execution = f.bind("preserved", disposed, applied);
+                String key = ZLinkAuthorityKeyCodec.spot("preserved");
+                var original = f.f.read(key);
+                f.outage();
+                f.at(35, 0);
+                f.publication = new CompletableFuture<>();
+                var cas = new CompletableFuture<ZLinkAuthorityWriteResult>();
+                f.heldWrites.put(key, cas);
+                var recovery = f.runtime.renewOwnerLeaseOnce();
+                var stored = f.awaitSubmitted(key);
+                assertTrue(execution.paused());
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                        assertThrows(ZLinkFrameworkException.class, () -> execution.check(true))
+                                .kind());
+                assertEquals(0, applied.get());
+                f.publication.complete(null);
+                assertTrue(execution.paused());
+                assertEquals(0, applied.get());
+                cas.complete(stored);
+                assertTrue(await(recovery));
+                assertEquals(1, applied.get());
+                assertEquals(0, disposed.get());
+                assertFalse(execution.paused());
+                execution.check(true);
+                var current = f.f.read(key);
+                assertTrue(original.sameIncarnation(current));
+                assertEquals(
+                        f.runtime.currentOwnerToken().leaseGeneration(),
+                        current.ownerLeaseGeneration());
+            }
+        }
+    }
+
     @RepeatedTest(100)
     void sameToken() {
         for (boolean p : new boolean[] {false, true}) sameToken(p);
