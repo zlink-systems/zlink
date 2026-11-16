@@ -8018,6 +8018,9 @@ TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardsWithMainApi)
     context->object_generation = 1;
     context->authority_owner_generation = 1;
     context->actor_count = 1;
+    auto close_finished = std::make_shared<task_completion_source_t<bool>> ();
+    context->merged_close_results.push_back (
+      [close_finished] (result_t<bool> result) { close_finished->complete (std::move (result)); });
     node->spot_contexts_by_id.emplace ("stale-outside-discard-spot",
                                        detail::spot_context_access_t::create (context));
     node->actor_types_by_id["early"] = "player";
@@ -8079,12 +8082,22 @@ TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardsWithMainApi)
     EXPECT_NE (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
     EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
 
-    // Apply the posted discard before the scheduler releases the queued Actor turn.
+    // A lane fence alone does not wait for offload cleanup, including Location release.
+    // Main never starts this Close, so keep the wait bounded and continue to teardown.
     node->lane.run_sync ([] {});
+    auto closed = close_finished->task ();
+    const bool close_completed = scheduler->run_until (closed, auto_connect_wait);
+    EXPECT_TRUE (close_completed);
+    if (close_completed) {
+        EXPECT_TRUE (closed.result ().value ());
+        EXPECT_TRUE (timer->disposed.load ());
+    }
     scheduler->run_all ();
     EXPECT_EQ (0, actor_calls);
     EXPECT_EQ (0, timer_calls);
     EXPECT_EQ (status_t::ownership_lost, actor->execution_status ());
+    EXPECT_EQ (status_t::ownership_lost, spot->execution_status ());
+    EXPECT_EQ (status_t::ownership_lost, timer_queue->execution_status ());
 
     runtime.stop ();
     std::vector<task_t<void>> completions;
