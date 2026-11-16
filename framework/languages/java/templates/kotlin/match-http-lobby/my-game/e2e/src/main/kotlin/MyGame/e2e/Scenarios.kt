@@ -141,62 +141,18 @@ private suspend fun playInput(a: Client, b: Client) {
     val target = player(beforeMove, other)
     val moveDelta = if (target.x >= source.x) Rules.MAX_STEP else -Rules.MAX_STEP
     val moveSequence = source.lastSequence + 1
-    val acceptedMove = MoveRequest(moveDelta, 0.0, moveSequence)
-    val rejectedMove = MoveRequest(moveDelta, 0.0, moveSequence + 1)
-    mover.send(acceptedMove)
-    mover.send(rejectedMove)
-    val moveResult = mover.next<MoveResult>()
-    val moveRejection = mover.next<ActionRejected>()
-    check(moveResult.sequence == moveSequence) { "Accepted move result sequence differs." }
-    check(moveRejection.reason == Rules.MOVE_BUDGET && moveRejection.retryAfterMs > 0) {
-        "Expected movement-budget rejection."
-    }
-    val afterMoveA = mover.view()
-    val afterMover = player(afterMoveA, mover)
-    check(afterMover.x == moveResult.x && afterMover.y == moveResult.y &&
-        afterMover.lastSequence == moveSequence && player(afterMoveA, other).hp == target.hp) {
-        "Movement-budget rejection changed the accepted movement state."
-    }
-    delay(moveRejection.retryAfterMs.toLong())
-    mover.send(rejectedMove)
-    val retriedMove = mover.next<MoveResult>()
-    check(retriedMove.sequence == rejectedMove.sequence) { "Server movement retry delay was insufficient." }
-    val afterMoveB = mover.view()
-    val afterRetryMove = player(afterMoveB, mover)
-    check(afterRetryMove.lastSequence == rejectedMove.sequence &&
-        afterRetryMove.x == retriedMove.x && afterRetryMove.y == retriedMove.y) {
-        "Retried movement result differs from RoomView."
-    }
+    move(a, b, mover, moveDelta, 0.0, moveSequence)
+    val afterMove = move(a, b, mover, moveDelta, 0.0, moveSequence + 1)
+    check(player(afterMove, mover).lastSequence == moveSequence + 1 &&
+        player(afterMove, other).hp == target.hp) { "Movement changed sequence or player HP." }
+    rejectAction(mover, MoveRequest(moveDelta, 0.0, moveSequence + 1), Rules.STALE_SEQUENCE)
 
     val beforeShot = a.view()
     val shotTarget = player(beforeShot, b)
     val shotSequence = player(beforeShot, a).lastSequence + 1
-    val acceptedShot = ShootRequest(b.playerId, shotSequence)
-    val rejectedShot = ShootRequest(b.playerId, shotSequence + 1)
-    a.send(acceptedShot)
-    a.send(rejectedShot)
-    val shotResult = a.next<ShotResult>()
-    val fireRejection = a.next<ActionRejected>()
-    check(shotResult.sequence == shotSequence && shotResult.outcome == "hit") {
-        "Expected accepted hit before fire-too-soon rejection."
-    }
-    check(fireRejection.reason == Rules.FIRE_TOO_SOON && fireRejection.retryAfterMs > 0) {
-        "Expected fire-interval rejection."
-    }
-    val afterShotA = a.view()
-    check(player(afterShotA, b).hp == shotTarget.hp - Rules.DAMAGE &&
-        player(afterShotA, a).lastSequence == shotSequence) {
-        "Fire-too-soon rejection changed the accepted shot state."
-    }
-    delay(fireRejection.retryAfterMs.toLong())
-    a.send(rejectedShot)
-    val retriedShot = a.next<ShotResult>()
-    check(retriedShot.sequence == rejectedShot.sequence) { "Server fire retry delay was insufficient." }
-    val afterShotB = a.view()
-    check(player(afterShotB, b).hp == shotTarget.hp - 2 * Rules.DAMAGE &&
-        player(afterShotB, a).lastSequence == rejectedShot.sequence) {
-        "Retried shot did not update the target state."
-    }
+    val afterShot = hit(a, b, shotSequence, shotTarget.hp - Rules.DAMAGE)
+    check(player(afterShot, a).lastSequence == shotSequence) { "Shots lost sequence." }
+    rejectAction(a, ShootRequest(b.playerId, shotSequence), Rules.STALE_SEQUENCE)
 
     val staleSequence = player(mover.view(), mover).lastSequence
     rejectAction(mover, MoveRequest(0.0, 0.0, staleSequence), Rules.STALE_SEQUENCE)
