@@ -440,5 +440,43 @@
       "failureCode": 18,
       "terminal": "Unavailable"
     }
+  ],
+  "joinFailureCases": [
+    {
+      "name": "closing-cold",
+      "target": "closing",
+      "warmRoute": false,
+      "errorKind": "NotFound"
+    },
+    {
+      "name": "closing-warm",
+      "target": "closing",
+      "warmRoute": true,
+      "errorKind": "NotFound"
+    },
+    {
+      "name": "absent-cold",
+      "target": "absent",
+      "warmRoute": false,
+      "errorKind": "Unavailable"
+    },
+    {
+      "name": "absent-warm",
+      "target": "absent",
+      "warmRoute": true,
+      "errorKind": "Unavailable"
+    },
+    {
+      "name": "missing-cold",
+      "target": "missing",
+      "warmRoute": false,
+      "errorKind": "NotFound"
+    },
+    {
+      "name": "missing-warm",
+      "target": "missing",
+      "warmRoute": true,
+      "errorKind": "NotFound"
+    }
   ]
 }

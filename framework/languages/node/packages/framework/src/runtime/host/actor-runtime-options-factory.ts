@@ -254,7 +254,11 @@ export class ZLinkActorRuntimeOptionsFactory {
         if (actorRef !== undefined) {
           this.options.rememberDestroyedActorRef(actorId, actorRef);
         }
-        this.options.streamBindingRuntime.unbindActor(actorId);
+        // Destroy is already committed; an unbound control that fails on a closed connection is a
+        // post-commit infrastructure failure, reported once instead of left unobserved.
+        void this.options.streamBindingRuntime
+          .unbindActor(actorId)
+          .catch((error: unknown) => this.options.reportPostCommitError(error));
       },
       publishActorAuthority: this.options.publishActorAuthority
     };
