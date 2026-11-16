@@ -7183,7 +7183,6 @@ test('public SpotId call reaches production host Missing Instance placement with
             kindData: null,
             parts: encodeChannelReplyParts(
               {
-                formatMarker: 0xf2,
                 kind: ZLinkChannelMessageKind.Request,
                 channelName: 'mesh',
                 messageName: 'Ping',
@@ -7375,7 +7374,6 @@ test('Missing Instance placement capacity fails without polling or retaining a c
             kindData: null,
             parts: encodeChannelReplyParts(
               {
-                formatMarker: 0xf2,
                 kind: ZLinkChannelMessageKind.Request,
                 channelName: 'mesh',
                 messageName: 'Ping',
@@ -7677,7 +7675,6 @@ test('Instance target-not-found completes once and a new call cold-activates Mis
             kindData: null,
             parts: encodeChannelReplyParts(
               {
-                formatMarker: 0xf2,
                 kind: ZLinkChannelMessageKind.Request,
                 channelName: 'mesh',
                 messageName: 'Lookup',
@@ -7982,7 +7979,6 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
   } as unknown as ZLinkBackendMeshNode;
   const completionParts = encodeChannelReplyParts(
     {
-      formatMarker: 0xf2,
       kind: ZLinkChannelMessageKind.Request,
       channelName: 'mesh',
       messageName: 'Ping',

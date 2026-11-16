@@ -3,124 +3,70 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
-const json = require('../../packages/framework/dist/runtime/messaging/framework-json-v1');
-const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/contracts');
+const { encodeChannelHeader } = require('./helpers/protobuf-channel-header');
 
-function parts(changes = {}) {
-  const bytes = Buffer.from(JSON.stringify({
-    formatMarker: 242, kind: 1, channelName: 'channel', messageName: 'Packet',
-    contentType: 'application/json', correlationId: 'request-1', deadline: null,
-    topic: null, metadata: {}, ...changes
-  }));
+function parts(value) {
+  const bytes = Buffer.isBuffer(value) ? value : encodeChannelHeader(value);
   return [{ data() { return bytes; } }];
 }
 
-test('canonical header fast path preserves the legacy decoded result', t => {
-  const input = parts();
-  const legacy = json.parseFrameworkJsonV1(input[0].data().toString(), {
-    rejectPropertyName: property => ['__proto__', 'constructor', 'prototype'].includes(property)
-  });
-  legacy.errorCode = null;
-  legacy.errorMessage = null;
-  legacy.source = undefined;
-  legacy.flowId = undefined;
-  legacy.flowOrigin = undefined;
-  Object.freeze(legacy.metadata);
-  t.mock.method(json, 'parseFrameworkJsonV1', () => assert.fail('canonical header used the legacy parser'));
-
-  const header = envelope.decodeChannelHeader(input);
-
-  assert.deepEqual(header, legacy);
-  assert.ok(Object.isFrozen(header.metadata));
-});
-
-test('header decoding preserves omitted optional fields and unknown fields', () => {
-  const header = envelope.decodeChannelHeader(rawParts(
-    '{"formatMarker":242,"kind":1,"channelName":"channel","messageName":"Packet",'
-      + '"contentType":"application/json","correlationId":"request-1","deadline":null,'
-      + '"topic":null,"metadata":{},"unknown":{"nested":[true,3.5]}}'
-  ));
-  assert.equal(header.errorCode, null);
-  assert.equal(header.errorMessage, null);
-  assert.equal(header.source, undefined);
-  assert.deepEqual(header.unknown, { nested: [true, 3.5] });
-});
-
-test('header decoding rejects malformed JSON and preserves unknown own properties safely', () => {
-  assert.throws(
-    () => envelope.decodeChannelHeader(rawParts('{"formatMarker":242,"kind":1')),
-    error => {
-      assert.equal(error.constructor, SyntaxError);
-      return true;
-    }
-  );
-  for (const property of ['__proto__', 'constructor', 'prototype']) {
-    const header = envelope.decodeChannelHeader(rawParts(
-      '{"formatMarker":242,"kind":1,"channelName":"channel","messageName":"Packet",'
-        + '"contentType":"application/json","correlationId":"request-1","deadline":null,'
-        + '"topic":null,"metadata":{},"' + property + '":{"polluted":true}}'
-    ));
-    assert.equal(Object.hasOwn(header, property), true);
-    assert.deepEqual(header[property], {polluted: true});
-    assert.equal(Object.getPrototypeOf(header), Object.prototype);
-    assert.equal(Object.prototype.polluted, undefined);
-  }
-});
-
-test('header normalization preserves validation and Off ignores observation fields', () => {
-  assert.throws(() => envelope.decodeChannelHeader(parts({ channelName: 1 })), /channelName/);
-  assert.throws(() => envelope.decodeChannelHeader(parts({ correlationId: null })), /correlationId/);
-  assert.throws(() => envelope.decodeChannelHeader(parts({ flowId: 'invalid', flowOrigin: 99 })), /flowId/);
-  assert.throws(() => envelope.decodeChannelHeader(parts({ metadata: { key: 1 } })), /metadata/);
-  const off = envelope.decodeChannelHeader(parts({ flowId: 'invalid', flowOrigin: 99 }), false);
-  assert.equal(off.flowId, undefined);
-  assert.equal(off.flowOrigin, undefined);
-  assert.equal(off.correlationId, 'request-1');
-});
-
-test('header integer fields reject decimal and exponent literals', () => {
-  const wire =
-    '{"formatMarker":242,"kind":3,"channelName":"channel","messageName":"Packet",' +
-    '"contentType":"application/json","correlationId":null,"metadata":{}}';
-  const cases = [
-    wire.replace('"formatMarker":242', '"formatMarker":242.0'),
-    wire.replace('"kind":3', '"kind":3e0'),
-    wire.replace('"metadata":{}', '"flowOrigin":3.0,"metadata":{}')
-  ];
-  for (const value of cases) {
-    assert.throws(
-      () => envelope.decodeChannelHeader(rawParts(value)),
-      error =>
-        error.kind === ZLinkFrameworkErrorKind.ProtocolError &&
-        /integer literal/.test(error.message)
-    );
-  }
-});
-
-function rawParts(value) {
-  const bytes = Buffer.from(value);
-  return [{ data() { return bytes; } }];
+function header(overrides = {}) {
+  return {
+    kind: 1,
+    channelName: 'channel',
+    messageName: 'Packet',
+    contentType: 'application/json',
+    correlationId: 'request-1',
+    metadata: {},
+    ...overrides
+  };
 }
 
-test('channel header rejects invalid UTF-8 before decoding metadata', () => {
-  const wire = Buffer.concat([
-    Buffer.from(
-      '{"formatMarker":242,"kind":3,"channelName":"api",'
-        + '"messageName":"Notice","contentType":"application/json",'
-        + '"correlationId":null,"metadata":{"k":"'
-    ),
-    Buffer.from([0xff]),
-    Buffer.from('"}}')
-  ]);
-  assert.throws(
-    () =>
-      envelope.decodeChannelHeader([
-        {
-          data() {
-            return wire;
-          }
-        }
-      ]),
-    /UTF-8/
-  );
+test('protobuf header decodes required, optional, and repeated metadata fields', () => {
+  const decoded = envelope.decodeChannelHeader(parts(header({
+    deadline: '2026-09-10T00:00:00.000Z',
+    topic: 'topic',
+    source: 'source',
+    metadata: [{ key: 'z', value: 'last' }, { key: 'a', value: 'first' }]
+  })));
+  assert.equal(decoded.kind, 1);
+  assert.equal(decoded.channelName, 'channel');
+  assert.equal(decoded.messageName, 'Packet');
+  assert.equal(decoded.contentType, 'application/json');
+  assert.equal(decoded.correlationId, 'request-1');
+  assert.equal(decoded.deadline, '2026-09-10T00:00:00.000Z');
+  assert.equal(decoded.topic, 'topic');
+  assert.equal(decoded.source, 'source');
+  assert.deepEqual({ ...decoded.metadata }, { z: 'last', a: 'first' });
+});
+
+test('protobuf header skips unknown fields and rejects malformed wire bytes', () => {
+  const base = encodeChannelHeader(header());
+  const unknown = Buffer.concat([base, Buffer.from([0x72, 0x03, 0x01, 0x02, 0x03])]);
+  assert.equal(envelope.decodeChannelHeader(parts(unknown)).channelName, 'channel');
+  assert.throws(() => envelope.decodeChannelHeader(parts(Buffer.from([0xff]))), /protobuf is malformed/);
+  assert.throws(() => envelope.decodeChannelHeader(parts(base.subarray(0, base.length - 1))), /protobuf is malformed/);
+  const invalidUtf8 = Buffer.from(base);
+  const channelName = invalidUtf8.indexOf(Buffer.from('channel'));
+  invalidUtf8[channelName] = 0xff;
+  assert.throws(() => envelope.decodeChannelHeader(parts(invalidUtf8)), /protobuf is malformed/);
+});
+
+test('protobuf header semantic validation rejects missing and unsupported fields', () => {
+  assert.throws(() => envelope.decodeChannelHeader(parts(header({ kind: 0 })), false), /kind/);
+  assert.throws(() => envelope.decodeChannelHeader(parts(header({ kind: 99 })), false), /kind/);
+  assert.equal(envelope.decodeChannelHeader(parts(header({ channelName: '' })), false).channelName, '');
+  assert.equal(envelope.decodeChannelHeader(parts(header({ messageName: '' })), false).messageName, '');
+  assert.equal(envelope.decodeChannelHeader(parts(header({ contentType: '' })), false).contentType, '');
+  assert.throws(() => envelope.decodeChannelHeader(parts(header({ correlationId: null })), false), /correlationId/);
+  assert.throws(() => envelope.decodeChannelHeader(parts(header({ flowId: 'invalid', flowOrigin: 99 }))), /flowId/);
+  assert.throws(() => envelope.decodeChannelHeader(parts(header({ metadata: [{ key: 'x', value: 'first' }, { key: 'x', value: 'last' }] })), false), /duplicate/);
+});
+
+test('tracing Off ignores malformed optional flow fields but retains correlation', () => {
+  const encoded = parts(header({ flowId: 'invalid', flowOrigin: 99 }));
+  const decoded = envelope.decodeChannelHeader(encoded, false);
+  assert.equal(decoded.flowId, undefined);
+  assert.equal(decoded.flowOrigin, undefined);
+  assert.equal(decoded.correlationId, 'request-1');
 });
