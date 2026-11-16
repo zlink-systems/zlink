@@ -121,12 +121,6 @@ class Client
         healthy ();
         connector_.send (MoveRequest{delta, sequence}).submit ();
     }
-    ActionRejected wait_rejection ()
-    {
-        const auto rejected = checked (connector_.wait_for<ActionRejected> ().submit ()).payload;
-        healthy ();
-        return rejected;
-    }
     void no_region_push ()
     {
         const auto before = view_count ();

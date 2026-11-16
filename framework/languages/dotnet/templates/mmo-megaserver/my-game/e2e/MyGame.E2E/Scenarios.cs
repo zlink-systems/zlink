@@ -8,7 +8,6 @@ internal static class Scenarios
     public static readonly string[] All = ["region", "movement", "dungeon", "reconnect", "update"];
     private const string Forest = "forest";
     private const int FirstMovedX = GameNames.MaxStep;
-    private const int MovedX = GameNames.MaxStep * 2;
 
     public static string[] Select(string? value)
     {
@@ -170,7 +169,6 @@ internal static class Scenarios
                             ct
                         );
                         RegionView firstMove;
-                        ActionRejected rejected;
                         using (
                             p1.Connector.On<RegionView>(
                                 (message, _) =>
@@ -190,31 +188,19 @@ internal static class Scenarios
                         )
                         {
                             await p1.Connector.Send(new MoveRequest(GameNames.MaxStep, 1)).Async(ct);
-                            var budgetRejected = p1.ReceiveAsync<ActionRejected>(
-                                result => result.Reason == Rejection.MoveBudget,
-                                ct
-                            );
-                            await p1.Connector.Send(new MoveRequest(GameNames.MaxStep, 2)).Async(ct);
                             firstMove = await firstReply.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
                             SameState(firstMove, await firstBroadcast);
-                            rejected = await budgetRejected;
                             Require(
                                 firstReplyCount == 1,
                                 "Caller received a duplicate movement result."
                             );
                         }
-                        Require(
-                            rejected.RetryAfterMs > 0,
-                            "Movement budget rejection omitted its retry time."
-                        );
-                        SameState(firstMove, await p1.RegionAsync(ct));
-                        await Task.Delay(TimeSpan.FromMilliseconds(rejected.RetryAfterMs), ct);
                         var secondReply = new TaskCompletionSource<RegionView>(
                             TaskCreationOptions.RunContinuationsAsynchronously
                         );
                         var secondReplyCount = 0;
                         var secondBroadcast = p2.ReceiveAsync<RegionView>(
-                            view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX),
+                            view => view.Players.Any(p => p.PlayerId == "p1" && p.X == FirstMovedX && p.Sequence == 2),
                             ct
                         );
                         using (
@@ -223,7 +209,7 @@ internal static class Scenarios
                                 {
                                     if (
                                         message.Payload.Players.Any(p =>
-                                            p.PlayerId == p1.PlayerId && p.X == MovedX
+                                            p.PlayerId == p1.PlayerId && p.X == FirstMovedX && p.Sequence == 2
                                         )
                                     )
                                     {
@@ -235,7 +221,7 @@ internal static class Scenarios
                             )
                         )
                         {
-                            await p1.Connector.Send(new MoveRequest(GameNames.MaxStep, 2)).Async(ct);
+                            await p1.Connector.Send(new MoveRequest(0, 2)).Async(ct);
                             expectedState = await secondReply.Task.WaitAsync(
                                 TimeSpan.FromSeconds(10),
                                 ct
@@ -247,6 +233,10 @@ internal static class Scenarios
                             "Caller received a duplicate accepted result."
                         );
                     }
+                    var stale = await p1.SendAsync<ActionRejected, MoveRequest>(
+                        new(0, 2), result => result.Reason == Rejection.StaleSequence, ct);
+                    Require(stale.RetryAfterMs == 0, "Stale sequence returned a retry delay.");
+                    SameState(expectedState, await p1.RegionAsync(ct));
                     SameState(isolatedState, await p3.RegionAsync(ct));
                     Require(!leaked.Task.IsCompleted, "p3 received another region's movement.");
                 }
