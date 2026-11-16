@@ -758,10 +758,11 @@ task_t<void> mesh_node_runtime_t::start (
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
     if (spot_state->location_lifecycle) {
         co_await spot_state->location_lifecycle->execution_runtime ().on_execution_discard (
-          [weak = std::weak_ptr (spot_state)] (auto allowed) {
+          [weak = std::weak_ptr (spot_state)] (auto allowed) -> task_t<void> {
               if (auto state = weak.lock ())
-                  spot_node_runtime_t (state).request_location_execution_discard (
+                  return spot_node_runtime_t (state).request_location_execution_discard (
                     std::move (allowed));
+              return task_t<void> (result_t<void>::success ());
           },
           [weak = std::weak_ptr (spot_state),
            owner = spot_state->location_lifecycle->execution_runtime ().owner_id ()] (

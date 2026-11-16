@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/location_runtime_test_access.hpp"
+#include "../support/location_reclaim_clock.hpp"
 
 #include "../support/runtime_metric_contract.hpp"
 #include "../support/manual_deadlines.hpp"
@@ -5638,6 +5639,137 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
     };
     commit (placement_object_kind_t::user_spot, "registered-spot", "room");
     commit (placement_object_kind_t::actor, "early", "player");
+    if (loss == -60 || loss == -61) {
+        using status_t = serial_execution_queue_t::execution_status_t;
+        location_reclaim_test_access_t reclaim_clock;
+        reclaim_clock.bind (store ());
+        auto executor = context->ensure_spot_serial_executor ();
+        auto spot = executor->spot_queue ();
+        auto actor = executor->actor_executor ("player:early")->queue ();
+        auto timer_queue = std::make_shared<serial_execution_queue_t> (*scheduler);
+        timer_queue->attach_spot_gate (spot);
+        timer_queue->set_execution_policy (runtime.execution_policy ());
+        timer_queue->confirm_execution_ready (clock_now.load ());
+        context->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+        serializer_registry_t serializers;
+        context->channel_runtime->serializers = &serializers;
+        auto timer = std::make_shared<detail::timer_state_t> ();
+        timer->name = "stale-timer";
+        timer->serial_queue = timer_queue;
+        auto handler = std::make_shared<int> (0);
+        timer->handler_instance = handler;
+        int timer_calls = 0, actor_calls = 0;
+        timer->handler_invoker = [&] (void *, void *, serializer_registry_t &,
+                                      const timer_tick_t &) {
+            ++timer_calls;
+            return task_t<zlink::message_t> (result_t<zlink::message_t>::success ({}));
+        };
+        context->timers.push_back (timer);
+        scheduler->run_all ();
+        task_completion_source_t<void> applied, acknowledged, terminal;
+        runtime
+          .on_execution_discard ([&] (auto policy) {
+              return continue_task<void> (
+                owner.request_location_execution_discard (std::move (policy)), [&] {
+                    applied.complete (result_t<void>::success ());
+                    return acknowledged.task ();
+                });
+          })
+          .result ()
+          .value ();
+        serial_work_options_t work;
+        work.completion = [&] (result_t<void> result) { terminal.complete (result); };
+        ASSERT_TRUE (actor->try_post ("before-stale", [&] { ++actor_calls; }, work));
+        detail::timer_runtime_t::post_fire_count (context, timer, timer_queue, 1);
+        // Exercise a temporarily closed admission as well as an open gate.
+        move_to (*lease_access::snapshot (runtime)->admission_deadline + 1ms);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        ASSERT_EQ (status_t::stopped, actor->execution_status ());
+        std::optional<task_t<void>> renewal;
+        if (loss == -60) {
+            store ().release_owner_lease (token).result ().value ();
+            renewal.emplace (lease_access::heartbeat_async (runtime, clock_now.load ()));
+            ASSERT_TRUE (applied.task ().result_for (auto_connect_wait));
+        } else {
+            owner
+              .request_location_execution_discard (
+                [] (const auto &) { return status_t::ownership_lost; })
+              .result ()
+              .value ();
+        }
+        EXPECT_EQ (status_t::ownership_lost, actor->execution_status ());
+        EXPECT_EQ (status_t::ownership_lost, spot->execution_status ());
+        EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+        if (renewal) {
+            EXPECT_FALSE (lease_access::snapshot (runtime)->token);
+            EXPECT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+              store ().read_owner_lease (token.owner_id).result ().value ()));
+            EXPECT_FALSE (renewal->await_ready ());
+            acknowledged.complete (result_t<void>::success ());
+            renewal->result ().value ();
+            ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+            EXPECT_NE (token.lease_generation,
+                       lease_access::snapshot (runtime)->token->lease_generation);
+        } else {
+            const auto current = std::get<owner_lease_found_t> (
+              store ().read_owner_lease (token.owner_id).result ().value ());
+            lease_access::accept (runtime, token, current.lease_expires_at, current.store_now,
+                                  clock_now.load (), true);
+        }
+        auto terminal_task = terminal.task ();
+        ASSERT_TRUE (scheduler->run_until (terminal_task, auto_connect_wait));
+        scheduler->run_all ();
+        EXPECT_FALSE (terminal.task ().result ());
+        EXPECT_EQ (framework_error_kind_t::not_found, terminal.task ().result ().error_kind ());
+        EXPECT_EQ (0, actor_calls);
+        EXPECT_EQ (0, timer_calls);
+        EXPECT_EQ (status_t::ownership_lost, actor->execution_status ());
+        EXPECT_EQ (status_t::ownership_lost, timer_queue->execution_status ());
+        actor->set_execution_policy (runtime.execution_policy ());
+        actor->confirm_execution_ready (clock_now.load ());
+        EXPECT_FALSE (actor->try_post ("after-new-claim", [&] { ++actor_calls; }));
+        auto fresh = std::make_shared<serial_execution_queue_t> (*scheduler);
+        fresh->set_execution_policy (runtime.execution_policy ());
+        fresh->confirm_execution_ready (clock_now.load ());
+        ASSERT_TRUE (fresh->try_post ("new-incarnation", [&] { ++actor_calls; }));
+        scheduler->run_all ();
+        EXPECT_EQ (1, actor_calls);
+        fresh->cancel_pending ();
+        // Local discard must settle before the repository starts release.
+        // The reclaim clock is independent of the owner's admission clock.
+        ASSERT_TRUE (lease_access::cleanup_submitted (runtime, auto_connect_wait,
+                                                      [&] { scheduler->run_all (); }));
+        if (loss == -61) {
+            EXPECT_TRUE (std::holds_alternative<authority_missing_t> (
+              store ().read_authority_core (actor_authority_key ("early")).result ().value ()));
+            EXPECT_EQ (0u, location_reclaim_test_access_t::observations (store ()));
+        }
+        if (loss == -60) {
+            advance (1s);
+            lease_access::heartbeat (runtime, clock_now.load ());
+            ASSERT_TRUE (lease_access::cleanup_submitted (runtime, auto_connect_wait));
+            EXPECT_TRUE (std::holds_alternative<authority_snapshot_t> (
+              store ().read_authority_core (actor_authority_key ("early")).result ().value ()));
+            reclaim_clock.advance (3 * options.owner_lease_fencing_margin - 1ms);
+            advance (1s);
+            lease_access::heartbeat (runtime, clock_now.load ());
+            ASSERT_TRUE (lease_access::cleanup_submitted (runtime, auto_connect_wait));
+            EXPECT_TRUE (std::holds_alternative<authority_snapshot_t> (
+              store ().read_authority_core (actor_authority_key ("early")).result ().value ()));
+            reclaim_clock.advance (1ms);
+        }
+        advance (1s);
+        lease_access::heartbeat (runtime, clock_now.load ());
+        ASSERT_TRUE (lease_access::cleanup_submitted (runtime, auto_connect_wait));
+        EXPECT_TRUE (std::holds_alternative<authority_missing_t> (
+          store ().read_authority_core (actor_authority_key ("early")).result ().value ()));
+        scheduler->run_all ();
+        runtime.stop ();
+        ASSERT_TRUE (close_executor (executor));
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
     if (loss == -55 || loss == -56 || loss == -57) {
         runtime
           .on_execution_discard (
@@ -6083,6 +6215,9 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         auto gate = executor->actor_executor ("player:early")->queue ();
         auto late = executor->actor_executor ("player:late")->queue ();
         auto spot = executor->spot_queue ();
+        const auto original_object =
+          loss == -13 ? native->objects ().find (stateful::object_kind_t::actor, "early")
+                      : std::optional<stateful::object_ref_t>{};
         *discard_gates = {gate, late, spot};
         if (loss == -47) {
             const auto object = *native->objects ().find (stateful::object_kind_t::actor, "late");
@@ -6376,6 +6511,17 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             provider.publication_release.complete (result_t<void>::success ());
             memory.publication_release.complete (result_t<void>::success ());
             runtime.stop ();
+        }
+        if (loss == -13) {
+            const auto recovered =
+              native->objects ().find (stateful::object_kind_t::actor, "early");
+            ASSERT_TRUE (original_object);
+            ASSERT_TRUE (recovered);
+            EXPECT_EQ (*original_object, *recovered);
+            EXPECT_EQ (gate, native->objects ().execution_gate (*recovered).result ().value ());
+            ASSERT_TRUE (gate->try_post ("same-object-after-preserve", [&] { ++handlers; }));
+            scheduler->run_all ();
+            EXPECT_EQ (2, handlers);
         }
         ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
@@ -7845,16 +7991,27 @@ TEST_P (StoreOutageRetention, RecoveryFailedExactReadDoesNotAuthorizeClaim)
 
 TEST_P (StoreOutageRetention, StaleOutsideEpisodeStillClaimsImmediately)
 {
-    location_runtime_t runtime (store (), options, "outside-episode-owner");
-    lease_access::clock (runtime, [&] { return clock_now.load (); });
-    claim (runtime);
-    const auto token = *lease_access::snapshot (runtime)->token;
-    advance (5s);
-    store ().release_owner_lease (token).result ().value ();
-    lease_access::heartbeat (runtime, clock_now.load ());
-    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
-    EXPECT_NE (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
-    EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+    registered_owner (false, false, -60);
+}
+
+TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardsSpotWideBeforeClaim)
+{
+    registered_owner (true, false, -60);
+}
+
+TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardsRetainedPerActorBeforeClaim)
+{
+    registered_owner (false, true, -60);
+}
+
+TEST_P (StoreOutageRetention, StaleOutsideEpisodeDiscardsRetainedSpotWideBeforeClaim)
+{
+    registered_owner (true, true, -60);
+}
+
+TEST_P (StoreOutageRetention, DiscardedCurrentOwnerCleansAuthorityWithoutReclaimWait)
+{
+    registered_owner (false, false, -61);
 }
 
 TEST_P (StoreOutageRetention, StaleRenewStartedBeforeOutageCannotClaimEarly)

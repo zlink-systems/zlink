@@ -15126,7 +15126,13 @@ spot_node_runtime_t::execution_queue_on_lane (const runtime::stateful::object_re
 
 void spot_node_runtime_t::bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle)
 {
-    _state->lane.run ([&] { _state->location_lifecycle = &lifecycle; }).get ();
+    _state->lane
+      .run ([&] {
+          _state->location_lifecycle = &lifecycle;
+          _state->discarded_authority_cleanup =
+            lifecycle.execution_runtime ().discarded_authority_cleanup ();
+      })
+      .get ();
 }
 
 void spot_node_runtime_t::observe_location_authority (authority_key_t key,
@@ -15202,7 +15208,7 @@ void spot_node_runtime_t::resume_location_execution ()
     });
 }
 
-void spot_node_runtime_t::request_location_execution_discard (
+task_t<void> spot_node_runtime_t::request_location_execution_discard (
   runtime::serial_execution_queue_t::execution_admission_t allowed)
 {
     using discarded_spot_t =
@@ -15247,7 +15253,14 @@ void spot_node_runtime_t::request_location_execution_discard (
         }
     };
     const auto state = _state;
-    state->lane.try_post ([state, allowed = std::move (allowed)] {
+    const auto preparation = co_await state->lane.run_task ([state] {
+        return std::pair{state->native_node.lock (), state->discarded_authority_cleanup};
+    });
+    const auto &native = preparation.first;
+    auto authorities = native ? co_await native->objects ().discard_location_execution (allowed)
+                              : std::vector<std::pair<authority_key_t, authority_snapshot_t>>{};
+    auto settled = std::make_shared<task_completion_source_t<void>> ();
+    co_await state->lane.run_task ([state, allowed = std::move (allowed), settled] {
         auto spots = std::make_shared<std::vector<discarded_spot_t>> ();
         std::vector<std::pair<actor_ref_t, runtime::serial_execution_queue_t::execution_status_t>>
           actors;
@@ -15280,26 +15293,36 @@ void spot_node_runtime_t::request_location_execution_discard (
                 }
             }
         }
-        if (spots->empty () && actors.empty ())
+        if (spots->empty () && actors.empty ()) {
+            settled->complete (result_t<void>::success ());
             return;
+        }
         // Existing Close uses its infrastructure executor outside the owner turn.
         const auto submitted = state->worker_executor->try_submit_internal (
           [state, spots = std::move (spots), actors = std::move (actors),
-           allowed = std::move (allowed)] () mutable {
+           allowed = std::move (allowed), settled] () mutable {
               auto cleanup =
                 cleanup_t::run (state, std::move (spots), std::move (actors), std::move (allowed));
-              detail::observe_task_terminal (cleanup, [state] (const result_t<void> &result) {
-                  if (!result)
-                      report_spot_close_diagnostic (state, {}, "location_discard_failed",
-                                                    result.exception ());
-              });
+              detail::observe_task_terminal (
+                cleanup, [state, settled] (const result_t<void> &result) {
+                    settled->complete (result);
+                    if (!result)
+                        report_spot_close_diagnostic (state, {}, "location_discard_failed",
+                                                      result.exception ());
+                });
           });
-        if (!submitted)
+        if (!submitted) {
+            settled->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                        "Local discard executor is closed"));
             report_spot_close_diagnostic (
               state, {}, "location_discard_rejected",
               std::make_exception_ptr (detail::make_framework_origin_exception (
                 framework_error_kind_t::shutting_down, "Local discard executor is closed")));
+        }
     });
+    if (preparation.second)
+        for (auto &[key, fence] : authorities)
+            co_await preparation.second (std::move (key), std::move (fence), settled->task ());
 }
 
 std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs () const
