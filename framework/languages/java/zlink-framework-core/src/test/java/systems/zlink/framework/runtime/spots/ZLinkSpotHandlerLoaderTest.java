@@ -364,6 +364,115 @@ final class ZLinkSpotHandlerLoaderTest {
                                                         CompletableFuture.completedFuture(null))));
     }
 
+    @Test
+    void explicitAndScannedPacketOwnersMustMatchConcreteSpot() {
+        var scan =
+                new ZLinkScannedHandlerCatalog(
+                        systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner.scan(
+                                        Set.of(ZLinkSpotHandlerLoaderTest.class))
+                                .handlers()
+                                .stream()
+                                .filter(
+                                        handler ->
+                                                handler.handlerType() == OwnerPacketHandler.class)
+                                .toList());
+        assertEquals(1, scan.handlers().size());
+        for (boolean scanned : List.of(false, true)) {
+            var loader =
+                    new ZLinkSpotHandlerLoader(
+                            scanned ? scan : new ZLinkScannedHandlerCatalog(List.of()),
+                            new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
+                            type -> null);
+            var configured =
+                    scanned ? List.<Class<?>>of() : List.<Class<?>>of(OwnerPacketHandler.class);
+            if (!scanned) {
+                var failure =
+                        assertThrows(
+                                ZLinkFrameworkException.class,
+                                () ->
+                                        loader.load(
+                                                DerivedSpot.class,
+                                                configured,
+                                                (name, period, type, options) ->
+                                                        CompletableFuture.completedFuture(null)));
+                assertInstanceOf(ZLinkConfigurationException.class, failure.getCause());
+                for (var type :
+                        List.of(OwnerPacketHandler.class, TestSpot.class, DerivedSpot.class)) {
+                    assertTrue(failure.getMessage().contains(type.getName()));
+                }
+            }
+            assertEquals(
+                    1,
+                    loader.load(
+                                    TestSpot.class,
+                                    configured,
+                                    (name, period, type, options) ->
+                                            CompletableFuture.completedFuture(null))
+                            .packetHandlers()
+                            .size());
+        }
+    }
+
+    private static final class OwnerPacketHandler
+            implements systems.zlink.framework.spots.ZLinkSpotPacketHandler<TestSpot, Request> {
+        public CompletionStage<Void> handle(TestSpot spot, Request request) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    @Test
+    void explicitAndScannedActorOwnersMustMatchConcreteSpot() throws Exception {
+        var scan =
+                new ZLinkScannedHandlerCatalog(
+                        systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner.scan(
+                                        Set.of(ZLinkSpotHandlerLoaderTest.class))
+                                .handlers()
+                                .stream()
+                                .filter(
+                                        handler ->
+                                                handler.handlerType()
+                                                        == ScopedScannedActorHandler.class)
+                                .toList());
+        assertEquals(1, scan.handlers().size());
+        for (boolean scanned : List.of(false, true)) {
+            var loader =
+                    new ZLinkSpotHandlerLoader(
+                            scanned ? scan : new ZLinkScannedHandlerCatalog(List.of()),
+                            new ZLinkSpotActorHandlerCatalog(new TrackingSerializer()),
+                            type -> null);
+            var configured =
+                    scanned
+                            ? List.<Class<?>>of()
+                            : List.<Class<?>>of(ScopedScannedActorHandler.class);
+            if (!scanned) {
+                var failure =
+                        assertThrows(
+                                ZLinkFrameworkException.class,
+                                () ->
+                                        loader.load(
+                                                DerivedSpot.class,
+                                                configured,
+                                                (name, period, type, options) ->
+                                                        CompletableFuture.completedFuture(null)));
+                assertInstanceOf(ZLinkConfigurationException.class, failure.getCause());
+                assertTrue(
+                        failure.getMessage().contains(ScopedScannedActorHandler.class.getName()));
+                assertTrue(failure.getMessage().contains(TestSpot.class.getName()));
+                assertTrue(failure.getMessage().contains(DerivedSpot.class.getName()));
+            }
+            assertEquals(
+                    1,
+                    loader.load(
+                                    TestSpot.class,
+                                    configured,
+                                    (name, period, type, options) ->
+                                            CompletableFuture.completedFuture(null))
+                            .actorPacketHandlers()
+                            .get("configured-request")
+                            .size());
+        }
+    }
+
     private static ZLinkHandlerActivator trackingActivator(Set<Class<?>> preparedHandlers) {
         return new ZLinkHandlerActivator() {
             @Override
@@ -409,7 +518,9 @@ final class ZLinkSpotHandlerLoaderTest {
         }
     }
 
-    private static final class TestSpot {}
+    private static class TestSpot {}
+
+    private static final class DerivedSpot extends TestSpot {}
 
     private static final class TestActor {}
 
