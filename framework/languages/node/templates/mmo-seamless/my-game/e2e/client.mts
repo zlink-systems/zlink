@@ -273,10 +273,10 @@ export async function scenario(
         (v) => v.playerId === id && v.reason === 'left-zone'
       );
       assert.equal(left.reason, 'left-zone');
-      const enteredMark = observer.messages.length;
+      // The same move produces both events; PlayerAppeared can arrive before PlayerLeft is read.
       const entered = await observer.wait<PlayerAppeared>(
         PacketNames.playerAppeared,
-        enteredMark,
+        leftMark,
         (v) => v.playerId === id && v.position.x === 300
       );
       assert.equal(entered.position.x, 300);
