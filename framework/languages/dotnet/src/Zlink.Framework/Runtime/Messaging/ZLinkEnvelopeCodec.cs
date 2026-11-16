@@ -184,7 +184,18 @@ internal static class ZLinkEnvelopeCodec
         if (header.FlowOrigin is null && flow?.Origin is { } flowOrigin)
             withFlow = withFlow with { FlowOrigin = flowOrigin };
         ValidateProtocolHeader(withFlow, true);
-        return Message.From(ToProto(withFlow, contentType).ToByteArray());
+        var protobuf = ToProto(withFlow, contentType);
+        var message = Message.Allocate(protobuf.CalculateSize());
+        try
+        {
+            protobuf.WriteTo(message.AsSpan());
+            return message;
+        }
+        catch
+        {
+            message.Dispose();
+            throw;
+        }
     }
 
     internal static ZLinkEnvelopeHeader PrepareResponse(
