@@ -33,7 +33,17 @@ internal static class ZLinkStreamFrameWriter
     }
 
     public static void Write(
-        Func<Message, bool> write,
+        IZLinkStream stream,
+        ZlinkStreamHeader header,
+        ReadOnlyMemory<byte> payload,
+        string failureMessage
+    )
+    {
+        Write(stream, header, payload.Span, failureMessage);
+    }
+
+    public static void Write(
+        IZLinkStream stream,
         ZlinkStreamHeader header,
         ReadOnlySpan<byte> payload,
         string failureMessage
@@ -43,29 +53,9 @@ internal static class ZLinkStreamFrameWriter
             ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
             payload
         );
-        using var payloadMessage = Message.From(frame);
-        if (!write(payloadMessage))
+        var message = Message.From(frame);
+        if (!WriteRaw(stream, message))
             throw new InvalidOperationException(failureMessage);
-    }
-
-    public static void Write(
-        IZLinkStream stream,
-        ZlinkStreamHeader header,
-        ReadOnlyMemory<byte> payload,
-        string failureMessage
-    )
-    {
-        Write(message => WriteRaw(stream, message), header, payload.Span, failureMessage);
-    }
-
-    public static void Write(
-        IZLinkStream stream,
-        ZlinkStreamHeader header,
-        ReadOnlySpan<byte> payload,
-        string failureMessage
-    )
-    {
-        Write(message => WriteRaw(stream, message), header, payload, failureMessage);
     }
 
     private static bool WriteRaw(IZLinkStream stream, Message message)
@@ -73,6 +63,13 @@ internal static class ZLinkStreamFrameWriter
         if (stream is ZLinkManagedStream managedStream)
             return managedStream.WriteRaw(message);
 
-        return stream.Write(ZLinkMessage.From(message.ToArray()));
+        try
+        {
+            return stream.Write(ZLinkMessage.From(message.ToArray()));
+        }
+        finally
+        {
+            message.Dispose();
+        }
     }
 }

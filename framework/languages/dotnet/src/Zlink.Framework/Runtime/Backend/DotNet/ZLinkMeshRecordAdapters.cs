@@ -22,11 +22,13 @@ internal static class ZLinkMeshRecordAdapters
     )
     {
         IReadOnlyList<Message> parts = batch.RetainMessage(index);
+        if (parts.Count == 0)
+            parts = new[] { Message.From(ReadOnlySpan<byte>.Empty) };
         var canonical = TryDecodeCanonicalActorJoin(
             parts,
             record.ActorControl?.CurrentActor.MeshName ?? string.Empty
         );
-        var message = parts.Count > 0 ? parts[0] : Message.From(ReadOnlySpan<byte>.Empty);
+        var message = parts[0];
         var epoch = record.ActorControl?.CurrentMembershipEpoch ?? 0;
         // Locally submitted joins leave the record's SourceActor zero-filled;
         // the control payload names the joining actor.
