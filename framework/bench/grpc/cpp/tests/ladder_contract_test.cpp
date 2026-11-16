@@ -351,16 +351,6 @@ void receive_pressure_contract (int level)
     running_before_release =
       static_cast<unsigned long long> (jobs->pressure_metrics_snapshot ().running_transition_count);
     held.release_without_handler ();
-    while (jobs->pressure_metrics_snapshot ().running_transition_count <= running_before_release
-           && std::chrono::steady_clock::now () < deadline)
-        std::this_thread::yield ();
-    const bool running_transition =
-      jobs->pressure_metrics_snapshot ().running_transition_count > running_before_release;
-    while (source_monitor.status ().flow_resume_applied_total <= resume_before_release
-           && std::chrono::steady_clock::now () < deadline)
-        std::this_thread::yield ();
-    const bool peer_resumed =
-      source_monitor.status ().flow_resume_applied_total > resume_before_release;
     while (!stop && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
     stop = true;
@@ -379,7 +369,19 @@ void receive_pressure_contract (int level)
     check (pressure.paused_transition_count != 0 && pressure.running_transition_count != 0
              && pressure.flow_state_config_failure_count == 0,
            "owner receive-flow pressure application failed");
-    check (running_transition && peer_resumed,
+    auto final_pressure = jobs->pressure_metrics_snapshot ();
+    auto peer = source_monitor.status ();
+    while ((final_pressure.running_transition_count != final_pressure.paused_transition_count
+            || peer.flow_resume_applied_total != peer.flow_pause_applied_total
+            || peer.flow_paused_connections != 0)
+           && std::chrono::steady_clock::now () < deadline) {
+        std::this_thread::yield ();
+        final_pressure = jobs->pressure_metrics_snapshot ();
+        peer = source_monitor.status ();
+    }
+    check (final_pressure.running_transition_count == final_pressure.paused_transition_count
+             && peer.flow_resume_applied_total == peer.flow_pause_applied_total
+             && peer.flow_paused_connections == 0,
            "owner permit return did not resume the peer socket");
     std::printf ("L%d permit pressure: zero receive while full; supply wake resumed 5 records; "
                  "receive-flow pause/resume; no leaked permits/waiters\n", level);
