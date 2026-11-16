@@ -315,15 +315,16 @@ internal sealed class ZLinkClientServerRuntimeService(
 
     private sealed class StateChangeSignal : IDisposable
     {
-        private readonly Channel<bool> _channel = Channel.CreateBounded<bool>(
-            new BoundedChannelOptions(1)
-            {
-                SingleReader = true,
-                SingleWriter = false,
-                AllowSynchronousContinuations = false,
-                FullMode = BoundedChannelFullMode.DropWrite,
-            }
-        );
+        private readonly Channel<bool> _channel =
+            global::System.Threading.Channels.Channel.CreateBounded<bool>(
+                new BoundedChannelOptions(1)
+                {
+                    SingleReader = true,
+                    SingleWriter = false,
+                    AllowSynchronousContinuations = false,
+                    FullMode = BoundedChannelFullMode.DropWrite,
+                }
+            );
 
         internal void Signal() => _channel.Writer.TryWrite(true);
 

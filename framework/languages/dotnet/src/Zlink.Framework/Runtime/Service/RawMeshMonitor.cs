@@ -5,7 +5,7 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class RawMeshMonitor : IMeshNodeMonitor
 {
     private readonly Channel<MeshMonitorEvent> _events =
-        Channel.CreateUnbounded<MeshMonitorEvent>();
+        global::System.Threading.Channels.Channel.CreateUnbounded<MeshMonitorEvent>();
     private readonly MeshMonitorEventMask _mask;
     private long _sequence;
     private int _disposed;
