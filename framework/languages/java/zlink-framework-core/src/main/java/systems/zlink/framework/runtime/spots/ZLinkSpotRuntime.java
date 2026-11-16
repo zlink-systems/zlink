@@ -7689,12 +7689,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return reason + " for packet '" + packetName + "'";
     }
 
-    /**
-     * Parses an inbound SPOT route message. A shared cross-language envelope ({@code [JSON header,
-     * body]}, formatMarker 0xF2) yields the header's messageName and body; legacy internal raw
-     * parts keep the packet-name/payload frames. A first frame that is a JSON object but not a
-     * valid envelope throws {@code PROTOCOL_ERROR}.
-     */
+    /** Parses an inbound SPOT route message from its ChannelHeader and payload frames. */
     static ParsedPacket parsePacket(List<Message> parts) {
         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
                 systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(
@@ -7705,13 +7700,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     static ParsedPacket parsePacket(
             List<Message> parts,
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
-        if (header != null) {
-            return new ParsedPacket(header.messageName(), parts.get(1), header);
+        if (parts.size() < 2) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "SPOT route envelope payload is missing");
         }
-        if (parts.size() >= 2) {
-            return new ParsedPacket(parts.get(0).toUtf8String(), parts.get(1));
-        }
-        return new ParsedPacket("", parts.get(0));
+        return new ParsedPacket(header.messageName(), parts.get(1), header);
     }
 
     static boolean isProbeFrame(List<Message> parts) {

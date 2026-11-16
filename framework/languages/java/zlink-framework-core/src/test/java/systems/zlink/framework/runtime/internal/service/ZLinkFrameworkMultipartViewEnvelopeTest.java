@@ -1,10 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -20,16 +17,14 @@ import java.util.List;
 
 final class ZLinkFrameworkMultipartViewEnvelopeTest {
     @Test
-    void envelopeProbeReadsTheRetainedHeaderOnce() {
-        try (var parts = view("{}")) {
+    void headerParserReadsTheRetainedHeaderOnce() {
+        try (var parts = view(validHeader())) {
             int[] reads = {0};
             var counted =
                     new AbstractList<Message>() {
                         @Override
                         public Message get(int index) {
-                            if (index == 0) {
-                                reads[0]++;
-                            }
+                            if (index == 0) reads[0]++;
                             return parts.get(index);
                         }
 
@@ -38,75 +33,68 @@ final class ZLinkFrameworkMultipartViewEnvelopeTest {
                             return parts.size();
                         }
                     };
-            assertTrue(ZLinkChannelEnvelope.looksLikeEnvelope(counted));
+            var header = ZLinkChannelEnvelope.decodeDispatchHeader(counted, false);
+            assertEquals("orders", header.channelName());
+            assertEquals("probe", header.messageName());
             assertEquals(1, reads[0]);
         }
     }
 
     @Test
-    void emptyAndRawPartsKeepTheirEnvelopeClassification() {
-        assertFalse(ZLinkChannelEnvelope.looksLikeEnvelope(null));
-        try (var empty = new ZLinkFrameworkMultipartView(new Object[0], null)) {
-            assertFalse(ZLinkChannelEnvelope.looksLikeEnvelope(empty));
-        }
-        try (var single =
-                new ZLinkFrameworkMultipartView(
-                        new Object[] {ByteBuffer.wrap(new byte[] {'{'})}, null)) {
-            assertFalse(ZLinkChannelEnvelope.looksLikeEnvelope(single));
-        }
-        for (String first : List.of("", " \t\r\n", "probe", " \t[1]", " \n42")) {
+    void dispatchAlwaysParsesChannelHeaderBytes() {
+        for (byte[] first : List.of(new byte[0], "probe".getBytes(StandardCharsets.UTF_8))) {
             try (var parts = view(first)) {
-                assertFalse(ZLinkChannelEnvelope.looksLikeEnvelope(parts), first);
-                assertNull(ZLinkChannelEnvelope.decodeDispatchHeader(parts, false), first);
+                ZLinkFrameworkException failure =
+                        assertThrows(
+                                ZLinkFrameworkException.class,
+                                () -> ZLinkChannelEnvelope.decodeDispatchHeader(parts, false));
+                assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
             }
         }
     }
 
     @Test
-    void whitespacePrefixedHeaderStillDecodesStrictly() {
-        try (var parts =
-                view(
-                        " \t\r\n{\"formatMarker\":"
-                                + ZLinkChannelEnvelope.FORMAT_MARKER
-                                + ",\"kind\":"
-                                + ZLinkChannelEnvelope.KIND_COMMAND
-                                + ",\"channelName\":\"orders\",\"messageName\":\"probe\"}")) {
-            assertTrue(ZLinkChannelEnvelope.looksLikeEnvelope(parts));
-            var header = ZLinkChannelEnvelope.decodeDispatchHeader(parts, false);
-            assertEquals("orders", header.channelName());
-            assertEquals("probe", header.messageName());
-        }
-    }
-
-    @Test
-    void malformedObjectRemainsAStrictProtocolError() {
-        try (var parts = view(" \n{bad json")) {
-            assertTrue(ZLinkChannelEnvelope.looksLikeEnvelope(parts));
-            var failure =
+    void malformedChannelHeaderIsAProtocolError() {
+        try (var parts = view(new byte[] {0x08})) {
+            ZLinkFrameworkException failure =
                     assertThrows(
                             ZLinkFrameworkException.class,
                             () -> ZLinkChannelEnvelope.decodeDispatchHeader(parts, false));
             assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
-            assertNull(ZLinkChannelEnvelope.tryDecodeHeader(parts, false));
+            org.junit.jupiter.api.Assertions.assertNull(
+                    ZLinkChannelEnvelope.tryDecodeHeader(parts, false));
         }
     }
 
     @Test
     void closedViewStillRejectsHeaderAccess() {
-        try (var parts = view("{}")) {
-            parts.close();
-            assertThrows(
-                    IllegalStateException.class,
-                    () -> ZLinkChannelEnvelope.looksLikeEnvelope(parts));
-        }
+        var parts = view(validHeader());
+        parts.close();
+        assertThrows(
+                IllegalStateException.class,
+                () -> ZLinkChannelEnvelope.decodeDispatchHeader(parts, false));
     }
 
-    private static ZLinkFrameworkMultipartView view(String first) {
+    private static ZLinkFrameworkMultipartView view(byte[] first) {
         return new ZLinkFrameworkMultipartView(
-                new Object[] {
-                    ByteBuffer.wrap(first.getBytes(StandardCharsets.UTF_8)),
-                    ByteBuffer.wrap(new byte[] {1, 2, 3})
-                },
-                null);
+                new Object[] {ByteBuffer.wrap(first), ByteBuffer.wrap(new byte[] {1, 2, 3})}, null);
+    }
+
+    private static byte[] validHeader() {
+        return ZLinkChannelEnvelope.encodeHeaderBytes(
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_COMMAND,
+                        "orders",
+                        "probe",
+                        ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        java.util.Map.of(),
+                        null,
+                        null));
     }
 }

@@ -206,10 +206,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                 envelope =
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
                                 .decodeDispatchHeader(received.parts(), true);
-                inboundFlow =
-                        envelope == null
-                                ? ZLinkSpotFlowFrame.decode(received.parts())
-                                : ZLinkSpotFlowFrame.fromEnvelopeHeader(envelope);
+                inboundFlow = ZLinkSpotFlowFrame.fromEnvelopeHeader(envelope);
             } catch (ZLinkFrameworkException invalidFlow) {
                 failRouteInvalidFlow(received, invalidFlow);
                 if (admission != null) admission.complete(null);
@@ -228,13 +225,10 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
             }
             ParsedPacket packet;
             try {
-                packet =
-                        envelope == null
-                                ? ZLinkSpotRuntime.parsePacket(received.parts())
-                                : ZLinkSpotRuntime.parsePacket(received.parts(), envelope);
+                packet = ZLinkSpotRuntime.parsePacket(received.parts(), envelope);
             } catch (ZLinkFrameworkException invalidEnvelope) {
-                //  A JSON-object first frame that is not a valid shared envelope
-                //  is a protocol error (C++ decode parity).
+                //  A frame that cannot be parsed and validated as ChannelHeader is a protocol
+                // error.
                 failRouteInvalidFlow(received, invalidEnvelope);
                 if (admission != null) admission.complete(null);
                 return;

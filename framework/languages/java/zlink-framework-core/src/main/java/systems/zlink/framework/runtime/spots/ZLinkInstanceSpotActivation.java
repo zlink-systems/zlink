@@ -302,10 +302,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             if (host.flowCaptureEnabled()) {
                 try {
                     observed = ZLinkSpotRuntime.parsePacket(received.parts());
-                    flow =
-                            observed.header() == null
-                                    ? ZLinkSpotFlowFrame.decode(received.parts())
-                                    : ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
+                    flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
                 } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
                     failRouteInvalidFlow(received, invalidEnvelope);
                     accepted.complete(null);
