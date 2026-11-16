@@ -208,6 +208,11 @@ class mesh_node_runtime_t
     using stateful_dispatch_configuration_t =
       std::variant<runtime::stateful::accepted_record_authority_resolver_t,
                    std::function<std::shared_ptr<const location_owner_token_t> ()>>;
+    void configure_operation_owner_resolver (
+      runtime::mesh::raw_mesh_node_owner_t::operation_owner_resolver_t resolver);
+    std::optional<runtime::mesh::raw_mesh_node_owner_t::operation_owner_t>
+    local_operation_owner (runtime::foundation::call_id_t operation,
+                           std::uint64_t reply_route_id) const;
     void configure_stateful_dispatch (stateful_dispatch_configuration_t configuration,
                                       runtime::live_location_reader_t *sources = nullptr);
     void configure_bound_session_operations (host::bound_session_operations_t operations);
@@ -256,6 +261,9 @@ class mesh_node_runtime_t
     send_to_node (const zlink::routing_id_t &target,
                   const std::vector<zlink::message_t> &parts,
                   const std::map<std::string, std::string> &metadata);
+    task_t<void> register_actor_request (host::pending_operation_t &operation,
+                                         std::chrono::milliseconds timeout,
+                                         std::shared_ptr<task_completion_source_t<void>> admitted);
     void prepare_actor_request_reply (
       host::pending_operation_t &operation,
       request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
@@ -701,6 +709,7 @@ class mesh_node_runtime_t
       _bound_session_relocation_resolver;
     stateful_dispatch_configuration_t _stateful_dispatch_configuration;
     runtime::live_location_reader_t *_request_sources = nullptr;
+    runtime::mesh::raw_mesh_node_owner_t::operation_owner_resolver_t _operation_owner_resolver;
     std::optional<host::bound_session_operations_t> _bound_session_operations;
     std::function<void (const runtime::protocol::session_relocation_route_t &)>
       _late_session_route_update_reporter;

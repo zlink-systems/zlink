@@ -7,6 +7,8 @@ internal delegate void ZLinkBackendRequestCallback(
 
 internal interface IZLinkBackendSpotNode : IAsyncDisposable
 {
+    Zlink.Framework.Runtime.Service.ZLinkManagedMeshNode RequestOperations { get; }
+
     ValueTask ForceStopAsync(CancellationToken cancellationToken) => DisposeAsync();
 
     // Observation-only: the existing tracer owns the live gate (spec 26/27).
@@ -288,7 +290,10 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         Func<IReadOnlyList<Message>, TReply> decodeReply,
         Func<Exception, Exception> mapFailure,
         ZLinkRequestAdmission? requestAdmission = null,
-        Action<Exception>? physicalFailure = null
+        Action<Exception>? physicalFailure = null,
+        Zlink.Framework.Runtime.Service.ZLinkManagedMeshNode.PendingOperation<TReply>? operation =
+            null,
+        Zlink.Framework.Runtime.Service.ZLinkManagedMeshNode? operationOwner = null
     );
 
     bool ReplyActorNoBind(

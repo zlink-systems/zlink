@@ -2074,6 +2074,17 @@ void app_t::_apply_zlink_framework ()
     }
     std::vector<std::weak_ptr<detail::mesh_node_runtime_t>> weak_mesh_nodes (mesh_nodes.begin (),
                                                                              mesh_nodes.end ());
+    for (const auto &mesh : mesh_nodes) {
+        mesh->configure_operation_owner_resolver (
+          [weak_mesh_nodes] (runtime::foundation::call_id_t operation, std::uint64_t reply_route_id)
+            -> std::optional<runtime::mesh::raw_mesh_node_owner_t::operation_owner_t> {
+              for (const auto &weak : weak_mesh_nodes)
+                  if (const auto candidate = weak.lock ())
+                      if (auto owner = candidate->local_operation_owner (operation, reply_route_id))
+                          return owner;
+              return std::nullopt;
+          });
+    }
     if (!mesh_nodes.empty ()) {
         const auto application_mesh_it =
           std::find_if (mesh_nodes.begin (), mesh_nodes.end (), [&] (const auto &mesh) {
@@ -3246,13 +3257,13 @@ void app_t::_apply_zlink_framework ()
     }
     if (!_state->services.contains (std::type_index (typeid (actor_client_t)))) {
         _state->services.add_factory<actor_client_t> (
-          [mesh_nodes, actor_location_observer, delays = &_state->delays,
+          [mesh_nodes, actor_location_observer,
            admission = detail::channel_runtime_t::from (_state->zlink.message_bus ()),
            location_options = options.location_options ()] (service_provider_t &provider) mutable {
               return runtime::make_actor_client (
                 provider.get_required<runtime::live_location_reader_t> (),
                 provider.get_required<serializer_registry_t> (), mesh_nodes,
-                actor_location_observer, location_options, *delays,
+                actor_location_observer, location_options,
                 [admission] { admission.admit_outbound (); });
           },
           service_lifetime_t::singleton);

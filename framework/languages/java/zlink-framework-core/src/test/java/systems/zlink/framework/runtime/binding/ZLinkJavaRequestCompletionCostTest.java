@@ -107,14 +107,22 @@ public final class ZLinkJavaRequestCompletionCostTest {
                 var requestPart = Message.from(new byte[] {1});
                 try {
                     var admission = new CompletableFuture<Void>();
-                    mesh.requestActor(
-                            target,
-                            List.of(requestPart),
+                    meshOperations.<List<Message>>submitTerminal(
+                            result.id(),
                             TIMEOUT,
-                            admission,
-                            java.util.function.Function.identity(),
+                            terminal -> {
+                                mesh.requestActor(
+                                        target,
+                                        List.of(requestPart),
+                                        TIMEOUT,
+                                        admission,
+                                        java.util.function.Function.identity(),
+                                        Message::closeAll,
+                                        java.util.function.Function.identity(),
+                                        result);
+                                return result;
+                            },
                             Message::closeAll,
-                            java.util.function.Function.identity(),
                             result);
                     admission.get(1, TimeUnit.SECONDS);
                     assertEquals(1, fixture.submits.get());
@@ -211,22 +219,32 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                         "public timeout");
                         var admission = new CompletableFuture<Void>();
                         try (var requestPart = Message.from(new byte[] {1})) {
-                            mesh.spotNode()
-                                    .requestToActor(
-                                            target,
-                                            List.of(requestPart),
-                                            systems.zlink.contracts.sockets.SendFlags.NONE,
+                            mesh.operationRegistry()
+                                    .<Integer>submitTerminal(
+                                            result.id(),
                                             TIMEOUT,
-                                            admission,
-                                            parts -> {
-                                                throw mapped;
+                                            terminal -> {
+                                                mesh.spotNode()
+                                                        .requestToActor(
+                                                                target,
+                                                                List.of(requestPart),
+                                                                systems.zlink.contracts.sockets
+                                                                        .SendFlags.NONE,
+                                                                TIMEOUT,
+                                                                admission,
+                                                                parts -> {
+                                                                    throw mapped;
+                                                                },
+                                                                ignored -> {},
+                                                                failure -> {
+                                                                    calls.incrementAndGet();
+                                                                    observed.complete(null);
+                                                                    return mapped;
+                                                                },
+                                                                result);
+                                                return result;
                                             },
                                             ignored -> {},
-                                            failure -> {
-                                                calls.incrementAndGet();
-                                                observed.complete(null);
-                                                return mapped;
-                                            },
                                             result);
                             admission.get(1, TimeUnit.SECONDS);
                             if (late) {

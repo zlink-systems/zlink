@@ -86,6 +86,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     ) => _node.CloseBoundSessionAsync(request, timeout, cancellationToken);
 
     internal ZLinkManagedMeshNode NativeNode => _node;
+    public ZLinkManagedMeshNode RequestOperations => _node;
 
     public void SetFlowTracer(ZLinkMessageFlowTracer flow) => _node.SetFlowTracer(flow);
 
@@ -1386,7 +1387,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         Func<IReadOnlyList<Message>, TReply> decodeReply,
         Func<Exception, Exception> mapFailure,
         ZLinkRequestAdmission? requestAdmission = null,
-        Action<Exception>? physicalFailure = null
+        Action<Exception>? physicalFailure = null,
+        ZLinkManagedMeshNode.PendingOperation<TReply>? operation = null,
+        ZLinkManagedMeshNode? operationOwner = null
     ) =>
         new(
             _node.RequestToActorAsync<TReply>(
@@ -1397,7 +1400,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                 decodeReply,
                 mapFailure,
                 requestAdmission,
-                physicalFailure
+                physicalFailure,
+                operation,
+                operationOwner
             )
         );
 

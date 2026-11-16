@@ -186,7 +186,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             && node is IZLinkBackendRelocationReplyRelay relayBackend
         )
         {
-            _relocationReplyRelayTarget = new ZLinkRelocationReplyTarget(relayBackend);
+            _relocationReplyRelayTarget = new ZLinkRelocationReplyTarget(
+                (relay, payload) => runtime.CompleteRelocationReply(this, relay, payload)
+            );
             relayBackend.SetRelocationReplyRelayTarget(_relocationReplyRelayTarget);
         }
         if (
