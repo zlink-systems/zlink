@@ -314,20 +314,16 @@ internal sealed class ZLinkChannelReceiveLoop(
         Message reply
     )
     {
-        if (replyToken is not { } value)
-        {
-            reply.Dispose();
-            return false;
-        }
         try
         {
+            if (replyToken is not { } value)
+                return false;
             router.Reply(sourceRid, value).Message(reply).Submit();
             return true;
         }
-        catch
+        finally
         {
             reply.Dispose();
-            throw;
         }
     }
 

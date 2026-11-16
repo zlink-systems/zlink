@@ -264,7 +264,7 @@ internal static class ZLinkSessionOutboundSubmission
 {
     internal static ZLinkSessionOutboundDelivery Submit(ZLinkSessionContext context, byte[] frame)
     {
-        using var message = Message.From(frame);
+        var message = Message.From(frame);
         return context.Write(message)
             ? ZLinkSessionOutboundDelivery.Delivered
             : ZLinkSessionOutboundDelivery.Backpressured;

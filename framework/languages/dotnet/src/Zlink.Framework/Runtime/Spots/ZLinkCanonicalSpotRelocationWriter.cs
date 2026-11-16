@@ -221,7 +221,7 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             throw new ZLinkRelocationDataLostException(
                 "Accepted request operation fence was not captured."
             );
-        var parts = journal.Parts.Select(static part => Message.From(part.Span)).ToArray();
+        var parts = ZLinkRawRouterServicePort.CreateMessages(journal.Parts);
         ZLinkEnvelopeHeader header;
         byte[] payload;
         try
