@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using ProtoChannelHeader = global::Zlink.Framework.Channel.V1.ChannelHeader;
+using ProtoChannelKind = global::Zlink.Framework.Channel.V1.ChannelKind;
+using ProtoMetadataEntry = global::Zlink.Framework.Channel.V1.MetadataEntry;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -24,6 +28,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 continue;
             var fields = row.Split('\t');
             bool request = bool.Parse(fields[1]);
+            var header = CreateMalformedHeader(fields[0]);
             var logger = new MeshFlowLoggerFactory();
             await using var services = new ServiceCollection()
                 .AddSingleton<ILoggerFactory>(logger)
@@ -73,7 +78,7 @@ public sealed partial class EntrySpotActorDispatchTests
             ZLinkEnvelopeHeader? replyHeader = null;
             var parts = new[]
             {
-                Message.From(System.Text.Encoding.UTF8.GetBytes(fields[2])),
+                Message.From(header.ToByteArray()),
                 Message.From(System.Text.Encoding.UTF8.GetBytes("request")),
             };
             Func<IReadOnlyList<Message>, SubmitResult>? reply = request
@@ -103,9 +108,8 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 Assert.Equal(ZLinkMessageKind.Error, replyHeader.Kind);
                 Assert.Equal("protocol_error", replyHeader.ErrorCode);
-                using var json = System.Text.Json.JsonDocument.Parse(fields[2]);
                 Assert.Equal(
-                    json.RootElement.GetProperty("correlationId").GetString(),
+                    header.HasCorrelationId ? header.CorrelationId : null,
                     replyHeader.CorrelationId
                 );
             }
@@ -116,11 +120,100 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
                 .ToArray();
             Assert.Single(errors);
-            Assert.Contains("reason=invalid_frame", errors[0], StringComparison.Ordinal);
-            Assert.Contains("action=" + fields[3], errors[0], StringComparison.Ordinal);
+            Assert.True(
+                errors[0].Contains("reason=invalid_frame", StringComparison.Ordinal),
+                $"{fields[0]}: {errors[0]}"
+            );
+            Assert.True(
+                errors[0].Contains("action=" + fields[3], StringComparison.Ordinal),
+                $"{fields[0]}: {errors[0]}"
+            );
             count++;
         }
         Assert.Equal(22, count);
+    }
+
+    private static ProtoChannelHeader CreateMalformedHeader(string id)
+    {
+        var header = new ProtoChannelHeader
+        {
+            Kind = ProtoChannelKind.Request,
+            ChannelName = "play",
+            MessageName = "String",
+            ContentType = "application/json",
+        };
+
+        switch (id)
+        {
+            case "metadata":
+                header.CorrelationId = "reply-correlation";
+                AddDuplicateMetadata(header);
+                break;
+            case "content-type":
+                header.ContentType = string.Empty;
+                header.CorrelationId = "reply-correlation";
+                break;
+            case "marker":
+            case "kind-type":
+            case "kind-value":
+            case "kind-boolean":
+            case "kind-fraction":
+            case "kind-overflow":
+            case "marker-fraction":
+                header.Kind = (ProtoChannelKind)99;
+                header.CorrelationId = "reply-correlation";
+                break;
+            case "syntax":
+            case "trailing-json":
+                return new ProtoChannelHeader();
+            case "correlation-65":
+                header.CorrelationId = new string('a', 65);
+                AddDuplicateMetadata(header);
+                break;
+            case "correlation-nonascii":
+                header.CorrelationId = "é";
+                AddDuplicateMetadata(header);
+                break;
+            case "correlation-64":
+                header.CorrelationId = new string('a', 64);
+                AddDuplicateMetadata(header);
+                break;
+            case "correlation-space":
+                header.CorrelationId = " ";
+                AddDuplicateMetadata(header);
+                break;
+            case "correlation-control":
+                header.CorrelationId = "\u007f";
+                AddDuplicateMetadata(header);
+                break;
+            case "correlation-empty":
+                header.CorrelationId = string.Empty;
+                AddDuplicateMetadata(header);
+                break;
+            case "correlation-null":
+            case "correlation-number":
+                AddDuplicateMetadata(header);
+                break;
+            case "send-metadata":
+                header.Kind = ProtoChannelKind.Command;
+                AddDuplicateMetadata(header);
+                break;
+            case "send-header-request":
+            case "send-marker":
+                header.Kind = (ProtoChannelKind)99;
+                header.CorrelationId = "reply-correlation";
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown malformed-header case '{id}'.");
+        }
+
+        return header;
+    }
+
+    private static void AddDuplicateMetadata(ProtoChannelHeader header)
+    {
+        header.Metadata.Add(new ProtoMetadataEntry { Key = "bad", Value = "first" });
+        header.Metadata.Add(new ProtoMetadataEntry { Key = "bad", Value = "second" });
     }
 
     [Theory]
