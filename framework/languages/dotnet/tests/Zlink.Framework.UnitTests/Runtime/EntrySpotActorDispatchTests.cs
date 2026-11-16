@@ -9596,7 +9596,11 @@ public sealed partial class EntrySpotActorDispatchTests
                         null
                     );
                 },
-                () => invalidations++
+                () =>
+                {
+                    invalidations++;
+                    return ValueTask.CompletedTask;
+                }
             );
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                 new ZLinkRouteSpotRequestCall<ProbeRouteMessage>(
@@ -9697,7 +9701,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             node.BeforeActorSendAsync = async () =>
             {
-                rows.InvalidateActorRoute(key);
+                await rows.InvalidateActorRouteAsync(key);
                 var replacementRid = RoutingId.From("replacement-send-node");
                 Assert.NotNull(
                     await AuthorityLocationTestFixture.PublishActorAsync(
@@ -9891,7 +9895,7 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
-            rows.InvalidateActorRoute(new ZLinkActorLocationKey(actor.ActorId));
+            await rows.InvalidateActorRouteAsync(new ZLinkActorLocationKey(actor.ActorId));
             var reply = await new ZLinkActorClient(runtime)
                 .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
                 .Timeout(TimeSpan.FromMilliseconds(500))
@@ -10110,7 +10114,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timeout.Kind);
 
-            rows.InvalidateActorRoute(key);
+            await rows.InvalidateActorRouteAsync(key);
             var replacementRid = RoutingId.From("replacement-node");
             Assert.NotNull(
                 await AuthorityLocationTestFixture.PublishActorAsync(
@@ -16307,6 +16311,9 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ConcurrentQueue<string> LifecycleEvents { get; } = new();
 
+        // Entry returns create Actors from separate Actor lanes, as a binding node allows.
+        private readonly object _createdActorsGate = new();
+
         public List<ZLinkBackendActorRef> CreatedActors { get; } = [];
 
         public ZLinkBackendActorRef? ActorLookupResult { get; set; }
@@ -16536,6 +16543,15 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public IReadOnlyList<ZLinkSpotNodePeerEntry> Peers() => [];
 
+        public ulong LifecycleGeneration => 1;
+
+        public (
+            MeshNodeState State,
+            RoutingId RoutingId,
+            IReadOnlyList<MeshNodePeer> Peers,
+            IReadOnlyList<MeshPeerChannel>[] PeerChannels
+        ) MeshTopology() => (MeshNodeState.Ready, RoutingId, MeshPeers(), []);
+
         public MeshNodeStatus MeshStatus() =>
             new(
                 MeshNodeState.Ready,
@@ -16676,8 +16692,11 @@ public sealed partial class EntrySpotActorDispatchTests
         public ZLinkBackendActorRef CreateActor(string actorId, Message createRequest)
         {
             var actor = new ZLinkBackendActorRef(RoutingId, actorId, 1);
-            CreatedActors.Add(actor);
-            CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            lock (_createdActorsGate)
+            {
+                CreatedActors.Add(actor);
+                CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            }
             return actor;
         }
 
@@ -16691,8 +16710,11 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = authorityOwnerGeneration;
             _ = createRequest;
             var actor = new ZLinkBackendActorRef(RoutingId, actorId, objectGeneration);
-            CreatedActors.Add(actor);
-            CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            lock (_createdActorsGate)
+            {
+                CreatedActors.Add(actor);
+                CreatedActorEntryRids.Add(_entrySpot.RoutingId);
+            }
             return actor;
         }
 

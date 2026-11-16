@@ -835,7 +835,7 @@ def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
         node_lock,
         internal_dependency_pattern,
         lambda match, version=version: replace_version_group(match, version),
-        13,
+        14,
     )
     sync.regex(
         node_lock,

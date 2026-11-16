@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +23,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreVersionCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -37,10 +37,7 @@ import java.util.concurrent.ExecutionException;
 class ZLinkRedisOpaqueLocationStoreTest {
     @Test
     void completedSnapshotAllowsImmediateHistoryReclamation() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
         try (var store =
                 new ZLinkRedisLocationStore(
                         new ZLinkRedisLocationOptions()
@@ -123,10 +120,7 @@ class ZLinkRedisOpaqueLocationStoreTest {
 
     @Test
     void prefixRangeIncludesExactAndUtf8KeysAcrossPages() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
         try (var store =
                 new ZLinkRedisLocationStore(
                         new ZLinkRedisLocationOptions()
@@ -182,10 +176,7 @@ class ZLinkRedisOpaqueLocationStoreTest {
 
     @Test
     void prefixScanDoesNotPageThroughUnrelatedRecords() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
         try (var store =
                 new ZLinkRedisLocationStore(
                         new ZLinkRedisLocationOptions()
@@ -238,10 +229,7 @@ class ZLinkRedisOpaqueLocationStoreTest {
 
     @Test
     void valueConditionChecksBytesAndExpiryAtomically() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
         try (var store =
                 new ZLinkRedisLocationStore(
                         new ZLinkRedisLocationOptions()
@@ -391,10 +379,7 @@ class ZLinkRedisOpaqueLocationStoreTest {
 
     @Test
     void conditionalBatchAndScanUseStableOpaqueSnapshot() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
         try (var store =
                 new ZLinkRedisLocationStore(
                         new ZLinkRedisLocationOptions()
@@ -483,10 +468,7 @@ class ZLinkRedisOpaqueLocationStoreTest {
 
     @Test
     void multiKeyCasKeepsEachConditionBoundToItsKey() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
         try (var store =
                 new ZLinkRedisLocationStore(
                         new ZLinkRedisLocationOptions()

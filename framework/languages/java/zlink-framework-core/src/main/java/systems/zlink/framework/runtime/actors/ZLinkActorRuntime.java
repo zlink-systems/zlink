@@ -2789,11 +2789,22 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     CompletionStage<Void> closeNativeSessionBinding(
             ZLinkActor actor, ZLinkInternalSpotNode node, Duration timeout) {
-        var started =
-                inOwnerTurn(
-                        () ->
-                                node.closeActorBoundSessionAsync(
-                                        requireContext(actor).actorRef(), timeout));
+        return closeNativeSessionBinding(
+                () -> node.closeActorBoundSessionAsync(requireContext(actor).actorRef(), timeout));
+    }
+
+    CompletionStage<Void> closeNativeSessionBindingForDestroy(
+            ZLinkActor actor, ZLinkInternalSpotNode node, Duration timeout) {
+        return closeNativeSessionBinding(
+                () ->
+                        node.closeActorBoundSessionAsync(
+                                requireContext(actor).actorRef(),
+                                timeout,
+                                () -> CompletableFuture.completedFuture(null)));
+    }
+
+    private CompletionStage<Void> closeNativeSessionBinding(Supplier<CompletionStage<Void>> close) {
+        var started = inOwnerTurn(close);
         var terminal = started.thenCompose(request -> request).toCompletableFuture();
         systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
                 terminal, started);

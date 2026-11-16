@@ -1,7 +1,7 @@
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
 import { randomBytes } from 'node:crypto';
-import { isUtf8 } from 'node:buffer';
+import * as protobuf from 'protobufjs/minimal';
 import {
   type Type,
   ZLinkFrameworkErrorKind,
@@ -29,11 +29,46 @@ import { isCanonicalCodecContentType } from '../../contracts/Configuration/Codec
 import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from '../messaging/framework-json-v1';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
 import { SERVICE_WIRE_METADATA_BYTES } from '../foundation/service-wire-constants.generated';
+import { zlink as ChannelHeaderProto } from './generated/channel-header-v1';
 import { codecsForFrameworkPacket } from './channel-framework-packets';
 import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
 import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
 
-export const ZLINK_CHANNEL_FORMAT_MARKER = 0xf2;
+const CHANNEL_HEADER_CODEC = (
+  ChannelHeaderProto as unknown as {
+    framework: {
+      channel: {
+        v1: {
+          ChannelHeader: {
+            create(): Record<string, unknown>;
+            encode(
+              value: unknown,
+              writer?: { finish(): Uint8Array; reset(): void }
+            ): { finish(): Uint8Array; reset(): void; len: number };
+            decode(
+              value: unknown,
+              length?: number,
+              end?: number,
+              depth?: number,
+              target?: unknown
+            ): unknown;
+          };
+        };
+      };
+    };
+  }
+).framework.channel.v1.ChannelHeader;
+// These codec calls are synchronous, so one process-local scratch set can be reused safely.
+const CHANNEL_HEADER_WRITER = CHANNEL_HEADER_CODEC.encode({});
+const CHANNEL_HEADER_READER = protobuf.Reader.create(Buffer.alloc(0));
+const CHANNEL_HEADER_TARGET = CHANNEL_HEADER_CODEC.create();
+const PREPARED_COMMAND_HEADERS = new WeakMap<
+  ReadonlyMap<string, ZLinkMessageSerializer>,
+  Map<string, Buffer>
+>();
+const EMPTY_PROTOBUF_METADATA: readonly Readonly<{ key: string; value: string }>[] = Object.freeze(
+  []
+);
 
 //  Shared default for the dominant no-metadata message; avoids a Map
 //  allocation per outbound envelope.
@@ -51,7 +86,6 @@ export const enum ZLinkChannelMessageKind {
 }
 
 export interface ZLinkChannelEnvelopeHeader {
-  readonly formatMarker: number;
   readonly kind: ZLinkChannelMessageKind;
   readonly channelName: string;
   readonly messageName: string;
@@ -77,31 +111,8 @@ export interface ZLinkChannelEnvelopeCodecRegistry {
   readonly serializers: ReadonlyMap<string, ZLinkMessageSerializer>;
 }
 
-interface PreparedChannelHeader {
-  readonly bytes: Buffer;
-  readonly correlationOffset: number;
-  readonly deadlineOffset: number;
-  readonly flowOffset: number;
-}
-
-/** The kind fixes deadline presence; only flow origin varies within each kind. */
-type PreparedHeaderVariants = Map<
-  ZLinkChannelMessageKind,
-  Map<ZLinkFlowOrigin | undefined, PreparedChannelHeader>
->;
-const preparedChannelHeaders = new WeakMap<
-  ReadonlyMap<string, ZLinkMessageSerializer>,
-  Map<string, Map<string, Map<string, PreparedHeaderVariants>>>
->();
-const CHANNEL_CORRELATION_FIELD = ',"correlationId":';
-const CHANNEL_DEADLINE_FIELD = ',"deadline":';
 const CHANNEL_CORRELATION_TEXT_LENGTH = 32;
 const PREPARED_CHANNEL_CORRELATION = '0'.repeat(CHANNEL_CORRELATION_TEXT_LENGTH);
-const PREPARED_CHANNEL_DEADLINE = '2000-01-01T00:00:00.000Z';
-const CHANNEL_CORRELATION_TEXT = /^[0-9a-f]{32}$/;
-const CHANNEL_FLOW_FIELD = ',"flowId":';
-// A flow id is a lowercase UUIDv7 (spec 27 §3): fixed 36 JSON-safe ASCII bytes.
-const PREPARED_CHANNEL_FLOW = '00000000-0000-7000-8000-000000000000';
 const CHANNEL_FLOW_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 // A per-process random 64-bit prefix followed by a per-process counter, both
@@ -183,9 +194,7 @@ export function encodeChannelEnvelopePartsAtDeadline(
     deadlineUnixMs,
     topic,
     createFlow,
-    metadata,
-    undefined,
-    codecs
+    metadata
   );
 }
 
@@ -231,8 +240,7 @@ export function encodeChannelReplyParts(
     undefined,
     false,
     EMPTY_OUTBOUND_METADATA,
-    request,
-    codecs
+    request
   );
 }
 
@@ -480,8 +488,7 @@ function encodePayload(
   topic: string | undefined,
   createFlow: boolean,
   metadata: ReadonlyMap<string, string>,
-  request?: ZLinkChannelEnvelopeHeader,
-  headerCodecs?: ZLinkChannelEnvelopeCodecRegistry
+  request?: ZLinkChannelEnvelopeHeader
 ): readonly MessageLike[] {
   let declaredType;
   let contentType: string;
@@ -526,7 +533,7 @@ function encodePayload(
       applicationMetadataRecord(metadata),
       flow?.flowId,
       flow?.flowOrigin,
-      headerCodecs
+      codecs
     ),
     message
   ];
@@ -575,51 +582,44 @@ function encodeChannelHeader(
 ): Buffer {
   if (
     codecs !== undefined &&
-    metadata === EMPTY_APPLICATION_METADATA &&
-    (flowId === undefined
-      ? flowOrigin === undefined
-      : flowOrigin !== undefined && CHANNEL_FLOW_TEXT.test(flowId)) &&
+    kind === ZLinkChannelMessageKind.Command &&
+    correlationId === null &&
+    deadline === null &&
     topic === null &&
+    errorCode == null &&
+    errorMessage == null &&
     source === undefined &&
-    ((kind === ZLinkChannelMessageKind.Command &&
-      correlationId === null &&
-      deadline === null &&
-      errorCode === null &&
-      errorMessage === null) ||
-      (kind === ZLinkChannelMessageKind.Request &&
-        correlationId !== null &&
-        CHANNEL_CORRELATION_TEXT.test(correlationId) &&
-        deadline !== null &&
-        deadline.length === PREPARED_CHANNEL_DEADLINE.length &&
-        errorCode === null &&
-        errorMessage === null) ||
-      (kind === ZLinkChannelMessageKind.Response &&
-        correlationId !== null &&
-        CHANNEL_CORRELATION_TEXT.test(correlationId) &&
-        deadline === null &&
-        errorCode === undefined &&
-        errorMessage === undefined))
+    flowId === undefined &&
+    flowOrigin === undefined &&
+    Object.keys(metadata).length === 0
   ) {
-    return preparedChannelHeader(
-      codecs,
+    let headers = PREPARED_COMMAND_HEADERS.get(codecs.serializers);
+    if (headers === undefined) {
+      headers = new Map();
+      PREPARED_COMMAND_HEADERS.set(codecs.serializers, headers);
+    }
+    const key = `${channelName}\0${messageName}\0${contentType}`;
+    const prepared = headers.get(key);
+    if (prepared !== undefined) return prepared;
+    const bytes = encodeChannelHeaderBytes(
       kind,
       channelName,
       messageName,
       contentType,
       correlationId,
       deadline,
+      topic,
       errorCode,
       errorMessage,
+      source,
+      metadata,
       flowId,
       flowOrigin
     );
+    headers.set(key, bytes);
+    return bytes;
   }
-  // The wire has a fixed field order. Measure escaped UTF-8 first, then write
-  // each field once into the only header Buffer: no header object, whole JSON
-  // string, or post-encode byte copy exists on the outbound path.
-  const measure = new ChannelHeaderWriter();
-  writeChannelHeader(
-    measure,
+  return encodeChannelHeaderBytes(
     kind,
     channelName,
     messageName,
@@ -634,96 +634,9 @@ function encodeChannelHeader(
     flowId,
     flowOrigin
   );
-  const result = Buffer.alloc(measure.byteLength);
-  const writer = new ChannelHeaderWriter(result);
-  writeChannelHeader(
-    writer,
-    kind,
-    channelName,
-    messageName,
-    contentType,
-    correlationId,
-    deadline,
-    topic,
-    errorCode,
-    errorMessage,
-    source,
-    metadata,
-    flowId,
-    flowOrigin
-  );
-  return result;
 }
 
-function preparedChannelHeader(
-  codecs: ZLinkChannelEnvelopeCodecRegistry,
-  kind: ZLinkChannelMessageKind,
-  channelName: string,
-  messageName: string,
-  contentType: string,
-  correlationId: string | null,
-  deadline: string | null,
-  errorCode: string | null | undefined,
-  errorMessage: string | null | undefined,
-  flowId: string | undefined,
-  flowOrigin: ZLinkFlowOrigin | undefined
-): Buffer {
-  let channels = preparedChannelHeaders.get(codecs.serializers);
-  if (channels === undefined)
-    preparedChannelHeaders.set(codecs.serializers, (channels = new Map()));
-  let packets = channels.get(channelName);
-  if (packets === undefined) channels.set(channelName, (packets = new Map()));
-  let contentTypes = packets.get(messageName);
-  if (contentTypes === undefined) packets.set(messageName, (contentTypes = new Map()));
-  let kinds = contentTypes.get(contentType);
-  if (kinds === undefined) contentTypes.set(contentType, (kinds = new Map()));
-  let flows = kinds.get(kind);
-  if (flows === undefined) kinds.set(kind, (flows = new Map()));
-  let prepared = flows.get(flowOrigin);
-  if (prepared === undefined) {
-    const bytes = encodeChannelHeader(
-      kind,
-      channelName,
-      messageName,
-      contentType,
-      correlationId === null ? null : PREPARED_CHANNEL_CORRELATION,
-      deadline === null ? null : PREPARED_CHANNEL_DEADLINE,
-      null,
-      errorCode,
-      errorMessage,
-      undefined,
-      EMPTY_APPLICATION_METADATA,
-      flowOrigin === undefined ? undefined : PREPARED_CHANNEL_FLOW,
-      flowOrigin
-    );
-    prepared = {
-      bytes,
-      correlationOffset:
-        bytes.indexOf(CHANNEL_CORRELATION_FIELD) + CHANNEL_CORRELATION_FIELD.length + 1,
-      deadlineOffset: bytes.indexOf(CHANNEL_DEADLINE_FIELD) + CHANNEL_DEADLINE_FIELD.length + 1,
-      flowOffset: bytes.indexOf(CHANNEL_FLOW_FIELD) + CHANNEL_FLOW_FIELD.length + 1
-    };
-    flows.set(flowOrigin, prepared);
-  }
-  if (correlationId === null && flowId === undefined) return prepared.bytes;
-  const bytes = Buffer.allocUnsafe(prepared.bytes.byteLength);
-  prepared.bytes.copy(bytes);
-  if (correlationId !== null)
-    bytes.write(
-      correlationId,
-      prepared.correlationOffset,
-      CHANNEL_CORRELATION_TEXT_LENGTH,
-      'ascii'
-    );
-  if (deadline !== null)
-    bytes.write(deadline, prepared.deadlineOffset, PREPARED_CHANNEL_DEADLINE.length, 'ascii');
-  if (flowId !== undefined)
-    bytes.write(flowId, prepared.flowOffset, PREPARED_CHANNEL_FLOW.length, 'ascii');
-  return bytes;
-}
-
-function writeChannelHeader(
-  writer: ChannelHeaderWriter,
+function encodeChannelHeaderBytes(
   kind: ZLinkChannelMessageKind,
   channelName: string,
   messageName: string,
@@ -737,136 +650,66 @@ function writeChannelHeader(
   metadata: Readonly<Record<string, string>>,
   flowId: string | undefined,
   flowOrigin: ZLinkFlowOrigin | undefined
-): void {
-  writer.append('{"formatMarker":');
-  writer.append(String(ZLINK_CHANNEL_FORMAT_MARKER));
-  writer.append(',"kind":');
-  writer.append(String(kind));
-  writer.append(',"channelName":');
-  writer.string(channelName);
-  writer.append(',"messageName":');
-  writer.string(messageName);
-  writer.append(',"contentType":');
-  writer.string(contentType);
-  writer.append(CHANNEL_CORRELATION_FIELD);
-  writer.nullableString(correlationId);
-  writer.append(CHANNEL_DEADLINE_FIELD);
-  writer.nullableString(deadline);
-  writer.append(',"topic":');
-  writer.nullableString(topic);
-  if (errorCode !== undefined) {
-    writer.append(',"errorCode":');
-    writer.nullableString(errorCode);
+): Buffer {
+  const sortedMetadata =
+    metadata === EMPTY_APPLICATION_METADATA
+      ? EMPTY_PROTOBUF_METADATA
+      : Object.keys(metadata)
+          .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+          .map((key) => ({ key, value: metadata[key]! }));
+  const header = OUTBOUND_CHANNEL_HEADER;
+  header.kind = kind;
+  header.channelName = channelName;
+  header.messageName = messageName;
+  header.contentType = contentType;
+  header.correlationId = correlationId;
+  header.deadline = deadline;
+  header.errorCode = errorCode ?? null;
+  header.errorMessage = errorMessage ?? null;
+  header.flowId = flowId ?? null;
+  header.flowOrigin = flowOrigin === undefined ? null : encodeFlowOrigin(flowOrigin);
+  header.source = source ?? null;
+  header.topic = topic;
+  header.metadata = sortedMetadata;
+  if (sortedMetadata.length !== 0) {
+    const metadataBytes = protobufSize({ metadata: sortedMetadata });
+    if (metadataBytes > SERVICE_WIRE_METADATA_BYTES) {
+      throw new ZLinkConfigurationException(
+        `Channel application metadata exceeds the ${SERVICE_WIRE_METADATA_BYTES}-byte limit.`
+      );
+    }
   }
-  if (errorMessage !== undefined) {
-    writer.append(',"errorMessage":');
-    writer.nullableString(errorMessage);
+  CHANNEL_HEADER_WRITER.reset();
+  try {
+    const encoded = CHANNEL_HEADER_CODEC.encode(header, CHANNEL_HEADER_WRITER).finish();
+    return Buffer.isBuffer(encoded) ? encoded : Buffer.from(encoded);
+  } finally {
+    CHANNEL_HEADER_WRITER.reset();
   }
-  if (source !== undefined) {
-    writer.append(',"source":');
-    writer.nullableString(source);
-  }
-  writer.append(',"metadata":');
-  writeApplicationMetadata(writer, metadata);
-  if (flowId !== undefined) {
-    writer.append(',"flowId":');
-    writer.string(flowId);
-  }
-  if (flowOrigin !== undefined) {
-    writer.append(',"flowOrigin":');
-    writer.append(String(encodeFlowOrigin(flowOrigin)));
-  }
-  writer.append('}');
 }
 
-function writeApplicationMetadata(
-  writer: ChannelHeaderWriter,
-  metadata: Readonly<Record<string, string>>
-): void {
-  writer.append('{');
-  let first = true;
-  for (const name in metadata) {
-    if (!Object.prototype.hasOwnProperty.call(metadata, name)) continue;
-    if (!first) writer.append(',');
-    first = false;
-    writer.string(name);
-    writer.append(':');
-    writer.string(metadata[name]!);
-  }
-  writer.append('}');
-}
+const OUTBOUND_CHANNEL_HEADER: Record<string, unknown> = {
+  kind: 0,
+  channelName: '',
+  messageName: '',
+  contentType: '',
+  correlationId: null,
+  deadline: null,
+  errorCode: null,
+  errorMessage: null,
+  flowId: null,
+  flowOrigin: null,
+  source: null,
+  topic: null,
+  metadata: EMPTY_PROTOBUF_METADATA
+};
 
-class ChannelHeaderWriter {
-  private offset = 0;
-
-  constructor(private readonly output?: Buffer) {}
-
-  get byteLength(): number {
-    return this.offset;
-  }
-
-  append(value: string): void {
-    if (this.output === undefined) {
-      this.offset += Buffer.byteLength(value);
-      return;
-    }
-    this.offset += this.output.write(value, this.offset, 'utf8');
-  }
-
-  nullableString(value: string | null): void {
-    if (value === null) this.append('null');
-    else this.string(value);
-  }
-
-  string(value: string): void {
-    this.append('"');
-    let start = 0;
-    for (let index = 0; index < value.length; index += 1) {
-      const code = value.charCodeAt(index);
-      let escaped: string | undefined;
-      switch (code) {
-        case 0x08:
-          escaped = '\\b';
-          break;
-        case 0x09:
-          escaped = '\\t';
-          break;
-        case 0x0a:
-          escaped = '\\n';
-          break;
-        case 0x0c:
-          escaped = '\\f';
-          break;
-        case 0x0d:
-          escaped = '\\r';
-          break;
-        case 0x22:
-          escaped = '\\"';
-          break;
-        case 0x5c:
-          escaped = '\\\\';
-          break;
-        default:
-          if (code < 0x20) {
-            escaped = `\\u00${code.toString(16).padStart(2, '0')}`;
-          } else if (code >= 0xd800 && code <= 0xdbff) {
-            const next = value.charCodeAt(index + 1);
-            if (next >= 0xdc00 && next <= 0xdfff) {
-              index += 1;
-            } else {
-              escaped = `\\u${code.toString(16)}`;
-            }
-          } else if (code >= 0xdc00 && code <= 0xdfff) {
-            escaped = `\\u${code.toString(16)}`;
-          }
-      }
-      if (escaped === undefined) continue;
-      this.append(value.slice(start, index));
-      this.append(escaped);
-      start = index + 1;
-    }
-    this.append(value.slice(start));
-    this.append('"');
+function protobufSize(value: unknown): number {
+  CHANNEL_HEADER_WRITER.reset();
+  try {
+    return CHANNEL_HEADER_CODEC.encode(value, CHANNEL_HEADER_WRITER).len;
+  } finally {
+    CHANNEL_HEADER_WRITER.reset();
   }
 }
 
@@ -883,14 +726,50 @@ function encodeFlowOrigin(origin: ZLinkFlowOrigin): number {
   }
 }
 
-export function decodeChannelHeader(
-  parts: readonly Message[],
-  flowEnabled = true
-): ZLinkChannelEnvelopeHeader {
-  if (parts.length === 0) {
-    throw new ZLinkConfigurationException('Channel envelope header part is missing.');
+/** Parses the sole channel header wire format; semantic checks follow in Framework validation. */
+export function decodeChannelHeaderRecord(payload: Buffer): Record<string, unknown> {
+  const decoded = decodeChannelHeaderRecordIntoScratch(payload);
+  return {
+    ...decoded,
+    metadata: Array.isArray(decoded.metadata) ? decoded.metadata.slice() : decoded.metadata
+  };
+}
+
+function decodeChannelHeaderRecordIntoScratch(payload: Buffer): Record<string, unknown> {
+  try {
+    const target = CHANNEL_HEADER_TARGET;
+    target.kind = 0;
+    target.channelName = '';
+    target.messageName = '';
+    target.contentType = '';
+    target.correlationId = null;
+    target.deadline = null;
+    target.errorCode = null;
+    target.errorMessage = null;
+    target.flowId = null;
+    target.flowOrigin = null;
+    target.source = null;
+    target.topic = null;
+    target.$unknowns = undefined;
+    const metadata = target.metadata;
+    if (Array.isArray(metadata)) metadata.length = 0;
+    CHANNEL_HEADER_READER.buf = payload;
+    CHANNEL_HEADER_READER.pos = 0;
+    CHANNEL_HEADER_READER.len = payload.length;
+    return CHANNEL_HEADER_CODEC.decode(
+      CHANNEL_HEADER_READER,
+      undefined,
+      undefined,
+      undefined,
+      target
+    ) as Record<string, unknown>;
+  } catch (error) {
+    throw new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.ProtocolError,
+      'Channel envelope header protobuf is malformed.',
+      { cause: error }
+    );
   }
-  return validateChannelHeader(parseChannelHeaderBytes(parts[0].data(), flowEnabled), flowEnabled);
 }
 
 const CHANNEL_JSON_PARSE_OPTIONS = Object.freeze({ rejectPropertyName: isPrototypeKey });
@@ -899,718 +778,32 @@ function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
   return parseFrameworkJsonV1(payload, CHANNEL_JSON_PARSE_OPTIONS, schema);
 }
 
-const CHANNEL_HEADER_FIELD_NAMES = [
-  '',
-  'formatMarker',
-  'kind',
-  'channelName',
-  'messageName',
-  'contentType',
-  'correlationId',
-  'deadline',
-  'topic',
-  'errorCode',
-  'errorMessage',
-  'source',
-  'flowId',
-  'flowOrigin',
-  'metadata'
-] as const;
-const CHANNEL_HEADER_FIELD_COUNT = CHANNEL_HEADER_FIELD_NAMES.length - 1;
-const CHANNEL_HEADER_INVALID_VALUE = Symbol('invalid channel header value');
-const CANONICAL_CHANNEL_HEADER_PREFIX = '{"formatMarker":242,"kind":';
+function isPrototypeKey(key: string): boolean {
+  return key === '__proto__' || key === 'constructor' || key === 'prototype';
+}
 
-function parseChannelHeaderBytes(payload: Buffer, flowEnabled: boolean): unknown {
-  if (startsWithJson(payload, CANONICAL_CHANNEL_HEADER_PREFIX)) {
-    const reader = new CanonicalChannelHeaderReader(
-      payload,
-      CANONICAL_CHANNEL_HEADER_PREFIX.length
-    );
-    const canonical = tryParseCanonicalChannelHeader(reader, flowEnabled);
-    // Canonical ASCII headers need no UTF-8 pass; all other paths are checked
-    // before byte slices are decoded.
-    if (canonical !== undefined && !reader.sawNonAscii) return canonical;
-    if (canonical !== undefined) {
-      if (!isUtf8(payload)) {
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.ProtocolError,
-          'Channel envelope header must contain valid UTF-8.'
-        );
-      }
-      return canonical;
-    }
+export function decodeChannelHeader(
+  parts: readonly Message[],
+  flowEnabled = true
+): ZLinkChannelEnvelopeHeader {
+  if (parts.length === 0) {
+    throw new ZLinkConfigurationException('Channel envelope header part is missing.');
   }
-  if (!isUtf8(payload)) {
+  const decoded = decodeChannelHeaderRecordIntoScratch(parts[0].data());
+  try {
+    return validateChannelHeader(decoded, flowEnabled);
+  } catch (error) {
+    if (
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.ProtocolError
+    ) {
+      throw error;
+    }
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
-      'Channel envelope header must contain valid UTF-8.'
+      error instanceof Error ? error.message : 'Channel envelope header contains invalid values.',
+      error
     );
-  }
-  return new ChannelHeaderJsonReader(payload, flowEnabled).parse();
-}
-
-function startsWithJson(bytes: Buffer, value: string): boolean {
-  if (bytes.length < value.length) return false;
-  for (let index = 0; index < value.length; index += 1) {
-    if (bytes[index] !== value.charCodeAt(index)) return false;
-  }
-  return true;
-}
-
-function tryParseCanonicalChannelHeader(
-  reader: CanonicalChannelHeaderReader,
-  flowEnabled: boolean
-): Record<string, unknown> | undefined {
-  const kind = reader.readSingleDigit();
-  if (kind === undefined || !reader.consume(',"channelName":')) return undefined;
-  const channelName = reader.readString();
-  if (channelName === undefined || !reader.consume(',"messageName":')) return undefined;
-  const messageName = reader.readString();
-  if (messageName === undefined || !reader.consume(',"contentType":')) return undefined;
-  const contentType = reader.readString();
-  if (contentType === undefined || !reader.consume(',"correlationId":')) return undefined;
-  const correlationId = reader.readNullableString();
-  if (correlationId === undefined || !reader.consume(',"deadline":')) return undefined;
-  const deadline = reader.readNullableString();
-  if (deadline === undefined || !reader.consume(',"topic":')) return undefined;
-  const topic = reader.readNullableString();
-  if (topic === undefined) return undefined;
-
-  const header: Record<string, unknown> = {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
-    kind,
-    channelName,
-    messageName,
-    contentType,
-    correlationId: correlationId === NULL_JSON_STRING ? null : correlationId,
-    deadline: deadline === NULL_JSON_STRING ? null : deadline,
-    topic: topic === NULL_JSON_STRING ? null : topic,
-    errorCode: null,
-    errorMessage: null,
-    source: undefined,
-    metadata: undefined,
-    flowId: undefined,
-    flowOrigin: undefined
-  };
-  if (!reader.readOptionalNullableString(CANONICAL_ERROR_CODE, 'errorCode', header))
-    return undefined;
-  if (!reader.readOptionalNullableString(CANONICAL_ERROR_MESSAGE, 'errorMessage', header))
-    return undefined;
-  if (!reader.readOptionalNullableString(CANONICAL_SOURCE, 'source', header)) return undefined;
-  const metadata = reader.readMetadata();
-  if (metadata === undefined) return undefined;
-  // Empty metadata validates to the shared empty record.
-  if (metadata !== NULL_JSON_STRING) header.metadata = metadata;
-  if (!reader.readOptionalString(CANONICAL_FLOW_ID, 'flowId', header, flowEnabled))
-    return undefined;
-  if (!reader.readOptionalSingleDigit(CANONICAL_FLOW_ORIGIN, 'flowOrigin', header))
-    return undefined;
-  return reader.consume('}') && reader.atEnd() ? header : undefined;
-}
-
-const CANONICAL_ERROR_CODE = ',"errorCode":';
-const CANONICAL_ERROR_MESSAGE = ',"errorMessage":';
-const CANONICAL_SOURCE = ',"source":';
-const CANONICAL_FLOW_ID = ',"flowId":';
-const CANONICAL_FLOW_ORIGIN = ',"flowOrigin":';
-
-const NULL_JSON_STRING = Symbol('null JSON string');
-
-class CanonicalChannelHeaderReader {
-  private index = 0;
-  /** A string held a byte outside ASCII, so the caller must still check UTF-8. */
-  sawNonAscii = false;
-
-  constructor(
-    private readonly bytes: Buffer,
-    initialIndex = 0
-  ) {
-    this.index = initialIndex;
-  }
-
-  atEnd(): boolean {
-    return this.index === this.bytes.length;
-  }
-
-  consume(value: string): boolean {
-    if (this.index + value.length > this.bytes.length) return false;
-    for (let offset = 0; offset < value.length; offset += 1) {
-      if (this.bytes[this.index + offset] !== value.charCodeAt(offset)) return false;
-    }
-    this.index += value.length;
-    return true;
-  }
-
-  readSingleDigit(): number | undefined {
-    if (this.index === this.bytes.length) return undefined;
-    const value = this.bytes[this.index];
-    if (value < 0x30 || value > 0x39) return undefined;
-    this.index += 1;
-    return value - 0x30;
-  }
-
-  readString(): string | undefined {
-    if (this.bytes[this.index] !== 0x22) return undefined;
-    const start = this.index;
-    this.index += 1;
-    let hasEscape = false;
-    while (this.index < this.bytes.length) {
-      const value = this.bytes[this.index++]!;
-      if (value === 0x22) {
-        // Without escapes the JSON string is its own bytes; decode them once.
-        return hasEscape
-          ? (JSON.parse(this.bytes.toString('utf8', start, this.index)) as string)
-          : this.bytes.toString(this.sawNonAscii ? 'utf8' : 'latin1', start + 1, this.index - 1);
-      }
-      if (value < 0x20) return undefined;
-      if (value >= 0x80) this.sawNonAscii = true;
-      if (value !== 0x5c) continue;
-      hasEscape = true;
-      if (this.index === this.bytes.length) return undefined;
-      const escaped = this.bytes[this.index++]!;
-      if (escaped === 0x75) {
-        for (let count = 0; count < 4; count += 1) {
-          if (this.index === this.bytes.length) return undefined;
-          const digit = this.bytes[this.index++];
-          if (!isHexDigit(digit)) return undefined;
-        }
-      } else if (
-        escaped !== 0x22 &&
-        escaped !== 0x5c &&
-        escaped !== 0x2f &&
-        escaped !== 0x62 &&
-        escaped !== 0x66 &&
-        escaped !== 0x6e &&
-        escaped !== 0x72 &&
-        escaped !== 0x74
-      ) {
-        return undefined;
-      }
-    }
-    return undefined;
-  }
-
-  readNullableString(): string | symbol | undefined {
-    if (this.consume('null')) return NULL_JSON_STRING;
-    return this.readString();
-  }
-
-  readMetadata(): Record<string, unknown> | symbol | undefined {
-    if (!this.consume(',"metadata":{')) return undefined;
-    if (this.consume('}')) return NULL_JSON_STRING;
-    const metadata: Record<string, unknown> = {};
-    for (;;) {
-      const key = this.readString();
-      if (key === undefined) return undefined;
-      if (Object.prototype.hasOwnProperty.call(metadata, key)) {
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.ProtocolError,
-          'duplicate envelope metadata key'
-        );
-      }
-      if (!this.consume(':')) return undefined;
-      const value = this.readString();
-      if (value === undefined) return undefined;
-      if (key === '__proto__') {
-        Object.defineProperty(metadata, key, {
-          configurable: true,
-          enumerable: true,
-          value,
-          writable: true
-        });
-      } else {
-        metadata[key] = value;
-      }
-      if (this.consume('}')) return metadata;
-      if (!this.consume(',')) return undefined;
-    }
-  }
-
-  readOptionalNullableString(
-    token: string,
-    name: string,
-    target: Record<string, unknown>
-  ): boolean {
-    if (!this.consume(token)) return true;
-    const value = this.readNullableString();
-    if (value === undefined) return false;
-    target[name] = value === NULL_JSON_STRING ? null : value;
-    return true;
-  }
-
-  readOptionalString(
-    token: string,
-    name: string,
-    target: Record<string, unknown>,
-    decode = true
-  ): boolean {
-    if (!this.consume(token)) return true;
-    if (!decode) return this.skipString();
-    const value = this.readString();
-    if (value === undefined) return false;
-    target[name] = value;
-    return true;
-  }
-
-  private skipString(): boolean {
-    if (this.bytes[this.index] !== 0x22) return false;
-    this.index += 1;
-    while (this.index < this.bytes.length) {
-      const value = this.bytes[this.index++]!;
-      if (value === 0x22) return true;
-      if (value < 0x20) return false;
-      if (value >= 0x80) this.sawNonAscii = true;
-      if (value !== 0x5c) continue;
-      if (this.index === this.bytes.length) return false;
-      const escaped = this.bytes[this.index++]!;
-      if (escaped === 0x75) {
-        for (let count = 0; count < 4; count += 1) {
-          if (this.index === this.bytes.length || !isHexDigit(this.bytes[this.index]!))
-            return false;
-          this.index += 1;
-        }
-      } else if (
-        escaped !== 0x22 &&
-        escaped !== 0x5c &&
-        escaped !== 0x2f &&
-        escaped !== 0x62 &&
-        escaped !== 0x66 &&
-        escaped !== 0x6e &&
-        escaped !== 0x72 &&
-        escaped !== 0x74
-      ) {
-        return false;
-      }
-    }
-    return false;
-  }
-
-  readOptionalSingleDigit(token: string, name: string, target: Record<string, unknown>): boolean {
-    if (!this.consume(token)) return true;
-    const value = this.readSingleDigit();
-    if (value === undefined) return false;
-    target[name] = value;
-    return true;
-  }
-}
-
-function isHexDigit(value: number): boolean {
-  return (
-    (value >= 0x30 && value <= 0x39) ||
-    (value >= 0x41 && value <= 0x46) ||
-    (value >= 0x61 && value <= 0x66)
-  );
-}
-
-/** Reads a noncanonical channel header directly from its UTF-8 bytes. */
-class ChannelHeaderJsonReader {
-  private index = 0;
-  private propertyName = '';
-  private stringStart = 0;
-  private stringEnd = 0;
-  private stringHasEscapes = false;
-
-  constructor(
-    private readonly bytes: Buffer,
-    private readonly flowEnabled: boolean
-  ) {}
-
-  parse(): unknown {
-    if (
-      this.bytes.length >= 3 &&
-      this.bytes[0] === 0xef &&
-      this.bytes[1] === 0xbb &&
-      this.bytes[2] === 0xbf
-    ) {
-      throw new SyntaxError('framework-json-v1 does not allow a UTF-8 BOM.');
-    }
-    this.skipWhitespace();
-    if (this.bytes[this.index] !== 0x7b) {
-      this.skipValue();
-      this.skipWhitespace();
-      if (this.index !== this.bytes.length) this.fail('trailing data');
-      return CHANNEL_HEADER_INVALID_VALUE;
-    }
-
-    const header: Record<string, unknown> = {};
-    let seenFields = 0;
-    this.index += 1;
-    this.skipWhitespace();
-    if (this.consumeByte(0x7d)) return this.finish(header);
-
-    for (;;) {
-      const field = this.readPropertyName(true);
-      const propertyName = this.propertyName;
-      this.skipWhitespace();
-      this.expectByte(0x3a, "':' after object property");
-      this.skipWhitespace();
-
-      if (field !== 0) {
-        const bit = 1 << field;
-        if ((seenFields & bit) !== 0) {
-          throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.ProtocolError,
-            'duplicate envelope header field'
-          );
-        }
-        seenFields |= bit;
-        const name = CHANNEL_HEADER_FIELD_NAMES[field]!;
-        if (!this.flowEnabled && (field === 12 || field === 13)) {
-          this.skipValue();
-          header[name] = undefined;
-        } else if (field === 14) {
-          header[name] = this.readMetadata();
-        } else {
-          header[name] = this.readValue(field === 1 || field === 2 || field === 13);
-        }
-      } else {
-        const value = this.readValue();
-        if (propertyName === '__proto__') {
-          Object.defineProperty(header, propertyName, {
-            configurable: true,
-            enumerable: true,
-            value,
-            writable: true
-          });
-        } else {
-          header[propertyName] = value;
-        }
-      }
-
-      this.skipWhitespace();
-      if (this.consumeByte(0x7d)) break;
-      this.expectByte(0x2c, "',' or '}' after object property");
-      this.skipWhitespace();
-    }
-    return this.finish(header);
-  }
-
-  private finish(header: Record<string, unknown>): Record<string, unknown> {
-    this.skipWhitespace();
-    if (this.index !== this.bytes.length) this.fail('trailing data');
-    return header;
-  }
-
-  private readMetadata(): unknown {
-    if (this.bytes[this.index] !== 0x7b) return this.readValue();
-    this.index += 1;
-    this.skipWhitespace();
-    if (this.consumeByte(0x7d)) return undefined;
-    const metadata: Record<string, unknown> = {};
-
-    for (;;) {
-      const key = this.readString();
-      if (Object.prototype.hasOwnProperty.call(metadata, key)) {
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.ProtocolError,
-          'duplicate envelope metadata key'
-        );
-      }
-      this.skipWhitespace();
-      this.expectByte(0x3a, "':' after object property");
-      this.skipWhitespace();
-      const value = this.readValue();
-      if (key === '__proto__') {
-        Object.defineProperty(metadata, key, {
-          configurable: true,
-          enumerable: true,
-          value,
-          writable: true
-        });
-      } else {
-        metadata[key] = value;
-      }
-      this.skipWhitespace();
-      if (this.consumeByte(0x7d)) return metadata;
-      this.expectByte(0x2c, "',' or '}' after object property");
-      this.skipWhitespace();
-    }
-  }
-
-  private readPropertyName(materializeUnknown = false): number {
-    this.scanString();
-    let field = 0;
-    let decoded: string | undefined;
-    if (this.stringHasEscapes) {
-      decoded = this.decodeString();
-      for (let candidate = 1; candidate <= CHANNEL_HEADER_FIELD_COUNT; candidate += 1) {
-        if (CHANNEL_HEADER_FIELD_NAMES[candidate] === decoded) {
-          field = candidate;
-          break;
-        }
-      }
-    } else {
-      for (let candidate = 1; candidate <= CHANNEL_HEADER_FIELD_COUNT; candidate += 1) {
-        if (
-          this.matchesAscii(
-            this.stringStart + 1,
-            this.stringEnd - 1,
-            CHANNEL_HEADER_FIELD_NAMES[candidate]!
-          )
-        ) {
-          field = candidate;
-          break;
-        }
-      }
-    }
-    this.propertyName =
-      field !== 0
-        ? CHANNEL_HEADER_FIELD_NAMES[field]!
-        : (decoded ??
-          (materializeUnknown
-            ? this.bytes.toString('utf8', this.stringStart + 1, this.stringEnd - 1)
-            : ''));
-    return field;
-  }
-
-  private readValue(integerOnly = false): unknown {
-    const value = this.bytes[this.index];
-    if (value === 0x22) return this.readString();
-    if (value === 0x7b) return this.readObject();
-    if (value === 0x5b) return this.readArray();
-    if (value === 0x74) {
-      this.readLiteral('true');
-      return true;
-    }
-    if (value === 0x66) {
-      this.readLiteral('false');
-      return false;
-    }
-    if (value === 0x6e) {
-      this.readLiteral('null');
-      return null;
-    }
-    return this.readNumber(integerOnly);
-  }
-
-  private readObject(): Record<string, unknown> {
-    this.index += 1;
-    this.skipWhitespace();
-    const object: Record<string, unknown> = {};
-    if (this.consumeByte(0x7d)) return object;
-    for (;;) {
-      const key = this.readString();
-      this.skipWhitespace();
-      this.expectByte(0x3a, "':' after object property");
-      this.skipWhitespace();
-      const value = this.readValue();
-      if (key === '__proto__') {
-        Object.defineProperty(object, key, {
-          configurable: true,
-          enumerable: true,
-          value,
-          writable: true
-        });
-      } else {
-        object[key] = value;
-      }
-      this.skipWhitespace();
-      if (this.consumeByte(0x7d)) return object;
-      this.expectByte(0x2c, "',' or '}' after object property");
-      this.skipWhitespace();
-    }
-  }
-
-  private readArray(): unknown[] {
-    this.index += 1;
-    this.skipWhitespace();
-    const array: unknown[] = [];
-    if (this.consumeByte(0x5d)) return array;
-    for (;;) {
-      array.push(this.readValue());
-      this.skipWhitespace();
-      if (this.consumeByte(0x5d)) return array;
-      this.expectByte(0x2c, "',' or ']' after array item");
-      this.skipWhitespace();
-    }
-  }
-
-  private skipValue(): void {
-    const value = this.bytes[this.index];
-    if (value === 0x22) {
-      this.scanString();
-      return;
-    }
-    if (value === 0x7b) return this.skipObject();
-    if (value === 0x5b) return this.skipArray();
-    if (value === 0x74) return this.readLiteral('true');
-    if (value === 0x66) return this.readLiteral('false');
-    if (value === 0x6e) return this.readLiteral('null');
-    this.readNumber();
-  }
-
-  private skipObject(): void {
-    this.index += 1;
-    this.skipWhitespace();
-    if (this.consumeByte(0x7d)) return;
-    for (;;) {
-      this.readPropertyName();
-      this.skipWhitespace();
-      this.expectByte(0x3a, "':' after object property");
-      this.skipWhitespace();
-      this.skipValue();
-      this.skipWhitespace();
-      if (this.consumeByte(0x7d)) return;
-      this.expectByte(0x2c, "',' or '}' after object property");
-      this.skipWhitespace();
-    }
-  }
-
-  private skipArray(): void {
-    this.index += 1;
-    this.skipWhitespace();
-    if (this.consumeByte(0x5d)) return;
-    for (;;) {
-      this.skipValue();
-      this.skipWhitespace();
-      if (this.consumeByte(0x5d)) return;
-      this.expectByte(0x2c, "',' or ']' after array item");
-      this.skipWhitespace();
-    }
-  }
-
-  private readString(): string {
-    this.scanString();
-    return this.decodeString();
-  }
-
-  private scanString(): void {
-    if (this.bytes[this.index] !== 0x22) this.fail('string');
-    this.stringStart = this.index++;
-    this.stringHasEscapes = false;
-    while (this.index < this.bytes.length) {
-      const value = this.bytes[this.index++]!;
-      if (value === 0x22) {
-        this.stringEnd = this.index;
-        return;
-      }
-      if (value < 0x20) this.fail('valid string character');
-      if (value !== 0x5c) continue;
-      this.stringHasEscapes = true;
-      if (this.index === this.bytes.length) this.fail('valid string escape');
-      const escaped = this.bytes[this.index++]!;
-      if (escaped === 0x75) {
-        for (let count = 0; count < 4; count += 1) {
-          if (this.index === this.bytes.length || !isHexDigit(this.bytes[this.index]!))
-            this.fail('four hexadecimal digits after \\u');
-          this.index += 1;
-        }
-      } else if (
-        escaped !== 0x22 &&
-        escaped !== 0x5c &&
-        escaped !== 0x2f &&
-        escaped !== 0x62 &&
-        escaped !== 0x66 &&
-        escaped !== 0x6e &&
-        escaped !== 0x72 &&
-        escaped !== 0x74
-      ) {
-        this.fail('valid string escape');
-      }
-    }
-    this.fail('terminated string');
-  }
-
-  private decodeString(): string {
-    return this.stringHasEscapes
-      ? (JSON.parse(this.bytes.toString('utf8', this.stringStart, this.stringEnd)) as string)
-      : this.bytes.toString('utf8', this.stringStart + 1, this.stringEnd - 1);
-  }
-
-  private readNumber(integerOnly = false): number {
-    const start = this.index;
-    let hasFractionOrExponent = false;
-    if (this.bytes[this.index] === 0x2d) this.index += 1;
-    if (this.bytes[this.index] === 0x30) {
-      this.index += 1;
-    } else if (this.isDigitOneToNine(this.bytes[this.index])) {
-      while (this.isDigit(this.bytes[this.index])) this.index += 1;
-    } else {
-      this.fail('JSON value');
-    }
-    if (this.bytes[this.index] === 0x2e) {
-      hasFractionOrExponent = true;
-      this.index += 1;
-      if (!this.isDigit(this.bytes[this.index])) this.fail('digit after decimal point');
-      while (this.isDigit(this.bytes[this.index])) this.index += 1;
-    }
-    if (this.bytes[this.index] === 0x65 || this.bytes[this.index] === 0x45) {
-      hasFractionOrExponent = true;
-      this.index += 1;
-      if (this.bytes[this.index] === 0x2b || this.bytes[this.index] === 0x2d) this.index += 1;
-      if (!this.isDigit(this.bytes[this.index])) this.fail('digit in exponent');
-      while (this.isDigit(this.bytes[this.index])) this.index += 1;
-    }
-    if (integerOnly && hasFractionOrExponent) {
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.ProtocolError,
-        'Channel envelope integer fields must use an integer literal.'
-      );
-    }
-    if (integerOnly) {
-      const negative = this.bytes[start] === 0x2d;
-      const digitsStart = start + (negative ? 1 : 0);
-      if (this.index - digitsStart <= 3) {
-        let integer = 0;
-        for (let offset = digitsStart; offset < this.index; offset += 1) {
-          integer = integer * 10 + this.bytes[offset]! - 0x30;
-        }
-        return negative ? -integer : integer;
-      }
-    }
-    const number = Number(this.bytes.toString('ascii', start, this.index));
-    if (!Number.isFinite(number)) {
-      throw new TypeError('framework-json-v1 only accepts finite JSON numbers.');
-    }
-    return number;
-  }
-
-  private readLiteral(value: 'true' | 'false' | 'null'): void {
-    for (let offset = 0; offset < value.length; offset += 1) {
-      if (this.bytes[this.index + offset] !== value.charCodeAt(offset)) this.fail(value);
-    }
-    this.index += value.length;
-  }
-
-  private matchesAscii(start: number, end: number, value: string): boolean {
-    if (end - start !== value.length) return false;
-    for (let offset = 0; offset < value.length; offset += 1) {
-      if (this.bytes[start + offset] !== value.charCodeAt(offset)) return false;
-    }
-    return true;
-  }
-
-  private isDigit(value: number | undefined): boolean {
-    return value !== undefined && value >= 0x30 && value <= 0x39;
-  }
-
-  private isDigitOneToNine(value: number | undefined): boolean {
-    return value !== undefined && value >= 0x31 && value <= 0x39;
-  }
-
-  private skipWhitespace(): void {
-    while (
-      this.bytes[this.index] === 0x20 ||
-      this.bytes[this.index] === 0x09 ||
-      this.bytes[this.index] === 0x0a ||
-      this.bytes[this.index] === 0x0d
-    ) {
-      this.index += 1;
-    }
-  }
-
-  private consumeByte(value: number): boolean {
-    if (this.bytes[this.index] !== value) return false;
-    this.index += 1;
-    return true;
-  }
-
-  private expectByte(value: number, expected: string): void {
-    if (!this.consumeByte(value)) this.fail(expected);
-  }
-
-  private fail(expected: string): never {
-    throw new SyntaxError(`framework-json-v1 expected ${expected} at offset ${this.index}.`);
   }
 }
 
@@ -1623,47 +816,77 @@ function schemaForInboundChannelEnvelope(
 
 function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannelEnvelopeHeader {
   if (!isRecord(value)) {
-    throw new ZLinkConfigurationException('Channel envelope header must be a JSON object.');
+    throw new ZLinkConfigurationException('Channel envelope header must be a protobuf message.');
   }
-  const header = value as Record<string, unknown>;
-  if (header.formatMarker !== ZLINK_CHANNEL_FORMAT_MARKER) {
-    throw new ZLinkConfigurationException('Channel envelope format marker is invalid.');
-  }
-  const kind = requireChannelMessageKind(header.kind);
-  const contentType = requireString(header.contentType, 'contentType');
-  if (contentType.trim().length === 0) {
-    throw new ZLinkConfigurationException('Channel envelope contentType must not be empty.');
-  }
-  // Spec 27 §4: flow fields are observation-only. With tracing Off the
-  // processing point neither reads nor validates them; correlation_id below
-  // stays mandatory at every level.
-  const flowId = flowEnabled ? optionalFlowId(header.flowId) : undefined;
-  const flowOrigin = flowEnabled ? optionalFlowOrigin(header.flowOrigin) : undefined;
+  const raw = value as Record<string, unknown>;
+  const kind = requireChannelMessageKind(raw.kind);
+  const contentType = requireString(raw.contentType, 'contentType');
+  const flowId = flowEnabled ? optionalFlowId(raw.flowId) : undefined;
+  const flowOrigin = flowEnabled ? optionalFlowOrigin(raw.flowOrigin) : undefined;
   if ((flowId === undefined) !== (flowOrigin === undefined)) {
     throw new ZLinkConfigurationException(
       'Channel envelope flowId and flowOrigin must both be present or absent.'
     );
   }
-  const correlationId = requireNullableString(header.correlationId, 'correlationId');
-  validateCorrelationForKind(kind, correlationId);
-  requireString(header.channelName, 'channelName');
-  requireString(header.messageName, 'messageName');
-  requireNullableString(header.deadline, 'deadline');
-  requireNullableString(header.topic, 'topic');
-  // Parsing already gives this receive operation an owned object. Validate
-  // and normalize it here instead of allocating a second header per record.
-  header.errorCode =
-    header.errorCode === undefined ? null : requireNullableString(header.errorCode, 'errorCode');
-  header.errorMessage =
-    header.errorMessage === undefined
+  const correlationId =
+    raw.correlationId === undefined
       ? null
-      : requireNullableString(header.errorMessage, 'errorMessage');
-  header.source =
-    header.source === undefined ? undefined : requireNullableString(header.source, 'source');
-  header.metadata = requireApplicationMetadata(header.metadata);
-  header.flowId = flowId;
-  header.flowOrigin = flowOrigin;
-  return header as unknown as ZLinkChannelEnvelopeHeader;
+      : requireNullableString(raw.correlationId, 'correlationId');
+  validateCorrelationForKind(kind, correlationId);
+  const channelName = requireString(raw.channelName, 'channelName');
+  const messageName = requireString(raw.messageName, 'messageName');
+  const deadline =
+    raw.deadline === undefined ? null : requireNullableString(raw.deadline, 'deadline');
+  const topic = raw.topic === undefined ? null : requireNullableString(raw.topic, 'topic');
+  const errorCode =
+    raw.errorCode === undefined ? null : requireNullableString(raw.errorCode, 'errorCode');
+  const errorMessage =
+    raw.errorMessage === undefined ? null : requireNullableString(raw.errorMessage, 'errorMessage');
+  const source = raw.source == null ? undefined : requireString(raw.source, 'source');
+  const metadataEntries = raw.metadata;
+  if (!Array.isArray(metadataEntries)) {
+    throw new ZLinkConfigurationException('Channel application metadata must be repeated entries.');
+  }
+  let checkedMetadata: Readonly<Record<string, string>>;
+  if (metadataEntries.length === 0) {
+    checkedMetadata = EMPTY_APPLICATION_METADATA;
+  } else {
+    const metadata: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const entry of metadataEntries) {
+      if (!isRecord(entry))
+        throw new ZLinkConfigurationException('Channel metadata entry is invalid.');
+      const key = requireString(entry.key, 'metadata.key');
+      const entryValue = requireString(entry.value, `metadata.${key}`);
+      if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+        throw new ZLinkConfigurationException(
+          'Channel application metadata contains a duplicate key.'
+        );
+      }
+      metadata[key] = entryValue;
+    }
+    checkedMetadata = requireApplicationMetadata(metadata);
+    const encodedMetadataLength = protobufSize({ metadata: metadataEntries });
+    if (encodedMetadataLength > SERVICE_WIRE_METADATA_BYTES) {
+      throw new ZLinkConfigurationException(
+        `Channel application metadata exceeds the ${SERVICE_WIRE_METADATA_BYTES}-byte limit.`
+      );
+    }
+  }
+  return {
+    kind,
+    channelName,
+    messageName,
+    contentType,
+    correlationId,
+    deadline,
+    topic,
+    errorCode,
+    errorMessage,
+    source,
+    metadata: checkedMetadata,
+    flowId,
+    flowOrigin
+  };
 }
 
 function correlationIdForOutboundKind(
@@ -1720,6 +943,7 @@ export function isValidChannelCorrelationId(value: string): boolean {
   return (
     value.length >= 1 &&
     value.length <= MAXIMUM_CORRELATION_ID_BYTES &&
+    !value.includes('\0') &&
     !NON_ASCII_CORRELATION_ID.test(value)
   );
 }
@@ -1753,48 +977,36 @@ function applicationMetadataRecord(
   metadata: ReadonlyMap<string, string>
 ): Readonly<Record<string, string>> {
   if (metadata.size === 0) return EMPTY_APPLICATION_METADATA;
-  const record: Record<string, string> = Object.create(null) as Record<string, string>;
+  const record: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const [key, value] of metadata) record[key] = value;
   return validateApplicationMetadata(record);
 }
 
-const INVALID_METADATA_UNICODE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+const INVALID_UNICODE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
 function validateApplicationMetadata(
   metadata: Record<string, unknown>
 ): Readonly<Record<string, string>> {
-  const keys = Object.keys(metadata);
-  if (keys.length === 0) return EMPTY_APPLICATION_METADATA;
-  for (const key of keys) {
+  for (const key of Object.keys(metadata)) {
     const value = requireString(metadata[key], `metadata.${key}`);
     if (
       key.length === 0 ||
       key.includes('\0') ||
       value.includes('\0') ||
-      INVALID_METADATA_UNICODE.test(key) ||
-      INVALID_METADATA_UNICODE.test(value)
+      INVALID_UNICODE.test(key) ||
+      INVALID_UNICODE.test(value)
     ) {
       throw new ZLinkConfigurationException(
         'Channel application metadata keys must be non-empty and keys and values must be valid Unicode without NUL.'
       );
     }
   }
-  const record = metadata as Record<string, string>;
-  const writer = new ChannelHeaderWriter();
-  writeApplicationMetadata(writer, record);
-  if (writer.byteLength > SERVICE_WIRE_METADATA_BYTES) {
-    throw new ZLinkConfigurationException(
-      `Channel application metadata exceeds the ${SERVICE_WIRE_METADATA_BYTES}-byte limit.`
-    );
-  }
-  return Object.freeze(record);
+  return Object.freeze(metadata as Record<string, string>);
 }
 
 function requireApplicationMetadata(value: unknown): Readonly<Record<string, string>> {
-  if (value === undefined) return EMPTY_APPLICATION_METADATA;
   if (!isRecord(value)) {
-    throw new ZLinkConfigurationException('Channel application metadata must be a JSON object.');
+    throw new ZLinkConfigurationException('Channel application metadata must be repeated entries.');
   }
   return validateApplicationMetadata(value);
 }
@@ -1846,20 +1058,19 @@ function requireString(value: unknown, fieldName: string): string {
   if (typeof value !== 'string') {
     throw new ZLinkConfigurationException(`Channel envelope ${fieldName} must be a string.`);
   }
+  if (value.includes('\0') || INVALID_UNICODE.test(value)) {
+    throw new ZLinkConfigurationException(
+      `Channel envelope ${fieldName} must be valid Unicode without NUL.`
+    );
+  }
   return value;
 }
 
 function requireNullableString(value: unknown, fieldName: string): string | null {
-  if (value === null || typeof value === 'string') {
-    return value;
-  }
-  throw new ZLinkConfigurationException(`Channel envelope ${fieldName} must be a string or null.`);
+  if (value === null) return null;
+  return requireString(value, fieldName);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isPrototypeKey(key: string): boolean {
-  return key === '__proto__' || key === 'constructor' || key === 'prototype';
 }

@@ -24,7 +24,6 @@ test('a same-node Session binding is installed once and carried by the relocatio
   const state = new framework.ZLinkActorRuntimeState(actorId);
   state.setNativeActorRef(actorRef);
   state.setLocationGeneration(3n);
-  state.setOwnerLeaseGeneration(5n);
 
   const relay = new ZLinkActorPacketRelay({
     routeTransport: {},
@@ -71,6 +70,7 @@ test('a same-node Session binding is installed once and carried by the relocatio
   const relocation = { high: 7n, low: 9n };
   const seals = [];
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'play-a-owner', leaseGeneration: 5n }),
     routeTransport: {},
     spotManager: () => undefined,
     actorManager: () => ({ getState: () => state }),

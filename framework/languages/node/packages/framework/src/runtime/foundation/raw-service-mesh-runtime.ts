@@ -94,6 +94,7 @@ export type RawServicePumpObserver = (sourceRoutingId: string, byteCount: number
 export interface RawServiceRequestResult {
   readonly terminalResult: number;
   readonly failureCode: number;
+  readonly cause?: unknown;
   readonly payload?: ServiceApplicationPayload;
 }
 
@@ -312,8 +313,7 @@ export class RawServiceMeshRuntime {
       const next = {
         ...this.descriptor,
         advertisedEndpoint: this.resolveAdvertisedEndpoint?.(boundEndpoint) ?? boundEndpoint,
-        descriptorRevision: this.descriptor.descriptorRevision + 1n,
-        state: 'serving' as const
+        descriptorRevision: this.descriptor.descriptorRevision + 1n
       };
       this.topology.publishLocal(next);
       this.descriptor = next;
@@ -495,10 +495,7 @@ export class RawServiceMeshRuntime {
   }
 
   peerLifecycleGeneration(nodeRoutingId: string): bigint | undefined {
-    return (
-      this.expectedPeers.get(nodeRoutingId)?.lifecycleGeneration ??
-      this.topology.admittedPeer(nodeRoutingId)?.descriptor.lifecycleGeneration
-    );
+    return this.expectedPeers.get(nodeRoutingId)?.lifecycleGeneration;
   }
 
   async waitForPeerRoute(
@@ -616,7 +613,7 @@ export class RawServiceMeshRuntime {
     readonly placementWeight?: number;
     readonly channelName?: string;
     readonly channelWeight?: number;
-    readonly state?: 'draining';
+    readonly state?: 'serving' | 'draining';
   }): Promise<void> {
     const current = this.topology.localDescriptor();
     const channels =

@@ -41,6 +41,7 @@ import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamError;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.io.InputStream;
 import java.net.Socket;
@@ -158,6 +159,12 @@ final class StreamSessionTest {
             client.getOutputStream().flush();
             assertErrorReply(client.getInputStream(), 11L, "internal_failure", "public failure");
 
+            client.getOutputStream()
+                    .write(frame(requestHeader(13L, "MustFailFramework"), bytes("bad")));
+            client.getOutputStream().flush();
+            assertErrorReply(
+                    client.getInputStream(), 13L, "unavailable", "application framework failure");
+
             client.getOutputStream().write(frame(requestHeader(12L, "Ping"), bytes("again")));
             client.getOutputStream().flush();
             assertReply(client, 12L, "\"pong\"");
@@ -250,10 +257,7 @@ final class StreamSessionTest {
             throws Exception {
         var entered = new CompletableFuture<Void>();
         var release = new CompletableFuture<Void>();
-        String redisEndpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        org.junit.jupiter.api.Assumptions.assumeTrue(
-                redisEndpoint != null && !redisEndpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String redisEndpoint = ZLinkTestRedis.endpoint();
         GameEntrySpot.disconnectCallback =
                 actor -> {
                     entered.complete(null);
@@ -1083,6 +1087,11 @@ final class StreamSessionTest {
                 ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
             if ("MustFail".equals(dispatch.packetName())) {
                 throw new IllegalStateException("public failure");
+            }
+            if ("MustFailFramework".equals(dispatch.packetName())) {
+                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "application framework failure");
             }
             recovered.set(true);
             context.client().reply("pong").submit();

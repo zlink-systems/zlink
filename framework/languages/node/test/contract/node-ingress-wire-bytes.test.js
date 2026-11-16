@@ -11,7 +11,7 @@ const { runWithFlow } = require('../../packages/framework/dist/runtime/diagnosti
 const correlation = '00112233445566778899aabbccddeeff';
 const flow = { flowId: '01992176-0000-7000-8000-000000000001', flowOrigin: 'Application' };
 const deadline = Date.parse('2026-09-10T00:00:00.000Z');
-const requestHeader = '{"formatMarker":242,"kind":1,"channelName":"echo","messageName":"Echo","contentType":"application/octet-stream","correlationId":"00112233445566778899aabbccddeeff","deadline":"2026-09-10T00:00:00.000Z","topic":null,"errorCode":null,"errorMessage":null,"metadata":{}}';
+const requestHeader = Buffer.from('080112046563686f1a044563686f22186170706c69636174696f6e2f6f637465742d73747265616d2a2030303131323233333434353536363737383839396161626263636464656566663218323032362d30392d31305430303a30303a30302e3030305a', 'hex');
 
 function bytes(part) {
   return typeof part === 'string' ? Buffer.from(part) : Buffer.isBuffer(part) ? part : part.data();
@@ -115,7 +115,7 @@ test('ingress wire golden: channel request header ordering and binary body with 
   const parts = envelope.encodeChannelEnvelopePartsAtDeadline(1, 'echo', 'Echo', body, deadline, undefined, undefined, correlation, false);
   try {
     assert.equal(parts.length, 2);
-    assert.deepEqual(bytes(parts[0]), Buffer.from(requestHeader));
+    assert.deepEqual(bytes(parts[0]), requestHeader);
     assert.deepEqual(bytes(parts[1]), body);
     const header = envelope.decodeChannelHeader(messageParts(parts), false);
     assert.equal(header.correlationId, correlation);
@@ -133,16 +133,16 @@ test('ingress wire golden: traced request, reply, error, and metadata retain the
   let reply;
   let error;
   try {
-    const expectedRequest = '{"formatMarker":242,"kind":1,"channelName":"echo","messageName":"Echo","contentType":"application/octet-stream","correlationId":"00112233445566778899aabbccddeeff","deadline":"2026-09-10T00:00:00.000Z","topic":null,"errorCode":null,"errorMessage":null,"metadata":{"trace":"가"},"flowId":"01992176-0000-7000-8000-000000000001","flowOrigin":3}';
-    assert.deepEqual(bytes(parts[0]), Buffer.from(expectedRequest));
+    const expectedRequest = Buffer.from('080112046563686f1a044563686f22186170706c69636174696f6e2f6f637465742d73747265616d2a2030303131323233333434353536363737383839396161626263636464656566663218323032362d30392d31305430303a30303a30302e3030305a4a2430313939323137362d303030302d373030302d383030302d30303030303030303030303150036a0c0a0574726163651203eab080', 'hex');
+    assert.deepEqual(bytes(parts[0]), expectedRequest);
     const header = envelope.decodeChannelHeader(messageParts(parts));
     assert.equal(header.flowOrigin, 'Application');
     assert.equal(header.metadata.trace, '가');
     reply = envelope.encodeChannelReplyParts(header, Buffer.from('80ff00', 'hex'));
-    assert.deepEqual(bytes(reply[0]), Buffer.from('{"formatMarker":242,"kind":2,"channelName":"echo","messageName":"Echo","contentType":"application/octet-stream","correlationId":"00112233445566778899aabbccddeeff","deadline":null,"topic":null,"metadata":{},"flowId":"01992176-0000-7000-8000-000000000001","flowOrigin":3}'));
+    assert.deepEqual(bytes(reply[0]), Buffer.from('080212046563686f1a044563686f22186170706c69636174696f6e2f6f637465742d73747265616d2a2030303131323233333434353536363737383839396161626263636464656566664a2430313939323137362d303030302d373030302d383030302d3030303030303030303030315003', 'hex'));
     assert.deepEqual(bytes(reply[1]), Buffer.from('80ff00', 'hex'));
     error = envelope.encodeChannelErrorReplyParts(header, new Error('bad "value"'));
-    assert.deepEqual(bytes(error[0]), Buffer.from('{"formatMarker":242,"kind":5,"channelName":"echo","messageName":"Echo","contentType":"application/json","correlationId":"00112233445566778899aabbccddeeff","deadline":null,"topic":null,"errorCode":"internal_failure","errorMessage":"bad \\"value\\"","metadata":{},"flowId":"01992176-0000-7000-8000-000000000001","flowOrigin":3}'));
+    assert.deepEqual(bytes(error[0]), Buffer.from('080512046563686f1a044563686f22106170706c69636174696f6e2f6a736f6e2a2030303131323233333434353536363737383839396161626263636464656566663a10696e7465726e616c5f6661696c757265420b626164202276616c7565224a2430313939323137362d303030302d373030302d383030302d3030303030303030303030315003', 'hex'));
     assert.deepEqual(bytes(error[1]), Buffer.from('null'));
   } finally {
     envelope.closeMessages(parts);

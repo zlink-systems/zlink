@@ -28,6 +28,10 @@ internal static class ZLinkMeshMetadataCodec
     internal const int MaxEncodedSize = 1024;
 
     internal static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    internal static readonly IComparer<string> Utf8ByteComparer = Comparer<string>.Create(
+        static (left, right) =>
+            StrictUtf8.GetBytes(left).AsSpan().SequenceCompareTo(StrictUtf8.GetBytes(right))
+    );
 
     private const byte Version = 1;
     private const int MaxEntries = 255;

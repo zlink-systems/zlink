@@ -96,7 +96,7 @@ for (const transport of ['mesh', 'no-bind']) {
         registry: {},
         resolveActor: () => ({ context: new DefaultZLinkActorContext(state) }),
         membership: scenario === 'followed' ? {
-          resolveOwner: () => ({ actorRef: { actorId: 'actor' }, spotId: 'target' }),
+          resolveOwner: () => ({ nativeActorRef: { actorId: 'actor', generation: 1n, nodeRid: 'node-a' }, meshName: 'mesh', spotId: 'target' }),
           dispatchToOwner: async () => {
             forwarded++;
             return framework.ZLinkMessage.fromEncoded(framework.ZLinkEncodedPayload.fromOwned(Buffer.alloc(0)));

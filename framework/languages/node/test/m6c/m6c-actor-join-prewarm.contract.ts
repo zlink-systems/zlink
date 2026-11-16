@@ -414,6 +414,18 @@ function fallbackRef(objectGeneration = OBJECT_GENERATION): ActorRef {
   };
 }
 
+function actorDispatchOwner(actorRef: ActorRef, spotId: string) {
+  return {
+    nativeActorRef: {
+      actorId: actorRef.actorId,
+      generation: actorRef.objectGeneration,
+      nodeRid: actorRef.nodeRid
+    },
+    meshName: actorRef.meshName,
+    spotId
+  };
+}
+
 function admission(transferId: string, objectGeneration = OBJECT_GENERATION) {
   return {
     actorId: ACTOR_ID,
@@ -641,7 +653,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
     resolveActor: () => (actorReady ? ({ context: { actorId: ACTOR_ID } } as never) : undefined),
     onDisconnectActor: async () => undefined,
     membership: {
-      resolveOwner: () => (actorReady ? { actorRef: fallbackRef(), spotId: 'current-target' } : {}),
+      resolveOwner: () => (actorReady ? actorDispatchOwner(fallbackRef(), 'current-target') : {}),
       dispatchToOwner: async (_spotId, delivery) => {
         delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
         return 'ok';
@@ -726,7 +738,7 @@ test('command 28 registers prewarm before Store validation so early Send and Req
     resolveActor: () => (actorReady ? ({ context: { actorId: ACTOR_ID } } as never) : undefined),
     onDisconnectActor: async () => undefined,
     membership: {
-      resolveOwner: () => (actorReady ? { actorRef: fallbackRef(), spotId: 'current-target' } : {}),
+      resolveOwner: () => (actorReady ? actorDispatchOwner(fallbackRef(), 'current-target') : {}),
       dispatchToOwner: async (_spotId, delivery) => {
         delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
         return 'ok';
@@ -903,7 +915,7 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
     resolveActor: () => (actorReady ? ({ context: { actorId: ACTOR_ID } } as never) : undefined),
     onDisconnectActor: async () => undefined,
     membership: {
-      resolveOwner: () => (actorReady ? { actorRef: fallbackRef(), spotId: 'current-target' } : {}),
+      resolveOwner: () => (actorReady ? actorDispatchOwner(fallbackRef(), 'current-target') : {}),
       dispatchToOwner: async (_spotId, delivery) => {
         delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
         return 'ok';
@@ -1100,7 +1112,7 @@ test('disabling the ingress prewarm consult reproduces the pre-fix silent drop',
     resolveActor: () => (actorReady ? ({ context: { actorId: ACTOR_ID } } as never) : undefined),
     onDisconnectActor: async () => undefined,
     membership: {
-      resolveOwner: () => (actorReady ? { actorRef: fallbackRef(), spotId: 'current-target' } : {}),
+      resolveOwner: () => (actorReady ? actorDispatchOwner(fallbackRef(), 'current-target') : {}),
       dispatchToOwner: async (_spotId, delivery) => {
         delivered.push(Buffer.from(delivery.parts[1].data()).toString('utf8'));
         return 'ok';

@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
@@ -415,7 +416,8 @@ final class ZLinkChannelMessageDispatcherTest {
                 new systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage(
                         Optional.empty(),
                         "updates",
-                        List.of(Message.from("Publish"), Message.from(value))));
+                        messageParts(
+                                ZLinkChannelEnvelope.KIND_PUBLISH, "orders", "Publish", value)));
     }
 
     public static final class ProbeSubscriber implements AutoCloseable {
@@ -494,9 +496,11 @@ final class ZLinkChannelMessageDispatcherTest {
                                 Optional.of(RoutingId.from("client")),
                                 Optional.empty(),
                                 Optional.of(7L),
-                                List.of(
-                                        Message.from("Request".getBytes(StandardCharsets.UTF_8)),
-                                        Message.from("first".getBytes(StandardCharsets.UTF_8))),
+                                messageParts(
+                                        ZLinkChannelEnvelope.KIND_REQUEST,
+                                        "orders",
+                                        "Request",
+                                        "first"),
                                 parts -> rejected.complete(ZLinkFrameworkErrorReply.kind(parts)),
                                 () -> {});
                 if (route) {
@@ -736,9 +740,13 @@ final class ZLinkChannelMessageDispatcherTest {
                         Optional.of(RoutingId.from("client")),
                         Optional.empty(),
                         reply == null ? Optional.empty() : Optional.of(7L),
-                        List.of(
-                                Message.from(packet.getBytes(StandardCharsets.UTF_8)),
-                                Message.from(body.getBytes(StandardCharsets.UTF_8))),
+                        messageParts(
+                                reply == null
+                                        ? ZLinkChannelEnvelope.KIND_COMMAND
+                                        : ZLinkChannelEnvelope.KIND_REQUEST,
+                                channel,
+                                packet,
+                                body),
                         reply == null
                                 ? null
                                 : parts -> {
@@ -865,7 +873,7 @@ final class ZLinkChannelMessageDispatcherTest {
                             invoker,
                             new ZLinkChannelDispatchReporter(errors, null),
                             errors.flow());
-            ZLinkBackendReceived received = receivedWithFailingReply();
+            ZLinkBackendReceived received = receivedWithFailingReply("orders");
 
             dispatcher.dispatchRequest("orders", null, received);
 
@@ -915,7 +923,7 @@ final class ZLinkChannelMessageDispatcherTest {
                             errors.flow(),
                             null,
                             ignored -> null);
-            ZLinkBackendReceived received = receivedWithFailingReply();
+            ZLinkBackendReceived received = receivedWithFailingReply("routes");
 
             dispatcher.dispatch("routes", null, received);
 
@@ -960,7 +968,7 @@ final class ZLinkChannelMessageDispatcherTest {
                             null,
                             ignored -> null);
 
-            dispatcher.dispatch("routes", null, receivedWithFailingReply());
+            dispatcher.dispatch("routes", null, receivedWithFailingReply("routes"));
 
             assertReplyPathMissingWithoutReplied(traces, dispatchError);
         } finally {
@@ -985,19 +993,31 @@ final class ZLinkChannelMessageDispatcherTest {
                 filters);
     }
 
-    private static ZLinkBackendReceived receivedWithFailingReply() {
+    private static ZLinkBackendReceived receivedWithFailingReply(String channel) {
         return new ZLinkBackendReceived(
                 ZLinkBackendRequestResult.OK,
                 Optional.of(RoutingId.from("client")),
                 Optional.empty(),
                 Optional.of(7L),
-                List.of(
-                        Message.from("Request".getBytes(StandardCharsets.UTF_8)),
-                        Message.from("request".getBytes(StandardCharsets.UTF_8))),
+                messageParts(ZLinkChannelEnvelope.KIND_REQUEST, channel, "Request", "request"),
                 ignored -> {
                     throw new IllegalStateException("reply path closed");
                 },
                 () -> {});
+    }
+
+    private static List<Message> messageParts(
+            int kind, String channel, String packet, String body) {
+        return ZLinkChannelEnvelope.encode(
+                ZLinkChannelEnvelope.create(
+                        kind,
+                        channel,
+                        packet,
+                        ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                        null,
+                        Map.of(),
+                        null),
+                Message.from(body));
     }
 
     private static Handler traceHandler(

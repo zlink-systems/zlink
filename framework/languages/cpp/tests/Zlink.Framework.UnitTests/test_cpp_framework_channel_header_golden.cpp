@@ -1,0 +1,104 @@
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+
+#include "runtime/messaging/envelope_codec.hpp"
+
+#include <cassert>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <string>
+#include <vector>
+
+namespace
+{
+using json = nlohmann::json;
+using zlink::framework::runtime::messaging::envelope_codec_t;
+using zlink::framework::runtime::messaging::envelope_header_t;
+using zlink::framework::runtime::messaging::message_kind_t;
+
+std::string from_hex (const std::string &hex)
+{
+    std::string bytes;
+    bytes.reserve (hex.size () / 2);
+    for (std::size_t i = 0; i < hex.size (); i += 2)
+        bytes.push_back (static_cast<char> (std::stoul (hex.substr (i, 2), nullptr, 16)));
+    return bytes;
+}
+
+envelope_header_t expected_header (const json &value)
+{
+    envelope_header_t header;
+    header.kind = static_cast<message_kind_t> (value.at ("kind").get<int> ());
+    header.channel_name = value.at ("channel_name").get<std::string> ();
+    header.message_name = value.at ("message_name").get<std::string> ();
+    header.content_type = value.at ("content_type").get<std::string> ();
+    if (value.contains ("correlation_id"))
+        header.correlation_id = value.at ("correlation_id").get<std::string> ();
+    if (value.contains ("deadline"))
+        header.deadline = value.at ("deadline").get<std::string> ();
+    for (const auto *name : {"error_code", "error_message", "flow_id", "source", "topic"})
+        if (value.contains (name))
+            value.at (name).get_to (*([&] () -> std::optional<std::string> * {
+                if (std::string (name) == "error_code")
+                    return &header.error_code;
+                if (std::string (name) == "error_message")
+                    return &header.error_message;
+                if (std::string (name) == "flow_id")
+                    return &header.flow_id;
+                if (std::string (name) == "source")
+                    return &header.source;
+                return &header.topic;
+            }) ());
+    if (value.contains ("flow_origin"))
+        header.flow_origin =
+          static_cast<zlink::framework::flow_origin_t> (value.at ("flow_origin").get<int> ());
+    if (value.contains ("metadata"))
+        for (const auto &entry : value.at ("metadata"))
+            header.metadata.emplace (entry.at (0).get<std::string> (),
+                                     entry.at (1).get<std::string> ());
+    return header;
+}
+
+bool same_header (const envelope_header_t &left, const envelope_header_t &right)
+{
+    return left.kind == right.kind && left.channel_name == right.channel_name
+           && left.message_name == right.message_name && left.content_type == right.content_type
+           && left.correlation_id == right.correlation_id && left.deadline == right.deadline
+           && left.error_code == right.error_code && left.error_message == right.error_message
+           && left.flow_id == right.flow_id && left.flow_origin == right.flow_origin
+           && left.source == right.source && left.topic == right.topic
+           && left.metadata == right.metadata;
+}
+
+} // namespace
+
+int main ()
+{
+    std::ifstream input (ZLINK_CHANNEL_HEADER_GOLDEN_PATH);
+    assert (input.good ());
+    const auto golden = json::parse (input);
+    envelope_codec_t codec;
+    for (const auto &fixture : golden.at ("valid")) {
+        const auto expected = expected_header (fixture.at ("header"));
+        const auto bytes = from_hex (fixture.at ("hex").get<std::string> ());
+        const auto decoded = codec.decode_header (std::span<const std::byte> (
+          reinterpret_cast<const std::byte *> (bytes.data ()), bytes.size ()));
+        assert (decoded && same_header (decoded.value (), expected));
+        const auto encoded = codec.encode_header (expected).bytes ();
+        const std::string encoded_bytes (reinterpret_cast<const char *> (encoded.data ()),
+                                         encoded.size ());
+        if (encoded_bytes != bytes)
+            std::cerr << "encode mismatch " << fixture.at ("name") << ": " << encoded_bytes.size ()
+                      << " bytes, expected " << bytes.size () << " bytes\n";
+        assert (encoded_bytes == bytes);
+    }
+    for (const auto &fixture : golden.at ("reject")) {
+        const auto bytes = from_hex (fixture.at ("hex").get<std::string> ());
+        const auto decoded = codec.decode_header (std::span<const std::byte> (
+          reinterpret_cast<const std::byte *> (bytes.data ()), bytes.size ()));
+        assert (!decoded
+                && decoded.error_kind ()
+                     == zlink::framework::framework_error_kind_t::protocol_error);
+    }
+}

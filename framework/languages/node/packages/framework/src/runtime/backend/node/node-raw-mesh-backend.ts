@@ -418,12 +418,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requests = requests;
   }
 
-  start(): void {
+  start(serviceState: 'preparing' | 'serving' = 'serving'): void {
     if (this.runtime !== undefined) return;
     if (this.closed) throw new Error('MeshNode is closed.');
     if (this.bindEndpoint === undefined)
       throw new Error('MeshNode bind endpoint is not configured.');
-    const descriptor = this.createDescriptor();
+    const descriptor = { ...this.createDescriptor(), state: serviceState };
     const runtime = new RawServiceMeshRuntime({
       requests: this.requests,
       onPendingOperationsChanged: this.onPendingOperationsChanged,
@@ -522,6 +522,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   async publishDraining(): Promise<void> {
     for (const name of this.channels.keys()) this.channels.set(name, 0);
     await this.requireRuntime().updateLocalDescriptor({ state: 'draining' });
+  }
+
+  async markServiceReady(): Promise<void> {
+    const runtime = this.requireRuntime();
+    if (runtime.topology.localDescriptor().state === 'serving') return;
+    await runtime.updateLocalDescriptor({ state: 'serving' });
   }
 
   async close(): Promise<void> {
@@ -779,6 +785,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     frames: readonly Uint8Array[],
     options?: {
       readonly timeoutMs?: number;
+      readonly targetNodeGeneration?: bigint;
       readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
@@ -796,7 +803,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         pending,
         'relocation control',
         options.signal,
-        options.onSubmitted
+        options.onSubmitted,
+        undefined,
+        options.targetNodeGeneration
       );
     }
     const completed = (reply: readonly Buffer[]) => {
@@ -812,7 +821,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       pending,
       'relocation control',
       options?.signal,
-      options?.onSubmitted
+      options?.onSubmitted,
+      undefined,
+      options?.targetNodeGeneration
     ).then(completed, failed);
     return pending.promise as Promise<readonly Uint8Array[]>;
   }
@@ -2560,6 +2571,7 @@ function completionRecord(
     kindData: 'kindData' in result ? (result.kindData ?? null) : null,
     terminalResult: result.terminalResult,
     failureErrno: result.failureCode,
+    ...('cause' in result && result.cause !== undefined ? { cause: result.cause } : {}),
     ...('failureMessage' in result && result.failureMessage !== undefined
       ? { failureMessage: result.failureMessage }
       : {}),
@@ -2934,7 +2946,8 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
   }
   return {
     terminalResult: RequestResult.InternalError,
-    failureCode: ServiceWireFrameworkErrorCode.requestFailed
+    failureCode: ServiceWireFrameworkErrorCode.requestFailed,
+    cause: failure
   };
 }
 

@@ -396,38 +396,57 @@ Add layers only to separate rules from external technology. If the game rules ar
 - Do not add an application service outside Spots and Actors; it would create a second state owner.
 - The HTTP lobby is stateless, so the usual hexagonal layout is fine there. Its ports are still defined per capability.
 
-### 10.7 Sessions and Login
+### 10.7 Role Split — Start Small, Stay Scalable
+
+Start small, but split roles so the game can scale out from the beginning. ZLink is built for this, so the split structure does not cost more to develop, and running the roles as separate processes on the same machine does not cost more hardware or operations.
+
+| Role | What it holds | How it scales |
+|---|---|---|
+| Game node process | Lobby and room (table) Spots, player Actors | Scale out by adding only these processes |
+| Shared node process | Only Instance Spots for values that are single for the whole game: matchmaking (choosing a room, filling seats), ownership of game-wide news and accumulated values | Start it on the same machine as a game node. With two or more game machines, run one per machine for fault tolerance |
+
+- Split matchmaking structurally even when it starts on one server (an Instance Spot on the shared node).
+- Game nodes do not register the factories of shared Instance Spots. Which node holds such a Spot is placement configuration: which node registers the factory. Code sends and requests by Spot ID only, independent of placement.
+- Do not keep values shared by many players or rooms in framework singletons or global maps guarded by locks (synchronized, Mutex), and do not paper over them with Redis distributed locks. Game-wide values belong to an Instance Spot, room values to the room Spot, player values to the player Actor (10.2). Common mistake: node-wide objects with locks in seven places, most of them correct only under the assumption of a single node.
+- Keep in a shared Spot only values that can be recovered from room resends or read from the database at startup, so the game continues when the shared node restarts.
+- When measuring capacity, report the total cores of the two processes on the same machine, and CPU and entry-latency p99 per process.
+
+### 10.8 Sessions and Login
 
 - Handle one player's logins in one order (that player's Actor or a per-player queue). Do not put an await between "check" and "register" on a shared map outside an Actor. Two simultaneous first logins both bind and break duplicate-login protection.
 - A player's Actor exists in exactly one place in the whole mesh. A duplicate login (the same Actor in two places) is a defect in the Framework or in login handling; fix its cause. Re-syncing the balance from the database before a game starts is only a stopgap until that fix.
+- The player's Actor decides the order between reconnecting and cleaning up a finished player. A login notifies the Actor before binding (marked as connecting in the Actor's turn), binds after the reply, and notifies again after binding. Cleanup is refused in the Actor's turn while the player is connecting or connected. If the Actor is notified only after binding, cleanup can arrive first in between.
 - If the login reply has a game to return to (resume), go to that game, not the lobby.
 - Clean up only with the ActorRef found during cleanup, inside that player's order. An ActorRef's generation tells creation incarnations apart and carries no binding.
+- When a login retry creates the Actor again, bind with the ActorRef the last attempt returned, not the one the first attempt returned. The first ref names the previous incarnation, and a session bound to it is attached to an Actor that no longer exists.
 
-### 10.8 Handlers and Execution Order
+### 10.9 Handlers and Execution Order
 
 - Do not block in handlers or HTTP threads. Do not do other work while holding a transaction open (blocking bridge calls, idle in transaction).
 - Do not await your own Spot's or Actor's lifecycle operations (close, destroy) inside a handler. They wait on the same execution order and stall.
 - Do not send a request to another Actor or Spot and await its reply inside a turn. If the other side sends a request back, both wait until timeout, and other players' requests to the same Spot are blocked meanwhile. Send state notifications with send (no reply awaited) and let the state owner decide.
+- Do not rebuild request on top of send. A home-made correlation ID and reply table that holds back the next step brings the same wait back, and a waiter whose only exits are the reply or a disconnect never ends when the reply is lost. Only replies that must hold the game back (settlement, admission) are awaited; everything else is send only. A wait you keep needs its own end condition.
 - Propagating a versioned value such as a balance needs only send. If the other Actor does not exist, do not create it; it reads the database when it is next created.
 - The Spot class a handler targets must be exactly the actual Spot class. A handler targeting a base class does not receive messages for a derived Spot.
 - Tell acceptance replies from completion notices apart. An OK reply does not mean the work that starts afterwards has finished.
 - Do not bump the revision of public state with a private acknowledgement message (such as READY). Other participants' READY messages are then rejected with a stale revision.
 
-### 10.9 How to Use ZLink
+### 10.10 How to Use ZLink
 
 - The Framework waits for remote request connections to become ready. Do not add sleeps, retries or longer timeouts in game code.
 - Do not paper over Framework defects in application code. Build a minimal reproduction that uses only the public API and file a ZLink issue.
 - One composition root decides startup order: ZLink first, application second. Otherwise the application stops after the runtime on shutdown.
+- On shutdown, close database connections only after the ZLink runtime has stopped, so Spot cleanup and the last round settlement still have a database. Do not set the shutdown-phase deadline shorter than the ZLink drain, and route outside database entry points (HTTP, batch) through one place that is closed on shutdown.
 - Before comparing versions, check the Framework and Core versions actually loaded.
 - Location Store keys use NUL as the separator, which looks like a space in logs. Do not build keys as strings yourself and compare them.
 
-### 10.10 Design and Testing Habits
+### 10.11 Design and Testing Habits
 
 - One decision, one place that decides it. Before adding a decision, find the place that already makes it. When several places decide the same thing (such as choosing the dealer) differently, results diverge from round to round.
 - Observation has one source. Do not mix query replies and notifications to judge state.
 - Take test expectations from the spec, not from the implementation. Check random outcomes exactly in unit tests with fixed inputs.
 
-### 10.11 Checklist — Before Merging Game Node Code
+### 10.12 Checklist — Before Merging Game Node Code
 
 - [ ] No database reads while handling a request
 - [ ] One database write transaction per round (per transaction)
@@ -443,7 +462,13 @@ Add layers only to separate rules from external technology. If the game rules ar
 - [ ] Stateful Actors use the state-preserving relocation policy and have a save/restore test with every field filled
 - [ ] No per-player remote requests on Spot entry
 - [ ] No blocking waits, sleeps or retries in handlers
+- [ ] No home-made request (correlation ID and reply table) on top of send, and every kept wait has an end condition
+- [ ] Database connections close after the ZLink runtime stops
+- [ ] A login retry binds the ActorRef from the last attempt
 - [ ] Money and reward notices are sent after the commit
+- [ ] Values single for the whole game (such as matchmaking) live in Instance Spots on the shared node, and game nodes do not register those factories
+- [ ] Shared values are not guarded by singletons, global maps or distributed locks
+- [ ] Shared-Spot values are recoverable from room resends or a database read at startup
 - [ ] Game rules are tested without ZLink or a database; the database is reached through capability ports, with no generic CRUD repository
 
 ## 11. Related Documents

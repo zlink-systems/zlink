@@ -1,5 +1,6 @@
 import { actorMessageFollowContext } from '../actors/actor-message-follow-context';
 import type { ActorRef, RoutingId, ZLinkActor } from '../../contracts';
+import type { ZLinkBackendActorRef } from '../backend/contracts';
 import { routingIdsEqual } from '../routing-id';
 import type { Message } from '../../contracts/Common/Message';
 import type {
@@ -31,10 +32,17 @@ export type ZLinkRouteToActorJoinPrewarm = (
   }
 ) => 'parked' | 'not-found';
 
-export interface ZLinkActorDispatchOwner {
-  readonly actorRef?: ActorRef;
-  readonly spotId?: RoutingId;
-}
+export type ZLinkActorDispatchOwner =
+  | {
+      readonly nativeActorRef?: undefined;
+      readonly meshName?: undefined;
+      readonly spotId?: undefined;
+    }
+  | {
+      readonly nativeActorRef: ZLinkBackendActorRef;
+      readonly meshName: string;
+      readonly spotId?: RoutingId;
+    };
 
 export interface ZLinkActorIngressMembership {
   readonly resolveOwner?: (actorId: string) => ZLinkActorDispatchOwner;
@@ -74,7 +82,7 @@ export function resolveActorIngress(
   if (handoff !== undefined) return { kind: 'follow', terminal: handoff };
   const membership = options.membership;
   const owner = membership?.resolveOwner?.(delivery.actorId);
-  if (owner?.actorRef !== undefined && !routingIdsEqual(owner.spotId, options.spotId)) {
+  if (owner?.nativeActorRef !== undefined && !routingIdsEqual(owner.spotId, options.spotId)) {
     if (membership?.dispatchToOwner === undefined) {
       throw new Error('Actor ingress requires the current membership dispatch port.');
     }
@@ -83,7 +91,7 @@ export function resolveActorIngress(
     return { kind: 'follow', terminal: membership.dispatchToOwner(owner.spotId, delivery) };
   }
   const actor =
-    membership?.resolveOwner === undefined || owner?.actorRef !== undefined
+    membership?.resolveOwner === undefined || owner?.nativeActorRef !== undefined
       ? options.resolveActor(delivery.actorId)
       : undefined;
   if (actor !== undefined) return { kind: 'local', actor };

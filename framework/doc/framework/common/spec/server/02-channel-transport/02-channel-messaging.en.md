@@ -662,8 +662,8 @@ The precise full signature is defined by
 | The host isn't accepting new submits. | Fails with that language's shutdown error. |
 
 <a id="reply-route-remains"></a>A reply route remains when the received message is a request with a reply token,
-the envelope header is an object that satisfies the
-[header structure rules](03-client-server-channel.en.md#envelope-header-structure), and `correlationId` is a string conforming to
+the envelope header [parses as a `ChannelHeader`](03-client-server-channel.en.md#envelope-header-grammar), and
+`correlation_id` is a string conforming to
 [Request Correlation and Business Flow Identification §3](../06-observability/04-flow-correlation.en.md#3-format-and-ownership).
 If another header field is invalid in that case, the request completes with an error reply. If this condition
 is not met, no reply is built and the failure is recorded once in runtime observability information.
@@ -754,7 +754,7 @@ Metadata's public contract is as follows.
 | Item | Contract |
 |---|---|
 | Key and value | UTF-8 and contain no NUL. A key is not empty. |
-| Total size | At most 1024 bytes, including encoded key, value, and structural overhead. |
+| Total size | At most 1024 bytes, including encoded key, value, and structural overhead. [ClientServer §5.3](03-client-server-channel.en.md#53-application-record-contract) defines the encoding. |
 | Setting the same key multiple times | The last value is sent. |
 | Reading in a handler | Provided as an unchangeable snapshot; the application copies it to keep it after the handler turn ends. |
 | Malformed metadata | Treated as a protocol error without running the handler. |

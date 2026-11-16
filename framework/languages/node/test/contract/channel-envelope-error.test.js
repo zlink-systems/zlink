@@ -15,6 +15,7 @@ const { ZLinkStreamFrameMessageFactory } = require('../../packages/framework/dis
 const encodedPayloadStorage = require('../../packages/framework/dist/contracts/Common/encoded-payload-storage');
 const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const { Message } = require('@zlink-systems/zlink');
+const { encodeChannelHeader, decodeChannelHeader: decodeProtobufChannelHeader } = require('./helpers/protobuf-channel-header');
 
 const codecSelectionFixture = JSON.parse(fs.readFileSync(path.resolve(
   __dirname,
@@ -167,7 +168,6 @@ test('channel receive accepts only canonical registered content types from the s
   for (const scenario of codecSelectionFixture.receiveScenarios) {
     const incoming = {
       header: {
-        formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
         kind: 1,
         channelName: 'codec',
         messageName: scenario.name,
@@ -449,8 +449,7 @@ test('Channel request and reply apply the packet JSON contract without a codec r
   }
 
   const invalidParts = [
-    Buffer.from(JSON.stringify({
-      formatMarker: 0xf2,
+    encodeChannelHeader({
       kind: 1,
       channelName: 'contract',
       messageName: 'ContractRequest',
@@ -459,7 +458,7 @@ test('Channel request and reply apply the packet JSON contract without a codec r
       deadline: null,
       topic: null,
       metadata: {}
-    })),
+    }),
     Buffer.from('{}')
   ];
   assert.throws(
@@ -754,8 +753,7 @@ test('channel envelope keeps an absolute deadline established before payload enc
 
 test('channel header rejects correlation values that do not match the message kind', () => {
   const commandWithCorrelation = readable([
-    Buffer.from(JSON.stringify({
-      formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+    encodeChannelHeader({
       kind: 3,
       channelName: 'api',
       messageName: 'Notice',
@@ -764,12 +762,11 @@ test('channel header rejects correlation values that do not match the message ki
       deadline: null,
       topic: null,
       metadata: {}
-    })),
+    }),
     Buffer.from('{}')
   ]);
   const requestWithoutCorrelation = readable([
-    Buffer.from(JSON.stringify({
-      formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+    encodeChannelHeader({
       kind: 1,
       channelName: 'api',
       messageName: 'Lookup',
@@ -778,7 +775,7 @@ test('channel header rejects correlation values that do not match the message ki
       deadline: null,
       topic: null,
       metadata: {}
-    })),
+    }),
     Buffer.from('{}')
   ]);
   assert.throws(
@@ -793,8 +790,7 @@ test('channel header rejects correlation values that do not match the message ki
 
 test('channel header treats nullable flow fields as absent', () => {
   const header = readable([
-    Buffer.from(JSON.stringify({
-      formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+    encodeChannelHeader({
       kind: 1,
       channelName: 'api',
       messageName: 'Lookup',
@@ -808,7 +804,7 @@ test('channel header treats nullable flow fields as absent', () => {
       metadata: {},
       flowId: null,
       flowOrigin: null
-    }))
+    })
   ]);
 
   assert.equal(envelope.decodeChannelHeader(header).flowId, undefined);
@@ -818,8 +814,7 @@ test('channel header treats nullable flow fields as absent', () => {
 test('channel envelope borrows the received payload until dispatch closes it', () => {
   const payload = Buffer.from('{"value":"borrowed"}');
   const parts = [
-    { data: () => Buffer.from(JSON.stringify({
-      formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+    { data: () => encodeChannelHeader({
       kind: 3,
       channelName: 'api',
       messageName: 'Notice',
@@ -828,7 +823,7 @@ test('channel envelope borrows the received payload until dispatch closes it', (
       deadline: null,
       topic: null,
       metadata: {}
-    })) },
+    }) },
     { data: () => payload }
   ];
 
@@ -910,7 +905,7 @@ test('channel Error reply encodes every framework error kind as its snake_case w
         new framework.ZLinkFrameworkException(kind, `${kindName} failed`)
       );
       try {
-        const header = JSON.parse(Buffer.from(replyParts[0]).toString('utf8'));
+        const header = decodeProtobufChannelHeader(Buffer.from(replyParts[0]));
         assert.equal(header.errorCode, ERROR_CODE_WIRE_NAMES[kindName], kindName);
         assert.throws(
           () => envelope.decodeChannelReply(readable(replyParts)),
@@ -933,8 +928,7 @@ test('channel Error decode consumes the canonical C++ error header verbatim', ()
   // emits it (snake_case errorCode, zlink.origin marker in metadata).
   for (const [kindName, wireName] of Object.entries(ERROR_CODE_WIRE_NAMES)) {
     const parts = readable([
-      Buffer.from(JSON.stringify({
-        formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+      encodeChannelHeader({
         kind: 5,
         channelName: 'profile',
         messageName: 'LookupReq',
@@ -945,7 +939,7 @@ test('channel Error decode consumes the canonical C++ error header verbatim', ()
         errorCode: wireName,
         errorMessage: 'cross-language failure',
         metadata: { 'zlink.origin': 'framework' }
-      })),
+      }),
       Buffer.from('null')
     ]);
     assert.throws(
@@ -965,8 +959,7 @@ test('channel Error decode degrades unknown and numeric errorCode names to Inter
   // understood as kinds.
   for (const errorCode of ['definitely_unknown', '3', '9', 'NotFound']) {
     const parts = readable([
-      Buffer.from(JSON.stringify({
-        formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+      encodeChannelHeader({
         kind: 5,
         channelName: 'profile',
         messageName: 'LookupReq',
@@ -977,7 +970,7 @@ test('channel Error decode degrades unknown and numeric errorCode names to Inter
         errorCode,
         errorMessage: 'unknown failure',
         metadata: {}
-      })),
+      }),
       Buffer.from('null')
     ]);
     assert.throws(
@@ -1040,7 +1033,6 @@ test('channel Error decode exposes the zlink.origin metadata on the decoded erro
 test('IMP-ND-03 unknown channel content type fails before handler payload delivery', () => {
   const envelopeValue = {
     header: {
-      formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
       kind: 1,
       channelName: 'api',
       messageName: 'Lookup',
@@ -1063,8 +1055,7 @@ test('IMP-ND-03 unknown channel content type fails before handler payload delive
 
 test('IMP-ND-03 unknown channel content type in a reply does not fall back to JSON', () => {
   const replyParts = readable([
-    Buffer.from(JSON.stringify({
-      formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+    encodeChannelHeader({
       kind: 2,
       channelName: 'api',
       messageName: 'Lookup',
@@ -1073,7 +1064,7 @@ test('IMP-ND-03 unknown channel content type in a reply does not fall back to JS
       deadline: null,
       topic: null,
       metadata: {}
-    })),
+    }),
     Buffer.from('{"id":"a"}')
   ]);
 
@@ -1087,8 +1078,7 @@ test('IMP-ND-03 unknown channel content type in a reply does not fall back to JS
 
 test('IMP-ND-03 unknown channel content type in an empty reply is still a ProtocolError', () => {
   const replyParts = readable([
-    Buffer.from(JSON.stringify({
-      formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+    encodeChannelHeader({
       kind: 2,
       channelName: 'api',
       messageName: 'Lookup',
@@ -1097,7 +1087,7 @@ test('IMP-ND-03 unknown channel content type in an empty reply is still a Protoc
       deadline: null,
       topic: null,
       metadata: {}
-    })),
+    }),
     Buffer.alloc(0)
   ]);
 
@@ -1109,154 +1099,53 @@ test('IMP-ND-03 unknown channel content type in an empty reply is still a Protoc
   );
 });
 
-test('ClientServer metadata consumes the shared minimum-escape fixture on send and receive', () => {
-  const fixture = JSON.parse(
-    fs.readFileSync(
-      path.resolve(
-        __dirname,
-        '../../../../runtime/protocol/fixtures/client-server-metadata.json'
-      ),
-      'utf8'
-    )
+test('protobuf metadata uses repeated entries, encoded byte limits, and duplicate rejection', () => {
+  const generated = require('../../packages/framework/dist/runtime/channels/generated/channel-header-v1');
+  const MetadataHeader = generated.zlink.framework.channel.v1.ChannelHeader;
+  const exactly1024 = [{ key: 'k', value: 'v'.repeat(1015) }];
+  assert.equal(MetadataHeader.encode({ metadata: exactly1024 }).finish().length, 1024);
+  const parts = envelope.encodeChannelEnvelopeParts(
+    3, 'api', 'Notice', {}, undefined, undefined, undefined, undefined, false,
+    new Map([['k', 'v'.repeat(1015)]])
   );
-  for (const scenario of fixture.cases) {
-    const header = {
-      formatMarker: 242,
-      kind: 3,
-      channelName: 'api',
-      messageName: 'Notice',
-      contentType: 'application/json',
-      correlationId: null,
-      deadline: null,
-      topic: null
-    };
-    if (Object.hasOwn(scenario, 'metadata')) header.metadata = scenario.metadata;
-    const json =
-      scenario.receivedEncoded === undefined
-        ? JSON.stringify(header)
-        : JSON.stringify(header).replace(
-            '"metadata":' + JSON.stringify(scenario.metadata),
-            '"metadata":' + scenario.receivedEncoded
-          );
-    const parts = readable([Buffer.from(json), Buffer.from('{}')]);
-    if (!scenario.valid) {
-      assert.throws(() => envelope.decodeChannelHeader(parts), undefined, scenario.name);
-      if (
-        scenario.metadata !== null
-        && typeof scenario.metadata === 'object'
-        && !Array.isArray(scenario.metadata)
-      ) {
-        assert.throws(
-          () =>
-            envelope.encodeChannelEnvelopeParts(
-              3,
-              'api',
-              'Notice',
-              {},
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              false,
-              new Map(Object.entries(scenario.metadata))
-            ),
-          undefined,
-          scenario.name
-        );
-      }
-      continue;
-    }
-    const decoded = envelope.decodeChannelHeader(parts);
-    assert.deepEqual(
-      Object.entries(decoded.metadata),
-      Object.entries(scenario.metadata ?? {}),
-      scenario.name
-    );
-    const encoded = envelope.encodeChannelEnvelopeParts(
-      3,
-      'api',
-      'Notice',
-      {},
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      new Map(Object.entries(scenario.metadata ?? {}))
-    );
-    try {
-      const text = readable(encoded)[0].data().toString();
-      assert.ok(text.includes('"metadata":' + scenario.encoded), scenario.name);
-      assert.equal(Buffer.byteLength(scenario.encoded), scenario.encodedSize, scenario.name);
-      assert.deepEqual(
-        Object.entries(envelope.decodeChannelHeader(readable(encoded)).metadata),
-        Object.entries(scenario.metadata ?? {}),
-        scenario.name
-      );
-    } finally {
-      envelope.closeMessages(encoded);
-    }
+  try {
+    const decoded = envelope.decodeChannelHeader(readable(parts));
+    assert.equal(decoded.metadata.k.length, 1015);
+  } finally {
+    envelope.closeMessages(parts);
   }
+  assert.throws(
+    () => envelope.encodeChannelEnvelopeParts(
+      3, 'api', 'Notice', {}, undefined, undefined, undefined, undefined, false,
+      new Map([['k', 'v'.repeat(1016)]])
+    ),
+    /1024-byte limit/
+  );
+  assert.throws(() => envelope.decodeChannelHeader(readable([
+    encodeChannelHeader({
+      kind: 3, channelName: 'api', messageName: 'Notice', contentType: 'application/json',
+      metadata: [{ key: 'x', value: 'first' }, { key: 'x', value: 'last' }]
+    })
+  ])), /duplicate/);
 });
 
-test('ClientServer metadata rejects unpaired UTF-16 surrogates on send', () => {
-  for (const entry of [
-    ['k', '\ud800'],
-    ['\udfff', 'v']
-  ]) {
+test('protobuf channel string fields reject invalid UTF-8 and unpaired metadata surrogates', () => {
+  const invalid = encodeChannelHeader({
+    kind: 3, channelName: 'api', messageName: 'Notice', contentType: 'application/json'
+  });
+  invalid[invalid.indexOf(Buffer.from('api'))] = 0xff;
+  assert.throws(
+    () => envelope.decodeChannelHeader(readable([invalid])),
+    error => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError
+  );
+  for (const entry of [['k', '\ud800'], ['\udfff', 'v']]) {
     assert.throws(
-      () =>
-        envelope.encodeChannelEnvelopeParts(
-          3,
-          'api',
-          'Notice',
-          {},
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          false,
-          new Map([entry])
-        ),
+      () => envelope.encodeChannelEnvelopeParts(
+        3, 'api', 'Notice', {}, undefined, undefined, undefined, undefined, false,
+        new Map([entry])
+      ),
       /valid Unicode/
     );
   }
-});
-
-test('channel header rejects invalid UTF-8 as ProtocolError', () => {
-  const invalid = Buffer.concat([
-    Buffer.from('{"formatMarker":242,"kind":3,"channelName":"api","messageName":"'),
-    Buffer.from([0xc3, 0x28]),
-    Buffer.from('","contentType":"application/json","metadata":{}}')
-  ]);
-  assert.throws(
-    () => envelope.decodeChannelHeader(readable([invalid, Buffer.from('{}')])),
-    (error) =>
-      error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError
-  );
-});
-
-test('envelope duplicates reject known fields and metadata', () => {
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"formatMarker\":242}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"kind\":3}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"channelName\":\"c\"}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"messageName\":\"m\"}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"contentType\":null,\"contentType\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"correlationId\":null,\"correlationId\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"deadline\":null,\"deadline\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"topic\":null,\"topic\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"errorCode\":null,\"errorCode\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"errorMessage\":null,\"errorMessage\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"source\":null,\"source\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"flowId\":null,\"flowId\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"flowOrigin\":null,\"flowOrigin\":null}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"metadata\":{},\"metadata\":{}}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"k\\u0069nd\":3}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope header field"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"metadata\":{\"a\":\"first\",\"\\u0061\":\"last\"}}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope metadata key"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"metadata\":{\"a\":null,\"\\u0061\":\"last\"}}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope metadata key"));
-  assert.throws(() => envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"metadata\":{\"a\":{},\"\\u0061\":\"last\"}}")]), false), (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError && error.message.includes("duplicate envelope metadata key"));
-});
-test('envelope duplicates ignore unknown fields', () => {
-  assert.equal(envelope.decodeChannelHeader(readable([Buffer.from("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"contentType\":\"application/json\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"Kind\":false,\"Kind\":[],\"unknown\":{\"a\":1,\"a\":2},\"unknown\":[{\"kind\":1,\"kind\":2}],\"kind\\u0000\":1,\"kind\\u0000\":2}")])).channelName, 'c');
 });

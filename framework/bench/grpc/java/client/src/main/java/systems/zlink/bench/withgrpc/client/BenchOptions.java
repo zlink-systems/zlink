@@ -57,6 +57,13 @@ public final class BenchOptions {
                 .contains(scenario)) {
             throw new IllegalArgumentException("unknown scenario: " + scenario);
         }
+        if ((implementation.equals("zlink-java-json")
+                        || implementation.equals("zlink-framework-java-json"))
+                && payload != 1024
+                && payload != 4096) {
+            throw new IllegalArgumentException(
+                    implementation + " supports payload sizes 1024 and 4096; got " + payload);
+        }
         if (payload < BenchMetricHeader.HEADER_SIZE
                 || requestWindow != 100
                 || submitConcurrency != 8

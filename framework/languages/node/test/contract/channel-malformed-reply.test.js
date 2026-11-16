@@ -4,12 +4,13 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const { ownCompletions } = require('./helpers/completion-poller');
+const { encodeChannelHeader } = require('./helpers/protobuf-channel-header');
 
 test('ZLinkChannelClient rejects an invalid reply kind', async () => {
   await withMalformedChannelReply(
     'inproc://channel-invalid-reply-kind',
     encodeEnvelope({
-      kind: 'response',
+      kind: 99,
       channelName: 'api',
       messageName: 'Ping',
       contentType: 'application/json',
@@ -27,8 +28,7 @@ test('ZLinkChannelClient rejects an unsafe reply body', async () => {
   await withMalformedChannelReply(
     'inproc://channel-unsafe-reply-body',
     [
-      Buffer.from(JSON.stringify({
-        formatMarker: 0xf2,
+      encodeChannelHeader({
         flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
         flowOrigin: 1,
         kind: 2,
@@ -40,7 +40,7 @@ test('ZLinkChannelClient rejects an unsafe reply body', async () => {
         topic: null,
         errorCode: null,
         errorMessage: null
-      })),
+      }),
       Buffer.from('{"__proto__":{"polluted":true}}')
     ],
     /not allowed/
@@ -94,12 +94,11 @@ async function receive(router) {
 
 function encodeEnvelope(header, body) {
   return [
-    Buffer.from(JSON.stringify({
-      formatMarker: 0xf2,
+    encodeChannelHeader({
       flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
       flowOrigin: 1,
       ...header
-    })),
+    }),
     Buffer.from(JSON.stringify(body))
   ];
 }

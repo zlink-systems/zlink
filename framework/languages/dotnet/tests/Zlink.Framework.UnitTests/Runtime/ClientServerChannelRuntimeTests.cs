@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,66 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task ClientServer_hello_and_admission_reply_close_wrappers()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ClientServer_hello_and_admission_reply_close_wrappers)
+            )
+        )
+            return;
+        using var probe = new MessageFinalizerProbe();
+        await using var server = CreateServer(0);
+        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        var clients = new List<ServiceProvider>();
+        try
+        {
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            var endpoint = (
+                await GetServerBundle(state, "work").ClientServerServer!.ReadAsync()
+            ).AdvertisedEndpoint;
+            var count = await probe.CountAsync(async () =>
+            {
+                for (var index = 0; index < 8; index++)
+                {
+                    var client = CreateClient(endpoint);
+                    clients.Add(client);
+                    var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+                    await clientRuntime.StartAsync(CancellationToken.None);
+                    var transport = clientRuntime.GetClientServerClientRuntime("work");
+                    await WaitUntilAsync(
+                        transport,
+                        () => transport.ReadyCount == 1,
+                        TimeSpan.FromSeconds(10)
+                    );
+                    Assert.Equal(1, transport.ReadyCount);
+                }
+            });
+            output.WriteLine($"hello and admission reply finalizers={count}");
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            foreach (var client in clients)
+            {
+                try
+                {
+                    await client
+                        .GetRequiredService<ZLinkFrameworkRuntime>()
+                        .StopAsync(CancellationToken.None);
+                }
+                finally
+                {
+                    await client.DisposeAsync();
+                }
+            }
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(false, false, true)]
@@ -421,19 +482,27 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             {
                 if (scenario.GetProperty("valid").GetBoolean())
                     continue;
-                var rawMetadata = scenario.TryGetProperty(
-                    "receivedEncoded",
-                    out var receivedMetadata
-                )
-                    ? receivedMetadata.GetString()
-                    : scenario.GetProperty("metadata").GetRawText();
-                var rawHeader =
-                    "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"work\",\"messageName\":\"EchoRequest\","
-                    + "\"contentType\":\"application/json\",\"correlationId\":\"invalid-metadata\",\"metadata\":"
-                    + rawMetadata
-                    + "}";
+                var scenarioName = scenario.GetProperty("name").GetString();
+                if (scenarioName is not ("empty-key" or "nul-key" or "nul-value"))
+                    continue;
+                var protoHeader = new global::Zlink.Framework.Channel.V1.ChannelHeader
+                {
+                    Kind = global::Zlink.Framework.Channel.V1.ChannelKind.Request,
+                    ChannelName = "work",
+                    MessageName = "EchoRequest",
+                    ContentType = "application/json",
+                    CorrelationId = "invalid-metadata",
+                };
+                foreach (var entry in scenario.GetProperty("metadata").EnumerateObject())
+                    protoHeader.Metadata.Add(
+                        new global::Zlink.Framework.Channel.V1.MetadataEntry
+                        {
+                            Key = entry.Name,
+                            Value = entry.Value.GetString()!,
+                        }
+                    );
                 var invalidParts = ZLinkMessageParts.Create(
-                    Message.From(System.Text.Encoding.UTF8.GetBytes(rawHeader)),
+                    Message.From(protoHeader.ToByteArray()),
                     Message.From(System.Text.Encoding.UTF8.GetBytes("{\"value\":\"invalid\"}"))
                 );
                 var rejected = await clientRuntime

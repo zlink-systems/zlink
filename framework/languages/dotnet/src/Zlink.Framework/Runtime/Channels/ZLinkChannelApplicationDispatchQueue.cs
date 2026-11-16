@@ -7,16 +7,15 @@ namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDisposable
 {
-    private readonly Channel<DispatchWork<TWork>> _queue = Channel.CreateUnbounded<
-        DispatchWork<TWork>
-    >(
-        new UnboundedChannelOptions
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            AllowSynchronousContinuations = false,
-        }
-    );
+    private readonly Channel<DispatchWork<TWork>> _queue =
+        global::System.Threading.Channels.Channel.CreateUnbounded<DispatchWork<TWork>>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false,
+            }
+        );
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationTokenSource _stop;
     private readonly string _name;

@@ -35,21 +35,8 @@ internal static class ZLinkHandlerContractDescriptorSupport
     )
     {
         if (actualType != expectedType)
-            throw new InvalidOperationException(
+            throw new ZLinkConfigurationException(
                 $"{description} '{handlerType}' targets '{actualType}', but registration expects '{expectedType}'."
-            );
-    }
-
-    public static void RequireAssignableFrom(
-        Type handlerType,
-        Type expectedRuntimeType,
-        Type declaredType,
-        string description
-    )
-    {
-        if (!declaredType.IsAssignableFrom(expectedRuntimeType))
-            throw new InvalidOperationException(
-                $"{description} '{handlerType}' targets '{declaredType}', but runtime type is '{expectedRuntimeType}'."
             );
     }
 }

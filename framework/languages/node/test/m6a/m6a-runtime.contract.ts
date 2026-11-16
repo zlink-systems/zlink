@@ -75,7 +75,8 @@ function descriptor(
       { name: 'alpha', weight: 100 },
       { name: 'beta', weight: 50 }
     ],
-    state: 'preparing',
+    // Direct raw-runtime fixtures own readiness through their input descriptor.
+    state: 'serving',
     securityIdentity: 'default',
     applicationVersion: 1n,
     protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY],
@@ -192,7 +193,7 @@ test('RouteMesh admission requires the generated capability but accepts sorted u
         ...descriptor('old'),
         protocolCapabilities: ['framework-service-v12']
       }),
-    /framework-service-v13/
+    /framework-service-v14/
   );
 });
 

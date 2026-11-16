@@ -188,7 +188,7 @@ subprojects {
                         usage("java-api") { fromResolutionOf("runtimeClasspath") }
                         usage("java-runtime") { fromResolutionResult() }
                     }
-                    from(components["java"])
+                    from(components.findByName("shadow") ?: components["java"])
                     groupId = project.group.toString()
                     artifactId = project.name
                     version = project.version.toString()

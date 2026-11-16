@@ -268,10 +268,10 @@ for (const spotId of ['spot-a', undefined]) {
     const owner = runtimeOptions.actorDispatchOwnerResolver(nativeActorRef.actorId);
 
     assert.equal(owner.spotId, spotId);
-    assert.equal(owner.actorRef.actorId, nativeActorRef.actorId);
-    assert.equal(owner.actorRef.nodeRid, nativeActorRef.nodeRid);
-    assert.equal(owner.actorRef.objectGeneration, nativeActorRef.generation);
-    assert.equal(owner.actorRef.generation, nativeActorRef.generation);
+    assert.equal(owner.nativeActorRef.actorId, nativeActorRef.actorId);
+    assert.equal(owner.nativeActorRef.nodeRid, nativeActorRef.nodeRid);
+    assert.equal(owner.nativeActorRef.generation, nativeActorRef.generation);
+    assert.equal(owner.meshName, actorState.meshName);
   });
 }
 
@@ -282,11 +282,12 @@ test('Mesh actor ingress uses the current runtime owner for handoff capture', as
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     actorDispatchOwnerResolver: () => ({
-      actorRef: {
+      nativeActorRef: {
         nodeRid: 'current-node',
         actorId: 'actor-1',
         generation: 3n
       },
+      meshName: 'test.mesh',
       spotId: currentSpotId
     }),
     async dispatchEntryActorPacket(_origin, _actorId, _parts, _returnResponse, _boundTarget, fallback) {
@@ -2497,7 +2498,7 @@ test('ZLinkSpotManager does not bind formal Mesh actor packets as remote session
   }
 });
 
-test('relocation materialization restores inherited User Spot handler registrations', async () => {
+test('relocation materialization restores handler registrations for the concrete User Spot type', async () => {
   class BaseSpot {}
   class RecoverySpot extends BaseSpot {}
   class ProbeActor {}
@@ -2509,24 +2510,24 @@ test('relocation materialization restores inherited User Spot handler registrati
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RecoverySpot],
     spotActorSendHandlers: [{
-      spotType: BaseSpot,
+      spotType: RecoverySpot,
       actorType: ProbeActor,
       handlerType: ActorSendHandler,
       packetName: 'ActorSend'
     }],
     spotActorRequestHandlers: [{
-      spotType: BaseSpot,
+      spotType: RecoverySpot,
       actorType: ProbeActor,
       handlerType: ActorRequestHandler,
       packetName: 'ActorRequest'
     }],
     spotPacketHandlers: [{
-      spotType: BaseSpot,
+      spotType: RecoverySpot,
       handlerType: PacketHandler,
       packetName: 'Packet'
     }],
     spotSubscriptionHandlers: [{
-      spotType: BaseSpot,
+      spotType: RecoverySpot,
       handlerType: SubscriptionHandler,
       channelName: 'events',
       topic: 'stage.*'

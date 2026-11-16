@@ -11,11 +11,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(zlink_cpp_with_grpc_bench CXX)
 
-option(ZLINK_CPP_ABLATION_LADDER "Enable the unmerged #4350 L0 ablation experiment" OFF)
-if(ZLINK_CPP_ABLATION_LADDER)
-  add_compile_definitions(ZLINK_CPP_ABLATION_LADDER=1)
-endif()
-
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -150,7 +145,6 @@ bench_target(bench_cpp_framework_server)
 target_link_libraries(bench_cpp_framework_server PRIVATE opentelemetry-cpp::metrics)
 target_link_libraries(bench_cpp_client PRIVATE zlink::framework_codec_protobuf)
 
-
 enable_testing()
 add_executable(bench_cpp_server_metrics_test tests/server_metrics_test.cpp ${BENCH_PROTO_CC})
 target_include_directories(bench_cpp_server_metrics_test PRIVATE ${BENCH_PROTO_GEN_DIR})
@@ -188,36 +182,9 @@ bench_grpc_target(bench_cpp_submit_threads_test)
 target_link_libraries(bench_cpp_submit_threads_test PRIVATE zlink::framework_codec_protobuf)
 add_test(NAME bench_cpp_submit_threads COMMAND bench_cpp_submit_threads_test)
 
-if(ZLINK_CPP_ABLATION_LADDER)
-  add_executable(bench_cpp_ladder_wire_identity_test tests/ladder_wire_identity_test.cpp ${BENCH_PROTO_CC})
-  bench_target(bench_cpp_ladder_wire_identity_test)
-  target_include_directories(bench_cpp_ladder_wire_identity_test PRIVATE ${BENCH_PROTO_GEN_DIR})
-  target_link_libraries(bench_cpp_ladder_wire_identity_test PRIVATE zlink::framework_codec_protobuf)
-  add_test(NAME bench_cpp_ladder_wire_identity COMMAND bench_cpp_ladder_wire_identity_test)
-  add_executable(bench_cpp_ladder_contract_test tests/ladder_contract_test.cpp ${BENCH_PROTO_CC})
-  bench_target(bench_cpp_ladder_contract_test)
-  target_include_directories(bench_cpp_ladder_contract_test PRIVATE ${BENCH_PROTO_GEN_DIR})
-  target_compile_definitions(bench_cpp_ladder_contract_test PRIVATE
-    BENCH_LADDER_MIXED_FIXTURE="${BENCH_REPO_ROOT}/framework/bench/grpc/ladder-mixed-payload.json")
-  target_link_libraries(bench_cpp_ladder_contract_test PRIVATE zlink::framework_codec_protobuf)
-  foreach(level RANGE 0 4)
-    add_test(NAME bench_cpp_ladder_L${level} COMMAND bench_cpp_ladder_contract_test)
-    set_tests_properties(bench_cpp_ladder_L${level} PROPERTIES
-      ENVIRONMENT "ZLINK_CPP_LADDER_LEVEL=${level}" TIMEOUT 30)
-  endforeach()
-  add_executable(bench_cpp_ladder_route_contract_test tests/ladder_route_contract_test.cpp ${BENCH_PROTO_CC})
-  bench_target(bench_cpp_ladder_route_contract_test)
-  target_include_directories(bench_cpp_ladder_route_contract_test PRIVATE ${BENCH_PROTO_GEN_DIR})
-  target_link_libraries(bench_cpp_ladder_route_contract_test PRIVATE
-    zlink::framework_codec_protobuf opentelemetry-cpp::metrics)
-  add_test(NAME bench_cpp_ladder_L5_7 COMMAND bench_cpp_ladder_route_contract_test)
-  set_tests_properties(bench_cpp_ladder_L5_7 PROPERTIES
-    ENVIRONMENT "ZLINK_CPP_LADDER_LEVEL=7" TIMEOUT 30)
-  foreach(target IN ITEMS bench_cpp_framework_server bench_cpp_client bench_cpp_submit_threads_test
-                          bench_cpp_ladder_contract_test bench_cpp_ladder_route_contract_test
-                          bench_cpp_ladder_wire_identity_test)
-    target_include_directories(${target} PRIVATE
-      "${BENCH_REPO_ROOT}/framework/languages/cpp/framework/src"
-      "${BENCH_REPO_ROOT}/framework/runtime/protocol/generated/cpp")
-  endforeach()
-endif()
+add_executable(bench_cpp_game_json_test tests/game_json_test.cpp ${BENCH_PROTO_CC})
+target_include_directories(bench_cpp_game_json_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+target_link_libraries(bench_cpp_game_json_test PRIVATE zlink::framework protobuf::libprotobuf)
+target_compile_definitions(bench_cpp_game_json_test PRIVATE
+  BENCH_GAME_JSON_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../ladder-mixed-payload.json")
+add_test(NAME bench_cpp_game_json_fixture COMMAND bench_cpp_game_json_test)

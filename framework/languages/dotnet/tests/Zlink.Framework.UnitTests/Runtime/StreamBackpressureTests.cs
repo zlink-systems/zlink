@@ -8,11 +8,107 @@ using Xunit.Abstractions;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamBackpressureTests(ITestOutputHelper output)
 {
+#if DEBUG
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Native_retry_closes_once_after_admission_and_detects_bad_close(int badClose)
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Native_retry_closes_once_after_admission_and_detects_bad_close)
+            )
+        )
+            return;
+        await using var fixture = await SaturatedStream.CreateAsync(output);
+        using var probe = new MessageFinalizerProbe();
+        var count = await probe.CountAsync(async () =>
+        {
+            Message? payload = null;
+            var draining = false;
+            var submitted = false;
+            var closes = 0;
+            ZLinkMessageParts.DisposingObserver.Value = part =>
+            {
+                if (!ReferenceEquals(part, payload))
+                    return;
+                Assert.True(
+                    !submitted || draining,
+                    "The wrapper must remain owned until admission completes."
+                );
+                Assert.Equal(1, Interlocked.Increment(ref closes));
+            };
+            try
+            {
+                Task? pending = null;
+                var sent = 0;
+                for (; sent < 10000; sent++)
+                {
+                    var bytes = new byte[1024];
+                    BinaryPrimitives.WriteInt32LittleEndian(bytes, sent);
+                    payload = Message.From(bytes);
+                    closes = 0;
+                    var admission = fixture.Stream.SubmitRawAsync(payload, fixture.Token);
+                    await Task.WhenAny(admission, Task.Delay(100, fixture.Token));
+                    fixture.Token.ThrowIfCancellationRequested();
+                    if (!admission.IsCompleted)
+                    {
+                        pending = admission;
+                        sent++;
+                        break;
+                    }
+                    await admission;
+                    Assert.Equal(1, closes);
+                }
+                Assert.NotNull(pending);
+                submitted = true;
+                Assert.Equal(0, closes);
+                if (badClose == 1)
+                {
+                    // The existing disposal observer rejects an actual close attempt
+                    // before it can damage a wrapper still owned by the operation.
+                    Assert.Throws<Xunit.Sdk.TrueException>(() =>
+                        ZLinkMessageParts.Dispose(payload!)
+                    );
+                    output.WriteLine("early close during native BACKPRESSURED admission rejected");
+                }
+                draining = true;
+                for (var sequence = 0; sequence < sent; sequence++)
+                {
+                    var bytes = await fixture.ReadAsync(1024);
+                    Assert.Equal(sequence, BinaryPrimitives.ReadInt32LittleEndian(bytes));
+                    Assert.All(bytes.Skip(4), value => Assert.Equal((byte)0, value));
+                }
+                await fixture.PumpUntilAsync(pending);
+                await pending;
+                Assert.Equal(1, closes);
+                if (badClose == 2)
+                {
+                    Assert.Throws<Xunit.Sdk.EqualException>(() =>
+                        ZLinkMessageParts.Dispose(payload!)
+                    );
+                    output.WriteLine("duplicate wrapper close rejected");
+                }
+                await fixture.AssertMarkerAsync();
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposingObserver.Value = null;
+            }
+        });
+        output.WriteLine($"native retry finalizers={count}");
+        Assert.Equal(0, count);
+    }
+#endif
+
     [Theory]
     [InlineData(SendFlags.None)]
     [InlineData(SendFlags.DontWait)]

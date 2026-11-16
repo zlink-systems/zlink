@@ -434,46 +434,49 @@ replace the original ClientServer request's value.
 
 ### 5.3 Application Record Contract
 
-The internal wire contract for a ClientServer application record carries
-[application metadata](02-channel-messaging.en.md#9-metadata-and-observation) in the JSON header's
-`metadata` field as a string-to-string object. A missing field is interpreted as empty metadata.
-Character, size-limit, error, and reply rules follow channel messaging §9. The total size in that
-section is the UTF-8 JSON encoding length of the entire metadata object, including keys, values, and
-structural overhead. The header's `metadata` field name and other fields are excluded from this size.
-This length is measured on the minimal-escape form — in key and value strings only `"`, `\`, and
-U+0001–U+001F are escaped (control characters use `\b` `\f` `\n` `\r` `\t` where one exists, otherwise
-lowercase `\u00xx`), every other character is written as raw UTF-8, and no whitespace appears between
-structural characters. A sender writes this form, and a receiver judges by the length of the received
-value re-measured in this form. The business payload frame carries no metadata.
+The header frame of a ClientServer application record is the protobuf encoding of the `ChannelHeader` message
+in `framework/runtime/protocol/channel-header-v1.proto`. Each runtime's header codec is generated from that
+`.proto` by the official protobuf generator ([wire protocol §1](06-wire-protocol.en.md#1-schema-and-generation-boundary)).
+The header's `metadata` field carries [application metadata](02-channel-messaging.en.md#9-metadata-and-observation)
+as a list of `MetadataEntry` (key, value). No entries means empty metadata. A sender writes entries in ascending
+UTF-8 byte order of the key, and a receiver accepts any order. Character, size-limit, error, and reply rules follow
+channel messaging §9; the total size in that section is the sum of the protobuf encoded lengths of the `metadata`
+entries. The business payload frame carries no metadata.
 
 <a id="envelope-header-grammar"></a>
-**Header grammar.** The JSON header frame is one [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) JSON object
-written in UTF-8 without a BOM. A violation is a protocol error, and
+**Header grammar.** A header frame that does not parse as a `ChannelHeader` is a protocol error, and an invalid
+UTF-8 string field is part of that parse failure (each runtime's protobuf parser judges it), and
 [channel messaging §8](02-channel-messaging.en.md#reply-route-remains) defines whether that request gets a reply.
 
 <a id="envelope-header-structure"></a>
-The structure rules define whether the header can be read as one object.
+One place, Framework validation after decode, judges the value rules. Input that the protobuf runtime rejects at
+parse time is handled as the same protocol error.
 
-- Only JSON whitespace may follow the object. Any other byte, NUL included, is a violation.
-- Strings must be valid Unicode. A `\u` escape that denotes an unpaired surrogate is a violation.
-- Field names must match the names in the table below exactly, case included. A table field that appears twice
-  in one object, or a key that appears twice in the `metadata` object, is a violation. A key not in the table is
-  ignored with its value however many times it appears.
+- String fields contain no NUL.
+- `kind` equal to `CHANNEL_KIND_UNSPECIFIED` is a violation. Whether another field must carry a value is defined by each section, not by this grammar.
+- An undefined value in an enum field is a violation.
+- A key that appears twice in `metadata` is a violation.
+- Undefined field numbers are skipped under protobuf rules.
 
-The field rules define each table field's value. An integer field's value is an integer literal without a decimal
-point or exponent, and it must belong to the table's value set. Whether `flowId` and `flowOrigin` values are
-checked is defined by
+Whether `flow_id` and `flow_origin` values are checked is defined by
 [Request Correlation and Business Flow Identification §4](../06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created),
-and this table applies when that section requires the check.
+and the table below applies when that section requires the check.
 
-| Field | JSON value |
-|---|---|
-| `formatMarker` | integer `242` (`0xF2`) |
-| `kind` | integer `1` request, `2` response, `3` command, `4` publish, `5` error |
-| `channelName`, `messageName`, `contentType` | string |
-| `correlationId`, `deadline`, `errorCode`, `errorMessage`, `flowId`, `source`, `topic` | string or `null` |
-| `flowOrigin` | integer `1` inbound, `2` timer, `3` application, `4` lifecycle, or `null` |
-| `metadata` | object whose values are all strings |
+| Field | Number | Value |
+|---|---|---|
+| `kind` | 1 | `REQUEST`(1), `RESPONSE`(2), `COMMAND`(3), `PUBLISH`(4), `ERROR`(5) |
+| `channel_name`, `message_name`, `content_type` | 2, 3, 4 | string |
+| `correlation_id`, `deadline`, `error_code`, `error_message` | 5, 6, 7, 8 | optional string |
+| `flow_id` | 9 | optional string |
+| `flow_origin` | 10 | optional. `INBOUND`(1), `TIMER`(2), `APPLICATION`(3), `LIFECYCLE`(4) |
+| `source`, `topic` | 11, 12 | optional string |
+| `metadata` | 13 | list of `MetadataEntry` |
+
+<a id="envelope-header-evolution"></a>
+**Format-change rules.** The only change allowed within one service protocol version is adding an optional field
+under a new field number. Reusing a field number, changing a type or meaning, adding or removing a required field or
+changing whether a field is required, and adding an enum value all raise the service protocol version, and a peer
+on a different version is rejected at hello. A removed field number is blocked with `reserved` and never reused.
 
 This grammar doesn't change whether a field must be present or what its value means. The sections of this
 document and of [channel messaging](02-channel-messaging.en.md) define that.

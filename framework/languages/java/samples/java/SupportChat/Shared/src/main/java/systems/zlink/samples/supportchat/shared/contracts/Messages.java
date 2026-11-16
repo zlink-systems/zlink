@@ -1,5 +1,7 @@
 package systems.zlink.samples.supportchat.shared.contracts;
 
+import org.jspecify.annotations.Nullable;
+
 import systems.zlink.framework.actors.ActorRefSnapshot;
 
 public final class Messages {
@@ -12,7 +14,11 @@ public final class Messages {
     public record AuthenticateUserReq(String accessToken) {}
 
     public record AuthenticateUserRes(
-            boolean accepted, String actorId, String displayName, String role, String reason) {}
+            boolean accepted,
+            @Nullable String actorId,
+            @Nullable String displayName,
+            @Nullable String role,
+            @Nullable String reason) {}
 
     public record OpenConversationApiReq(
             String customerActorId, String customerDisplayName, String subject) {}
@@ -80,10 +86,10 @@ public final class Messages {
             String subject,
             String status,
             String customerActorId,
-            String agentActorId,
+            @Nullable String agentActorId,
             long lastMessageSeq,
-            Long lastMessageAtUnixMs,
-            Long idleDeadlineUnixMs) {}
+            @Nullable Long lastMessageAtUnixMs,
+            @Nullable Long idleDeadlineUnixMs) {}
 
     public record ChatMessage(
             String conversationId,

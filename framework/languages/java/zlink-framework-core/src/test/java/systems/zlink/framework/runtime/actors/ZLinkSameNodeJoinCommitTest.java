@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -61,8 +62,9 @@ final class ZLinkSameNodeJoinCommitTest {
         objects.addActorFactory(
                 "player", Player.class, Factory.class, factory -> factory.disableRelocation());
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, ZLinkSameNodeJoinBarrierTest.observeMeshJoins(records))) {
+                        ZLinkFrameworkRuntimeTestAccess.start(
+                                options, ZLinkSameNodeJoinBarrierTest.observeMeshJoins(records));
+                AutoCloseable releasePendingLeave = () -> sourceLeave.complete(null)) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
@@ -263,7 +265,7 @@ final class ZLinkSameNodeJoinCommitTest {
         }
     }
 
-    public record Join(String spotId, boolean reject, boolean failStore) {}
+    public record Join(@Nullable String spotId, boolean reject, boolean failStore) {}
 
     public record Admission(boolean reject) {}
 

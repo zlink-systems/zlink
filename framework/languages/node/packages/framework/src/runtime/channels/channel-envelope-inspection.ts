@@ -3,8 +3,8 @@ import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkFlowOrigin } from '../../contracts';
 import {
   decodeChannelHeader,
+  decodeChannelHeaderRecord,
   isValidChannelCorrelationId,
-  ZLINK_CHANNEL_FORMAT_MARKER,
   ZLinkChannelMessageKind,
   type ZLinkChannelEnvelopeHeader
 } from './channel-envelope';
@@ -44,9 +44,7 @@ export function inspectMalformedChannelHeader(
   if (parts.length === 0) return {};
   let header: Record<string, unknown>;
   try {
-    const parsed: unknown = JSON.parse(parts[0].data().toString());
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
-    header = parsed as Record<string, unknown>;
+    header = decodeChannelHeaderRecord(parts[0].data());
   } catch {
     return {};
   }
@@ -75,7 +73,6 @@ export function malformedProtocolErrorRequestHeader(
   info: ZLinkMalformedChannelHeaderInfo
 ): ZLinkChannelEnvelopeHeader {
   return {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
     kind: ZLinkChannelMessageKind.Request,
     channelName,
     messageName: info.messageName ?? '',

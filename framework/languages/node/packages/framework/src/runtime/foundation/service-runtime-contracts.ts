@@ -278,6 +278,7 @@ export interface ReceiveRecord {
   readonly terminalResult: number;
   readonly failureErrno: number;
   readonly failureMessage?: string;
+  readonly cause?: unknown;
   readonly parts: Message[];
   /** Returns whether the local operation can still accept a lifecycle reply. */
   readonly isPending?: () => boolean;

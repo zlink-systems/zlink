@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "channel-header-v1.pb.h"
 #include "mailbox_claim_fixture.hpp"
 #include "same_owner_claim_controls.hpp"
 #include <zlink/json.hpp>
@@ -876,16 +877,19 @@ void verify_client_server_terminal_overlap_matrix (int selected = -1)
                             const auto payload = std::string (4096, static_cast<char> ('0' + id));
                             auto body =
                               zlink::message_t::from_json (overlap_send_t{id, fail, payload});
+                            zlink::framework::runtime::messaging::envelope_header_t envelope;
+                            envelope.kind =
+                              request
+                                ? zlink::framework::runtime::messaging::message_kind_t::request
+                                : zlink::framework::runtime::messaging::message_kind_t::command;
+                            envelope.channel_name = "overlap";
+                            envelope.message_name = request ? "overlap.request" : "overlap.send";
+                            envelope.content_type = "application/json";
+                            envelope.correlation_id = std::to_string (id);
                             const auto header =
-                              nlohmann::json{
-                                {"formatMarker", 242},
-                                {"kind", request ? 1 : 3},
-                                {"channelName", "overlap"},
-                                {"messageName", request ? "overlap.request" : "overlap.send"},
-                                {"contentType", "application/json"},
-                                {"correlationId", std::to_string (id)},
-                                {"metadata", nlohmann::json::object ()}}
-                                .dump ();
+                              std::string (zlink::framework::runtime::messaging::envelope_codec_t{}
+                                             .encode_header (envelope)
+                                             .to_string ());
                             if (request)
                                 result.emplace (await_overlap_wire_reply (
                                   batch.source.request ()
@@ -1279,32 +1283,46 @@ await_metadata_wire_reply (zlink::async_result_t<std::vector<zlink::message_t>> 
     co_return co_await std::move (pending);
 }
 
-std::vector<std::string> invalid_metadata_headers (bool request = false,
-                                                   bool metadata_first = false)
+std::vector<std::string> invalid_metadata_headers (bool request = false)
 {
-    std::ifstream input (ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH);
-    assert (input.good ());
-    const auto fixture = nlohmann::json::parse (input);
-    std::vector<std::string> headers;
-    for (const auto &test : fixture.at ("cases")) {
-        if (test.at ("valid").get<bool> ())
-            continue;
-        nlohmann::json header = {{"formatMarker", 242},
-                                 {"kind", request ? 1 : 3},
-                                 {"channelName", "metadata"},
-                                 {"messageName", request ? "metadata.request" : "metadata.send"},
-                                 {"correlationId", "malformed-metadata"},
-                                 {"contentType", "application/json"}};
-        const auto metadata = test.contains ("receivedEncoded")
-                                ? test.at ("receivedEncoded").get<std::string> ()
-                                : test.at ("metadata").dump ();
-        auto encoded = header.dump ();
-        encoded.pop_back ();
-        headers.push_back (metadata_first
-                             ? "{\"metadata\":" + metadata + "," + encoded.substr (1) + "}"
-                             : encoded + ",\"metadata\":" + metadata + "}");
+    using wire_t = zlink::framework::channel::v1::ChannelHeader;
+    std::vector<std::string> result;
+    const auto make = [&] {
+        wire_t header;
+        header.set_kind (request ? zlink::framework::channel::v1::REQUEST
+                                 : zlink::framework::channel::v1::COMMAND);
+        header.set_channel_name ("metadata");
+        header.set_message_name (request ? "metadata.request" : "metadata.send");
+        header.set_content_type ("application/json");
+        if (request)
+            header.set_correlation_id ("malformed-metadata");
+        return header;
+    };
+    {
+        auto header = make ();
+        auto *first = header.add_metadata ();
+        first->set_key ("tenant-id");
+        first->set_value ("one");
+        auto *second = header.add_metadata ();
+        second->set_key ("tenant-id");
+        second->set_value ("two");
+        result.push_back (header.SerializeAsString ());
     }
-    return headers;
+    {
+        auto header = make ();
+        auto *entry = header.add_metadata ();
+        entry->set_key ("");
+        entry->set_value ("empty key");
+        result.push_back (header.SerializeAsString ());
+    }
+    {
+        auto header = make ();
+        auto *entry = header.add_metadata ();
+        entry->set_key ("tenant-id");
+        entry->set_value (std::string (1100, 'x'));
+        result.push_back (header.SerializeAsString ());
+    }
+    return result;
 }
 
 void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
@@ -1337,8 +1355,15 @@ void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
       .message (zlink::message_t::from (
         protocol::encode_liveness (protocol::command::livenessAck, liveness.probe_id)))
       .async ();
-    const std::string valid =
-      R"({"formatMarker":242,"kind":3,"channelName":"metadata","messageName":"metadata.send","contentType":"application/json","metadata":{"tenant-id":"tenant-42"}})";
+    zlink::framework::runtime::messaging::envelope_header_t valid_envelope;
+    valid_envelope.kind = zlink::framework::runtime::messaging::message_kind_t::command;
+    valid_envelope.channel_name = "metadata";
+    valid_envelope.message_name = "metadata.send";
+    valid_envelope.content_type = "application/json";
+    valid_envelope.metadata = {{"tenant-id", "tenant-42"}};
+    const auto valid = std::string (zlink::framework::runtime::messaging::envelope_codec_t{}
+                                      .encode_header (valid_envelope)
+                                      .to_string ());
     for (const auto &bad : invalid_metadata_headers ()) {
         const auto previous = metadata_send_handler_t::calls.load (std::memory_order_acquire);
         (void) source.send ()
@@ -1356,8 +1381,13 @@ void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
         assert (metadata_send_handler_t::calls.load (std::memory_order_acquire) == previous + 1);
         assert (metadata_send_handler_t::received.load ());
     }
-    const std::string valid_request =
-      R"({"formatMarker":242,"kind":1,"channelName":"metadata","messageName":"metadata.request","correlationId":"valid-metadata","contentType":"application/json","metadata":{"tenant-id":"tenant-42"}})";
+    auto valid_request_envelope = valid_envelope;
+    valid_request_envelope.kind = zlink::framework::runtime::messaging::message_kind_t::request;
+    valid_request_envelope.message_name = "metadata.request";
+    valid_request_envelope.correlation_id = "valid-metadata";
+    const auto valid_request = std::string (zlink::framework::runtime::messaging::envelope_codec_t{}
+                                              .encode_header (valid_request_envelope)
+                                              .to_string ());
     const auto response =
       await_metadata_wire_reply (source.request ()
                                    .message (zlink::message_t::from (valid_request))
@@ -1372,8 +1402,8 @@ void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
         response.value ().front (), false);
     assert (reply_header && reply_header.value ().metadata.empty ());
     assert (nlohmann::json::parse (response.value ()[1].to_string ()) == "tenant-42");
-    for (const bool first : {false, true}) {
-        for (const auto &bad_request : invalid_metadata_headers (true, first)) {
+    {
+        for (const auto &bad_request : invalid_metadata_headers (true)) {
             const auto calls = metadata_request_handler_t::calls.load ();
             const auto rejected =
               await_metadata_wire_reply (source.request ()
@@ -1456,8 +1486,15 @@ void verify_invalid_metadata_is_a_protocol_error ()
       source.request ().message (zlink::message_t::from (hello)).timeout (5s).async ().reply);
     pump (client_server::client_server_pump_result_t::infrastructure);
     assert (admission.result ());
-    const std::string valid =
-      R"({"formatMarker":242,"kind":3,"channelName":"metadata","messageName":"metadata.send","contentType":"application/json","metadata":{"tenant-id":"tenant-42"}})";
+    zlink::framework::runtime::messaging::envelope_header_t valid_envelope;
+    valid_envelope.kind = zlink::framework::runtime::messaging::message_kind_t::command;
+    valid_envelope.channel_name = "metadata";
+    valid_envelope.message_name = "metadata.send";
+    valid_envelope.content_type = "application/json";
+    valid_envelope.metadata = {{"tenant-id", "tenant-42"}};
+    const auto valid = std::string (zlink::framework::runtime::messaging::envelope_codec_t{}
+                                      .encode_header (valid_envelope)
+                                      .to_string ());
     (void) source.send ()
       .message (zlink::message_t::from (valid))
       .message (zlink::message_t::from ("{}"))
@@ -1565,8 +1602,14 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
     }
     assert (admitted == client_server::client_server_pump_result_t::infrastructure);
     assert (admission.result ());
-    const std::string header =
-      R"({"formatMarker":242,"kind":3,"channelName":"receive-turn","messageName":"receive-turn.send","contentType":"application/json","metadata":{}})";
+    zlink::framework::runtime::messaging::envelope_header_t receive_header;
+    receive_header.kind = zlink::framework::runtime::messaging::message_kind_t::command;
+    receive_header.channel_name = "receive-turn";
+    receive_header.message_name = "receive-turn.send";
+    receive_header.content_type = "application/json";
+    const auto header = std::string (zlink::framework::runtime::messaging::envelope_codec_t{}
+                                       .encode_header (receive_header)
+                                       .to_string ());
     for (std::size_t index = 0; index < queued_records; ++index) {
         const auto submitted = source.send ()
                                  .message (zlink::message_t::from (header))
@@ -1752,8 +1795,15 @@ void verify_client_server_closed_reply_finishes_without_server_lane ()
     pump (client_server::client_server_pump_result_t::infrastructure);
     assert (admission.result ());
 
-    const std::string header =
-      R"({"formatMarker":242,"kind":1,"channelName":"closed-reply","messageName":"closed.request","correlationId":"closed-reply-test","contentType":"application/json"})";
+    zlink::framework::runtime::messaging::envelope_header_t closed_header;
+    closed_header.kind = zlink::framework::runtime::messaging::message_kind_t::request;
+    closed_header.channel_name = "closed-reply";
+    closed_header.message_name = "closed.request";
+    closed_header.correlation_id = "closed-reply-test";
+    closed_header.content_type = "application/json";
+    const auto header = std::string (zlink::framework::runtime::messaging::envelope_codec_t{}
+                                       .encode_header (closed_header)
+                                       .to_string ());
     auto pending = source.request ()
                      .message (zlink::message_t::from (header))
                      .message (zlink::message_t::from ("{}"))
@@ -1823,8 +1873,15 @@ void verify_sealed_client_server_rejects_request ()
     assert (admission.result ());
 
     server.mailbox ().close ();
-    const std::string header =
-      R"({"formatMarker":242,"kind":1,"channelName":"sealed-request","messageName":"sealed.request","correlationId":"sealed-request-test","contentType":"application/json"})";
+    zlink::framework::runtime::messaging::envelope_header_t sealed_header;
+    sealed_header.kind = zlink::framework::runtime::messaging::message_kind_t::request;
+    sealed_header.channel_name = "sealed-request";
+    sealed_header.message_name = "sealed.request";
+    sealed_header.correlation_id = "sealed-request-test";
+    sealed_header.content_type = "application/json";
+    const auto header = std::string (zlink::framework::runtime::messaging::envelope_codec_t{}
+                                       .encode_header (sealed_header)
+                                       .to_string ());
     auto pending = await_metadata_wire_reply (source.request ()
                                                 .message (zlink::message_t::from (header))
                                                 .message (zlink::message_t::from ("{}"))

@@ -71,7 +71,8 @@ public sealed class StreamFrameWriteTests
         private TaskCompletionSource _writeCompletion = NewCompletion();
         private int _writeCount;
 
-        public Channel<byte[]> Writes { get; } = Channel.CreateUnbounded<byte[]>();
+        public Channel<byte[]> Writes { get; } =
+            global::System.Threading.Channels.Channel.CreateUnbounded<byte[]>();
 
         public int WriteCount => Volatile.Read(ref _writeCount);
 

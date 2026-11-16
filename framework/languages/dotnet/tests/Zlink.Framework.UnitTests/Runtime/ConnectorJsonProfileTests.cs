@@ -260,6 +260,20 @@ public sealed class ConnectorJsonProfileTests
         Assert.ThrowsAny<JsonException>(() => Payload("{\"state\":\"1\"}").FromJson<EnumPayload>());
     }
 
+    [Fact]
+    public void Connector_constructor_nullability_is_independent_of_default_presence()
+    {
+        Assert.Equal(
+            new DefaultedNullability(),
+            Payload("{\"body\":null}").FromJson<DefaultedNullability>()
+        );
+        Assert.ThrowsAny<JsonException>(() =>
+            Payload("{\"label\":null}").FromJson<DefaultedNullability>()
+        );
+    }
+
+    private sealed record DefaultedNullability(string Label = "default", byte[]? Body = null);
+
     [Theory]
     [InlineData("plain-duplicate", "{\"seq\":1,\"seq\":2}", true)]
     [InlineData("escaped-current", "{\"seq\":1,\"s\\u0065q\":2}", true)]

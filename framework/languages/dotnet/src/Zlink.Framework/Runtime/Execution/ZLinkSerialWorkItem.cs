@@ -192,9 +192,14 @@ internal sealed class ZLinkSerialWorkItem
         if (executionStatus != ZLinkObjectExecutionStatus.Allowed)
         {
             _relocationRelease?.Invoke();
+            // Ownership loss ends with NotFound whether or not stop cleanup has cancelled the queue yet
+            // (Location runtime spec §5.1).
             if (
-                executionStatus == ZLinkObjectExecutionStatus.Stopped
-                || cancellationToken.IsCancellationRequested
+                executionStatus != ZLinkObjectExecutionStatus.OwnershipLost
+                && (
+                    executionStatus == ZLinkObjectExecutionStatus.Stopped
+                    || cancellationToken.IsCancellationRequested
+                )
             )
                 _completion!.TrySetCanceled(cancellationToken);
             else

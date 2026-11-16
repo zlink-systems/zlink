@@ -19,7 +19,6 @@ import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
@@ -68,10 +67,7 @@ final class ZLinkChannelRouteDispatcher {
                 envelope =
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
                                 .decodeDispatchHeader(received.parts(), true);
-                inboundFlow =
-                        envelope == null
-                                ? ZLinkChannelFlowFrame.decode(received.parts())
-                                : ZLinkChannelFlowFrame.fromEnvelopeHeader(envelope);
+                inboundFlow = ZLinkChannelFlowFrame.fromEnvelopeHeader(envelope);
             } catch (PayloadDecodeDispatchException
                     | systems.zlink.framework.errors.ZLinkFrameworkException invalidFlow) {
                 String packetName =
@@ -120,8 +116,8 @@ final class ZLinkChannelRouteDispatcher {
             try {
                 packet = ZLinkChannelEnvelope.decodeDispatchPacket(received.parts(), envelope);
             } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
-                //  A JSON-object first frame that is not a valid shared
-                //  envelope is a protocol error (C++ decode parity).
+                //  A frame that cannot be parsed and validated as ChannelHeader is a protocol
+                // error.
                 if (received.routingId().isPresent() && received.isRequest()) {
                     errors.replyError(
                             router,
@@ -147,7 +143,7 @@ final class ZLinkChannelRouteDispatcher {
                 return;
             }
             if (ZLinkFrameworkErrorReply.isPacketName(packet.packetName())
-                    || (packet.header() != null && packet.header().isError())) {
+                    || packet.header().isError()) {
                 errors.report(
                         ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                         received.isRequest()
@@ -173,10 +169,7 @@ final class ZLinkChannelRouteDispatcher {
                         null);
                 return;
             }
-            String contentType =
-                    packet.header() != null
-                            ? packet.header().contentType()
-                            : ZLinkChannelContentTypeFrame.decode(received.parts());
+            String contentType = packet.header().contentType();
             RoutingId source = received.routingId().get();
             if (!received.isRequest()) {
                 dispatchSend(channelName, source, packet, contentType);
@@ -376,9 +369,7 @@ final class ZLinkChannelRouteDispatcher {
                                                     ZLinkFrameworkMultipartView.buffer(
                                                             received.parts(),
                                                             packet.payloadIndex()),
-                                                    packet.header() == null
-                                                            ? Map.of()
-                                                            : packet.header().metadata(),
+                                                    packet.header().metadata(),
                                                     contentType,
                                                     flow.enabled(ZLinkMessageFlowOutcome.DISPATCHED)
                                                             ? () ->
@@ -491,10 +482,7 @@ final class ZLinkChannelRouteDispatcher {
                                                                         registration,
                                                                         source,
                                                                         payload.dataBuffer(),
-                                                                        packet.header() != null
-                                                                                ? packet.header()
-                                                                                        .metadata()
-                                                                                : Map.of(),
+                                                                        packet.header().metadata(),
                                                                         contentType,
                                                                         flow.enabled(
                                                                                         ZLinkMessageFlowOutcome

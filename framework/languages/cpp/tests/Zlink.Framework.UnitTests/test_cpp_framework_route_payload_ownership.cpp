@@ -2,6 +2,7 @@
 #include <zlink/json.hpp>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <channel-header-v1.pb.h>
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include <zlink/framework.hpp>
 #include "runtime/channels/route_handler_invoker.hpp"
@@ -42,6 +43,15 @@
 namespace
 {
 using namespace zlink::framework;
+using channel_header_proto_t = zlink::framework::channel::v1::ChannelHeader;
+
+std::string encode_channel_header_proto (const channel_header_proto_t &header)
+{
+    std::string bytes;
+    if (!header.SerializeToString (&bytes))
+        throw std::runtime_error ("test ChannelHeader protobuf cannot be encoded");
+    return bytes;
+}
 
 struct task_registration_probe_t
 {
@@ -1629,37 +1639,39 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
             reply_parts = parts;
             return true;
         };
-        msg::envelope_header_t header;
-        header.channel_name = "mesh";
-        header.message_name = "request";
-        header.correlation_id = "request-correlation";
-        header.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
-        header.flow_origin = flow_origin_t::application;
-        auto wire = codec.encode_header (header).to_string ();
-        auto invalid_flow = wire;
-        invalid_flow.replace (invalid_flow.find (*header.flow_id), 4, "ZZZZ");
-        auto invalid_flow_type = wire;
-        const auto flow_at = invalid_flow_type.find (*header.flow_id);
-        invalid_flow_type.replace (flow_at - 1, header.flow_id->size () + 2, "7");
-        auto invalid_metadata = wire;
-        const std::string empty_metadata = "\"metadata\":{}";
-        invalid_metadata.replace (invalid_metadata.find (empty_metadata), empty_metadata.size (),
-                                  "\"metadata\":[]");
-        auto invalid_content_type = wire;
-        const auto content_at = invalid_content_type.find (header.content_type);
-        invalid_content_type.replace (content_at - 1, header.content_type.size () + 2, "7");
-        auto invalid_deadline = wire;
-        const std::string deadline = "\"deadline\":null";
-        invalid_deadline.replace (invalid_deadline.find (deadline), deadline.size (),
-                                  "\"deadline\":7");
-        for (const auto &invalid : {invalid_flow, invalid_flow_type, invalid_metadata,
-                                    invalid_content_type, invalid_deadline}) {
-            SCOPED_TRACE (invalid);
+        channel_header_proto_t header;
+        header.set_kind (zlink::framework::channel::v1::REQUEST);
+        header.set_channel_name ("mesh");
+        header.set_message_name ("request");
+        header.set_content_type ("application/json");
+        header.set_correlation_id ("request-correlation");
+        header.set_flow_id ("01890a5d-ac96-774b-bcce-b302099a8057");
+        header.set_flow_origin (zlink::framework::channel::v1::APPLICATION);
+        auto invalid_flow = header;
+        invalid_flow.set_flow_id ("ZZZZ0a5d-ac96-774b-bcce-b302099a8057");
+        auto invalid_flow_type = header;
+        invalid_flow_type.set_flow_origin (
+          static_cast<zlink::framework::channel::v1::FlowOrigin> (7));
+        auto invalid_metadata = header;
+        invalid_metadata.add_metadata ()->set_value ("invalid");
+        auto invalid_content_type = header;
+        invalid_content_type.set_content_type (std::string ("application/json\0", 17));
+        auto invalid_deadline = header;
+        invalid_deadline.set_deadline (std::string ("2026-11-17\0", 11));
+        const std::vector<std::pair<std::string, channel_header_proto_t>> invalid_headers{
+          {"flow", std::move (invalid_flow)},
+          {"flow-origin", std::move (invalid_flow_type)},
+          {"metadata", std::move (invalid_metadata)},
+          {"content-type", std::move (invalid_content_type)},
+          {"deadline", std::move (invalid_deadline)}};
+        for (const auto &[name, invalid] : invalid_headers) {
+            SCOPED_TRACE (name);
             const auto previous_errors = errors.size ();
             const auto previous_replies = replies;
             reply_parts.clear ();
-            auto parts = std::vector<zlink::message_t>{zlink::message_t::from (invalid),
-                                                       zlink::message_t::from ("42")};
+            auto parts = std::vector<zlink::message_t>{
+              zlink::message_t::from (encode_channel_header_proto (invalid)),
+              zlink::message_t::from ("42")};
             auto rejected = runtime::decode_mesh_record_header (record, parts, true, options);
             EXPECT_FALSE (rejected);
             EXPECT_EQ (rejected.error_kind (), framework_error_kind_t::protocol_error);
@@ -1669,17 +1681,18 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
             ASSERT_EQ (errors.size (), previous_errors + 1);
             EXPECT_EQ (errors.back ().action, dispatch_error_action_t::reply_error);
             EXPECT_EQ (errors.back ().reason, dispatch_error_reason_t::invalid_frame);
-            EXPECT_EQ (errors.back ().correlation_id, header.correlation_id);
-            EXPECT_EQ (errors.back ().flow_id,
-                       invalid == invalid_metadata ? header.flow_id : std::nullopt);
+            EXPECT_EQ (errors.back ().correlation_id, header.correlation_id ());
+            EXPECT_EQ (errors.back ().flow_id, name == "metadata"
+                                                 ? std::optional<std::string> (header.flow_id ())
+                                                 : std::nullopt);
             ASSERT_EQ (reply_parts.size (), 2u);
             auto reply = codec.decode_header (msg::message_parts_t (reply_parts));
             ASSERT_TRUE (reply);
             EXPECT_EQ (reply.value ().kind, msg::message_kind_t::error);
             EXPECT_EQ (reply.value ().error_code, "protocol_error");
-            EXPECT_EQ (reply.value ().correlation_id, header.correlation_id);
-            EXPECT_EQ (reply.value ().channel_name, header.channel_name);
-            EXPECT_EQ (reply.value ().message_name, header.message_name);
+            EXPECT_EQ (reply.value ().correlation_id, header.correlation_id ());
+            EXPECT_EQ (reply.value ().channel_name, header.channel_name ());
+            EXPECT_EQ (reply.value ().message_name, header.message_name ());
         }
         // Without readable correlation there is no request to attach a reply to.
         const auto previous_replies = replies;
@@ -1791,6 +1804,47 @@ TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContrac
         std::getline (input, request, '\t');
         std::getline (input, json, '\t');
         std::getline (input, action, '\t');
+        (void) json; // The shared table's payload column describes the legacy JSON wire format.
+        channel_header_proto_t header;
+        header.set_kind (zlink::framework::channel::v1::REQUEST);
+        header.set_channel_name ("play");
+        header.set_message_name ("String");
+        header.set_content_type ("application/json");
+        header.set_correlation_id ("reply-correlation");
+        bool malformed_wire = false;
+        if (id == "syntax" || id == "trailing-json") {
+            malformed_wire = true;
+        } else if (id == "correlation-65") {
+            header.set_correlation_id (std::string (65, 'a'));
+        } else if (id == "correlation-nonascii") {
+            header.set_correlation_id ("\xc3\xa9");
+        } else if (id == "correlation-64") {
+            header.set_correlation_id (std::string (64, 'a'));
+        } else if (id == "correlation-space") {
+            header.set_correlation_id (" ");
+        } else if (id == "correlation-control") {
+            header.set_correlation_id (std::string ("\0\x7f", 2));
+        } else if (id == "correlation-empty") {
+            header.set_correlation_id ("");
+        } else if (id == "correlation-null" || id == "correlation-number") {
+            header.clear_correlation_id ();
+        } else if (id == "content-type") {
+            header.set_content_type (std::string ("application/json\0", 17));
+        } else if (id == "send-marker") {
+            header.set_kind (static_cast<zlink::framework::channel::v1::ChannelKind> (99));
+        }
+        const bool invalid_metadata =
+          id == "metadata" || id == "correlation-64" || id == "correlation-space"
+          || id == "correlation-control" || id == "correlation-empty" || id == "correlation-null"
+          || id == "correlation-number" || id == "send-metadata" || id == "send-header-request"
+          || id == "kind-type" || id == "kind-value" || id == "kind-boolean"
+          || id == "kind-fraction" || id == "kind-overflow" || id == "marker"
+          || id == "marker-fraction";
+        if (invalid_metadata)
+            header.add_metadata ()->set_value ("invalid");
+        const auto wire =
+          malformed_wire ? std::string ("\xff", 1) : encode_channel_header_proto (header);
+        const auto expected_correlation = header.correlation_id ();
         SCOPED_TRACE (id);
         for (auto kind : request == "true" ? std::vector{host::record_kind_t::node_request,
                                                          host::record_kind_t::channel_request,
@@ -1821,7 +1875,7 @@ TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContrac
               options, [observations] (const message_dispatch_error_event_t &event) {
                   observations->record (event);
               });
-            auto parts = std::vector<zlink::message_t>{zlink::message_t::from (json),
+            auto parts = std::vector<zlink::message_t>{zlink::message_t::from (wire),
                                                        zlink::message_t::from ("request")};
             auto result = runtime::decode_mesh_record_header (record, parts, false, options);
             EXPECT_FALSE (result);
@@ -1839,8 +1893,7 @@ TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContrac
                 ASSERT_TRUE (reply);
                 EXPECT_EQ (reply.value ().kind, msg::message_kind_t::error);
                 EXPECT_EQ (reply.value ().error_code, "protocol_error");
-                EXPECT_EQ (reply.value ().correlation_id,
-                           nlohmann::json::parse (json).at ("correlationId").get<std::string> ());
+                EXPECT_EQ (reply.value ().correlation_id, expected_correlation);
             }
         }
         ++count;
