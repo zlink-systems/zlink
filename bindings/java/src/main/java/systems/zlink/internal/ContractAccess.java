@@ -306,8 +306,6 @@ public final class ContractAccess {
 
         Object openSharedMessageScope();
 
-        boolean messageScopeAlive(Object scope);
-
         void closeMessageScope(Object scope);
 
         Object allocate(Object scope);
@@ -885,22 +883,6 @@ public final class ContractAccess {
 
     public static long nativeMessageLayoutSize() {
         return nativeMessageAccess().layoutSize();
-    }
-
-    public static Object nativeMessageOpenSharedScope() {
-        return nativeMessageAccess().openSharedMessageScope();
-    }
-
-    public static boolean nativeMessageScopeAlive(Object scope) {
-        return nativeMessageAccess().messageScopeAlive(scope);
-    }
-
-    public static void nativeMessageCloseScope(Object scope) {
-        nativeMessageAccess().closeMessageScope(scope);
-    }
-
-    public static Object nativeMessageAllocate(Object scope) {
-        return nativeMessageAccess().allocate(scope);
     }
 
     public static Object nativeMessageHandleFromAddress(long address) {
