@@ -12,6 +12,7 @@ import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotActorSend;
 import systems.zlink.framework.runtime.handlers.ZLinkGenericTypeResolver;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanValidation;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
@@ -50,7 +51,7 @@ final class ZLinkSpotActorHandlerCatalog {
             Map<String, List<SpotActorPacketHandlerRegistration>> handlersByPacket) {
         boolean matched = false;
         if (isActorPacketHandlerType(handlerType)) {
-            registerInterfaceHandler(handlerType, handlersByPacket);
+            registerInterfaceHandler(handlerType, expectedSpotType, handlersByPacket);
             matched = true;
         }
         for (Method method : handlerType.getMethods()) {
@@ -103,38 +104,44 @@ final class ZLinkSpotActorHandlerCatalog {
                 new SpotActorPacketHandlerRegistration(
                         handlerType,
                         method,
-                        expectedSpotType,
+                        shape.spotType() == null ? expectedSpotType : shape.spotType(),
                         shape.actorType(),
                         shape.messageType(),
                         replyType,
                         ZLinkPacketNames.resolve(shape.messageType(), explicitPacketName),
                         kind,
-                        suspendInvokers));
+                        suspendInvokers),
+                expectedSpotType);
     }
 
     private void registerInterfaceHandler(
             Class<?> handlerType,
+            Class<?> expectedSpotType,
             Map<String, List<SpotActorPacketHandlerRegistration>> handlersByPacket) {
         registerInterfaceHandler(
                 handlerType,
+                expectedSpotType,
                 ZLinkScannedHandlerKind.ACTOR_SEND,
                 findInterface(handlerType, ZLinkEntrySpotActorSendHandler.class),
                 findInterface(handlerType, ZLinkSpotActorSendHandler.class),
                 handlersByPacket);
         registerInterfaceHandler(
                 handlerType,
+                expectedSpotType,
                 ZLinkScannedHandlerKind.ACTOR_SEND,
                 findInterface(handlerType, KOTLIN_ENTRY_SPOT_ACTOR_SEND_HANDLER),
                 findInterface(handlerType, KOTLIN_SPOT_ACTOR_SEND_HANDLER),
                 handlersByPacket);
         registerInterfaceHandler(
                 handlerType,
+                expectedSpotType,
                 ZLinkScannedHandlerKind.ACTOR_REQUEST,
                 findInterface(handlerType, ZLinkEntrySpotActorRequestHandler.class),
                 findInterface(handlerType, ZLinkSpotActorRequestHandler.class),
                 handlersByPacket);
         registerInterfaceHandler(
                 handlerType,
+                expectedSpotType,
                 ZLinkScannedHandlerKind.ACTOR_REQUEST,
                 findInterface(handlerType, KOTLIN_ENTRY_SPOT_ACTOR_REQUEST_HANDLER),
                 findInterface(handlerType, KOTLIN_SPOT_ACTOR_REQUEST_HANDLER),
@@ -143,6 +150,7 @@ final class ZLinkSpotActorHandlerCatalog {
 
     private void registerInterfaceHandler(
             Class<?> handlerType,
+            Class<?> expectedSpotType,
             ZLinkScannedHandlerKind kind,
             ParameterizedType entryInterface,
             ParameterizedType spotInterface,
@@ -166,12 +174,18 @@ final class ZLinkSpotActorHandlerCatalog {
                                 : Void.class,
                         ZLinkPacketNames.resolve(messageType),
                         kind,
-                        suspendInvokers));
+                        suspendInvokers),
+                expectedSpotType);
     }
 
     void add(
             Map<String, List<SpotActorPacketHandlerRegistration>> handlersByPacket,
-            SpotActorPacketHandlerRegistration registration) {
+            SpotActorPacketHandlerRegistration registration,
+            Class<?> expectedSpotType) {
+        if (registration.spotType() != null) {
+            ZLinkHandlerScanValidation.requireExactSpotType(
+                    registration.handlerType(), expectedSpotType, registration.spotType());
+        }
         List<SpotActorPacketHandlerRegistration> packetHandlers =
                 handlersByPacket.computeIfAbsent(
                         registration.packetName(), ignored -> new ArrayList<>());

@@ -7,9 +7,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 @ZLinkSpotSubscription(channelName = "events", topic = "room.events")
-public final class TopicSubscription implements ZLinkSpotSubscriptionHandler<Object, String> {
+public final class TopicSubscription
+        implements ZLinkSpotSubscriptionHandler<TopicSubscription.SubscriptionSpot, String> {
+    public static final class SubscriptionSpot {}
+
     @Override
-    public CompletionStage<Void> handle(Object spot, String message) {
+    public CompletionStage<Void> handle(SubscriptionSpot spot, String message) {
         return CompletableFuture.completedFuture(null);
     }
 }
