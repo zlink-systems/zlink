@@ -376,6 +376,10 @@ Reply, timeout, cancellation과 Spot shutdown이 경쟁하면 먼저 확정된 t
 하나만 사용한다. Spot이 종료되거나 같은 Spot ID로 새 generation이 만들어지면 이전
 activation의 늦은 reply를 새 Spot에 전달하지 않는다. Target 연결 종료·timeout 뒤 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
 
+Framework는 취소·deadline·실패 결과를 caller에게 공개하기 전에 그 request가 잡은 local admission(application
+job permit·capacity 대기)과 stale route 무효화를 끝낸다. Caller가 결과를 관찰하는 시점에는 이 정리가 이미
+반영되어 있다.
+
 ## 10. Operation identity와 완료 자리 (구현)
 
 최종 typed 결과의 전달 구조는 [§9](#9-request-completion--완료-경쟁과-timeout-budget)를 따른다.
