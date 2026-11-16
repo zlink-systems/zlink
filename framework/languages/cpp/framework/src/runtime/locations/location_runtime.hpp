@@ -469,33 +469,34 @@ class location_runtime_t
         return [lane = _lane, operations = _descriptor_publications, lease = _owner_lease,
                 now = _lease_now, owner = std::atomic_load (&_heartbeat_state), store = _store] (
                  authority_key_t key, authority_snapshot_t fence, task_t<void> settled) {
-            return lane->run_task ([lane, operations, lease, now, owner, store,
-                                    key = std::move (key), fence = std::move (fence),
-                                    settled = std::move (settled)] () mutable {
-                if (owner->stop.load (std::memory_order_acquire))
-                    return;
-                auto operation = std::make_shared<discarded_authority_t> (
-                  *store, std::move (key), std::move (fence), std::move (settled));
-                register_repository_operation (operations, operation);
-                // Registration is submitted; Store cleanup still waits for local
-                // discard and accepted membership additions to settle.
-                operation->submitted.complete (result_t<void>::success ());
-                detail::observe_task_terminal (
-                  operation->settled, [lane, lease, owner, operation] (const auto &) {
-                      lane->try_post ([lease, owner, operation] {
-                          if (owner->stop.load (std::memory_order_acquire))
-                              return;
-                          const auto current =
-                            std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
-                          if (current->token)
-                              operation->progress (*current->token);
-                      });
-                  });
-                const auto current =
-                  std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
-                if (owner_lease_usable (*current, (*now) ()))
-                    operation->progress (*current->token);
-            });
+            return lane->run_task (
+              [lane, operations, lease, now, owner, store, key = std::move (key),
+               fence = std::move (fence),
+               settled = std::make_shared<task_t<void>> (std::move (settled))] () mutable {
+                  if (owner->stop.load (std::memory_order_acquire))
+                      return;
+                  auto operation = std::make_shared<discarded_authority_t> (
+                    *store, std::move (key), std::move (fence), std::move (*settled));
+                  register_repository_operation (operations, operation);
+                  // Registration is submitted; Store cleanup still waits for local
+                  // discard and accepted membership additions to settle.
+                  operation->submitted.complete (result_t<void>::success ());
+                  detail::observe_task_terminal (
+                    operation->settled, [lane, lease, owner, operation] (const auto &) {
+                        lane->try_post ([lease, owner, operation] {
+                            if (owner->stop.load (std::memory_order_acquire))
+                                return;
+                            const auto current =
+                              std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
+                            if (current->token)
+                                operation->progress (*current->token);
+                        });
+                    });
+                  const auto current =
+                    std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
+                  if (owner_lease_usable (*current, (*now) ()))
+                      operation->progress (*current->token);
+              });
         };
     }
 
@@ -1801,15 +1802,15 @@ class location_runtime_t
                             co_return outcome;
                     } else {
                         auto discards = co_await lease_lane (attempt, [runtime] {
-                            std::vector<task_t<void>> discards;
+                            auto discards = std::make_shared<std::vector<task_t<void>>> ();
                             for (const auto &observer : *runtime->_execution_discard_requests)
-                                discards.push_back (observer.discard ([] (const auto &) {
+                                discards->push_back (observer.discard ([] (const auto &) {
                                     return serial_execution_queue_t::execution_status_t::
                                       ownership_lost;
                                 }));
                             return discards;
                         });
-                        for (auto &discard : discards)
+                        for (auto &discard : *discards)
                             co_await discard;
                     }
                 } else {
