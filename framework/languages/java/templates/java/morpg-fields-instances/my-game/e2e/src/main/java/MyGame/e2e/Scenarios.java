@@ -66,6 +66,7 @@ public final class Scenarios implements AutoCloseable {
                 value -> value.reason().equals(Rejection.NOT_LEADER));
         require(nonleader.retryAfterMs() == 0, "Leadership rejection has a cooldown");
         p2.send(new ViewRequest());
+        p2.next(WorldState.class);
         var unchanged = p2.next(PartyView.class, view -> view.partyId().equals(partyId));
         require(joined.members().equals(unchanged.members())
                         && joined.phase() == unchanged.phase()
@@ -155,8 +156,10 @@ public final class Scenarios implements AutoCloseable {
                     "Field crossing interrupted connection");
 
             player.send(new ViewRequest());
+            player.next(WorldState.class);
             var playerParty = player.next(PartyView.class, view -> view.partyId().equals(party.partyId()));
             observer.send(new ViewRequest());
+            observer.next(WorldState.class);
             var observerParty = observer.next(PartyView.class,
                     view -> view.partyId().equals(party.partyId()));
             require(playerParty.members().equals(members)
@@ -176,6 +179,7 @@ public final class Scenarios implements AutoCloseable {
                 require(rejected != null, "Missing movement rejection: " + entry.reason());
                 player.send(new ViewRequest());
                 var state = player.next(WorldState.class);
+                player.next(PartyView.class);
                 require(state.x() == after.x() && state.sequence() == after.sequence(),
                         "Rejected movement changed state");
             }
@@ -190,6 +194,7 @@ public final class Scenarios implements AutoCloseable {
             require(stale.retryAfterMs() == 0, "Stale movement has a retry delay");
             player.send(new ViewRequest());
             var current = player.next(WorldState.class);
+            player.next(PartyView.class);
             require(current.x() == moved.x() && current.sequence() == moved.sequence(),
                     "Stale movement changed state");
             return;

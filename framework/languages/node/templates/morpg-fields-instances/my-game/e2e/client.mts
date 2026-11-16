@@ -159,7 +159,9 @@ async function enter(a: PlayerClient, b: PlayerClient, party: string): Promise<D
   assert.deepEqual(joined, await a.wait<PartyView>(PacketNames.partyView, markA, v => v.members.length === 2));
   const rejected = await b.send<ActionRejected>(new EnterDungeonRequest(), PacketNames.actionRejected);
   assert.deepEqual(rejected, { reason: 'not-leader', retryAfterMs: 0 });
+  const rejectedView = b.messages.length;
   assert.deepEqual(await b.send<PartyView>(new ViewRequest(), PacketNames.partyView), joined);
+  await b.wait<WorldState>(PacketNames.worldState, rejectedView);
   const markB = b.messages.length, markLeader = a.messages.length;
   await a.connector.send(new EnterDungeonRequest()).submit();
   await a.connector.send(new EnterDungeonRequest()).submit();
@@ -228,8 +230,12 @@ export async function scenario(
       assert.equal(visible.sourceFieldId, 'field-3');
       assert.equal(visible.x, Positions.fieldDestination);
       assert.deepEqual(await a.sessionInfo(), identity);
+      const crossMark = a.messages.length;
       const cross = await a.send<PartyView>(new ViewRequest(), PacketNames.partyView);
+      await a.wait<WorldState>(PacketNames.worldState, crossMark);
+      const otherMark = b.messages.length;
       const other = await b.send<PartyView>(new ViewRequest(), PacketNames.partyView);
+      await b.wait<WorldState>(PacketNames.worldState, otherMark);
       assert.deepEqual(cross, other);
       assert.equal(cross.partyId, party.partyId);
       assert.deepEqual(cross.members, [a.playerId, b.playerId]);
@@ -240,7 +246,9 @@ export async function scenario(
         [new MoveRequest(0, 1n), 'stale-sequence']
       ] as const) {
         assert.deepEqual(await a.send<ActionRejected>(request, PacketNames.actionRejected), { reason, retryAfterMs: 0 });
+        const viewMark = a.messages.length;
         const state = await a.send<WorldState>(new ViewRequest(), PacketNames.worldState);
+        await a.wait<PartyView>(PacketNames.partyView, viewMark);
         assert.equal(state.x, moved.x); assert.equal(state.sequence, moved.sequence);
       }
       const continued = await a.send<WorldState>(new MoveRequest(0, 2n), PacketNames.worldState, v => v.sequence === 2n);
@@ -249,7 +257,10 @@ export async function scenario(
       assert.equal(accepted.x, moved.x);
       const stale = await a.send<ActionRejected>(new MoveRequest(0, 3n), PacketNames.actionRejected);
       assert.deepEqual(stale, { reason: 'stale-sequence', retryAfterMs: 0 });
-      assert.deepEqual(await a.send<WorldState>(new ViewRequest(), PacketNames.worldState), accepted);
+      const staleViewMark = a.messages.length;
+      const unchanged = await a.send<WorldState>(new ViewRequest(), PacketNames.worldState);
+      await a.wait<PartyView>(PacketNames.partyView, staleViewMark);
+      assert.deepEqual(unchanged, accepted);
 
     } else {
       await a.join(Positions.dungeon);

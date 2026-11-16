@@ -55,6 +55,7 @@ class Scenarios(private val nodes: Nodes, selectedScenarios: List<String>) {
         val nonleader = p2.next<ActionRejected> { it.reason == Rejection.NOT_LEADER }
         check(nonleader.retryAfterMs == 0) { "Leadership rejection has a cooldown" }
         p2.send(ViewRequest())
+        p2.next<WorldState>()
         val unchanged = p2.next<PartyView> { it.partyId == partyId }
         check(
             joined.members == unchanged.members &&
@@ -159,8 +160,10 @@ class Scenarios(private val nodes: Nodes, selectedScenarios: List<String>) {
             }
 
             player.send(ViewRequest())
+            player.next<WorldState>()
             val playerParty = player.next<PartyView> { it.partyId == partyView.partyId }
             observer.send(ViewRequest())
+            observer.next<WorldState>()
             val observerParty = observer.next<PartyView> { it.partyId == partyView.partyId }
             check(
                 playerParty.members == members &&
@@ -184,6 +187,7 @@ class Scenarios(private val nodes: Nodes, selectedScenarios: List<String>) {
                 check(rejected.reason == entry.reason) { "Missing movement rejection: ${entry.reason}" }
                 player.send(ViewRequest())
                 val state = player.next<WorldState>()
+                player.next<PartyView>()
                 check(state.x == after.x && state.sequence == after.sequence) {
                     "Rejected movement changed state"
                 }
@@ -199,6 +203,7 @@ class Scenarios(private val nodes: Nodes, selectedScenarios: List<String>) {
             check(stale.retryAfterMs == 0) { "Stale movement has a retry delay" }
             player.send(ViewRequest())
             val current = player.next<WorldState>()
+            player.next<PartyView>()
             check(current.x == moved.x && current.sequence == moved.sequence) {
                 "Stale movement changed state"
             }

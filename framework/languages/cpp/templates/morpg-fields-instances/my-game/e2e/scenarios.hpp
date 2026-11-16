@@ -146,6 +146,7 @@ inline void field (const std::string &endpoint)
             require (rejected.retryAfterMs == 0, "Movement rejection has a cooldown");
             const auto state = player.exchange<ViewRequest, WorldState> (
               {}, [] (const auto &) { return true; });
+            player.receive<PartyView> ([] (const auto &) { return true; });
             require (state.x == moved.x && state.sequence == moved.sequence,
                      "Rejected movement changed state");
         }
@@ -158,6 +159,7 @@ inline void field (const std::string &endpoint)
         require (stale.retryAfterMs == 0, "Stale sequence returned a retry delay");
         const auto unchanged = player.exchange<ViewRequest, WorldState> (
           {}, [] (const auto &) { return true; });
+        player.receive<PartyView> ([] (const auto &) { return true; });
         require (unchanged.x == continued.x && unchanged.sequence == continued.sequence,
                  "Stale movement changed state");
     }
