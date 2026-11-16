@@ -50,6 +50,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLivene
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
@@ -1350,7 +1351,12 @@ public final class ZLinkChannelRuntime
             Duration timeout) {
         Duration effectiveTimeout = effectiveRouteTimeout(timeout);
         List<Message> requestParts =
-                ZLinkChannelCallRuntime.parts(Optional.of(packetName), payload);
+                ZLinkChannelCallRuntime.parts(
+                        channelName,
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        Optional.of(packetName),
+                        payload,
+                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
         var result =
                 systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
                         .<ZLinkBackendReceived, Message>prepareOperation(
