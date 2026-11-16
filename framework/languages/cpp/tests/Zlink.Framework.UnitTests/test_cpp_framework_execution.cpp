@@ -3784,9 +3784,28 @@ bool verify_spot_serial_task_async_retains_work_until_terminal ()
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
+    struct actor_release_guard_t
+    {
+        std::shared_ptr<int> actor;
+        std::promise<void> *released;
+
+        actor_release_guard_t (std::shared_ptr<int> value, std::promise<void> &release_completed) :
+            actor (std::move (value)), released (&release_completed)
+        {
+        }
+
+        ~actor_release_guard_t ()
+        {
+            actor.reset ();
+            released->set_value ();
+        }
+    };
+
     // Declared before the executor and owner so queued work never outlives them.
     std::promise<void> entered;
     std::promise<result_t<void>> settled;
+    std::promise<void> released;
+    const auto released_result = released.get_future ();
     auto executor = std::make_shared<runtime::offload_executor_t> (1, "spot-serial-retain");
     auto owner = std::make_shared<spot_context_state_t> ();
     owner->serial_executor = executor;
@@ -3800,9 +3819,11 @@ bool verify_spot_serial_task_async_retains_work_until_terminal ()
       [&] { (void) terminal->complete (result_t<void>::success ()); });
     auto actor_instance = std::make_shared<int> (7);
     const std::weak_ptr<int> weak_actor = actor_instance;
+    auto work_guard =
+      std::make_shared<actor_release_guard_t> (std::move (actor_instance), released);
     owner->run_serial_task_async (
       "retained-spot-lifecycle-leave",
-      [actor_instance = std::move (actor_instance), terminal, &entered] {
+      [work_guard = std::move (work_guard), terminal, &entered] {
           entered.set_value ();
           return await_lifecycle_terminal (terminal);
       },
@@ -3814,9 +3835,11 @@ bool verify_spot_serial_task_async_retains_work_until_terminal ()
     terminal->complete (result_t<void>::success ());
     if (settled_result.wait_for (std::chrono::seconds (5)) != std::future_status::ready)
         return false;
+    const bool released_after_terminal =
+      released_result.wait_for (std::chrono::seconds (5)) == std::future_status::ready
+      && weak_actor.expired ();
     const bool succeeded = static_cast<bool> (settled_result.get ());
     owner->serial_queue->drain ();
-    const bool released_after_terminal = weak_actor.expired ();
     if (!retained_while_suspended || !succeeded || !released_after_terminal)
         std::cerr << "lifecycle work lifetime: retained=" << retained_while_suspended
                   << " succeeded=" << succeeded << " released=" << released_after_terminal << '\n';
