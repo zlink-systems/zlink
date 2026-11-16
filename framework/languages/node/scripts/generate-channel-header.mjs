@@ -15,6 +15,17 @@ const generatedDirectory = join(
 const generatedModule = join(generatedDirectory, 'channel-header-v1.js');
 const generatedTypes = join(generatedDirectory, 'channel-header-v1.d.ts');
 const check = process.argv.includes('--check');
+
+//  tsc emits only .ts sources, so the build copies the committed generated module into dist.
+if (process.argv.includes('--dist')) {
+  const { mkdirSync } = await import('node:fs');
+  const distDirectory = join(workspace, 'packages/framework/dist/runtime/channels/generated');
+  mkdirSync(distDirectory, { recursive: true });
+  copyFileSync(generatedModule, join(distDirectory, 'channel-header-v1.js'));
+  copyFileSync(generatedTypes, join(distDirectory, 'channel-header-v1.d.ts'));
+  process.exit(0);
+}
+
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'zlink-channel-header-'));
 
 try {
