@@ -420,14 +420,15 @@ final class ZLinkSpotLifecycle {
         return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
     }
 
-    void discardExecution(DefaultSpotContext context) {
+    CompletionStage<Void> discardExecution(DefaultSpotContext context) {
         SpotActivation activation = spots.get(context.spotId());
         if (activation == null
                 || activation.context != context
-                || !spots.remove(context.spotId(), activation)) return;
+                || !spots.remove(context.spotId(), activation))
+            return CompletableFuture.completedFuture(null);
         recordSpotCount(activation.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, -1);
         countChanged.run();
-        context.closeResourcesAsync();
+        return context.closeResourcesAsync();
     }
 
     ZLinkSpot<?> spotFor(String spotId) {

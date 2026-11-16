@@ -347,6 +347,11 @@ final class ZLinkActorJoinStoreAdmissionTest {
         runtime.setActorJoinRelocationPort(
                 new ZLinkActorJoinRelocationPort() {
                     @Override
+                    public CompletionStage<Void> discardTargetJoins(Object targetSpot) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    @Override
                     public CompletionStage<Submission> relocate(Goal goal, Duration timeout) {
                         return CompletableFuture.failedFuture(
                                 new AssertionError("relocation is outside admission coverage"));

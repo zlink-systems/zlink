@@ -362,11 +362,12 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                     systems.zlink.framework.execution.ZLinkSerialExecutionQueue.ExecutionPolicy,
                     ZLinkExecutionAvailability {
         private final BooleanSupplier steady;
-        private final AtomicReference<Runnable> cleanup;
+        private final AtomicReference<Supplier<CompletionStage<Void>>> cleanup;
+        private final CompletableFuture<Void> localCompletion = new CompletableFuture<>();
         private final Supplier<String> authorityKey;
         private volatile String key;
         private final Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply;
-        private final Supplier<String> parent;
+        private Supplier<String> parent;
         private ZLinkAuthoritySnapshot confirmed;
         private CompletionStage<Void> operation;
         private volatile Runnable resume;
@@ -376,7 +377,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 BooleanSupplier steady,
                 Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
                 Supplier<String> parent,
-                Runnable cleanup) {
+                Supplier<CompletionStage<Void>> cleanup) {
             this.authorityKey = authorityKey;
             this.steady = steady;
             this.apply = apply;
@@ -462,12 +463,18 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             discardCore();
         }
 
-        private void discardCore() {
+        public CompletionStage<Void> discardAsync() {
+            return discardCore();
+        }
+
+        private CompletionStage<Void> discardCore() {
             // After stop or close, host shutdown owns the remaining object cleanup; check() keeps
             // answering SHUTTING_DOWN and the cleanup record stays untouched.
-            if (!started) return;
-            Runnable action = cleanup.getAndSet(null);
-            if (action == null) return;
+            if (!started && cleanup.get() != null) return CompletableFuture.completedFuture(null);
+            var action = cleanup.getAndSet(null);
+            if (action == null) return localCompletion;
+            String parentKey = parent.get();
+            parent = () -> parentKey;
             StoreOutage episode = outage;
             Preservation record = episode == null ? null : episode.records.get(this);
             executions.remove(key == null ? this : key, this);
@@ -476,7 +483,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 record.resumed.completeExceptionally(
                         new CancellationException("preserved incarnation discarded"));
             resumeCore();
-            action.run();
+            systems.zlink.framework.runtime.handlers.ZLinkHandlerStages.fromStageSupplier(action)
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) localCompletion.complete(null);
+                                else localCompletion.completeExceptionally(unwrap(failure));
+                            });
+            return localCompletion;
         }
 
         @Override
@@ -526,6 +539,22 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
             Supplier<String> parent,
             Runnable cleanup) {
+        return executionAsync(
+                authorityKey,
+                steady,
+                apply,
+                parent,
+                () ->
+                        systems.zlink.framework.runtime.handlers.ZLinkHandlerStages.fromRunnable(
+                                cleanup));
+    }
+
+    public Execution executionAsync(
+            Supplier<String> authorityKey,
+            BooleanSupplier steady,
+            Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
+            Supplier<String> parent,
+            Supplier<CompletionStage<Void>> cleanup) {
         return new Execution(
                 Objects.requireNonNull(authorityKey),
                 Objects.requireNonNull(steady),
@@ -1738,11 +1767,64 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             Execution execution, ZLinkLocationOwnerToken owner) {
         if (execution.cleanup.get() != null) return CompletableFuture.completedFuture(null);
         CompletionStage<Boolean> cleanup =
-                execution.confirmed == null
-                        ? CompletableFuture.completedFuture(true)
-                        : locationStore()
-                                .cleanupDiscarded(
-                                        execution.key, execution.confirmed, owner, () -> false);
+                execution
+                        .localCompletion
+                        .thenCompose(
+                                ignored ->
+                                        stateLane.runAsync(
+                                                () ->
+                                                        executions.values().stream()
+                                                                .filter(
+                                                                        child ->
+                                                                                child != execution
+                                                                                        && child
+                                                                                                        .cleanup
+                                                                                                        .get()
+                                                                                                == null
+                                                                                        && execution
+                                                                                                        .key
+                                                                                                != null
+                                                                                        && execution
+                                                                                                .key
+                                                                                                .equals(
+                                                                                                        child
+                                                                                                                .parent
+                                                                                                                .get()))
+                                                                .distinct()
+                                                                .toList()))
+                        .thenCompose(
+                                children ->
+                                        CompletableFuture.allOf(
+                                                        children.stream()
+                                                                .map(
+                                                                        child ->
+                                                                                cleanupExecution(
+                                                                                                child,
+                                                                                                owner)
+                                                                                        .toCompletableFuture())
+                                                                .toArray(CompletableFuture[]::new))
+                                                .thenCompose(
+                                                        ignored ->
+                                                                stateLane.runAsync(
+                                                                        () ->
+                                                                                children.stream()
+                                                                                        .noneMatch(
+                                                                                                child ->
+                                                                                                        executions
+                                                                                                                .containsValue(
+                                                                                                                        child)))))
+                        .thenCompose(
+                                membersDone ->
+                                        !membersDone
+                                                ? CompletableFuture.completedFuture(false)
+                                                : execution.confirmed == null
+                                                        ? CompletableFuture.completedFuture(true)
+                                                        : locationStore()
+                                                                .cleanupDiscarded(
+                                                                        execution.key,
+                                                                        execution.confirmed,
+                                                                        owner,
+                                                                        () -> false));
         return cleanup.thenCompose(
                 done ->
                         stateLane.runAsync(
