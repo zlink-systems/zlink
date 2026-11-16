@@ -6,6 +6,7 @@
 #include "runtime/execution/serial_application_record.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
@@ -59,6 +60,20 @@ struct state_lane_test_access_t
 };
 } // namespace zlink::framework::runtime
 
+namespace zlink::framework::runtime::mesh
+{
+struct raw_mesh_node_owner_test_access_t
+{
+    static state_lane_t &lane (raw_mesh_node_owner_t &node) { return node._lane; }
+    static bool send_terminated (raw_mesh_node_owner_t &node,
+                                 detail::backend::raw_send_stage_trace_t trace)
+    {
+        return node.start_send ({}, {}, false, std::move (trace)).state
+               == raw_mesh_node_owner_t::send_start_state_t::terminated;
+    }
+};
+} // namespace zlink::framework::runtime::mesh
+
 namespace zlink::framework::detail
 {
 struct actor_transfer_coordinator_test_access_t
@@ -72,6 +87,50 @@ namespace
 
 using zlink::framework::runtime::offload_executor_t;
 using zlink::framework::runtime::state_lane_t;
+
+TEST (ZLinkStateLane, ContendedMeshSendsDrainOnCurrentOwner)
+{
+    namespace mesh = zlink::framework::runtime::mesh;
+    mesh::service_node_descriptor_t descriptor{"send-lane", {'s'}, 1, 1, "inproc://send-lane-owner",
+                                               {{"X", 100}}};
+    mesh::raw_mesh_node_owner_t node (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{std::move (descriptor)}));
+    auto &lane = mesh::raw_mesh_node_owner_test_access_t::lane (node);
+    std::promise<void> entered, release;
+    const auto released = release.get_future ().share ();
+    std::thread::id owner_id;
+    std::thread owner ([&] {
+        lane.run_sync ([&] {
+            owner_id = std::this_thread::get_id ();
+            entered.set_value ();
+            released.wait ();
+        });
+    });
+    entered.get_future ().wait ();
+    std::array<std::thread::id, 2> submit_ids;
+    std::array<std::thread, 2> submitters;
+    for (std::size_t i = 0; i < submitters.size (); ++i) {
+        submitters[i] = std::thread ([&, i] {
+            const auto terminated = mesh::raw_mesh_node_owner_test_access_t::send_terminated (
+              node, [&, i] (std::string_view, std::string_view) {
+                  submit_ids[i] = std::this_thread::get_id ();
+              });
+            EXPECT_TRUE (terminated);
+        });
+    }
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (zlink::framework::runtime::state_lane_test_access_t::pending_work (lane) < 2
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const auto queued = zlink::framework::runtime::state_lane_test_access_t::pending_work (lane);
+    release.set_value ();
+    owner.join ();
+    for (auto &submitter : submitters)
+        submitter.join ();
+    ASSERT_EQ (2u, queued);
+    EXPECT_EQ (owner_id, submit_ids[0]);
+    EXPECT_EQ (owner_id, submit_ids[1]);
+}
 
 struct move_constructible_snapshot_t
 {

@@ -128,6 +128,7 @@ struct actor_join_wire_outcome_t
 
 class raw_mesh_node_owner_t
 {
+    friend struct raw_mesh_node_owner_test_access_t;
     friend state_lane_t &auto_connect_owner_lane (raw_mesh_node_owner_t &owner)
     {
         return owner._lane;

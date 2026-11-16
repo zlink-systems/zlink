@@ -1752,12 +1752,14 @@ raw_mesh_node_owner_t::start_send (std::span<const std::uint8_t> target_routing_
                                    bool needs_public_completion,
                                    detail::backend::raw_send_stage_trace_t trace)
 {
-    // run_sync returns only after the binding has consumed or snapshotted the parts.
-    return _lane.run_sync ([this, parts, trace = std::move (trace), needs_public_completion,
-                            &target_routing_id] () mutable {
+    // The lane drains queued submissions on its current owner. Wait until the
+    // binding has consumed or snapshotted the caller-owned parts.
+    auto submitted = _lane.run_checked ([this, parts, trace = std::move (trace),
+                                         needs_public_completion, &target_routing_id] () mutable {
         return start_send_on_lane (target_routing_id, parts, needs_public_completion,
                                    std::move (trace));
     });
+    return submitted.get ();
 }
 
 raw_mesh_node_owner_t::send_start_result_t
