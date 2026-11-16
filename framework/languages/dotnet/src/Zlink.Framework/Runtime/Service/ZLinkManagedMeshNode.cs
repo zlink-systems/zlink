@@ -8818,7 +8818,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && !actor.Draining;
             if (
                 !actorPresent
-                || actor!.AuthorityOwnerGeneration != stateful.AuthorityOwnerGeneration
+                || (
+                    actor!.Ref.ObjectGeneration == stateful.TargetActor.ObjectGeneration
+                    && actor.AuthorityOwnerGeneration != stateful.AuthorityOwnerGeneration
+                )
                 || stateful.OwnerLeaseGeneration
                     != checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
             )
