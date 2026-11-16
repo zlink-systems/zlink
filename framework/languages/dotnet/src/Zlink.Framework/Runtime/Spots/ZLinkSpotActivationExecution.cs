@@ -755,7 +755,6 @@ internal abstract partial class ZLinkSpotActivation
                 "The durable Instance Spot request-source fence does not match its source node.",
                 nameof(requestSource)
             );
-        var parts = payload.Select(Message.From).ToArray();
         var completion = new TaskCompletionSource<InstanceSpotActivationTerminal>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -782,6 +781,7 @@ internal abstract partial class ZLinkSpotActivation
                 );
                 return SubmitResult.Ok;
             };
+        var parts = ZLinkRawRouterServicePort.CreateMessages(payload);
         var received = new ZLinkBackendRouteReceived(
             parts,
             sourceNodeRid,
@@ -2209,7 +2209,10 @@ internal abstract partial class ZLinkSpotActivation
             );
         if (!received.CanReply)
         {
-            var retained = received.Parts.Select(Message.From).ToArray();
+            var retained = ZLinkRawRouterServicePort.CreateMessages(
+                received.Parts,
+                static part => Message.From(part)
+            );
             var operationId = received.OperationId;
             var messageFollowHopCount = checked((byte)(received.MessageFollowHopCount + 1));
             received.Dispose();
@@ -2701,7 +2704,7 @@ internal abstract partial class ZLinkSpotActivation
         {
             cancellationToken.ThrowIfCancellationRequested();
             var journal = DecodeRelocationReplayRecord(job, sourceMeshName);
-            var parts = journal.Parts.Select(static part => Message.From(part.Span)).ToArray();
+            var parts = ZLinkRawRouterServicePort.CreateMessages(journal.Parts);
             byte[][]? capturedReply = null;
             Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
             if (journal.ReplyRouteId != 0 && journal.SourceNodeRid is { } sourceNodeRid)
