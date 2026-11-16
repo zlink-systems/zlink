@@ -9,12 +9,15 @@
 #include <service_wire_constants.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <new>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -229,18 +232,24 @@ bool consume_utf8 (std::string_view value, std::size_t &index, unsigned char lea
 
 // The envelope has a fixed field order. Count the escaped bytes first, then
 // write directly into the destination frame.
-class header_writer_t
+template <typename Output = std::nullptr_t> class header_writer_t
 {
   public:
-    explicit header_writer_t (char *output = nullptr) : _output (output) {}
-    explicit header_writer_t (std::string &output) : _string_output (&output) {}
+    explicit header_writer_t (Output output = {}) : _output (output) {}
+    explicit header_writer_t (std::string &output)
+        requires std::is_same_v<Output, std::string *>
+        : _output (&output)
+    {
+    }
 
     void append (std::string_view text)
     {
-        if (_output && !text.empty ())
-            std::memcpy (_output + _size, text.data (), text.size ());
-        else if (_string_output != nullptr)
-            _string_output->append (text);
+        if constexpr (std::is_same_v<Output, char *>) {
+            if (!text.empty ())
+                std::memcpy (_output + _size, text.data (), text.size ());
+        } else if constexpr (std::is_same_v<Output, std::string *>) {
+            _output->append (text);
+        }
         _size += text.size ();
     }
 
@@ -315,15 +324,20 @@ class header_writer_t
 
     // The sizing/string writer owns validation; the final frame writer only
     // emits the bytes whose size and validity have already been established.
-    bool validates_input () const noexcept { return _output == nullptr; }
+    constexpr bool validates_input () const noexcept { return !std::is_same_v<Output, char *>; }
 
   private:
-    char *_output = nullptr;
-    std::string *_string_output = nullptr;
+    Output _output{};
     std::size_t _size = 0;
 };
 
-void write_metadata (header_writer_t &writer, const std::map<std::string, std::string> &metadata)
+header_writer_t () -> header_writer_t<std::nullptr_t>;
+header_writer_t (char *) -> header_writer_t<char *>;
+header_writer_t (std::string &) -> header_writer_t<std::string *>;
+
+template <typename Output>
+void write_metadata (header_writer_t<Output> &writer,
+                     const std::map<std::string, std::string> &metadata)
 {
     const auto start = writer.size ();
     writer.append ("{");
@@ -353,14 +367,16 @@ void write_metadata (header_writer_t &writer, const std::map<std::string, std::s
                                        + std::to_string (protocol::metadataBytes) + " bytes");
 }
 
-void write_channel_fragment (header_writer_t &writer, std::string_view channel)
+template <typename Output>
+void write_channel_fragment (header_writer_t<Output> &writer, std::string_view channel)
 {
     writer.append ("{\"channelName\":");
     writer.string (channel);
 }
 
-void write_type_fragments (header_writer_t &prefix,
-                           header_writer_t &middle,
+template <typename Output>
+void write_type_fragments (header_writer_t<Output> &prefix,
+                           header_writer_t<Output> &middle,
                            std::string_view name,
                            std::string_view content_type,
                            message_kind_t kind)
@@ -440,7 +456,8 @@ header_plan_t &header_plan ()
     return value;
 }
 
-void write_header (header_writer_t &writer,
+template <typename Output>
+void write_header (header_writer_t<Output> &writer,
                    const envelope_header_t &header,
                    const std::string *flow_id,
                    const std::optional<flow_origin_t> &flow_origin,
@@ -694,11 +711,12 @@ template <bool Borrow> class canonical_header_reader_t
   public:
     explicit canonical_header_reader_t (std::string_view bytes) : _remaining (bytes) {}
 
-    bool consume (std::string_view text)
+    template <std::size_t N> bool consume (const char (&text)[N])
     {
-        if (!_remaining.starts_with (text))
+        constexpr std::size_t size = N - 1;
+        if (_remaining.size () < size || std::memcmp (_remaining.data (), text, size) != 0)
             return false;
-        _remaining.remove_prefix (text.size ());
+        _remaining.remove_prefix (size);
         return true;
     }
 
@@ -712,6 +730,36 @@ template <bool Borrow> class canonical_header_reader_t
         std::size_t decoded_size = 0;
         bool escaped = false;
         while (index < _remaining.size () && _remaining[index] != '"') {
+            // Full words and the space-padded tail use the same byte predicate.
+            // Stop before control, quote, backslash or non-ASCII bytes; their
+            // validation and decoding remain with the handlers below.
+            constexpr std::uint64_t high_bits = 0x8080808080808080ULL;
+            constexpr std::uint64_t ones = 0x0101010101010101ULL;
+            constexpr std::uint64_t spaces = 0x2020202020202020ULL;
+            const auto remaining = _remaining.size () - index;
+            std::uint64_t word = spaces;
+            std::size_t count;
+            if (remaining >= sizeof (word)) {
+                std::memcpy (&word, _remaining.data () + index, sizeof (word));
+                count = sizeof (word);
+            } else {
+                std::memcpy (&word, _remaining.data () + index, remaining);
+                count = remaining;
+            }
+            const auto quotes = word ^ 0x2222222222222222ULL;
+            const auto slashes = word ^ 0x5c5c5c5c5c5c5c5cULL;
+            const std::uint64_t special = (word & high_bits) | ((word - spaces) & ~word & high_bits)
+                                          | ((quotes - ones) & ~quotes & high_bits)
+                                          | ((slashes - ones) & ~slashes & high_bits);
+            const auto leading = std::endian::native == std::endian::little
+                                   ? std::countr_zero (special)
+                                   : std::countl_zero (special);
+            const auto plain = std::min (count, static_cast<std::size_t> (leading / 8));
+            if (plain != 0) {
+                index += plain;
+                decoded_size += plain;
+                continue;
+            }
             const auto byte = static_cast<unsigned char> (_remaining[index++]);
             if (byte < 0x20)
                 return false;

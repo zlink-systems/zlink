@@ -9,7 +9,7 @@ export interface ZLinkInternalActorTransportDeliveryGate {
     actorId: string,
     kind: 'oneWay' | 'request',
     signal?: AbortSignal
-  ): Promise<number | void>;
+  ): Promise<void>;
 
   recordMessageFollowRelay?(actorId: string, context: ZLinkActorMessageFollowContext): void;
 }

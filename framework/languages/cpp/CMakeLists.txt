@@ -1117,6 +1117,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   zlink_framework_cpp_enable_test_unused_result_errors(test_cpp_framework_typed_json)
   target_link_libraries(test_cpp_framework_typed_json PRIVATE zlink_framework zlink::stream_connector)
   target_compile_definitions(test_cpp_framework_typed_json PRIVATE
+    ZLINK_PAYLOAD_CONTRACT_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/test/fixtures/typed-json-payload.tsv"
     ZLINK_TYPED_JSON_BYTES_GOLDEN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/Zlink.Framework.UnitTests/typed_json_bytes_golden.jsonl"
     ZLINK_TYPED_JSON_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-v1.json"
     ZLINK_REQUIRED_PRESENCE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-required-presence.txt")
@@ -2042,7 +2043,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   if(WIN32)
     list(APPEND ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
       -D ZLINK_FRAMEWORK_CPP_TOOLING_GENERATOR=${CMAKE_GENERATOR}
-      -D ZLINK_FRAMEWORK_CPP_TOOLING_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+      -D ZLINK_FRAMEWORK_CPP_TOOLING_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM})
+  endif()
+  # Reuse this build's vcpkg packages so the configure smoke does not reinstall the manifest.
+  if(VCPKG_INSTALLED_DIR)
+    list(APPEND ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
       -D ZLINK_FRAMEWORK_CPP_TOOLING_VCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}
       -D ZLINK_FRAMEWORK_CPP_TOOLING_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET})
   endif()
@@ -3002,6 +3007,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIMEOUT 30)
   endforeach()
 
+  foreach(_control_name "$zlink.heartbeat.ping" "$zlink.actor.bound" "$zlink.actor.unbound" "unknown.control")
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_stream_control_closing_${_control_name}
+      COMMAND test_cpp_stream_control_contract "closing:${_control_name}"
+      LABELS "framework-unit;framework-contract;stream;liveness"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
+
   add_zlink_framework_test(
     test_cpp_framework_stream_liveness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness.cpp
@@ -3474,33 +3488,36 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIER integration
       TIMEOUT 120)
   endif()
-  set(_zlink_framework_static_archives
-    "$<TARGET_FILE_NAME:zlink_framework>;$<TARGET_FILE_NAME:zlink_framework_provider_abstractions>;$<TARGET_FILE_NAME:zlink_http_client>;$<TARGET_FILE_NAME:zlink_framework_locations_redis>;$<TARGET_FILE_NAME:zlink_stream_connector>")
-  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
-    list(APPEND _zlink_framework_static_archives "$<TARGET_FILE_NAME:zlink_framework_locations_etcd>")
+  # TEST_PROBES forces INSTALL_FRAMEWORK=OFF, so that build has no package to consume.
+  if(NOT ZLINK_FRAMEWORK_CPP_TEST_PROBES)
+    set(_zlink_framework_static_archives
+      "$<TARGET_FILE_NAME:zlink_framework>;$<TARGET_FILE_NAME:zlink_framework_provider_abstractions>;$<TARGET_FILE_NAME:zlink_http_client>;$<TARGET_FILE_NAME:zlink_framework_locations_redis>;$<TARGET_FILE_NAME:zlink_stream_connector>")
+    if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+      list(APPEND _zlink_framework_static_archives "$<TARGET_FILE_NAME:zlink_framework_locations_etcd>")
+    endif()
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_install_consumer
+      COMMAND ${CMAKE_COMMAND}
+        -DZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DZLINK_FRAMEWORK_CPP_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/package-consumer-install
+        -DZLINK_FRAMEWORK_CPP_CONFIGURATION=${ZLINK_FRAMEWORK_CPP_TEST_CONFIGURATION}
+        -DZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG=${ZLINK_FRAMEWORK_CPP_TEST_IS_MULTI_CONFIG}
+        "-DZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH=${ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH}"
+        -DZLINK_FRAMEWORK_CPP_EXPECT_REDIS_PLUS_PLUS=${ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS}
+        -DZLINK_FRAMEWORK_CPP_EXPECT_LIBUV=${ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV}
+        -DZLINK_FRAMEWORK_CPP_EXPECT_ETCD=${ZLINK_FRAMEWORK_CPP_WITH_ETCD}
+        -DZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES=${ZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES}
+        "-DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVES=${_zlink_framework_static_archives}"
+        -DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVE_TOOLS_DIR=${ZLINK_STATIC_ARCHIVE_TOOLS_DIR}
+        -DZLINK_FRAMEWORK_CPP_SHARED_SYMBOLS_MAP=${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map
+        -DZLINK_FRAMEWORK_CPP_NM=${CMAKE_NM}
+        -DZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR=${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}
+        -P
+        ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/install_consumer.cmake
+      LABELS "framework-package;framework-regression;connector-package"
+      TIER integration
+      TIMEOUT 120)
   endif()
-  zlink_framework_cpp_add_test(
-    NAME test_cpp_framework_install_consumer
-    COMMAND ${CMAKE_COMMAND}
-      -DZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
-      -DZLINK_FRAMEWORK_CPP_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/package-consumer-install
-      -DZLINK_FRAMEWORK_CPP_CONFIGURATION=${ZLINK_FRAMEWORK_CPP_TEST_CONFIGURATION}
-      -DZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG=${ZLINK_FRAMEWORK_CPP_TEST_IS_MULTI_CONFIG}
-      "-DZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH=${ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH}"
-      -DZLINK_FRAMEWORK_CPP_EXPECT_REDIS_PLUS_PLUS=${ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS}
-      -DZLINK_FRAMEWORK_CPP_EXPECT_LIBUV=${ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV}
-      -DZLINK_FRAMEWORK_CPP_EXPECT_ETCD=${ZLINK_FRAMEWORK_CPP_WITH_ETCD}
-      -DZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES=${ZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES}
-      "-DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVES=${_zlink_framework_static_archives}"
-      -DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVE_TOOLS_DIR=${ZLINK_STATIC_ARCHIVE_TOOLS_DIR}
-      -DZLINK_FRAMEWORK_CPP_SHARED_SYMBOLS_MAP=${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map
-      -DZLINK_FRAMEWORK_CPP_NM=${CMAKE_NM}
-      -DZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR=${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}
-      -P
-      ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/install_consumer.cmake
-    LABELS "framework-package;framework-regression;connector-package"
-    TIER integration
-    TIMEOUT 120)
   set(ZLINK_FRAMEWORK_CPP_STREAM_PACKAGE_EXPECTED_PATH_ARGS
     -DZLINK_FRAMEWORK_CPP_UNREAL_LIBRARY_PATH=${CMAKE_INSTALL_LIBDIR}/$<TARGET_FILE_NAME:zlink_unreal_stream_connector>
     -DZLINK_FRAMEWORK_CPP_STREAM_LIBRARY_PATH=${CMAKE_INSTALL_LIBDIR}/$<TARGET_FILE_NAME:zlink_stream_connector>

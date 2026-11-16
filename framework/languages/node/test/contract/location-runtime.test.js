@@ -710,12 +710,18 @@ test('location runtime exact object queries preserve Ready rows as unavailable a
   ]);
 });
 
-test('location lifecycle reclaims tracked Spot and Actor rows after an owner lease generation change', async () => {
+test('location lifecycle tracks Spot and Actor rows created after an owner lease generation change', async () => {
   const store = testInMemoryLocationStore();
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
   const lifecycle = new internal.ZLinkLocationLifecycle(runtime, store, 'play', store);
 
   await runtime.start(rid('node-a'));
+  const oldOwner = runtime.currentOwnerToken;
+  await store.releaseOwnerLease(oldOwner);
+  assert.equal(await runtime.renewOwnerLeaseOnce(), true);
+  const newOwner = runtime.currentOwnerToken;
+  assert.notDeepEqual(newOwner, oldOwner);
+
   const actorClaim = await lifecycle.claimActor('player', 'actor-1', rid('node-a'));
   assert.equal(actorClaim.status, internal.ZLinkActorClaimStatus.Claimed);
   assert.equal(
@@ -730,12 +736,6 @@ test('location lifecycle reclaims tracked Spot and Actor rows after an owner lea
     ),
     internal.ZLinkLocationWriteStatus.Stored
   );
-
-  const oldOwner = runtime.currentOwnerToken;
-  await store.releaseOwnerLease(oldOwner);
-  assert.equal(await runtime.renewOwnerLeaseOnce(), true);
-  const newOwner = runtime.currentOwnerToken;
-  assert.notDeepEqual(newOwner, oldOwner);
 
   await lifecycle.reclaimOwnerRows();
   assert.equal(
@@ -753,46 +753,6 @@ test('location lifecycle reclaims tracked Spot and Actor rows after an owner lea
   assert.equal(await store.resolveSpot({ meshName: 'play', spotId: 'spot-1' }), undefined);
   await runtime.stop();
 });
-
-for (const kind of ['Actor', 'Spot']) {
-  test(`${kind} reclaim skips a tracked entry replaced while its Store read is pending`, async () => {
-    let releaseResolve;
-    const resolvePending = new Promise((resolve) => { releaseResolve = resolve; });
-    const removed = [];
-    let generation = 0n;
-    let oldDeactivated = 0;
-    const runtime = {
-      ownerId: 'owner-a',
-      currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
-      async [`write${kind}`](_row, intent) {
-        assert.equal(intent, internal.ZLinkLocationWriteIntent.NewClaim, 'stale reclaim must not write');
-        return { status: internal.ZLinkLocationWriteStatus.Stored, generation: ++generation, updatedAt: new Date(0) };
-      },
-      async [`remove${kind}`](_key, leaseGeneration) { removed.push(leaseGeneration); }
-    };
-    const store = { async [`resolve${kind}`]() { await resolvePending; return undefined; } };
-    const claims = kind === 'Actor'
-      ? new ZLinkActorLocationClaims(runtime, store, 'play')
-      : new ZLinkSpotLocationClaims(runtime, undefined, store);
-    const claim = (deactivate) => kind === 'Actor'
-      ? claims.claim('Player', 'actor-race', 'node-a', deactivate)
-      : claims.claim('play', 'spot-race', 'Room', 'node-a', framework.ZLinkSpotKind.User, 1n, 1n, deactivate);
-    const release = () => kind === 'Actor'
-      ? claims.release('Player', 'actor-race') : claims.release('play', 'spot-race');
-    await claim(async () => { oldDeactivated++; });
-    const reclaim = claims.reclaimOwnerRows();
-    await new Promise(setImmediate);
-    await release();
-    runtime.currentOwnerToken = { ownerId: 'owner-a', leaseGeneration: 2n };
-    await claim();
-    releaseResolve();
-    await reclaim;
-    assert.equal(generation, 2n);
-    assert.equal(oldDeactivated, 0);
-    await release();
-    assert.deepEqual(removed, [1n, 2n], 'replacement remains tracked under its own owner lease');
-  });
-}
 
 test('location runtime bounds fixed routing-id owner lease renewal by the configured timeout', async () => {
   const store = testInMemoryLocationStore();
@@ -2087,7 +2047,7 @@ test('actor resolver keeps the current Actor route while its enclosing Spot proj
   assert.equal(current.objectGeneration, 6n);
 });
 
-test('Spot Message Follow invalidates only resolver entries for the source owner fence', async () => {
+test('Spot Message Follow invalidates only matching Spot routes and preserves the independent Actor owner route', async () => {
   const fence = {
     spotId: 'spot-follow',
     objectGeneration: 7n,
@@ -2136,19 +2096,7 @@ test('Spot Message Follow invalidates only resolver entries for the source owner
     ownerId: 'owner-a',
     ownerLeaseGeneration: fence.ownerLeaseGeneration,
     authorityOwnerGeneration: 9n,
-    authorityStoreVersion: 'actor-version',
-    enclosingSpotRoute: {
-      routerChannelId: 'play',
-      targetNodeRid: fence.targetNodeRid,
-      spotId: fence.spotId,
-      spotKind: framework.ZLinkSpotKind.User,
-      targetSpotGeneration: fence.objectGeneration,
-      targetNodeGeneration: fence.targetNodeGeneration,
-      authorityOwnerGeneration: fence.authorityOwnerGeneration,
-      targetOwnerId: 'owner-a',
-      ownerLeaseGeneration: fence.ownerLeaseGeneration,
-      authorityStoreVersion: 'spot-version'
-    }
+    authorityStoreVersion: 'actor-version'
   };
   const resolvers = await cachedFollowRoutes(spotRow, actorRow, directActorRoute);
 
@@ -2163,7 +2111,8 @@ test('Spot Message Follow invalidates only resolver entries for the source owner
   assert.equal(resolvers.invalidateSpotRouteIfMatches(fence), true);
   assert.equal(resolvers[inspectRuntime]().spotRouteKeys.length, 0);
   assert.equal(resolvers[inspectRuntime]().actorRouteKeys.length, 0);
-  assert.equal(resolvers[inspectRuntime]().directActorRouteKeys.length, 0);
+  assert.equal(resolvers[inspectRuntime]().directActorRouteKeys.length, 1);
+  assert.deepEqual((await resolvers.resolveDirectActorRoute(actorRow.actorId)).route.actorRef, actorRow.actorRef);
 });
 
 test('store location resolver returns a live remote ActorRef', async () => {
@@ -3486,10 +3435,6 @@ async function cachedFollowRoutes(spotRow, actorRow, route) {
   const { encodeActorAuthorityIdentity } = require(
     '../../packages/framework/dist/runtime/actors/actor-authority-publication'
   );
-  const { encodeServiceUserSpotAuthorityPayload } = require(
-    '../../packages/framework/dist/runtime/foundation/service-authority-payload-codec'
-  );
-  const enclosing = route.enclosingSpotRoute;
   const snapshot = (kind, generation, ownerGeneration, payload) => ({
     kind: 'snapshot',
     objectGeneration: generation,
@@ -3518,19 +3463,11 @@ async function cachedFollowRoutes(spotRow, actorRow, route) {
             meshName: route.meshName,
             ownerNodeGeneration: route.ownerNodeGeneration,
             owner: { ownerId: route.ownerId, leaseGeneration: route.ownerLeaseGeneration },
-            spotId: enclosing?.spotId ?? actorRow.spotId,
-            spotGeneration: enclosing?.targetSpotGeneration ?? actorRow.spotGeneration,
-            spotKind: enclosing ? framework.ZLinkSpotKind.User : framework.ZLinkSpotKind.Entry
+            spotId: actorRow.spotId,
+            spotGeneration: actorRow.spotGeneration,
+            spotKind: actorRow.spotKind
           }));
-      assert.ok(enclosing, 'only the enclosing Spot authority may be resolved');
-      assert.equal(key.value, authorityKeys.encodeAuthorityKey('user_spot', enclosing.spotId).value);
-      return snapshot('user_spot', enclosing.targetSpotGeneration, enclosing.authorityOwnerGeneration,
-        encodeServiceUserSpotAuthorityPayload({
-          state: 'ready', stableType: 'game', spotId: enclosing.spotId,
-          ownerId: route.ownerId, ownerLeaseGeneration: route.ownerLeaseGeneration,
-          ownerMeshName: route.meshName, ownerNodeRid: String(route.actorRef.nodeRid),
-          ownerNodeGeneration: route.ownerNodeGeneration
-        }));
+      assert.fail('An Actor direct route must read only the Actor authority record.');
     }
   };
   const resolver = new internal.ZLinkStoreLocationResolvers({

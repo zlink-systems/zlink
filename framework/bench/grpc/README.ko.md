@@ -17,7 +17,7 @@ L7 load balancer, multi-node 분배, 네트워크 지연을 대표하지 않는�
 
 ### 1.1 구현 이름
 
-언어 하나마다 세 구현을 비교한다. `<lang>`은 `dotnet`, `node`, `java`, `kotlin`, `cpp` 중
+언어 하나마다 다섯 구현을 비교한다(`kotlin`은 앞의 세 구현만). `<lang>`은 `dotnet`, `node`, `java`, `kotlin`, `cpp` 중
 하나다. report 표와 `RESULT` 라인에서도 같은 이름을 사용한다.
 
 | 구현 이름 | 의미 |
@@ -25,10 +25,14 @@ L7 load balancer, multi-node 분배, 네트워크 지연을 대표하지 않는�
 | `grpc-<lang>` | 해당 언어의 gRPC unary RPC |
 | `zlink-<lang>` | framework를 거치지 않는 raw binding의 ROUTER↔ROUTER TCP 경로 |
 | `zlink-framework-<lang>` | framework RouteMesh의 RID 직접 node request/send |
+| `zlink-<lang>-json` | `zlink-<lang>`과 같은 raw binding 경로. 본문은 공통 게임 메시지를 그 언어의 표준 JSON 라이브러리(C++ nlohmann, .NET System.Text.Json, Java Jackson, Node `JSON.stringify`/`JSON.parse`)로 encode·decode한 것 (1024·4096만 지원) |
+| `zlink-framework-<lang>-json` | `zlink-framework-<lang>`과 같은 RouteMesh 경로. 같은 게임 메시지를 framework 기본 typed JSON으로 보낸다 (1024·4096만 지원) |
 
-기본 실행 순서는 `grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>` 순서다. 같은 payload
-크기와 같은 active duration에서 세 구현을 같은 패턴으로 실행하므로, 표에서는 한 패턴 아래에
-세 구현이 나란히 출력된다.
+기본 실행 순서는 `grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`, `zlink-<lang>-json`,
+`zlink-framework-<lang>-json`이다. 두 JSON 구현은 네 언어 모두
+`framework/bench/grpc/ladder-mixed-payload.json`(필드·순서·크기별 item 수·stamp 위치·golden 본문)을
+공유하고, 언어마다 두 encoder의 결과가 golden 본문과 byte 단위로 같은지 시험한다. 같은 payload 크기와 같은 active duration에서 구현을 같은 패턴으로
+실행하므로, 표에서는 한 패턴 아래에 해당 구현이 나란히 출력된다.
 
 ### 1.2 C 기준 bench
 
@@ -73,11 +77,12 @@ bench에서 다룬다. 이 bench는 gRPC와 같은 모양의 1:1 요청 경로�
 
 ## 2. 측정 패턴
 
-처음 범위는 두 payload 크기와 세 패턴만 사용한다. payload 크기는 `1024`, `4096` bytes를
-기본값으로 한다. payload 크기는 protobuf `bytes body` 또는 raw ZLink message body의 전체
-크기다. 앞 29 bytes는 측정 header로 사용하고, 나머지를 business payload 영역으로 채운다.
-gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, ZMP header는 이 크기에 포함하지
-않는다.
+처음 범위는 두 payload 크기와 세 패턴만 사용한다. 기본 payload 크기는 `1024`, `4096` bytes다.
+기존 protobuf 행에서 payload 크기는 protobuf `bytes body` 또는 raw ZLink message body의 길이다.
+앞 29 bytes는 측정 header로 사용하고, 나머지를 business payload 영역으로 채운다. JSON 행은
+공통 fixture가 크기별 item 수를 고른다. 실제 JSON 본문 길이는 각각 1,011 bytes와 4,087 bytes이며
+golden 검사가 이 길이와 내용을 확인한다. gRPC HTTP/2 frame, protobuf field overhead, ZLink
+envelope, ZMP header는 payload 크기에 포함하지 않는다.
 
 | 패턴 이름 | gRPC | ZLink raw binding | ZLink framework | 해석 |
 |-----------|------|-------------------|-----------------|------|
@@ -150,10 +155,10 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 - `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
   설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
 - 기본 `submit_concurrency`는 `8`이다. **이것은 stream 수이지 연결 수가 아니다.**
-  세 행 모두 서버 간 연결은 **하나**를 쓴다 — gRPC는 채널 하나를 stub 8개가 공유하고,
+  각 셀은 서버 간 연결을 **하나** 쓴다 — gRPC는 채널 하나를 stub 8개가 공유하고,
   raw binding은 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다.
   연결 수가 행마다 다르면 §7.2의 비율이 계층 비용이 아니라 연결 수 차이를 잰다.
-- gRPC와 ZLink framework는 같은 protobuf DTO를 사용한다. ZLink raw binding은 framework를
+- gRPC와 기존 두 ZLink 행은 같은 protobuf DTO를 사용한다. raw binding은 framework를
   거치지 않을 뿐 wire 모양은 같다. envelope 헤더 part 하나와 protobuf로 인코딩한
   `BenchPayload` part 하나, 모두 두 part로 보낸다. 측정 header 29 bytes는 그 protobuf
   `bytes body` 안에 들어간다. 이 모양은 선택이 아니라 판정식의 전제다. §7.2 formula 1이
@@ -379,8 +384,13 @@ raw binding 결과의 60% 이상이면 framework 추가 비용은 통과로 판�
 ```text
 payload 크기 1024와 4096 각각에서:
 zlink-<lang> / zlink-c                     >= 0.80   binding 계층 통과
-zlink-framework-<lang> / zlink-<lang>      >= 0.60   framework 추가 비용 통과(세 패턴 모두)
+zlink-framework-<lang>-json / zlink-<lang>-json >= 0.60 framework 추가 비용 통과(세 패턴 모두)
 ```
+
+framework÷binding 0.60 판정은 공통 JSON 본문을 보내는
+`zlink-framework-<lang>-json / zlink-<lang>-json`으로 계산한다. Framework의 기본 payload가 typed
+JSON이므로, 같은 JSON 본문을 보내는 binding과 비교해야 framework 계층의 비용만 남는다. 기존 protobuf
+본문 행은 gRPC와의 비교에 유지한다.
 
 두 식은 payload 크기마다 따로 계산한다. 한 언어는 `1024`와 `4096` 두 크기에서 모두 기준을
 만족할 때에만 통과다. 한 크기만 만족한 결과는 통과가 아니며, payload별 값은 항상 그대로
@@ -553,7 +563,7 @@ command endpoint가 분리되어 다섯), 언어당 세 구현이므로 언어�
 | `cpp` | 5280-5299 | 5280/5281, 5282/5283 | 5285/5286, 5287/5288/5289 | 5292/5293, 5294/5295 |
 | C 기준(client-driven) | 6200-6219 | 6200/6201, 6202/6203 | 6205/6206, 6207/6208/6209 | 없음 |
 
-각 대역의 `+16`~`+19`는 예비다. runner는 측정 시작 전에 자기 대역의 포트가 비어 있는지 확인한다.
+`zlink-<lang>-json`과 `zlink-framework-<lang>-json`은 각각 `zlink-<lang>`, `zlink-framework-<lang>`의 포트를 그대로 쓴다. 한 언어 안에서도 한 번에 한 쌍만 측정하므로 겹치지 않는다. 각 대역의 `+16`~`+19`는 예비다. runner는 측정 시작 전에 자기 대역의 포트가 비어 있는지 확인한다.
 사용 중이면 다른 포트로 옮기지 않고 중단한다. 포트를 옮기면 결과에 기록된 endpoint와 실제
 endpoint가 어긋난다. Kotlin 보조 셀은 Java의 B를 그대로 쓰므로 Java 측정과 같은 시간에 돌리지
 않는다(한 번에 한 언어).

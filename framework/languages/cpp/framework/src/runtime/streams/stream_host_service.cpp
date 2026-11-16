@@ -2470,6 +2470,35 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                           std::shared_ptr<application_job_queue_t::permit_t> application_permit,
                           session_liveness_t::clock_t::time_point received_at)
     {
+        trace_stream_host ("core-frame", _stream, header,
+                           "rid=" + rid.to_hex ()
+                             + " payload_bytes=" + std::to_string (payload.size ()));
+        if (header.kind () == stream_message_kind_t::control) {
+            std::shared_ptr<core_session_t> current;
+            {
+                const std::lock_guard lock (_core_sessions_mutex);
+                const auto found = _core_sessions.find (
+                  runtime::stateful::stream_session_registry_t::connection_key (rid));
+                if (found != _core_sessions.end ())
+                    current = found->second;
+            }
+            if (current)
+                current->liveness->record_inbound (received_at, false);
+            stream_t stream;
+            _runtime.set_session_identity (stream, rid);
+            _runtime.attach_transport_writer (
+              stream,
+              [this, rid] (const stream_header_t &control, const zlink::message_t &body)
+                -> task_t<void> { co_await send_core_frame (rid, control, body); });
+            try {
+                _runtime.dispatch_control_frame (stream, header, payload);
+                return true;
+            }
+            catch (...) {
+                disconnect_core_peer (rid, "protocol_error");
+                return false;
+            }
+        }
         std::shared_ptr<core_session_t> current;
         try {
             current = get_or_create_core_session (rid, received_at);
@@ -2480,24 +2509,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             return false;
         }
 
-        current->liveness->record_inbound (received_at,
-                                           header.kind () != stream_message_kind_t::control);
-        trace_stream_host ("core-frame", _stream, header,
-                           "rid=" + rid.to_hex ()
-                             + " payload_bytes=" + std::to_string (payload.size ()));
+        current->liveness->record_inbound (received_at, true);
         bool submitted = false;
         bool protocol_error = false;
         std::optional<result_t<void>> rejected;
         try {
-            if (header.kind () == stream_message_kind_t::control) {
-                std::lock_guard session_lock (current->gate);
-                if (current->connected && !current->closing) {
-                    detail::session_actor_manager_access_t::set_codec (*current->actors,
-                                                                       header.codec ());
-                    _runtime.dispatch_control_frame (current->stream, header, payload);
-                }
-                return true;
-            }
             if (current->replacement
                 && current->replacement->closing.load (std::memory_order_acquire)) {
                 return false;

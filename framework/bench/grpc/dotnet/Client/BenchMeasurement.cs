@@ -58,58 +58,113 @@ internal static class BenchMeasurement
         );
         var runId = HeaderRunId(trigger.runId);
         var next = new Sequence();
+        IBenchGameJsonTransport? gameJsonTransport = options.Implementation
+            is "zlink-dotnet-json"
+                or "zlink-framework-dotnet-json"
+            ? transport as IBenchGameJsonTransport
+            : null;
 
         switch (trigger.pattern)
         {
             case "request-serial":
-                await RunRequestWorkersAsync(
-                    transport,
-                    metrics,
-                    trigger,
-                    runId,
-                    next,
-                    deadline,
-                    1,
-                    0,
-                    operationCancellation.Token
-                );
+                if (gameJsonTransport is null)
+                    await RunRequestWorkersAsync(
+                        transport,
+                        metrics,
+                        trigger,
+                        runId,
+                        next,
+                        deadline,
+                        1,
+                        0,
+                        operationCancellation.Token
+                    );
+                else
+                    await RunGameJsonRequestWorkersAsync(
+                        gameJsonTransport,
+                        metrics,
+                        trigger,
+                        runId,
+                        next,
+                        deadline,
+                        1,
+                        0,
+                        operationCancellation.Token
+                    );
                 break;
             case "request-window":
-                await RunRequestWorkersAsync(
-                    transport,
-                    metrics,
-                    trigger,
-                    runId,
-                    next,
-                    deadline,
-                    trigger.requestWindow,
-                    0,
-                    operationCancellation.Token
-                );
+                if (gameJsonTransport is null)
+                    await RunRequestWorkersAsync(
+                        transport,
+                        metrics,
+                        trigger,
+                        runId,
+                        next,
+                        deadline,
+                        trigger.requestWindow,
+                        0,
+                        operationCancellation.Token
+                    );
+                else
+                    await RunGameJsonRequestWorkersAsync(
+                        gameJsonTransport,
+                        metrics,
+                        trigger,
+                        runId,
+                        next,
+                        deadline,
+                        trigger.requestWindow,
+                        0,
+                        operationCancellation.Token
+                    );
                 break;
             case "request-backpressure":
-                RunRequestBackpressureStreams(
-                    transport,
-                    metrics,
-                    trigger,
-                    runId,
-                    next,
-                    deadline,
-                    operationCancellation,
-                    options.DrainBoundMs
-                );
+                if (gameJsonTransport is null)
+                    RunRequestBackpressureStreams(
+                        transport,
+                        metrics,
+                        trigger,
+                        runId,
+                        next,
+                        deadline,
+                        operationCancellation,
+                        options.DrainBoundMs
+                    );
+                else
+                    RunGameJsonRequestBackpressureStreams(
+                        gameJsonTransport,
+                        metrics,
+                        trigger,
+                        runId,
+                        next,
+                        deadline,
+                        operationCancellation,
+                        options.DrainBoundMs
+                    );
                 break;
             case "send-saturation":
-                await RunSendWorkersAsync(
-                    transport,
-                    metrics,
-                    trigger,
-                    runId,
-                    next,
-                    deadline,
-                    trigger.submitConcurrency,
-                    operationCancellation.Token
-                );
+                if (gameJsonTransport is null)
+                    await RunSendWorkersAsync(
+                        transport,
+                        metrics,
+                        trigger,
+                        runId,
+                        next,
+                        deadline,
+                        trigger.submitConcurrency,
+                        operationCancellation.Token
+                    );
+                else
+                    await RunGameJsonSendWorkersAsync(
+                        gameJsonTransport,
+                        metrics,
+                        trigger,
+                        runId,
+                        next,
+                        deadline,
+                        trigger.submitConcurrency,
+                        operationCancellation.Token
+                    );
                 break;
             default:
                 throw new InvalidOperationException($"Unsupported pattern {trigger.pattern}.");
@@ -200,40 +255,284 @@ internal static class BenchMeasurement
     {
         if (workers > 1)
         {
-            var tasks = Enumerable.Range(0, workers).Select(_ => Task.Run(async () =>
-            {
-                while (Stopwatch.GetTimestamp() < deadline)
-                {
-                    var sequence = next.Next();
-                    await ExecuteRequestAsync(
-                        transport, metrics, trigger, runId, stream, sequence, cancellationToken
-                    );
-                }
-            }, cancellationToken));
+            var tasks = Enumerable
+                .Range(0, workers)
+                .Select(_ =>
+                    Task.Run(
+                        async () =>
+                        {
+                            while (Stopwatch.GetTimestamp() < deadline)
+                            {
+                                var sequence = next.Next();
+                                await ExecuteRequestAsync(
+                                    transport,
+                                    metrics,
+                                    trigger,
+                                    runId,
+                                    stream,
+                                    sequence,
+                                    cancellationToken
+                                );
+                            }
+                        },
+                        cancellationToken
+                    )
+                );
             await transport.DriveAsync(Task.WhenAll(tasks));
             return;
         }
         var local = new SourceMetrics[workers];
-        RunDedicatedStreams(workers, index =>
-        {
-            var streamMetrics = local[index] = new SourceMetrics(metrics.SampleLimit);
-            streamMetrics.Reset(deadline, metrics.Phase);
-            while (Stopwatch.GetTimestamp() < deadline)
+        RunDedicatedStreams(
+            workers,
+            index =>
             {
-                var sequence = next.Next();
-                ExecuteRequestAsync(
-                    transport,
-                    streamMetrics,
-                    trigger,
-                    runId,
-                    stream,
-                    sequence,
-                    cancellationToken
-                ).GetAwaiter().GetResult();
+                var streamMetrics = local[index] = new SourceMetrics(metrics.SampleLimit);
+                streamMetrics.Reset(deadline, metrics.Phase);
+                while (Stopwatch.GetTimestamp() < deadline)
+                {
+                    var sequence = next.Next();
+                    ExecuteRequestAsync(
+                            transport,
+                            streamMetrics,
+                            trigger,
+                            runId,
+                            stream,
+                            sequence,
+                            cancellationToken
+                        )
+                        .GetAwaiter()
+                        .GetResult();
+                }
             }
-        });
+        );
         foreach (var streamMetrics in local)
             metrics.MergeFrom(streamMetrics);
+    }
+
+    private static async Task RunGameJsonRequestWorkersAsync(
+        IBenchGameJsonTransport transport,
+        SourceMetrics metrics,
+        BenchTriggerRequest trigger,
+        uint runId,
+        Sequence next,
+        long deadline,
+        int workers,
+        int stream,
+        CancellationToken cancellationToken
+    )
+    {
+        if (workers > 1)
+        {
+            var tasks = Enumerable
+                .Range(0, workers)
+                .Select(_ =>
+                    Task.Run(
+                        async () =>
+                        {
+                            while (Stopwatch.GetTimestamp() < deadline)
+                            {
+                                var sequence = next.Next();
+                                await ExecuteGameJsonRequestAsync(
+                                    transport,
+                                    metrics,
+                                    trigger,
+                                    runId,
+                                    stream,
+                                    sequence,
+                                    cancellationToken
+                                );
+                            }
+                        },
+                        cancellationToken
+                    )
+                );
+            await Task.WhenAll(tasks);
+            return;
+        }
+        var local = new SourceMetrics[workers];
+        RunDedicatedStreams(
+            workers,
+            index =>
+            {
+                var streamMetrics = local[index] = new SourceMetrics(metrics.SampleLimit);
+                streamMetrics.Reset(deadline, metrics.Phase);
+                while (Stopwatch.GetTimestamp() < deadline)
+                {
+                    var sequence = next.Next();
+                    ExecuteGameJsonRequestAsync(
+                            transport,
+                            streamMetrics,
+                            trigger,
+                            runId,
+                            stream,
+                            sequence,
+                            cancellationToken
+                        )
+                        .GetAwaiter()
+                        .GetResult();
+                }
+            }
+        );
+        foreach (var streamMetrics in local)
+            metrics.MergeFrom(streamMetrics);
+    }
+
+    private static void RunGameJsonRequestBackpressureStreams(
+        IBenchGameJsonTransport transport,
+        SourceMetrics metrics,
+        BenchTriggerRequest trigger,
+        uint runId,
+        Sequence next,
+        long deadline,
+        CancellationTokenSource operationCancellation,
+        int drainBoundMs
+    )
+    {
+        var locals = new SourceMetrics[trigger.submitConcurrency];
+        RunDedicatedStreams(
+            trigger.submitConcurrency,
+            stream =>
+            {
+                var streamMetrics = locals[stream] = new SourceMetrics(metrics.SampleLimit);
+                streamMetrics.Reset(deadline, metrics.Phase);
+                var pending = new List<Task>();
+                var issuedSincePrune = 0;
+                while (Stopwatch.GetTimestamp() < deadline)
+                {
+                    var sequence = next.Next();
+                    var payload = transport.CreateGamePayload(
+                        trigger.payloadBytes,
+                        runId,
+                        streamMetrics.Phase,
+                        sequence
+                    );
+                    var started = streamMetrics.Begin();
+                    try
+                    {
+                        Task<BenchGameMessage> reply;
+                        Task? admitted = null;
+                        if (transport is RawBenchTransport raw)
+                        {
+                            var submission = raw.SubmitGameRequest(
+                                payload,
+                                operationCancellation.Token
+                            );
+                            reply = submission.Reply;
+                            if (submission.Result == SubmitResult.Backpressured)
+                                admitted = submission.Admitted;
+                            else if (submission.Result != SubmitResult.Ok)
+                                throw new InvalidOperationException(
+                                    $"Raw JSON request submit returned {submission.Result}."
+                                );
+                        }
+                        else if (transport is FrameworkBenchTransport framework)
+                        {
+                            var request = framework.SubmitGameRequest(
+                                payload,
+                                operationCancellation.Token
+                            );
+                            reply = request.AsTask();
+                            admitted = request.Admitted.AsTask();
+                        }
+                        else
+                        {
+                            reply = transport
+                                .RequestGameAsync(stream, payload, operationCancellation.Token)
+                                .AsTask();
+                        }
+                        pending.Add(
+                            ObserveGameJsonRequestReplyAsync(
+                                reply,
+                                streamMetrics,
+                                runId,
+                                sequence,
+                                started,
+                                operationCancellation.Token
+                            )
+                        );
+                        admitted?.GetAwaiter().GetResult();
+                        if (++issuedSincePrune == 256)
+                        {
+                            pending.RemoveAll(static task => task.IsCompleted);
+                            issuedSincePrune = 0;
+                            Thread.Yield();
+                        }
+                    }
+                    catch (OperationCanceledException)
+                        when (operationCancellation.IsCancellationRequested)
+                    {
+                        streamMetrics.Cancel();
+                        throw;
+                    }
+                    catch (Exception error)
+                    {
+                        streamMetrics.Complete(
+                            started,
+                            false,
+                            error,
+                            Stopwatch.GetTimestamp(),
+                            sequence
+                        );
+                    }
+                }
+                try
+                {
+                    Task.WhenAll(pending)
+                        .WaitAsync(
+                            TimeSpan.FromMilliseconds(drainBoundMs),
+                            operationCancellation.Token
+                        )
+                        .GetAwaiter()
+                        .GetResult();
+                }
+                catch (Exception error)
+                    when (
+                        error is TimeoutException
+                        || error is OperationCanceledException
+                            && operationCancellation.IsCancellationRequested
+                    )
+                {
+                    // Outstanding requests are abandoned by the terminal snapshot.
+                }
+                finally
+                {
+                    streamMetrics.FreezeTerminal();
+                }
+            }
+        );
+        foreach (var streamMetrics in locals)
+            metrics.MergeFrom(streamMetrics);
+        // All stream snapshots must exclude the shared cancellation's terminal callbacks.
+        operationCancellation.Cancel();
+    }
+
+    private static async Task ObserveGameJsonRequestReplyAsync(
+        Task<BenchGameMessage> replyTask,
+        SourceMetrics metrics,
+        uint runId,
+        ulong sequence,
+        long started,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            var reply = await replyTask;
+            if (!BenchGamePayloads.HasExpectedStamp(reply, runId, metrics.Phase, sequence))
+                throw new InvalidOperationException(
+                    "JSON game reply did not carry the expected metric stamp."
+                );
+            metrics.Complete(started, true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            metrics.Cancel();
+            throw;
+        }
+        catch (Exception error)
+        {
+            metrics.Complete(started, false, error, Stopwatch.GetTimestamp(), sequence);
+        }
     }
 
     private static void RunRequestBackpressureStreams(
@@ -248,91 +547,122 @@ internal static class BenchMeasurement
     )
     {
         var locals = new SourceMetrics[trigger.submitConcurrency];
-        RunDedicatedStreams(trigger.submitConcurrency, stream =>
-        {
-            var streamMetrics = locals[stream] = new SourceMetrics(metrics.SampleLimit);
-            streamMetrics.Reset(deadline, metrics.Phase);
-            var pending = new List<Task>();
-            var issuedSincePrune = 0;
-            while (Stopwatch.GetTimestamp() < deadline)
+        RunDedicatedStreams(
+            trigger.submitConcurrency,
+            stream =>
             {
-                var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayload(
-                    trigger.payloadBytes,
-                    runId,
-                    streamMetrics.Phase,
-                    sequence
-                );
-                var started = streamMetrics.Begin();
+                var streamMetrics = locals[stream] = new SourceMetrics(metrics.SampleLimit);
+                streamMetrics.Reset(deadline, metrics.Phase);
+                var pending = new List<Task>();
+                var issuedSincePrune = 0;
+                while (Stopwatch.GetTimestamp() < deadline)
+                {
+                    var sequence = next.Next();
+                    var payload = BenchMetricHeaders.CreatePayload(
+                        trigger.payloadBytes,
+                        runId,
+                        streamMetrics.Phase,
+                        sequence
+                    );
+                    var started = streamMetrics.Begin();
+                    try
+                    {
+                        Task<BenchPayload> reply;
+                        Task? admitted = null;
+                        if (transport is RawBenchTransport raw)
+                        {
+                            var submission = raw.SubmitRequest(
+                                payload,
+                                operationCancellation.Token
+                            );
+                            reply = submission.Reply;
+                            if (submission.Result == SubmitResult.Backpressured)
+                                admitted = submission.Admitted;
+                            else if (submission.Result != SubmitResult.Ok)
+                                throw new InvalidOperationException(
+                                    $"Raw request submit returned {submission.Result}."
+                                );
+                        }
+                        else if (transport is FrameworkBenchTransport framework)
+                        {
+                            var request = framework.SubmitRequest(
+                                payload,
+                                operationCancellation.Token
+                            );
+                            reply = request.AsTask();
+                            admitted = request.Admitted.AsTask();
+                        }
+                        else
+                        {
+                            reply = transport
+                                .RequestAsync(stream, payload, operationCancellation.Token)
+                                .AsTask();
+                        }
+                        pending.Add(
+                            ObserveRequestReplyAsync(
+                                reply,
+                                streamMetrics,
+                                trigger,
+                                runId,
+                                sequence,
+                                started,
+                                operationCancellation.Token
+                            )
+                        );
+                        admitted?.GetAwaiter().GetResult();
+                        if (++issuedSincePrune == 256)
+                        {
+                            pending.RemoveAll(static task => task.IsCompleted);
+                            issuedSincePrune = 0;
+                            Thread.Yield();
+                        }
+                    }
+                    catch (OperationCanceledException)
+                        when (operationCancellation.IsCancellationRequested)
+                    {
+                        streamMetrics.Cancel();
+                        throw;
+                    }
+                    catch (Exception error)
+                    {
+                        streamMetrics.Complete(
+                            started,
+                            false,
+                            error,
+                            Stopwatch.GetTimestamp(),
+                            sequence
+                        );
+                    }
+                }
                 try
                 {
-                    Task<BenchPayload> reply;
-                    Task? admitted = null;
-                    if (transport is RawBenchTransport raw)
-                    {
-                        var submission = raw.SubmitRequest(payload, operationCancellation.Token);
-                        reply = submission.Reply;
-                        if (submission.Result == SubmitResult.Backpressured)
-                            admitted = submission.Admitted;
-                        else if (submission.Result != SubmitResult.Ok)
-                            throw new InvalidOperationException(
-                                $"Raw request submit returned {submission.Result}."
-                            );
-                    }
-                    else if (transport is FrameworkBenchTransport framework)
-                    {
-                        var request = framework.SubmitRequest(payload, operationCancellation.Token);
-                        reply = request.AsTask();
-                        admitted = request.Admitted.AsTask();
-                    }
-                    else
-                    {
-                        reply = transport.RequestAsync(stream, payload, operationCancellation.Token).AsTask();
-                    }
-                    pending.Add(ObserveRequestReplyAsync(
-                        reply,
-                        streamMetrics,
-                        trigger,
-                        runId,
-                        sequence,
-                        started,
-                        operationCancellation.Token
-                    ));
-                    admitted?.GetAwaiter().GetResult();
-                    if (++issuedSincePrune == 256)
-                    {
-                        pending.RemoveAll(static task => task.IsCompleted);
-                        issuedSincePrune = 0;
-                        Thread.Yield();
-                    }
-                }
-                catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
-                {
-                    streamMetrics.Cancel();
-                    throw;
+                    Task.WhenAll(pending)
+                        .WaitAsync(
+                            TimeSpan.FromMilliseconds(drainBoundMs),
+                            operationCancellation.Token
+                        )
+                        .GetAwaiter()
+                        .GetResult();
                 }
                 catch (Exception error)
+                    when (
+                        error is TimeoutException
+                        || error is OperationCanceledException
+                            && operationCancellation.IsCancellationRequested
+                    )
                 {
-                    streamMetrics.Complete(started, false, error);
+                    // Outstanding requests are abandoned by the terminal snapshot.
+                }
+                finally
+                {
+                    streamMetrics.FreezeTerminal();
                 }
             }
-            try
-            {
-                Task.WhenAll(pending).WaitAsync(TimeSpan.FromMilliseconds(drainBoundMs), operationCancellation.Token)
-                    .GetAwaiter().GetResult();
-            }
-            catch (TimeoutException)
-            {
-                streamMetrics.FreezeTerminal();
-                operationCancellation.Cancel();
-            }
-            catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
-            {
-                streamMetrics.FreezeTerminal();
-            }
-        });
+        );
         foreach (var streamMetrics in locals)
             metrics.MergeFrom(streamMetrics);
+        // All stream snapshots must exclude the shared cancellation's terminal callbacks.
+        operationCancellation.Cancel();
     }
 
     private static async Task ObserveRequestReplyAsync(
@@ -358,7 +688,7 @@ internal static class BenchMeasurement
         }
         catch (Exception error)
         {
-            metrics.Complete(started, false, error);
+            metrics.Complete(started, false, error, Stopwatch.GetTimestamp(), sequence);
         }
     }
 
@@ -374,39 +704,99 @@ internal static class BenchMeasurement
     )
     {
         var locals = new SourceMetrics[workers];
-        RunDedicatedStreams(workers, stream =>
-        {
-            var streamMetrics = locals[stream] = new SourceMetrics(metrics.SampleLimit);
-            streamMetrics.Reset(deadline, metrics.Phase);
-            while (Stopwatch.GetTimestamp() < deadline)
+        RunDedicatedStreams(
+            workers,
+            stream =>
             {
-                var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayload(
-                    trigger.payloadBytes,
-                    runId,
-                    streamMetrics.Phase,
-                    sequence
-                );
-                var started = streamMetrics.Begin();
-                try
+                var streamMetrics = locals[stream] = new SourceMetrics(metrics.SampleLimit);
+                streamMetrics.Reset(deadline, metrics.Phase);
+                while (Stopwatch.GetTimestamp() < deadline)
                 {
-                    transport.SendAsync(stream, payload, cancellationToken)
-                        .AsTask()
-                        .GetAwaiter()
-                        .GetResult();
-                    streamMetrics.Complete(started, true);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    streamMetrics.Cancel();
-                    throw;
-                }
-                catch (Exception error)
-                {
-                    streamMetrics.Complete(started, false, error);
+                    var sequence = next.Next();
+                    var payload = BenchMetricHeaders.CreatePayload(
+                        trigger.payloadBytes,
+                        runId,
+                        streamMetrics.Phase,
+                        sequence
+                    );
+                    var started = streamMetrics.Begin();
+                    try
+                    {
+                        transport
+                            .SendAsync(stream, payload, cancellationToken)
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult();
+                        streamMetrics.Complete(started, true);
+                    }
+                    catch (OperationCanceledException)
+                        when (cancellationToken.IsCancellationRequested)
+                    {
+                        streamMetrics.Cancel();
+                        throw;
+                    }
+                    catch (Exception error)
+                    {
+                        streamMetrics.Complete(started, false, error);
+                    }
                 }
             }
-        });
+        );
+        foreach (var streamMetrics in locals)
+            metrics.MergeFrom(streamMetrics);
+        return Task.CompletedTask;
+    }
+
+    private static Task RunGameJsonSendWorkersAsync(
+        IBenchGameJsonTransport transport,
+        SourceMetrics metrics,
+        BenchTriggerRequest trigger,
+        uint runId,
+        Sequence next,
+        long deadline,
+        int workers,
+        CancellationToken cancellationToken
+    )
+    {
+        var locals = new SourceMetrics[workers];
+        RunDedicatedStreams(
+            workers,
+            stream =>
+            {
+                var streamMetrics = locals[stream] = new SourceMetrics(metrics.SampleLimit);
+                streamMetrics.Reset(deadline, metrics.Phase);
+                while (Stopwatch.GetTimestamp() < deadline)
+                {
+                    var sequence = next.Next();
+                    var payload = transport.CreateGamePayload(
+                        trigger.payloadBytes,
+                        runId,
+                        streamMetrics.Phase,
+                        sequence
+                    );
+                    var started = streamMetrics.Begin();
+                    try
+                    {
+                        transport
+                            .SendGameAsync(stream, payload, cancellationToken)
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult();
+                        streamMetrics.Complete(started, true);
+                    }
+                    catch (OperationCanceledException)
+                        when (cancellationToken.IsCancellationRequested)
+                    {
+                        streamMetrics.Cancel();
+                        throw;
+                    }
+                    catch (Exception error)
+                    {
+                        streamMetrics.Complete(started, false, error);
+                    }
+                }
+            }
+        );
         foreach (var streamMetrics in locals)
             metrics.MergeFrom(streamMetrics);
         return Task.CompletedTask;
@@ -415,15 +805,31 @@ internal static class BenchMeasurement
     private static void RunDedicatedStreams(int count, Action<int> submit)
     {
         var errors = new Exception?[count];
-        var threads = Enumerable.Range(0, count).Select(index => new Thread(() =>
-        {
-            try { submit(index); }
-            catch (Exception error) { errors[index] = error; }
-        }) { IsBackground = true, Name = $"bench-submit-{index}" }).ToArray();
-        foreach (var thread in threads) thread.Start();
-        foreach (var thread in threads) thread.Join();
+        var threads = Enumerable
+            .Range(0, count)
+            .Select(index => new Thread(() =>
+            {
+                try
+                {
+                    submit(index);
+                }
+                catch (Exception error)
+                {
+                    errors[index] = error;
+                }
+            })
+            {
+                IsBackground = true,
+                Name = $"bench-submit-{index}",
+            })
+            .ToArray();
+        foreach (var thread in threads)
+            thread.Start();
+        foreach (var thread in threads)
+            thread.Join();
         var failures = errors.Where(static error => error is not null).Cast<Exception>().ToArray();
-        if (failures.Length > 0) throw new AggregateException(failures);
+        if (failures.Length > 0)
+            throw new AggregateException(failures);
     }
 
     private static async Task ExecuteRequestAsync(
@@ -447,6 +853,33 @@ internal static class BenchMeasurement
             transport.RequestAsync(stream, payload, cancellationToken).AsTask(),
             metrics,
             trigger,
+            runId,
+            sequence,
+            started,
+            cancellationToken
+        );
+    }
+
+    private static async Task ExecuteGameJsonRequestAsync(
+        IBenchGameJsonTransport transport,
+        SourceMetrics metrics,
+        BenchTriggerRequest trigger,
+        uint runId,
+        int stream,
+        ulong sequence,
+        CancellationToken cancellationToken
+    )
+    {
+        var payload = transport.CreateGamePayload(
+            trigger.payloadBytes,
+            runId,
+            metrics.Phase,
+            sequence
+        );
+        var started = metrics.Begin();
+        await ObserveGameJsonRequestReplyAsync(
+            transport.RequestGameAsync(stream, payload, cancellationToken).AsTask(),
+            metrics,
             runId,
             sequence,
             started,

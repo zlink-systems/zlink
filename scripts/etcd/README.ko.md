@@ -304,3 +304,45 @@ Node 전용 `location-etcd-host-clock.test.js`는 `ZLINK_ETCD_INTEGRATION=1`일 
 `ZLINK_ETCD_TEST_LOG_DIR`는 결과·명령 출력·manager log·proxy 관찰·member log의 저장 위치다.
 기본값은 `scripts/etcd/.conformance-logs/`다. `unverified.json`은 미검증 목록이며
 `cleanup.json`은 container·network·process·임시 디렉터리 잔여 수를 기록한다.
+
+## Client capability 결과
+
+2026-11-15에 코드와 GitHub Actions 원본 로그를 대조했다. Client 선택·버전·lockfile·license의 소유 문서는 [C++](../../framework/languages/cpp/extensions/framework-locations-etcd/README.ko.md#etcd-client), [.NET](../../framework/languages/dotnet/src/Zlink.Framework.Locations.Etcd/README.ko.md#etcd-client), [Java](../../framework/languages/java/zlink-framework-locations-etcd/README.ko.md#etcd-client), [Node](../../framework/languages/node/packages/framework-locations-etcd/README.ko.md#etcd-client)의 `etcd client` 절이다.
+
+표의 F·C·N은 아래 명령과 결과 원본을 가리킨다. 명령은 준비된 build에서 관련 시험을 선택하는 재현 명령이며, 이 문서 작업에서는 실행하지 않았다. `없음`은 해당 capability 시험을 찾지 못했다는 뜻이다. `실행 근거 없음`은 시험 코드는 있지만 확인한 CI 로그에 그 시험의 실행 결과가 없다는 뜻이다.
+
+- **F** — [run 43650235394, job 132616840063](https://github.com/zlink-systems/zlink/actions/runs/43650235394/job/132616840063), `Run the etcd 4x4 cross-language conformance`: 성공. 명령: `bash scripts/etcd/build-and-run-4x4.sh framework/languages/cpp/build/linux-ninja-release "$RUNNER_TEMP/etcd-4x4" --allow-unverified`. 표의 이름은 [공통 case 구현](conformance-cases.cjs)의 ID다. 원본 job 로그는 합계만 출력한다. F의 개별 case 통과는 성공한 실행과 현재 case·coverage 코드로부터의 간접 확인이며, per-case artifact를 직접 읽은 결과가 아니다.
+- **C** — 같은 run·job의 `test_cpp_framework_locations_etcd`: ctest에서 `Passed`. 선택 명령: `ctest --test-dir framework/languages/cpp/build/linux-ninja-release -R '^test_cpp_framework_locations_etcd$' --output-on-failure`. 표의 `EtcdProvider.*`·`EtcdTls.*`는 [suite의 gtest 이름](../../framework/languages/cpp/extensions/framework-locations-etcd/tests/test_etcd.cpp)이다. 성공한 suite에 포함되지만 원본 로그에는 개별 gtest 결과가 없다. 환경 변수가 필요한 `EtcdLive`는 이 근거에 포함하지 않는다.
+- **N** — [run 43650235394, job 132616839962](https://github.com/zlink-systems/zlink/actions/runs/43650235394/job/132616839962), `Run Node framework release gate`: 성공. 원본 TAP 로그에 아래 시험 이름의 `ok`가 있다. Node workspace에서 `node --test test/contract/location-etcd-admin.test.js test/contract/location-etcd-client.test.js test/contract/location-etcd-provider.test.js`로 선택한다.
+
+위 nightly run 전체의 결론은 `failure`다. C++ 시험 job과 Node 시험 job은 성공했으며, 별도 sanitizer job이 실패했다. F는 plaintext etcd harness다. C와 N의 TLS·auth는 fake gRPC server 시험이며 보안 설정을 켠 실제 etcd harness의 결과가 아니다.
+
+| Capability | C++ | .NET | Java | Node |
+|---|---|---|---|---|
+| Txn Compare VALUE LESS | F: `etcd.expiry-before-apply` | F: `etcd.expiry-before-apply` | F: `etcd.expiry-before-apply` | F: `etcd.expiry-before-apply` |
+| Txn Compare CREATE | F: `spi.atomic-conflict` | F: `spi.atomic-conflict` | F: `spi.atomic-conflict` | F: `spi.atomic-conflict` |
+| Txn Compare MOD | F: `etcd.condition-change-before-apply` | F: `etcd.condition-change-before-apply` | F: `etcd.condition-change-before-apply` | F: `etcd.condition-change-before-apply` |
+| Revision-pinned Range | F: `etcd.snapshot-stability` | F: `etcd.snapshot-stability` | F: `etcd.snapshot-stability` | F: `etcd.snapshot-stability` |
+| Linearizable reads | F: `etcd.minority-isolation` | F: `etcd.minority-isolation` | F: `etcd.minority-isolation` | F: `etcd.minority-isolation` |
+| Header cluster_id / revision | F: `etcd.cross-language-record`; `etcd.cross-language-version-condition` | F: `etcd.cross-language-record`; `etcd.cross-language-version-condition` | F: `etcd.cross-language-record`; `etcd.cross-language-version-condition` | F: `etcd.cross-language-record`; `etcd.cross-language-version-condition` |
+| ErrCompacted | F: `etcd.compacted-snapshot` | F: `etcd.compacted-snapshot` | F: `etcd.compacted-snapshot` | F: `etcd.compacted-snapshot` |
+| NOSPACE | F: `etcd.quota-exhaustion` | F: `etcd.quota-exhaustion` | F: `etcd.quota-exhaustion` | F: `etcd.quota-exhaustion` |
+| Transport errors | F: `etcd.leader-loss-before-result` | F: `etcd.leader-loss-before-result` | F: `etcd.leader-loss-before-result` | F: `etcd.leader-loss-before-result` |
+| Lost Txn reply: no hidden retry | F: `etcd.leader-loss-before-result`; `spi.unknown-commit-reconstruction` | F: `etcd.leader-loss-before-result`; `spi.unknown-commit-reconstruction` | F: `etcd.leader-loss-before-result`; `spi.unknown-commit-reconstruction` | F: `etcd.leader-loss-before-result`; `spi.unknown-commit-reconstruction` |
+| `keys_only=true` | 없음 | 없음 | 없음 | 없음 |
+| TLS | C: `EtcdTls.MutualTlsCustomCaAndIdentityHostNameAndTrustValidation` | 실행 근거 없음: `EtcdTlsTests.Custom_trusted_CA_and_client_certificate_chain_complete_mutual_TLS`, `Untrusted_server_certificate_fails_before_the_RPC_is_received` | 실행 근거 없음: `ZLinkEtcdTlsTest.customCaAndClientIdentityEstablishMutualTlsAndUntrustedCaFails` | N: `etcd TLS uses normalized HTTPS URLs and supports trusted CA plus client identity` |
+| Auth | C: `EtcdProvider.AuthenticationRefreshesOnlyOnceForRecognizedDescriptions`; `EtcdProvider.AuthenticationAndAllWriteCallsShareAbsoluteDeadline` | 실행 근거 없음: `Authentication_rejection_reauthenticates_once_with_the_same_deadline`, `A_second_authentication_rejection_is_not_retried` | 실행 근거 없음: `authenticationErrorReauthenticatesAndResendsOnlyOnce`, `authenticationAndAllWriteRpcsShareOneAbsoluteDeadline` | N: `only a rejected authentication RPC is replayed once, within the original deadline` |
+| 16 MiB send boundary | C: `EtcdProvider.MaximumSendLimitUsesStoreFailureBeforeServerDispatch` | 없음 | 없음 | 없음 |
+| 8 MiB receive boundary | C: `EtcdProvider.ReceiveLimitAcceptsFiveMiBAndRejectsNineMiBAuthenticationResponses` | 없음 | 없음 | 없음 |
+| Cancellation | 없음 (physical RPC 취소); C의 `EtcdProvider.ConsumerWaitCancellationDoesNotCancelOrRetirePhysicalOperation`은 wait 취소 뒤 RPC 유지를 검사한다. | F: `spi.unknown-commit-reconstruction` | F: `spi.unknown-commit-reconstruction` | N: `etcd cancellation cancels a pending RPC; dispose drains and rejects new operations`; F: `spi.unknown-commit-reconstruction` |
+
+.NET·Java의 단위시험 선택 명령은 각각 `dotnet test framework/languages/dotnet/tests/Zlink.Framework.Locations.Etcd.Tests/Zlink.Framework.Locations.Etcd.Tests.csproj`와 Java workspace의 `./gradlew :zlink-framework-locations-etcd:test`다. 확인한 nightly의 .NET job은 다른 test project를, Java job은 core·integration·Spring starter task를 실행하므로 provider 단위시험 결과로 쓰지 않는다. 시험 코드는 [.NET provider](../../framework/languages/dotnet/tests/Zlink.Framework.Locations.Etcd.Tests/EtcdProviderTests.cs), [.NET TLS](../../framework/languages/dotnet/tests/Zlink.Framework.Locations.Etcd.Tests/EtcdTlsTests.cs), [Java provider](../../framework/languages/java/zlink-framework-locations-etcd/src/test/java/systems/zlink/framework/locations/etcd/ZLinkEtcdProviderTest.java), [Java TLS](../../framework/languages/java/zlink-framework-locations-etcd/src/test/java/systems/zlink/framework/locations/etcd/ZLinkEtcdTlsTest.java)에 있다.
+
+F의 cancellation case는 .NET·Java·Node에서 전송 후 abort와 unknown commit을 확인한다. C++에서는 [conformance-cases.cjs:635](conformance-cases.cjs)의 `proxy.disconnect()`를 쓰므로 RPC 취소 capability의 근거가 아니다. 크기 설정과 최대 SPI batch 통과는 client 송수신 제한의 양쪽 경계 시험을 대체하지 않는다. C의 send 시험은 15 MiB 수락·17 MiB 거부, receive 시험은 5 MiB 수락·9 MiB 거부를 검사한다. 정확히 16 MiB·8 MiB의 직전/직후 경계 실측과는 구분한다.
+
+### 남은 작업
+
+- 항목 3: 네 언어의 `keys_only=true`, .NET·Java·Node의 송수신 크기 양쪽 경계, C++의 직접 RPC 취소 시험을 추가한다. 기존 .NET·Java TLS·auth 단위시험의 실행 결과도 기록한다. 실제 TLS·auth-enabled etcd harness 결과와 fake server 결과를 구분한다.
+- 항목 5·6: 고정한 resolved 그래프와 capability 실행을 연결하고, .NET·Java lockfile 및 C++·.NET·Java의 전이 의존성 license 목록을 기록한다. .NET의 retry·hedging 비활성화는 관찰된 lost-reply 비재전송 결과와 별도로 선택 transport의 설정·계약 근거가 필요하다.
+- C++ pinning: Conan의 etcd-enabled gRPC lock entry와 vcpkg baseline·실제 gRPC/protobuf 해석 버전이 없다. 버전 고정은 별도 결정이며 이 작업에서 build·lockfile을 바꾸지 않는다.
+- 공통 실행기의 host clock 세 ID(`etcd.provider-clock-independent`, `etcd.manager-wall-clock-jumps`, `spi.snapshot-clock`)는 `unverified`다. [실행기](conformance-runner.mjs)가 실행 전에 차단하며 성공한 F step도 이 범위를 검증하지 않는다.

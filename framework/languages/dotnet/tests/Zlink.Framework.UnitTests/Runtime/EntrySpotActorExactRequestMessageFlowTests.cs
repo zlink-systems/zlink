@@ -45,7 +45,7 @@ public sealed partial class EntrySpotActorDispatchTests
                         ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(
                             null
                         ),
-                    () => { }
+                    () => ValueTask.CompletedTask
                 );
             var request = instanceIntent
                 ? new ZLinkInstanceSpotRequestCall<ProbeRouteMessage>(
