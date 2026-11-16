@@ -15944,6 +15944,26 @@ public sealed partial class EntrySpotActorDispatchTests
             IZLinkBackendLocalActorAuthorityReader,
             IZLinkBackendBoundSessionBind
     {
+        private IContext? actorRequestContext;
+        private ZLinkBackendSpotNodeWrapper? actorRequestRegistryBackend;
+        public ZLinkManagedMeshNode RequestOperations
+        {
+            get
+            {
+                if (ActorRequestNode is not null)
+                    return ActorRequestNode.RequestOperations;
+                if (actorRequestRegistryBackend is null)
+                {
+                    actorRequestContext = Systems.Zlink.Zlink.CreateContext();
+                    var owner = new ZLinkManagedMeshNode(actorRequestContext, "entry");
+                    owner.SetRoutingId(RoutingId);
+                    actorRequestRegistryBackend = new ZLinkBackendSpotNodeWrapper(owner);
+                    actorRequestRegistryBackend.ActivateIngress();
+                }
+                return actorRequestRegistryBackend.NativeNode;
+            }
+        }
+
         public int RuntimeContextDisposeCount;
 
         public Func<
@@ -16386,7 +16406,14 @@ public sealed partial class EntrySpotActorDispatchTests
                 new NotSupportedException()
             );
 
-        public ValueTask DisposeAsync() => NodeDisposeHandler?.Invoke() ?? ValueTask.CompletedTask;
+        public async ValueTask DisposeAsync()
+        {
+            if (actorRequestRegistryBackend is not null)
+                await actorRequestRegistryBackend.DisposeAsync();
+            actorRequestContext?.Dispose();
+            if (NodeDisposeHandler is not null)
+                await NodeDisposeHandler();
+        }
 
         public void SetRoutingId(RoutingId routingId)
         {
@@ -16983,7 +17010,9 @@ public sealed partial class EntrySpotActorDispatchTests
             Func<IReadOnlyList<Message>, TReply> decodeReply,
             Func<Exception, Exception> mapFailure,
             Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null,
-            Action<Exception>? physicalFailure = null
+            Action<Exception>? physicalFailure = null,
+            ZLinkManagedMeshNode.PendingOperation<TReply>? operation = null,
+            ZLinkManagedMeshNode? operationOwner = null
         )
         {
             if (ActorRequestNode is not null)
@@ -16995,7 +17024,9 @@ public sealed partial class EntrySpotActorDispatchTests
                     decodeReply,
                     mapFailure,
                     requestAdmission,
-                    physicalFailure
+                    physicalFailure,
+                    operation,
+                    operationOwner
                 );
             LastActorRequestTimeout = timeout;
             IReadOnlyList<Message> reply;
@@ -17037,15 +17068,37 @@ public sealed partial class EntrySpotActorDispatchTests
             catch (Exception failure)
             {
                 physicalFailure?.Invoke(failure);
+                if (operation is not null)
+                {
+                    (operationOwner ?? RequestOperations).FailNativeDeadline(
+                        operation,
+                        mapFailure(failure)
+                    );
+                    return default!;
+                }
                 throw mapFailure(failure);
             }
             try
             {
-                return decodeReply(reply);
+                var decoded = decodeReply(reply);
+                if (operation is not null)
+                    (operationOwner ?? RequestOperations).CompleteManagedOperation(
+                        operation,
+                        decoded
+                    );
+                return decoded;
             }
             catch (Exception failure)
             {
                 physicalFailure?.Invoke(failure);
+                if (operation is not null)
+                {
+                    (operationOwner ?? RequestOperations).FailNativeDeadline(
+                        operation,
+                        mapFailure(failure)
+                    );
+                    return default!;
+                }
                 throw mapFailure(failure);
             }
             finally
