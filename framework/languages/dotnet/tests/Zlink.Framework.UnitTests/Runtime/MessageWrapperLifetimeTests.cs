@@ -17,6 +17,13 @@ public sealed class MessageWrapperLifetimeTests(Xunit.Abstractions.ITestOutputHe
     [InlineData(true)]
     public async Task Finalizer_detector_distinguishes_leaked_and_closed_wrappers(bool dispose)
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Finalizer_detector_distinguishes_leaked_and_closed_wrappers)
+            )
+        )
+            return;
         using var probe = new MessageFinalizerProbe();
         var count = await probe.CountAsync(() =>
         {
@@ -33,6 +40,13 @@ public sealed class MessageWrapperLifetimeTests(Xunit.Abstractions.ITestOutputHe
     [InlineData(true, false)]
     public async Task Fallback_terminal_closes_wrapper(bool cancel, bool reject)
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Fallback_terminal_closes_wrapper)
+            )
+        )
+            return;
         using var probe = new MessageFinalizerProbe();
         var count = await probe.CountAsync(async () =>
         {
@@ -63,6 +77,13 @@ public sealed class MessageWrapperLifetimeTests(Xunit.Abstractions.ITestOutputHe
     [Fact]
     public async Task Empty_actor_join_fallback_closes_its_wrapper()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Empty_actor_join_fallback_closes_its_wrapper)
+            )
+        )
+            return;
         using var probe = new MessageFinalizerProbe();
         var count = await probe.CountAsync(() =>
         {
@@ -103,6 +124,13 @@ public sealed class MessageWrapperLifetimeTests(Xunit.Abstractions.ITestOutputHe
     [Fact]
     public async Task Partial_creation_failure_rolls_back_every_created_wrapper()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Partial_creation_failure_rolls_back_every_created_wrapper)
+            )
+        )
+            return;
         using var probe = new MessageFinalizerProbe();
         var count = await probe.CountAsync(() =>
         {
@@ -141,6 +169,13 @@ public sealed class MessageWrapperLifetimeTests(Xunit.Abstractions.ITestOutputHe
     [Fact]
     public async Task Disposed_binding_receive_wrapper_is_finalized_when_its_pool_thread_exits()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Disposed_binding_receive_wrapper_is_finalized_when_its_pool_thread_exits)
+            )
+        )
+            return;
         using var probe = new MessageFinalizerProbe();
         var count = await probe.CountAsync(() =>
         {
@@ -192,6 +227,13 @@ public sealed class MessageWrapperLifetimeTests(Xunit.Abstractions.ITestOutputHe
     [Fact]
     public async Task Raw_request_terminal_closes_wrapper()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Raw_request_terminal_closes_wrapper)
+            )
+        )
+            return;
         using var probe = new MessageFinalizerProbe();
         var count = await probe.CountAsync(() =>
             new DirectRequestWaitCostTests().Direct_request_only_awaits_for_reply_observation()
@@ -218,6 +260,13 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public async Task Durable_activation_metadata_failure_closes_wrappers()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Durable_activation_metadata_failure_closes_wrappers)
+            )
+        )
+            return;
         using var services = new ServiceCollection().BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration();
         var runtime = new ZLinkFrameworkRuntime(

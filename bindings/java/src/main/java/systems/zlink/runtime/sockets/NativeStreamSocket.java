@@ -86,34 +86,40 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
     public boolean recvPacket(StreamPacket result, RecvFlags flags) {
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(flags, "flags");
+
         ContractAccess.streamPacketBegin(result);
         Message header = InternalAccess.messageAcquireReceive();
         Message body = InternalAccess.messageAcquireReceive();
-        try (java.lang.foreign.Arena arena =
-                 java.lang.foreign.Arena.ofConfined()) {
-            MemorySegment ridOut = arena.allocate(
-                java.lang.foreign.ValueLayout.ADDRESS);
-            int rc = systems.zlink.runtime.nativeapi.Native.streamRecvPacket(
-                runtime().handle(), ridOut,
-                InternalAccess.messageNativeHandle(header),
-                InternalAccess.messageNativeHandle(body), flags.value());
-            if (rc == RecvResult.NO_DATA.value()) {
-                header.close();
-                body.close();
-                ContractAccess.streamPacketFail(result);
-                return false;
+        try {
+            runtime().socketCore().reserveNativeCall();
+            try (java.lang.foreign.Arena arena =
+                     java.lang.foreign.Arena.ofConfined()) {
+                MemorySegment ridOut = arena.allocate(
+                    java.lang.foreign.ValueLayout.ADDRESS);
+                int rc = systems.zlink.runtime.nativeapi.Native.streamRecvPacket(
+                    runtime().handle(), ridOut,
+                    InternalAccess.messageNativeHandle(header),
+                    InternalAccess.messageNativeHandle(body), flags.value());
+                if (rc == RecvResult.NO_DATA.value()) {
+                    header.close();
+                    body.close();
+                    ContractAccess.streamPacketFail(result);
+                    return false;
+                }
+                if (rc != RecvResult.OK.value()) {
+                    throw new systems.zlink.contracts.errors.ZlinkRecvException(
+                        RecvResult.fromValue(rc),
+                        systems.zlink.runtime.nativeapi.Native.errno());
+                }
+                InternalAccess.messageFinishReceive(header, false);
+                InternalAccess.messageFinishReceive(body, false);
+                RoutingId rid = systems.zlink.runtime.nativeapi.NativeRoutingIds
+                    .readOut(ridOut);
+                ContractAccess.streamPacketComplete(result, rid, header, body);
+                return true;
+            } finally {
+                runtime().socketCore().releaseNativeCall();
             }
-            if (rc != RecvResult.OK.value()) {
-                throw new systems.zlink.contracts.errors.ZlinkRecvException(
-                    RecvResult.fromValue(rc),
-                    systems.zlink.runtime.nativeapi.Native.errno());
-            }
-            InternalAccess.messageFinishReceive(header, false);
-            InternalAccess.messageFinishReceive(body, false);
-            RoutingId rid = systems.zlink.runtime.nativeapi.NativeRoutingIds
-                .readOut(ridOut);
-            ContractAccess.streamPacketComplete(result, rid, header, body);
-            return true;
         } catch (RuntimeException | Error failure) {
             try { header.close(); } catch (RuntimeException ignored) { }
             try { body.close(); } catch (RuntimeException ignored) { }

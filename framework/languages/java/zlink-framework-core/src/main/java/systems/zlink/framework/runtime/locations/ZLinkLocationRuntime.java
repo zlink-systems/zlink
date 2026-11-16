@@ -368,6 +368,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         private final Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply;
         private final Supplier<String> parent;
         private ZLinkAuthoritySnapshot confirmed;
+        private CompletionStage<Void> operation;
         private volatile Runnable resume;
 
         private Execution(
@@ -469,8 +470,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             if (action == null) return;
             StoreOutage episode = outage;
             Preservation record = episode == null ? null : episode.records.get(this);
-            if (record == null) close();
-            else
+            executions.remove(key == null ? this : key, this);
+            executions.put(this, this);
+            if (record != null)
                 record.resumed.completeExceptionally(
                         new CancellationException("preserved incarnation discarded"));
             resumeCore();
@@ -489,7 +491,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         }
 
         private void closeCore() {
-            executions.remove(key == null ? this : key, this);
+            if (cleanup.get() != null) executions.remove(key == null ? this : key, this);
             StoreOutage episode = outage;
             if (cleanup.get() != null && episode != null) {
                 Preservation record = episode.records.remove(this);
@@ -548,7 +550,6 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         final Execution execution;
         final ZLinkAuthoritySnapshot authority;
         final CompletableFuture<Void> resumed = new CompletableFuture<>();
-        CompletionStage<Void> operation;
 
         Preservation(Execution execution) {
             this.execution = execution;
@@ -1106,11 +1107,14 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                         lifecycle);
                                                     }
                                                     ownerAdmissionRevoked = true;
+                                                    for (Execution execution :
+                                                            List.copyOf(executions.values()))
+                                                        execution.discardCore();
                                                     return () ->
                                                             claimOwnerLease(lifecycle)
                                                                     .thenCompose(
                                                                             ignored ->
-                                                                                    republishAfterOwnerLeaseRecovery(
+                                                                                    recoverAfterOwnerLease(
                                                                                             lifecycle,
                                                                                             false))
                                                                     .thenApply(ignored -> true);
@@ -1192,6 +1196,29 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     private Supplier<CompletionStage<Void>> prepareRecoveryCore(
+            CompletableFuture<Void> lifecycle, boolean admissionWasOpen) {
+        StoreOutage episode = outage;
+        var discarded =
+                executions.values().stream()
+                        .filter(
+                                execution ->
+                                        execution.cleanup.get() == null
+                                                && (episode == null
+                                                        || !episode.records.containsKey(execution)))
+                        .toList();
+        var recovery = prepareOutageRecoveryCore(lifecycle, admissionWasOpen);
+        if (discarded.isEmpty()) return recovery;
+        ZLinkLocationOwnerToken owner = ownerToken;
+        return () -> {
+            var attempts = new ArrayList<CompletableFuture<Void>>();
+            for (Execution execution : discarded)
+                attempts.add(cleanupExecution(execution, owner).toCompletableFuture());
+            attempts.add(recovery.get().toCompletableFuture());
+            return CompletableFuture.allOf(attempts.toArray(CompletableFuture[]::new));
+        };
+    }
+
+    private Supplier<CompletionStage<Void>> prepareOutageRecoveryCore(
             CompletableFuture<Void> lifecycle, boolean admissionWasOpen) {
         StoreOutage episode = outage;
         if (episode == null)
@@ -1319,8 +1346,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                         })
                                                 .thenCompose(
                                                         done ->
-                                                                cleanupRecord(
-                                                                        episode, record, owner));
+                                                                cleanupDiscardedExecution(
+                                                                        record.execution, owner));
                                     })
                             .thenCompose(Function.identity())
                             .toCompletableFuture());
@@ -1353,11 +1380,11 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         return stateLane
                 .<Supplier<CompletionStage<Void>>>runAsync(
                         () -> {
-                            if (record.operation != null
+                            if (record.execution.operation != null
                                     || record.execution.key == null && !owner.equals(episode.token))
                                 return () -> CompletableFuture.completedFuture(null);
                             var completion = new CompletableFuture<Void>();
-                            record.operation = completion;
+                            record.execution.operation = completion;
                             return () ->
                                     confirmRecovery(episode, record, owner, descriptor)
                                             .handle(
@@ -1376,8 +1403,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                             .whenComplete(
                                                     (ignored, failure) -> {
                                                         if (failure != null)
-                                                            completeRecord(
-                                                                    record, completion, failure);
+                                                            completeExecution(
+                                                                    record.execution,
+                                                                    completion,
+                                                                    failure);
                                                     });
                         })
                 .thenCompose(Supplier::get);
@@ -1423,7 +1452,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             Throwable failure,
             CompletableFuture<Void> completion) {
         if (failure != null && !unconfirmedRecovery(failure)) record.execution.discardCore();
-        Supplier<CompletionStage<Void>> continuation = () -> cleanupRecord(episode, record, owner);
+        Supplier<CompletionStage<Void>> continuation =
+                () -> cleanupDiscardedExecution(record.execution, owner);
         if (failure == null && record.execution.cleanup.get() != null) {
             if (record.execution.key != null && snapshot == null) record.execution.discardCore();
             else {
@@ -1441,8 +1471,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                 finishRecoveredRecord(episode, record, snapshot, owner)
                                         .whenComplete(
                                                 (done, terminal) ->
-                                                        completeRecord(
-                                                                record, completion, terminal));
+                                                        completeExecution(
+                                                                record.execution,
+                                                                completion,
+                                                                terminal));
                             });
                     return () -> CompletableFuture.completedFuture(null);
                 } else continuation = () -> finishRecoveredRecord(episode, record, snapshot, owner);
@@ -1452,15 +1484,16 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         return () ->
                 work.get()
                         .whenComplete(
-                                (done, terminal) -> completeRecord(record, completion, terminal));
+                                (done, terminal) ->
+                                        completeExecution(record.execution, completion, terminal));
     }
 
-    private void completeRecord(
-            Preservation record, CompletableFuture<Void> completion, Throwable failure) {
+    private void completeExecution(
+            Execution execution, CompletableFuture<Void> completion, Throwable failure) {
         stateLane
                 .runAsync(
                         () -> {
-                            if (record.operation == completion) record.operation = null;
+                            if (execution.operation == completion) execution.operation = null;
                             return null;
                         })
                 .whenComplete(
@@ -1518,7 +1551,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                             return (Runnable) () -> {};
                                         }))
                 .thenAccept(Runnable::run)
-                .thenCompose(ignored -> cleanupRecord(episode, record, owner));
+                .thenCompose(ignored -> cleanupDiscardedExecution(record.execution, owner));
     }
 
     private void finishRecoveryCore(StoreOutage episode) {
@@ -1674,27 +1707,56 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 && java.util.Arrays.equals(current.payload(), put.payload());
     }
 
-    private CompletionStage<Void> cleanupRecord(
-            StoreOutage episode, Preservation record, ZLinkLocationOwnerToken owner) {
-        if (record.execution.cleanup.get() != null) return CompletableFuture.completedFuture(null);
+    private CompletionStage<Void> cleanupExecution(
+            Execution execution, ZLinkLocationOwnerToken owner) {
+        return stateLane
+                .<Supplier<CompletionStage<Void>>>runAsync(
+                        () -> {
+                            if (execution.operation != null) {
+                                var running = execution.operation;
+                                return () -> running;
+                            }
+                            var completion = new CompletableFuture<Void>();
+                            execution.operation = completion;
+                            return () ->
+                                    CompletableFuture.completedFuture(null)
+                                            .thenCompose(
+                                                    ignored ->
+                                                            cleanupDiscardedExecution(
+                                                                    execution, owner))
+                                            .whenComplete(
+                                                    (ignored, failure) ->
+                                                            completeExecution(
+                                                                    execution,
+                                                                    completion,
+                                                                    failure));
+                        })
+                .thenCompose(Supplier::get);
+    }
+
+    private CompletionStage<Void> cleanupDiscardedExecution(
+            Execution execution, ZLinkLocationOwnerToken owner) {
+        if (execution.cleanup.get() != null) return CompletableFuture.completedFuture(null);
         CompletionStage<Boolean> cleanup =
-                record.authority == null
+                execution.confirmed == null
                         ? CompletableFuture.completedFuture(true)
                         : locationStore()
                                 .cleanupDiscarded(
-                                        record.execution.key, record.authority, owner, () -> false);
+                                        execution.key, execution.confirmed, owner, () -> false);
         return cleanup.thenCompose(
                 done ->
                         stateLane.runAsync(
                                 () -> {
                                     if (done) {
-                                        episode.records.remove(record.execution, record);
+                                        executions.remove(execution, execution);
                                         executions.remove(
-                                                record.execution.key == null
-                                                        ? record.execution
-                                                        : record.execution.key,
-                                                record.execution);
-                                        finishRecoveryCore(episode);
+                                                execution.key == null ? execution : execution.key,
+                                                execution);
+                                        StoreOutage episode = outage;
+                                        if (episode != null) {
+                                            episode.records.remove(execution);
+                                            finishRecoveryCore(episode);
+                                        }
                                     }
                                     return null;
                                 }));
