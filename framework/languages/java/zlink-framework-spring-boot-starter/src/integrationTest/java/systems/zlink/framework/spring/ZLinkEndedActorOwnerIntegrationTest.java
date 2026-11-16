@@ -1,7 +1,6 @@
 package systems.zlink.framework.spring;
 
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -12,6 +11,8 @@ import org.springframework.context.annotation.Import;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
@@ -19,11 +20,10 @@ import systems.zlink.framework.locationprovider.ZLinkStoreScanItem;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locations.redis.*;
-import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
-import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -44,6 +44,8 @@ public class ZLinkEndedActorOwnerIntegrationTest {
             Pattern.compile(Pattern.quote(CREATED_PREFIX) + "(\\d+)");
     private static final Pattern LISTENER_ENDPOINT =
             Pattern.compile("LISTEN_ENDPOINT=tcp://127\\.0\\.0\\.1:(\\d+)");
+    private static final String RELEASE_WAIT_OBSERVED = "AUTHORITY_RELEASE_WAIT_OBSERVED";
+    private static volatile Duration renewInterval;
 
     @Configuration(proxyBeanMethods = false)
     @EnableZLinkFramework
@@ -54,6 +56,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
             return options -> {
                 System.out.println(
                         "LEASE_TTL_MS=" + options.configureLocations().ownerLeaseTtl().toMillis());
+                renewInterval = options.configureLocations().ownerLeaseRenewInterval();
                 options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 var node = options.addRouteMesh("probe");
                 node.listen("tcp://127.0.0.1:0")
@@ -119,20 +122,28 @@ public class ZLinkEndedActorOwnerIntegrationTest {
         private final ExecutorService outputReader;
         private final CompletableFuture<String> createdOutput;
         private final Future<?> outputTask;
+        private final boolean reclaim;
 
         private ActorProcess(
                 Process process,
                 ExecutorService outputReader,
                 CompletableFuture<String> createdOutput,
-                Future<?> outputTask) {
+                Future<?> outputTask,
+                boolean reclaim) {
             this.process = process;
             this.outputReader = outputReader;
             this.createdOutput = createdOutput;
             this.outputTask = outputTask;
+            this.reclaim = reclaim;
         }
 
         private static ActorProcess start(
-                String redis, String prefix, String mode, boolean hold, Path output)
+                String redis,
+                String prefix,
+                String mode,
+                boolean hold,
+                boolean reclaim,
+                Path output)
                 throws IOException {
             var command =
                     new ArrayList<>(
@@ -143,6 +154,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                                     "-Dprobe.redis=" + redis,
                                     "-Dprobe.prefix=" + prefix,
                                     "-Dprobe.node=restarted-node",
+                                    "-Dprobe.reclaim=" + reclaim,
                                     "-cp",
                                     System.getProperty("zlink.test.classpath"),
                                     ZLinkEndedActorOwnerIntegrationTest.class.getName(),
@@ -177,7 +189,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                                     throw new UncheckedIOException(failure);
                                 }
                             });
-            return new ActorProcess(process, outputReader, createdOutput, outputTask);
+            return new ActorProcess(process, outputReader, createdOutput, outputTask, reclaim);
         }
 
         private long awaitCreated(long previous) throws Exception {
@@ -190,6 +202,8 @@ public class ZLinkEndedActorOwnerIntegrationTest {
             Assertions.assertTrue(Integer.parseInt(listener.group(1)) > 0);
             Assertions.assertTrue(generation > previous);
             Assertions.assertTrue(content.contains("FACTORY_INIT pid=" + process.pid()));
+            Assertions.assertEquals(
+                    reclaim, content.contains(RELEASE_WAIT_OBSERVED), "authority release wait");
             return generation;
         }
 
@@ -214,8 +228,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
     @Test
     void disabledFactoryRecreatesActorFromEndedOwnerRecordsAfterNormalProcessExit()
             throws Exception {
-        String redis = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        Assumptions.assumeTrue(redis != null && !redis.isBlank());
+        String redis = ZLinkTestRedis.endpoint();
         var logs = Files.createTempDirectory("zlink-1570-public-");
         System.out.println("Ended Actor owner logs: " + logs);
         String prefix = "actor-reclaim-" + UUID.randomUUID() + ":";
@@ -230,7 +243,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                 var output = logs.resolve("node-" + index + ".log");
                 ZLinkStoreKey ownerKey = null;
                 List<ZLinkStoreScanItem> retained = List.of();
-                var child = ActorProcess.start(redis, prefix, mode, index < 2, output);
+                var child = ActorProcess.start(redis, prefix, mode, index < 2, index > 0, output);
                 try (child) {
                     long generation = child.awaitCreated(previous);
                     previous = generation;
@@ -268,8 +281,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
 
     @Test
     void disabledFactoryRecreatesActorAfterOwnerProcessIsKilled() throws Exception {
-        String redis = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        Assumptions.assumeTrue(redis != null && !redis.isBlank());
+        String redis = ZLinkTestRedis.endpoint();
         var logs = Files.createTempDirectory("zlink-1570-public-");
         System.out.println("Actor crash logs: " + logs);
         String prefix = "actor-reclaim-" + UUID.randomUUID() + ":";
@@ -282,7 +294,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
             for (int index = 0; index < 3; index++) {
                 String mode = index == 1 ? "getOrCreate" : "create";
                 var output = logs.resolve("node-" + index + ".log");
-                var child = ActorProcess.start(redis, prefix, mode, index < 2, output);
+                var child = ActorProcess.start(redis, prefix, mode, index < 2, index > 0, output);
                 try (child) {
                     long generation = child.awaitCreated(previous);
                     previous = generation;
@@ -355,55 +367,45 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                 new SpringApplicationBuilder(Config.class).web(WebApplicationType.NONE).run()) {
             var runtime = app.getBean(ZLinkFrameworkRuntime.class);
             // Startup can return with owner admission closed until lease recovery finishes.
-            var ready = new CompletableFuture<Void>();
-            runtime.observe()
-                    .subscribe(
-                            new Flow.Subscriber<
-                                    ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>() {
-                                private Flow.Subscription subscription;
-
-                                public void onSubscribe(Flow.Subscription value) {
-                                    subscription = value;
-                                    value.request(Long.MAX_VALUE);
-                                }
-
-                                public void onNext(
-                                        ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> value) {
-                                    if (value.status().isReady()) {
-                                        ready.complete(null);
-                                        subscription.cancel();
-                                    }
-                                }
-
-                                public void onError(Throwable failure) {
-                                    ready.completeExceptionally(failure);
-                                }
-
-                                public void onComplete() {
-                                    ready.completeExceptionally(
-                                            new IllegalStateException(
-                                                    "Host observation completed before READY"));
-                                }
-                            });
-            ready.get();
+            ZLinkHostServing.await(runtime);
             Assertions.assertTrue(runtime.isReady());
             System.out.println(
                     "LISTEN_ENDPOINT="
                             + runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "probe")
                                     .endpoint());
             var actors = app.getBean(ZLinkActorManager.class);
-            var result =
-                    args[0].equals("create")
-                            ? actors.create("reclaim-actor", "player")
-                                    .inMesh("probe")
-                                    .submit()
-                                    .toCompletableFuture()
-                                    .get()
-                            : actors.getOrCreate("reclaim-actor", "player")
-                                    .inMesh("probe")
-                                    .submit()
-                                    .toCompletableFuture()
-                                    .get();
+            boolean reclaim = Boolean.getBoolean("probe.reclaim");
+            // An ended owner's Actor is re-created only after the authority release wait
+            // (Location runtime §6.1, #3877): a reclaim's first attempt must report that wait,
+            // and each later attempt either reports it again, is Created, or fails the run.
+            ZLinkActorCreateResult result = null;
+            for (int attempt = 0; result == null; attempt++) {
+                try {
+                    result =
+                            args[0].equals("create")
+                                    ? actors.create("reclaim-actor", "player")
+                                            .inMesh("probe")
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .get()
+                                    : actors.getOrCreate("reclaim-actor", "player")
+                                            .inMesh("probe")
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .get();
+                } catch (ExecutionException failure) {
+                    if (!(failure.getCause() instanceof ZLinkFrameworkException cause)
+                            || cause.kind() != ZLinkFrameworkErrorKind.UNAVAILABLE
+                            || !String.valueOf(cause.getMessage())
+                                    .contains("authority release wait")) throw failure;
+                    if (attempt == 0) System.out.println(RELEASE_WAIT_OBSERVED);
+                    Thread.sleep(renewInterval.toMillis());
+                    continue;
+                }
+                if (attempt == 0 && reclaim)
+                    throw new AssertionError(
+                            "An ended owner's Actor was re-created before the authority release wait");
+            }
             if (!(result instanceof ZLinkActorCreateResult.Created created))
                 throw new AssertionError("Expected Created, got " + result);
             System.out.println(CREATED_PREFIX + created.actor().objectGeneration());

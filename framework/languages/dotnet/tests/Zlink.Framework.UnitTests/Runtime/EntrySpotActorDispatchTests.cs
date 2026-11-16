@@ -16543,6 +16543,15 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public IReadOnlyList<ZLinkSpotNodePeerEntry> Peers() => [];
 
+        public ulong LifecycleGeneration => 1;
+
+        public (
+            MeshNodeState State,
+            RoutingId RoutingId,
+            IReadOnlyList<MeshNodePeer> Peers,
+            IReadOnlyList<MeshPeerChannel>[] PeerChannels
+        ) MeshTopology() => (MeshNodeState.Ready, RoutingId, MeshPeers(), []);
+
         public MeshNodeStatus MeshStatus() =>
             new(
                 MeshNodeState.Ready,

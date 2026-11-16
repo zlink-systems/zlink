@@ -309,7 +309,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             );
         var sessionNode = runtime.GetMeshNodeRuntime(actor.MeshName).Node;
         var sessionNodeRid = sessionNode.RoutingId;
-        var sessionOwnerNodeGeneration = sessionNode.MeshStatus().LifecycleGeneration;
+        var sessionOwnerNodeGeneration = sessionNode.LifecycleGeneration;
         if (sessionOwnerNodeGeneration == 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
@@ -754,7 +754,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             return true;
         var local = runtime.GetMeshNodeRuntime(route.MeshName.Value).Node;
         return route.Ref.NodeRid == local.RoutingId
-            && route.TargetNodeGeneration == local.MeshStatus().LifecycleGeneration;
+            && route.TargetNodeGeneration == local.LifecycleGeneration;
     }
 
     public ValueTask NotifyActorDisconnectedAsync(

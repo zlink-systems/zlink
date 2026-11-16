@@ -35,7 +35,7 @@ internal sealed class ZLinkManagedStream : IZLinkStream
         ArgumentNullException.ThrowIfNull(payload);
         if (flags is not (SendFlags.None or SendFlags.DontWait))
             throw new ArgumentOutOfRangeException(nameof(flags));
-        using var raw = payload.ToRawMessage(_codecs);
+        var raw = payload.ToRawMessage(_codecs);
         return WriteRaw(raw);
     }
 

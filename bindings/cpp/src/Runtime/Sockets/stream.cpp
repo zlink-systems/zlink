@@ -3,6 +3,7 @@
 #include <zlink/Contracts/Sockets/stream_socket.hpp>
 #include <Runtime/Core/routing_id_access.hpp>
 #include <Runtime/Native/message_access.hpp>
+#include <Runtime/Native/socket_handle.hpp>
 #include <Runtime/Sockets/detail.hpp>
 #include <Runtime/Sockets/socket_access.hpp>
 #include <Runtime/Messaging/operation_state.hpp>
@@ -104,11 +105,15 @@ bool stream_socket_t::recv_packet (stream_packet_t &out_, recv_flags_t flags_)
     } claim{out_._receiving};
 
     out_.close ();
+    recv_result_t admission;
+    detail::socket_call_t call (detail::socket_access_t::native_owner (*this), admission);
+    if (admission != recv_result_t::ok)
+        throw recv_error_t (admission, zlink_errno ());
     message_t header;
     message_t body;
     const zlink_routing_id_t *source_rid = nullptr;
     const recv_result_t result = static_cast<recv_result_t> (zlink_stream_recv_packet (
-      detail::native_handle (*this), &source_rid, detail::native_handle (header),
+      call.handle (), &source_rid, detail::native_handle (header),
       detail::native_handle (body),
       static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
     if (result == recv_result_t::no_data)

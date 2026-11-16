@@ -39,7 +39,7 @@ public sealed class DirectRequestWaitCostTests
         using var waits = new SubmissionWaitListener();
         for (var index = 0; index < RequestCount; index++)
         {
-            using var payload = Message.From(BitConverter.GetBytes(index));
+            var payload = Message.From(BitConverter.GetBytes(index));
             ValueTask<IReadOnlyList<Message>> pending;
             waits.Begin();
             try

@@ -4,12 +4,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { createClient } = require('redis');
 const { ZLinkFrameworkRelocationOutcome } = require('../../packages/framework/dist');
-const redisUrl = process.env.ZLINK_TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
+const { connectTestRedis } = require('./helpers/test-redis');
 const { startChild, stopChild, deletePrefix } = require('./helpers/native-process-harness')(
-  path.join(__dirname, 'fixtures', 'actor-direct-route-process.js'),
-  redisUrl
+  path.join(__dirname, 'fixtures', 'actor-direct-route-process.js')
 );
 
 // The request outcome inside the commit-to-publication window follows the
@@ -26,16 +24,10 @@ test(
       process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR ??
       fs.mkdtempSync(path.join(os.tmpdir(), 'actor-publication-'));
     const children = [];
-    const redis = createClient({ url: redisUrl, socket: { reconnectStrategy: false } });
-    redis.on('error', () => {});
-    try {
-      await redis.connect();
-      await redis.ping();
-    } catch (error) {
-      if (redis.isOpen) redis.disconnect();
+    const redis = await connectTestRedis(t);
+    if (redis === undefined) {
       if (!process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR)
         fs.rmSync(flowDirectory, { recursive: true, force: true });
-      t.skip(`Redis is unavailable at ${redisUrl}: ${error.message}`);
       return;
     }
     let next;
