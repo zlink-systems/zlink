@@ -237,17 +237,23 @@ public sealed class LocationRuntimeTests
                     ? Task.CompletedTask
                     : Execute(async ct =>
                     {
-                        entered.TrySetResult();
                         if (boundary == 2)
                         {
-                            await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                            // The turn must be suspended before the test starts recovery; signalling first lets
+                            // release complete before the yield and the handler finishes on the fast path.
+                            var yielded = ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
                                 _ => new ValueTask(release.Task),
                                 ct
                             );
+                            entered.TrySetResult();
+                            await yielded;
                             Interlocked.Increment(ref calls);
                         }
                         else
+                        {
+                            entered.TrySetResult();
                             await release.Task;
+                        }
                     });
             if (boundary != 1)
                 await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -298,17 +304,10 @@ public sealed class LocationRuntimeTests
             await recovery.WaitAsync(TimeSpan.FromSeconds(5));
             if (discard)
             {
-                if (target is 0 or 3)
-                {
-                    var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                        pending.WaitAsync(TimeSpan.FromSeconds(5))
-                    );
-                    Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
-                }
-                else
-                    await Assert.ThrowsAsync<TaskCanceledException>(() =>
-                        pending.WaitAsync(TimeSpan.FromSeconds(5))
-                    );
+                var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                    pending.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
                 Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
                 Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
                 Assert.Equal(0, calls);
