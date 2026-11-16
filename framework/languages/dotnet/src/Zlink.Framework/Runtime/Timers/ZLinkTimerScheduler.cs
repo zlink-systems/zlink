@@ -106,11 +106,11 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
+        Task? wake = null;
         try
         {
-            while (true)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 var next = await _lane.RunAsync(TryTakeDueOnLane).ConfigureAwait(false);
                 if (next.HasDue)
                 {
@@ -120,30 +120,35 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
                     continue;
                 }
 
+                wake ??= _wake.WaitAsync(cancellationToken);
                 if (next.Delay is null)
                 {
-                    await _wake.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    await wake.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                    wake = null;
                     continue;
                 }
 
                 using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                     cancellationToken
                 );
-                var wake = _wake.WaitAsync(waitCancellation.Token);
                 var deadline = Task.Delay(next.Delay.Value, TimeProvider, waitCancellation.Token);
                 await Task.WhenAny(wake, deadline).ConfigureAwait(false);
+                if (wake.IsCompleted)
+                {
+                    await wake.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                    wake = null;
+                }
                 waitCancellation.Cancel();
-                try
-                {
-                    await Task.WhenAll(wake, deadline).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (waitCancellation.IsCancellationRequested)
-                {
-                    // The other wait won, or the scheduler is stopping.
-                }
+                await deadline.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        finally
+        {
+            _stopSource.Cancel();
+            if (wake is not null)
+                await wake.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
     }
 
     private (bool HasDue, ScheduledTimer DueTimer, TimeSpan? Delay) TryTakeDueOnLane()
