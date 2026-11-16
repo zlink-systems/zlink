@@ -57,7 +57,6 @@ import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import {
-  type ZLinkLocationOwnerToken,
   zlinkDefaultLocationOptions,
   type ZLinkLocationRuntimeQuery
 } from '../../contracts/Locations';
@@ -69,9 +68,7 @@ import {
   type ZLinkActorManagerOptions,
   decodeRemoteActorSourceLeaveTerminal,
   DefaultZLinkActorClient,
-  isActorAuthorityPayload,
   publishInitialActorAuthority,
-  rewriteActorAuthorityOwner,
   ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
   ZLinkActorHandoffCoordinator,
   ZLinkActorTransferRegistry
@@ -150,12 +147,7 @@ import {
   runtimeObservationIsTerminal,
   runtimeStateIsReady
 } from '../foundation/runtime-state-projections';
-import { rewriteServiceAuthorityOwner } from '../foundation/service-authority-payload-codec';
 import { ServiceRelocationAuthorityError } from '../foundation/service-relocation-coordinator';
-import {
-  replaceServiceRelocationAuthorityApplicationPayload,
-  serviceRelocationAuthorityApplicationPayload
-} from '../foundation/service-relocation-runtime';
 import {
   MeshPeerRuntimeState,
   OperationKind,
@@ -496,8 +488,7 @@ export class ZLinkFrameworkRuntimeHost
       metrics: this.metrics,
       fallbackNodeRid: `node-${randomUUID()}`,
       observeActorAuthorityVersion: (actorId, storeVersion) =>
-        this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
-      rewriteAuthorityPayloadForOwner
+        this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion)
     });
     this.streamBindingRuntime = new ZLinkStreamBindingRuntime({
       dispatchErrors: this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink),
@@ -569,8 +560,6 @@ export class ZLinkFrameworkRuntimeHost
           meshName === undefined ||
           node === undefined ||
           state.locationGeneration === undefined ||
-          state.ownerLeaseGeneration === undefined ||
-          state.ownerLeaseGeneration !== owner.leaseGeneration ||
           !routingIdsEqual(node.routingId, current.nodeRid)
         ) {
           throw new ZLinkConfigurationException(
@@ -581,7 +570,7 @@ export class ZLinkFrameworkRuntimeHost
           meshName,
           objectGeneration: current.generation,
           ownerId: owner.ownerId,
-          ownerLeaseGeneration: state.ownerLeaseGeneration,
+          ownerLeaseGeneration: owner.leaseGeneration,
           nodeRid: String(current.nodeRid),
           nodeRidHex: encodeRoutingIdStorageHex(current.nodeRid),
           nodeGeneration: node.lifecycleGeneration,
@@ -705,7 +694,7 @@ export class ZLinkFrameworkRuntimeHost
         );
       },
       currentOwnerFence: (actorId) => {
-        const state = this.actorManager?.getState(actorId);
+        const state = this.actorManager?.publishedState(actorId);
         const current = state?.nativeActorRef;
         const owner = this.locationOwner.currentRuntime?.currentOwnerToken;
         const node =
@@ -718,14 +707,13 @@ export class ZLinkFrameworkRuntimeHost
           owner === undefined ||
           node === undefined ||
           state.locationGeneration === undefined ||
-          state.ownerLeaseGeneration === undefined ||
           !routingIdsEqual(node.routingId, current.nodeRid)
         ) {
           return undefined;
         }
         return ownerFence({
           ownerId: owner.ownerId,
-          ownerLeaseGeneration: state.ownerLeaseGeneration,
+          ownerLeaseGeneration: owner.leaseGeneration,
           nodeRid: String(current.nodeRid),
           nodeRidHex: encodeRoutingIdStorageHex(current.nodeRid),
           nodeGeneration: node.lifecycleGeneration,
@@ -743,6 +731,7 @@ export class ZLinkFrameworkRuntimeHost
       factories?.createBoundSessionRelay ??
       ((relayOptions: ZLinkBoundSessionRelayOptions) => new ZLinkBoundSessionRelay(relayOptions));
     this.boundSessionRelay = createBoundSessionRelay({
+      currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
       admission: this.admission,
       requestTimeoutMs: options.registration.requestTimeoutMs,
       sessionRelocationSealTimeoutMs:
@@ -2842,11 +2831,7 @@ export class ZLinkFrameworkRuntimeHost
                   entrySpotGeneration: entrySpot.lifecycleGeneration,
                   ...(reply === undefined ? {} : { reply }),
                   onPublished: () =>
-                    actors.adoptCreatedAuthority(
-                      record.actorId,
-                      authority.authorityOwnerGeneration,
-                      authority.ownerLeaseGeneration
-                    )
+                    actors.adoptCreatedAuthority(record.actorId, authority.authorityOwnerGeneration)
                 };
               },
               signal
@@ -4134,17 +4119,6 @@ function relocationReason(reason: string): ZLinkFrameworkRelocationReason {
     default:
       return ZLinkFrameworkRelocationReason.RelocationFailed;
   }
-}
-
-function rewriteAuthorityPayloadForOwner(
-  payload: Uint8Array,
-  owner: ZLinkLocationOwnerToken
-): Uint8Array {
-  const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
-  const rewritten = isActorAuthorityPayload(applicationPayload)
-    ? rewriteActorAuthorityOwner(applicationPayload, owner)
-    : (rewriteServiceAuthorityOwner(applicationPayload, owner) ?? applicationPayload);
-  return replaceServiceRelocationAuthorityApplicationPayload(payload, rewritten);
 }
 
 function validateRelocationOptions(

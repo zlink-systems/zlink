@@ -25,6 +25,11 @@ namespace zlink
 namespace detail
 {
 
+socket_handle_t *socket_access_t::native_owner (socket_t &socket_) noexcept
+{
+    return socket_._socket.get ();
+}
+
 void *socket_access_t::native_handle (socket_t &socket_) noexcept
 {
     return socket_._socket ? detail::native_handle (*socket_._socket) : nullptr;
@@ -366,6 +371,8 @@ int socket_t::receive (received_t &received_, recv_flags_t flags_, bool attach_r
 int socket_t::receive_impl (
   received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_)
 {
+    recv_result_t result;
+    detail::socket_call_t call (_socket.get (), result);
     if (!_receive_envelope)
         _receive_envelope = std::make_unique<detail::recv_envelope_t> ();
     auto &envelope = *_receive_envelope;
@@ -376,8 +383,9 @@ int socket_t::receive_impl (
     const bool use_router_recv = _type == socket_type::router;
     int rc = -1;
     try {
-        rc = detail::recv_whole_envelope (
-          detail::native_handle (*this), flags_, envelope, use_router_recv);
+        rc = result != recv_result_t::ok ? static_cast<int> (result)
+             : detail::recv_whole_envelope (
+                 call.handle (), flags_, envelope, use_router_recv);
     }
     catch (...) {
         // A failed binding-side allocation must not leave earlier multipart
@@ -396,7 +404,7 @@ int socket_t::receive_impl (
     // Core reports the route generation of the record returned by the last
     // successful zlink_router_recv; read it before any other data receive.
     const uint64_t route_generation =
-      use_router_recv ? zlink_router_recv_route_generation (detail::native_handle (*this)) : 0;
+      use_router_recv ? zlink_router_recv_route_generation (call.handle ()) : 0;
     detail::received_access_t::commit_receive_metadata (
       received_, std::move (envelope.source_rid), envelope.has_reply_token,
       envelope.reply_token, _runtime ? _runtime->reply_owner : nullptr, route_generation);
@@ -438,13 +446,17 @@ int socket_t::subscribe (topic_message_t &message_, recv_flags_t flags_)
         _receive_envelope->take_subscription_message (message_);
         return ZLINK_RECV_OK;
     }
+    recv_result_t result;
+    detail::socket_call_t call (_socket.get (), result);
+    if (result != recv_result_t::ok)
+        return static_cast<int> (result);
     return detail::read_subscription_message (
       message_,
       [&] (const zlink_routing_id_t **source_rid_out_, char *topic_out_, size_t topic_capacity_,
            size_t *topic_size_out_, zlink_msg_t *parts_out_, size_t parts_capacity_,
            size_t *part_count_out_) {
            return static_cast<int> (zlink_subscribe (
-             detail::native_handle (*this), source_rid_out_, topic_out_,
+             call.handle (), source_rid_out_, topic_out_,
              topic_capacity_, topic_size_out_, parts_out_, parts_capacity_, part_count_out_,
              static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
        });
@@ -473,11 +485,15 @@ int socket_t::subscribe_part (std::optional<routing_id_t> &source_rid_out_,
 
 int socket_t::subscription_event (subscription_event_t &event_, recv_flags_t flags_)
 {
+    recv_result_t result;
+    detail::socket_call_t call (_socket.get (), result);
+    if (result != recv_result_t::ok)
+        return static_cast<int> (result);
     const zlink_routing_id_t *source_rid = nullptr;
     zlink_msg_t native_part;
     size_t part_count = 0;
     const int rc = zlink_recv (
-      detail::native_handle (*this), &source_rid, &native_part, 1u, &part_count,
+      call.handle (), &source_rid, &native_part, 1u, &part_count,
       static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
     if (rc != ZLINK_RECV_OK)
         return rc;

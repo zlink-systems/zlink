@@ -1308,10 +1308,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         )
                         .ConfigureAwait(false);
                 }
-                catch
+                finally
                 {
                     hello.Dispose();
-                    throw;
                 }
                 try
                 {

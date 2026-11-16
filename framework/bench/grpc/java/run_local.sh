@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Optional controls: SOURCE_CPUS and TARGET_CPUS (taskset CPU lists).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,7 +90,11 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_file="${cell_dir}/target-stats.json"
         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
 
-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
+        target_process=("${target_command[@]}")
+        if [[ -n "${TARGET_CPUS:-}" ]]; then
+          target_process=(taskset -c "${TARGET_CPUS}" "${target_process[@]}")
+        fi
+        setsid "${target_process[@]}" >"${target_log}" 2>&1 &
         b_pid=$!
         wait_for_stats "${target_stats_url}" 0
 
@@ -107,7 +112,11 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${target_command_endpoint}" ]]; then
           source_args+=(--target-command-endpoint "${target_command_endpoint}")
         fi
-        setsid "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+        source_process=("${SOURCE_BIN}" "${source_args[@]}")
+        if [[ -n "${SOURCE_CPUS:-}" ]]; then
+          source_process=(taskset -c "${SOURCE_CPUS}" "${source_process[@]}")
+        fi
+        setsid "${source_process[@]}" >"${source_log}" 2>&1 &
         a_pid=$!
         wait_for_stats "${source_stats_url}" 1
 

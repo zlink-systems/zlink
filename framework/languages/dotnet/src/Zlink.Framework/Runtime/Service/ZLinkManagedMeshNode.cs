@@ -2692,16 +2692,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         return RunState(() =>
         {
-            var admitted = _peersByRid.Values.Count(static peer => peer.Admitted);
-            var draining = _peersByRid.Values.Count(static peer =>
-                peer.State == MeshPeerState.Draining
-            );
-            var pendingApplication = _ownedMailboxes
-                .Where(static entry => entry.Key.Domain == MeshReadyDomains.Application)
-                .Sum(static entry => entry.Value.Count);
-            var pendingInfrastructure = _ownedMailboxes
-                .Where(static entry => entry.Key.Domain == MeshReadyDomains.Infrastructure)
-                .Sum(static entry => entry.Value.Count);
+            var admitted = 0;
+            var draining = 0;
+            foreach (var peer in _peersByRid.Values)
+            {
+                if (peer.Admitted)
+                    admitted++;
+                if (peer.State == MeshPeerState.Draining)
+                    draining++;
+            }
+            var pendingApplication = 0;
+            var pendingInfrastructure = 0;
+            foreach (var entry in _ownedMailboxes)
+            {
+                if (entry.Key.Domain == MeshReadyDomains.Application)
+                    pendingApplication = checked(pendingApplication + entry.Value.Count);
+                if (entry.Key.Domain == MeshReadyDomains.Infrastructure)
+                    pendingInfrastructure = checked(pendingInfrastructure + entry.Value.Count);
+            }
             var pendingBytes = checked((ulong)Math.Max(0, Volatile.Read(ref _queuedBytes)));
             return new MeshNodeStatus(
                 _state,
@@ -2726,48 +2734,92 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid) =>
         _channelSelection.ClassifyRouterTarget(targetRid);
 
-    public MeshNodePeer[] Peers()
+    internal ulong LifecycleGeneration => _lifecycleGeneration;
+
+    internal (
+        MeshNodeState State,
+        RoutingId RoutingId,
+        IReadOnlyList<MeshNodePeer> Peers,
+        IReadOnlyList<MeshPeerChannel>[] PeerChannels
+    ) MeshTopology() =>
+        RunState(() =>
+        {
+            var peers = PeersOnLane();
+            var channels =
+                peers.Length == 0
+                    ? Array.Empty<IReadOnlyList<MeshPeerChannel>>()
+                    : new IReadOnlyList<MeshPeerChannel>[peers.Length];
+            for (var index = 0; index < peers.Length; index++)
+                channels[index] =
+                    peers[index].State == MeshPeerState.Closed || peers[index].RoutingId.IsEmpty
+                        ? []
+                        : PeerChannelsOnLane(
+                            peers[index].RoutingId,
+                            peers[index].LifecycleGeneration
+                        );
+            return (_state, _routingId, (IReadOnlyList<MeshNodePeer>)peers, channels);
+        });
+
+    public MeshNodePeer[] Peers() => RunState(PeersOnLane);
+
+    private MeshNodePeer[] PeersOnLane()
     {
-        return RunState(() =>
-            _peersByIntent
-                .Values.Select(intent =>
-                    intent.Snapshot(
-                        _peersByRid.GetValueOrDefault(
-                            intent.ResolvedRid.IsEmpty
-                                ? intent.ExpectedRid ?? default
-                                : intent.ResolvedRid
-                        )
+        if (_peersByIntent.Count == 0 && _peersByRid.Count == 0)
+            return Array.Empty<MeshNodePeer>();
+        var peers = new List<MeshNodePeer>(_peersByIntent.Count + _peersByRid.Count);
+        foreach (var intent in _peersByIntent.Values)
+            peers.Add(
+                intent.Snapshot(
+                    _peersByRid.GetValueOrDefault(
+                        intent.ResolvedRid.IsEmpty
+                            ? intent.ExpectedRid ?? default
+                            : intent.ResolvedRid
                     )
                 )
-                .Concat(VisibleInboundPeersUnderLock().Select(static peer => peer.Snapshot()))
-                .ToArray()
-        );
+            );
+        foreach (var peer in VisibleInboundPeersUnderLock())
+            peers.Add(peer.Snapshot());
+        return peers.ToArray();
     }
 
-    private IEnumerable<Peer> VisibleInboundPeersUnderLock() =>
-        _peersByRid.Values.Where(peer =>
-            !_peersByIntent.Values.Any(intent =>
-                intent.IsBoundTo(peer)
-                || peer.RouteGeneration == 0
-                    && (
-                        intent.ResolvedRid == peer.RoutingId || intent.ExpectedRid == peer.RoutingId
-                    )
-            )
-        );
-
-    public MeshPeerChannel[] PeerChannels(RoutingId peerRid, ulong lifecycleGeneration)
+    private IEnumerable<Peer> VisibleInboundPeersUnderLock()
     {
-        return RunState(() =>
+        foreach (var peer in _peersByRid.Values)
         {
-            if (
-                !_peersByRid.TryGetValue(peerRid, out var peer)
-                || peer.LifecycleGeneration != lifecycleGeneration
-            )
-                return Array.Empty<MeshPeerChannel>();
-            return peer
-                .Channels.Select(static channel => new MeshPeerChannel(channel.Key, channel.Value))
-                .ToArray();
-        });
+            var bound = false;
+            foreach (var intent in _peersByIntent.Values)
+            {
+                if (
+                    intent.IsBoundTo(peer)
+                    || peer.RouteGeneration == 0
+                        && (
+                            intent.ResolvedRid == peer.RoutingId
+                            || intent.ExpectedRid == peer.RoutingId
+                        )
+                )
+                {
+                    bound = true;
+                    break;
+                }
+            }
+            if (!bound)
+                yield return peer;
+        }
+    }
+
+    public MeshPeerChannel[] PeerChannels(RoutingId peerRid, ulong lifecycleGeneration) =>
+        RunState(() => PeerChannelsOnLane(peerRid, lifecycleGeneration));
+
+    private MeshPeerChannel[] PeerChannelsOnLane(RoutingId peerRid, ulong lifecycleGeneration)
+    {
+        if (
+            !_peersByRid.TryGetValue(peerRid, out var peer)
+            || peer.LifecycleGeneration != lifecycleGeneration
+        )
+            return Array.Empty<MeshPeerChannel>();
+        return peer
+            .Channels.Select(static channel => new MeshPeerChannel(channel.Key, channel.Value))
+            .ToArray();
     }
 
     public IMeshNodeMonitor OpenMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All)
@@ -8028,7 +8080,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     "The command 40 relocation terminal could not be submitted on its reply leg.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
-            message = null;
         }
         catch (ZlinkException exception)
         {
@@ -9276,7 +9327,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         if (replyParts is not { Count: > 0 })
             return Array.Empty<ReadOnlyMemory<byte>>();
-        var messages = replyParts.Select(static part => Message.From(part.Span)).ToArray();
+        var messages = ZLinkRawRouterServicePort.CreateMessages(replyParts);
         try
         {
             ZLinkEnvelopeHeader header;
@@ -10266,7 +10317,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     return false;
                 socket.Reply(target, replyToken).Message(message).Submit();
-                message = null;
             }
             return true;
         }
@@ -11001,13 +11051,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private ValueTask SendDirectWireAsync(
+    private async ValueTask SendDirectWireAsync(
         RoutingId target,
         IReadOnlyList<Message> messages,
         CancellationToken cancellationToken
     )
     {
-        var ownershipTransferred = false;
         try
         {
             Task admission;
@@ -11028,22 +11077,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .Messages(messages)
                     .Async(cancellationToken)
                     .EnsureAcceptedAsync();
-                ownershipTransferred = true;
             }
             // Spec 01 §10, 08 §3 E3: a send whose admission is decided by the
             // submit result completes from it without a completion-table entry.
             // Only an admission that arrives later registers before it is observed.
             if (admission.IsCompleted)
-                return new ValueTask(admission);
+            {
+                await admission.ConfigureAwait(false);
+                return;
+            }
             var pending = Completions.RegisterSend(NextStandaloneOperationId());
             pending.Observe(admission);
-            return pending.Completion;
+            await pending.Completion.ConfigureAwait(false);
         }
-        catch (Exception failure)
+        finally
         {
-            if (!ownershipTransferred)
-                DisposeParts(messages);
-            return ValueTask.FromException(failure);
+            DisposeParts(messages);
         }
     }
 
@@ -11378,7 +11427,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        var ownershipTransferred = false;
         try
         {
             admission ??= _channelSelection.DirectPeer(target)?.Liveness;
@@ -11395,14 +11443,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     cancellationToken,
                     requestAdmission: requestAdmission
                 );
-                ownershipTransferred = true;
             }
             return new ValueTask<IReadOnlyList<Message>>(request);
         }
         finally
         {
-            if (!ownershipTransferred)
-                DisposeParts(messages);
+            DisposeParts(messages);
         }
     }
 
@@ -12706,7 +12752,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             pending,
             RequestResult.Ok,
             0,
-            replyParts.Select(Message.From).ToArray()
+            ZLinkRawRouterServicePort.CreateMessages(replyParts, static part => Message.From(part))
         );
     }
 
@@ -13639,7 +13685,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 .EnsureAcceptedAsync();
             if (admission.IsCanceled)
                 return false;
-            message = null;
             await admission.ConfigureAwait(false);
             return true;
         }
@@ -13793,13 +13838,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 nameof(parts)
             );
 
-        var messages = new Message[parts.Count];
-        var created = 0;
-        var ownershipTransferred = false;
+        var messages = ZLinkRawRouterServicePort.CreateMessages(parts);
         try
         {
-            for (; created < messages.Length; created++)
-                messages[created] = Message.From(parts[created]);
             Task admission;
             lock (_socketGate)
             {
@@ -13807,16 +13848,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
                 var operation = socket.Send(target).Messages(messages);
-                ownershipTransferred = true;
                 admission = operation.Async(cancellationToken).EnsureAcceptedAsync();
             }
             await admission.ConfigureAwait(false);
         }
         finally
         {
-            if (!ownershipTransferred)
-                for (var index = 0; index < created; index++)
-                    messages[index].Dispose();
+            DisposeParts(messages);
         }
     }
 
@@ -15002,7 +15040,10 @@ internal sealed class ZLinkManagedStreamSessionService(
     )
     {
         EnsureStarted();
-        var retained = parts.Select(Message.From).ToArray();
+        var retained = ZLinkRawRouterServicePort.CreateMessages(
+            parts,
+            static part => Message.From(part)
+        );
         try
         {
             return stream

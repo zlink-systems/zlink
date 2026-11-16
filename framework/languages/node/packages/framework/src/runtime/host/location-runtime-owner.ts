@@ -25,7 +25,6 @@ export interface ZLinkLocationRuntimeOwnerOptions {
   readonly metrics: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly monotonicNowMs?: () => number;
   readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
-  readonly rewriteAuthorityPayloadForOwner?: import('../locations').ZLinkLocationRuntimeOptions['rewriteAuthorityPayloadForOwner'];
 }
 
 export interface ZLinkLocationRuntimeStopSnapshot {
@@ -108,8 +107,7 @@ export class ZLinkLocationRuntimeOwner {
           kind: 'channel' as const,
           name
         }))
-      ],
-      rewriteAuthorityPayloadForOwner: this.options.rewriteAuthorityPayloadForOwner
+      ]
     });
     this.runtime = runtime;
     this.lifecycle = new ZLinkLocationLifecycle(

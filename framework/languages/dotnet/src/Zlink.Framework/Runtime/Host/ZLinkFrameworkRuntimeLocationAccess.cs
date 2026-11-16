@@ -231,7 +231,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     (int)local.FailureCode,
                     "Local Instance Spot activation"
                 );
-            return local.ReplyParts.Select(Message.From).ToArray();
+            return ZLinkRawRouterServicePort.CreateMessages(local.ReplyParts);
         }
         return await source
             .Node.ActivateInstanceSpotAsync(
