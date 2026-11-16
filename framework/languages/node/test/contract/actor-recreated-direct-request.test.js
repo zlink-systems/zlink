@@ -1,62 +1,168 @@
 'use strict';
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const test = require('node:test');
-const { createClient } = require('redis');
+const { randomUUID } = require('node:crypto');
+const { Module, Injectable } = require('@nestjs/common');
+const { NestFactory } = require('@nestjs/core');
+const framework = require('../../packages/framework/dist');
+const {
+  ZLinkInMemoryProviderLocationStore
+} = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 const {
   ServiceStaleGenerationError
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-registry');
-const redisUrl = process.env.ZLINK_TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
-const { startChild, stopChild, deletePrefix } = require('./helpers/native-process-harness')(
-  path.join(__dirname, 'fixtures', 'actor-direct-route-process.js'),
-  redisUrl
-);
+const n = require('../../packages/nestjs/dist');
 
 test(
   'cached ID request reaches the recreated Actor on the same owner',
   { timeout: 60000 },
   async (t) => {
-    const run = `${process.pid}-${Date.now()}`;
-    const children = [];
-    const keyPrefix = `zlink:test:recreated:${run}:`;
-    const redis = createClient({ url: redisUrl, socket: { reconnectStrategy: false } });
-    redis.on('error', () => {});
-    await redis.connect();
+    const run = `${process.pid}-${randomUUID()}`;
+    const meshName = `recreated-${run}`;
+    const ownerRoutingId = `owner-${run}`;
+    const requesterRoutingId = `requester-${run}`;
+    const locationStore = new ZLinkInMemoryProviderLocationStore();
+    const apps = [];
+
+    class Ask {
+      constructor(value = 'ask') {
+        this.value = value;
+      }
+    }
+    class Player {
+      constructor(context) {
+        this.context = context;
+      }
+    }
+    class Factory {
+      async create(context) {
+        return new Player(context);
+      }
+    }
+    class Entry {
+      async onCreateActor() {
+        return { accepted: true };
+      }
+      async onActorJoin() {
+        return { accepted: true };
+      }
+      async onJoinedActor() {}
+      async onLeaveActor() {}
+    }
+    class AskHandler {
+      async handle(_entry, actor, _context, _request) {
+        return { generation: String(actor.context.objectGeneration), node: ownerRoutingId };
+      }
+    }
+    Injectable()(Factory);
+    Injectable()(Entry);
+    Injectable()(AskHandler);
+    n.zlinkEntrySpotActorRequestHandler({
+      actor: () => Player,
+      entrySpot: () => Entry,
+      packetName: 'Ask'
+    })(AskHandler);
+
+    async function startNode(role, targetEndpoint) {
+      const routingId = role === 'owner' ? ownerRoutingId : requesterRoutingId;
+      const builder = n.zlinkFramework().addLocationStore(locationStore);
+      builder.configureDispatch().messageFlow('normal');
+      builder
+        .configureLocations()
+        .pollingIntervalMs(20)
+        .ownerLeaseRenewIntervalMs(100)
+        .ownerLeaseTtlMs(5000)
+        .ownerLeaseFencingMarginMs(500)
+        .ownerLeaseRenewTimeoutMs(500);
+      const mesh = builder
+        .addRouteMesh(meshName)
+        .listen('tcp://127.0.0.1:0')
+        .routingId(routingId);
+      if (role === 'owner') {
+        mesh
+          .objects()
+          .server()
+          .addEntrySpot(Entry, 'player')
+          .addActorFactory('player', Factory, (factory) => factory.disableRelocation());
+      } else {
+        mesh.objects().client();
+        mesh.peerConnections().connect(ownerRoutingId, targetEndpoint);
+      }
+      class App {}
+      Module({
+        imports: [n.ZLinkModule.forRoot(builder.build())],
+        providers: role === 'owner' ? [Factory, Entry, AskHandler] : []
+      })(App);
+      const app = await NestFactory.createApplicationContext(App, {
+        logger: false,
+        abortOnError: false
+      });
+      apps.push(app);
+      return app;
+    }
+
+    async function waitForOwnerDescriptor(owner) {
+      const query = owner.get(n.ZLINK_LOCATION_RUNTIME_QUERY);
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        const descriptor = (await query.listMeshNodeDescriptors(meshName)).items.find(
+          (item) =>
+            String(item.rid) === ownerRoutingId &&
+            item.state === 1
+        );
+        if (descriptor) return descriptor;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error('owner node not published Serving');
+    }
+
+    async function waitForOwnerPeer(requester) {
+      const routeMesh = requester.get(n.ZLINK_ROUTE_MESH_RUNTIME);
+      for await (const snapshot of routeMesh.observe(
+        meshName,
+        64,
+        AbortSignal.timeout(10000)
+      )) {
+        if (
+          snapshot.status.isReady &&
+          snapshot.status.peers.some(
+            (peer) =>
+              String(peer.nodeRid) === ownerRoutingId && peer.state === framework.ZLinkPeerState.Ready
+          )
+        )
+          return;
+      }
+      throw new Error('owner peer not Ready');
+    }
+
     t.after(async () => {
-      await Promise.all(children.map(stopChild));
-      await deletePrefix(redis, keyPrefix);
-      await redis.quit();
+      for (const app of apps.reverse()) await app.close();
     });
-    const base = {
-      meshName: `recreated-${run}`,
-      keyPrefix,
-      endpoint: 'tcp://127.0.0.1:*',
-      targetRoutingId: `owner-${run}`
-    };
-    const owner = startChild(children, {
-      ...base,
-      role: 'target',
-      routingId: base.targetRoutingId
-    });
-    const ready = await owner.ready;
-    await owner.command('createActor');
-    const caller = startChild(children, {
-      ...base,
-      role: 'client',
-      routingId: `client-${run}`,
-      targetEndpoint: ready.endpoint
-    });
-    await caller.ready;
-    await caller.command('waitRouteReady');
-    const first = await caller.command('askGeneration');
-    assert.equal(await caller.command('actorRouteCached'), true);
-    assert.equal(await owner.command('destroyActor'), true);
-    await owner.command('createActor');
-    assert.equal(await caller.command('actorRouteCached'), true);
-    const second = await caller.command('askGeneration');
+
+    const owner = await startNode('owner');
+    const ownerDescriptor = await waitForOwnerDescriptor(owner);
+    const actors = owner.get(n.ZLINK_ACTOR_MANAGER);
+    await actors.getOrCreate('alice', 'player').inMesh(meshName).submit();
+
+    const requester = await startNode('requester', ownerDescriptor.endpoint);
+    await waitForOwnerPeer(requester);
+    const actorClient = requester.get(n.ZLINK_ACTOR_CLIENT);
+    const routeIsCached = () =>
+      requester
+        .get(n.ZLINK_FRAMEWORK_RUNTIME)
+        [inspectRuntime]()
+        .actorRouteCache?.directActorRouteKeys.includes('alice') ?? false;
+
+    const first = await actorClient.requestToActor('alice', new Ask('incarnation')).submit();
+    assert.equal(routeIsCached(), true);
+    assert.equal(await actors.destroy(await actors.find('alice')), true);
+    await actors.getOrCreate('alice', 'player').inMesh(meshName).submit();
+    assert.equal(routeIsCached(), true);
+    const second = await actorClient.requestToActor('alice', new Ask('incarnation')).submit();
     assert.equal(second.node, first.node);
     assert.notEqual(second.generation, first.generation);
   }
