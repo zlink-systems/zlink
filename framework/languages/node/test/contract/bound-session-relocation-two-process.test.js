@@ -64,17 +64,14 @@ function startChild(children, role, port) {
   child.stderr.on('data', chunk => { stderr += chunk; });
   const pending = new Map();
   let nextId = 1;
+  // Readiness ends with the child's ready, fatal or exit event; node:test bounds the whole wait.
   const ready = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${role} readiness timed out.\n${stderr}`)), 10_000);
     child.on('message', message => {
-      if (message?.type === 'ready') {
-        clearTimeout(timer);
-        resolve(message);
-      } else if (message?.type === 'fatal') {
-        clearTimeout(timer);
-        reject(new Error(message.message));
-      }
+      if (message?.type === 'ready') resolve(message);
+      else if (message?.type === 'fatal') reject(new Error(message.message));
     });
+    child.once('exit', (code, signal) =>
+      reject(new Error(`${role} exited before readiness: code=${code} signal=${signal}\n${stderr}`)));
   });
   child.on('message', message => {
     if ((message?.type !== 'result' && message?.type !== 'error') || !pending.has(message.id)) return;
