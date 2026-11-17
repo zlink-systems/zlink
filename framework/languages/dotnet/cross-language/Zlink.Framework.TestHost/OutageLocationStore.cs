@@ -207,7 +207,7 @@ internal sealed class OutageLocationStore(
                 var descriptor = request.Mutations.OfType<ZLinkStoreMutation.Put>().SingleOrDefault(put => put.Key == _meshKey);
                 if (descriptor is not null && _descriptorConfirmedMs == 0)
                 {
-                    var descriptorType = Repository.Assembly.GetType("Zlink.Framework.Runtime.Locations.ZLinkMeshNodeDescriptor", true)!;
+                    var descriptorType = Repository.Assembly.GetType("Zlink.Framework.Contracts.Locations.ZLinkMeshNodeDescriptor", true)!;
                     var record = Repository.GetMethod("DecodeDescriptor", Static)!.MakeGenericMethod(descriptorType).Invoke(null, [descriptor.Bytes])!;
                     Require(Property<long>(Property(record, "Descriptor"), "LeaseGeneration") == _newLease, "Recovery descriptor did not use the recovered lease.");
                     Require(Property<string>(Property(record, "Descriptor"), "OwnerId") == Property<string>(_authorityBefore!, "OwnerId"), "Recovery descriptor changed owner identity.");
