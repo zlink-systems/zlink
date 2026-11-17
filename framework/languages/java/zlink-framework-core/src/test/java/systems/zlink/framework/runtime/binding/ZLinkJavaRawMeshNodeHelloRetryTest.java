@@ -679,7 +679,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
         return wire.decodeHeader(receiveFrame(port, router)).command();
     }
 
-    // The tick that submits HELLO may also emit a liveness probe; admission order is what is checked.
+    // A HELLO tick may also emit a liveness probe; only admission order is checked.
     private static byte[] receiveAdmissionFrame(
             ZLinkJavaRawServicePort port, RouterSocket router, ZLinkServiceM6AWireCodec wire) {
         while (true) {
