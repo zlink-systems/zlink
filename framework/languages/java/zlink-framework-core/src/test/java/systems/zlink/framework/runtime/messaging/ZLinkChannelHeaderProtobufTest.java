@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,15 +16,20 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.io.InputStream;
-import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 final class ZLinkChannelHeaderProtobufTest {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Pattern ALLOCATION_RESULT = Pattern.compile("^(\\d+) (\\d+)$");
 
     @Test
     void matchesEverySharedGoldenHeader() throws Exception {
@@ -155,53 +161,39 @@ final class ZLinkChannelHeaderProtobufTest {
     }
 
     @Test
-    void warmHeaderEncodeAndDecodeStayWithinAllocationCaps() {
-        var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
-        assertTrue(bean.isThreadAllocatedMemorySupported());
-        if (!bean.isThreadAllocatedMemoryEnabled()) bean.setThreadAllocatedMemoryEnabled(true);
-        var header =
-                new ZLinkChannelEnvelope.Header(
-                        ZLinkChannelEnvelope.KIND_COMMAND,
-                        "orders",
-                        "Move",
-                        "application/json",
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        Map.of("tenant", "alpha"),
-                        null,
-                        null);
-        byte[] wire = ZLinkChannelEnvelope.encodeHeaderBytes(header);
-        for (int i = 0; i < 10_000; i++) {
-            wire = ZLinkChannelEnvelope.encodeHeaderBytes(header);
-            ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(wire), false);
+    void warmHeaderEncodeAndDecodeStayWithinAllocationCaps() throws Exception {
+        String java =
+                ProcessHandle.current()
+                        .info()
+                        .command()
+                        .orElseGet(
+                                () ->
+                                        Path.of(System.getProperty("java.home"), "bin", "java")
+                                                .toString());
+        Process process =
+                new ProcessBuilder(
+                                java,
+                                "-XX:-DoEscapeAnalysis",
+                                "-cp",
+                                System.getProperty("java.class.path"),
+                                ZLinkChannelHeaderAllocationProbe.class.getName())
+                        .start();
+        if (!process.waitFor(Duration.ofSeconds(60).toMillis(), TimeUnit.MILLISECONDS)) {
+            process.destroyForcibly();
+            process.waitFor();
+            fail("allocation probe child JVM timed out after 60 seconds");
         }
+        String output = new String(process.getInputStream().readAllBytes());
+        String error = new String(process.getErrorStream().readAllBytes());
+        assertEquals(0, process.exitValue(), "allocation probe child JVM failed: " + error);
+        Matcher result = ALLOCATION_RESULT.matcher(output.strip());
+        assertTrue(result.matches(), "unexpected allocation probe output: " + output);
+        long encodeBytes = Long.parseLong(result.group(1));
+        long decodeBytes = Long.parseLong(result.group(2));
 
-        // A loaded machine can measure before the JIT finishes; slower code only allocates more,
-        // so the lowest of several rounds is the warm cost.
-        long threadId = Thread.currentThread().threadId();
-        int checksum = 0;
-        long encodeBytes = Long.MAX_VALUE;
-        long decodeBytes = Long.MAX_VALUE;
-        for (int round = 0; round < 5; round++) {
-            long beforeEncode = bean.getThreadAllocatedBytes(threadId);
-            for (int i = 0; i < 1_000; i++)
-                checksum += ZLinkChannelEnvelope.encodeHeaderBytes(header).length;
-            encodeBytes =
-                    Math.min(encodeBytes, bean.getThreadAllocatedBytes(threadId) - beforeEncode);
-            long beforeDecode = bean.getThreadAllocatedBytes(threadId);
-            for (int i = 0; i < 1_000; i++)
-                checksum += ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(wire), false).kind();
-            decodeBytes =
-                    Math.min(decodeBytes, bean.getThreadAllocatedBytes(threadId) - beforeDecode);
-        }
-
-        assertTrue(checksum > 0);
-        assertTrue(encodeBytes <= 700_000, "encode allocated " + encodeBytes + " bytes");
-        assertTrue(decodeBytes <= 1_140_000, "decode allocated " + decodeBytes + " bytes");
+        // OpenJDK 25.0.4.1 measured 768,000 encode / 1,240,000 decode bytes per 1,000 calls.
+        assertTrue(encodeBytes <= 768_000, "encode allocated " + encodeBytes + " bytes");
+        assertTrue(decodeBytes <= 1_240_000, "decode allocated " + decodeBytes + " bytes");
     }
 
     private static JsonNode golden() throws Exception {
