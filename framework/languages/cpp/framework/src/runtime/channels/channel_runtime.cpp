@@ -1897,8 +1897,10 @@ void route_client_t::submit_request_reply_message_erased (
         runtime::messaging::client_call_codec_t codec;
         // Preserve the selected route and packet names in the deferred header.
         auto header = codec.create_envelope (
-          runtime::messaging::message_kind_t::request, decode.router_channel_id, decode.packet_name,
+          runtime::messaging::message_kind_t::request, {}, {},
           runtime::messaging::remaining_request_timeout (deadline), std::nullopt, std::nullopt, {});
+        header.channel_name = runtime::messaging::header_text_t::view (decode.router_channel_id);
+        header.message_name = runtime::messaging::header_text_t::view (decode.packet_name);
         header.metadata = metadata;
         if (detail::message_flow_tracer_t (state->runtime->dispatch)
               .enabled_for (message_flow_outcome_t::sent)) {
