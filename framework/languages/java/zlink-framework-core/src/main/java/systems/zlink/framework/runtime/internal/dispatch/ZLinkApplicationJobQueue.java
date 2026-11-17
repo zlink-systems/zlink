@@ -196,14 +196,23 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 post,
                 acquisition -> {
                     CompletableFuture<T> completion =
-                            new CompletableFuture<>() {
+                            new systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                                            .CancellationFuture<
+                                    T>(null) {
+                                @Override
+                                protected void beforeCompletion(Throwable failure) {
+                                    if (failure != null) {
+                                        cancelWaiter(acquisition.waiter);
+                                        acquisition.cancel(false);
+                                    }
+                                }
+
                                 @Override
                                 public boolean cancel(boolean mayInterruptIfRunning) {
                                     if (acquisition.cancel(mayInterruptIfRunning)) return true;
                                     return completeExceptionally(
                                             new java.util.concurrent.CompletionException(
-                                                    new java.util.concurrent
-                                                            .CancellationException()));
+                                                    new CancellationException()));
                                 }
                             };
                     acquisition
@@ -231,7 +240,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     private <T> T acquire(
             Origin origin,
             Function<Runnable, CompletionStage<Void>> post,
-            Function<CompletableFuture<Permit>, T> registration) {
+            Function<WaitFuture, T> registration) {
         Objects.requireNonNull(origin, "origin");
         T result;
         PressureSnapshot transition;
@@ -788,13 +797,13 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                             .whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null) {
-                                            waiter.future.completeExceptionally(failure);
                                             permit.abandonReservation();
+                                            waiter.future.completeExceptionally(failure);
                                         }
                                     });
                 } catch (java.util.concurrent.RejectedExecutionException stopped) {
-                    waiter.future.completeExceptionally(stopped);
                     permit.abandonReservation();
+                    waiter.future.completeExceptionally(stopped);
                 }
             }
             return grant;
@@ -846,7 +855,8 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         try {
             LOGGER.log(
                     java.util.logging.Level.WARNING,
-                    "zlink.runtime.host.local_job_backlog_exceeded source_kind=host source_name=zlink.runtime.host local_waiters={0} effective_maximum={1}",
+                    "zlink.runtime.host.local_job_backlog_exceeded source_kind=host"
+                            + " source_name=zlink.runtime.host local_waiters={0} effective_maximum={1}",
                     new Object[] {count, effectiveLimit});
         } catch (RuntimeException failure) {
             new java.util.logging.ErrorManager()
@@ -1103,32 +1113,26 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         }
     }
 
-    private static final class WaitFuture extends CompletableFuture<Permit> {
+    private static final class WaitFuture
+            extends systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                            .CancellationFuture<
+                    Permit> {
         private final ZLinkApplicationJobQueue owner;
         private final Waiter waiter;
-        private boolean queueCancellation;
 
         private WaitFuture(ZLinkApplicationJobQueue owner, Waiter waiter) {
+            super(null);
             this.owner = owner;
             this.waiter = waiter;
         }
 
         @Override
-        public boolean cancel(boolean mayInterruptIfRunning) {
-            boolean cancelled = super.cancel(mayInterruptIfRunning);
-            if (cancelled && !queueCancellation) {
-                owner.cancelWaiter(waiter);
-            }
-            return cancelled;
+        protected void beforeCompletion(Throwable failure) {
+            if (failure != null) owner.cancelWaiter(waiter);
         }
 
         private void cancelFromQueue() {
-            queueCancellation = true;
-            try {
-                super.cancel(false);
-            } finally {
-                queueCancellation = false;
-            }
+            cancel(false);
         }
     }
 

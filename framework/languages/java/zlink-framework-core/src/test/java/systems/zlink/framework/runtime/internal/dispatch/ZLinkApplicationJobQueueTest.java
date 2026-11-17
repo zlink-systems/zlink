@@ -29,6 +29,53 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkApplicationJobQueueTest {
     @Test
+    void publishedAcquisitionKeepsCancellationShapeAfterReleasingAdmission() {
+        try (var queue = queue(1);
+                var held =
+                        queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                                .toCompletableFuture()
+                                .join()) {
+            var caller =
+                    queue.acquireAndPublish(
+                                    ZLinkApplicationJobQueue.Origin.LOCAL,
+                                    task -> CompletableFuture.completedFuture(null),
+                                    permit -> CompletableFuture.completedFuture("reply"))
+                            .toCompletableFuture();
+            var observed =
+                    caller.handle(
+                            (value, failure) -> {
+                                assertInstanceOf(
+                                        java.util.concurrent.CancellationException.class,
+                                        assertInstanceOf(
+                                                        java.util.concurrent.CompletionException
+                                                                .class,
+                                                        failure)
+                                                .getCause());
+                                return queue.snapshot();
+                            });
+            assertTrue(caller.cancel(false));
+            assertEquals(0, observed.join().capacityWaiters());
+            assertEquals(1, observed.join().permitsInUse());
+        }
+    }
+
+    @Test
+    void cancellationRemovesCapacityWaiterBeforePublicContinuation() {
+        try (var queue = queue(1);
+                var held =
+                        queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                                .toCompletableFuture()
+                                .join()) {
+            var waiting =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL).toCompletableFuture();
+            var observed = waiting.handle((value, error) -> queue.snapshot());
+            assertTrue(waiting.cancel(false));
+            assertEquals(0, observed.join().capacityWaiters());
+            assertEquals(1, observed.join().permitsInUse());
+        }
+    }
+
+    @Test
     void rotationCountAndResumedSourceRespectOlderFifoWaiters() {
         try (var queue = queue(1)) {
             assertEquals(
