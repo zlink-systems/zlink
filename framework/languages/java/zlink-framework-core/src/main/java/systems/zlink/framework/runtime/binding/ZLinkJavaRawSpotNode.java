@@ -2723,53 +2723,42 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             "Session owner has no live MeshNode descriptor"));
         }
         ZLinkInternalMeshNode.PeerAuthorityFence sessionOwner = local.orElseThrow();
-        ActorSessionBinding candidate =
-                new ActorSessionBinding(
+        var route =
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        owner.lifecycleGeneration(),
+                        actorAuthorityOwnerGeneration(actor),
+                        actorAuthorityOwnerLeaseGeneration(actor));
+        var command =
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                        1, route, sessionRid, true, bindingGeneration);
+        var result = new CompletableFuture<ZLinkServiceM6BWireCodec.BoundSessionBindReply>();
+        var operation =
+                applyRemoteStreamBinding(
                         sessionOwner.sourceNodeRid(),
                         sessionOwner.sourceNodeGeneration(),
                         sessionOwner.ownerId(),
                         sessionOwner.ownerLeaseGeneration(),
-                        sessionRid,
-                        actor,
-                        0,
-                        bindingGeneration,
-                        actorAuthorityOwnerGeneration(actor),
-                        actorAuthorityOwnerLeaseGeneration(actor),
-                        false);
-        return remoteSessionBindingOwner
-                .apply(
-                        this,
-                        actor,
-                        applied -> {
-                            var current = actorBindings.get(actor.actorId());
-                            var accepted =
-                                    admitRemoteStreamBinding(
-                                            new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                                    actor,
-                                                    owner.lifecycleGeneration(),
-                                                    candidate.authorityOwnerGeneration(),
-                                                    candidate.actorOwnerLeaseGeneration()),
-                                            candidate,
-                                            current == null ? null : current.binding(),
-                                            true,
-                                            applied);
-                            if (accepted == null) {
-                                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
-                                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                                                .UNAVAILABLE,
-                                        "Session binding generation is stale");
-                            }
-                            if (accepted == candidate) installActorBinding(accepted);
-                            return CompletableFuture.completedFuture(true);
-                        })
-                .thenApply(
-                        ignored ->
-                                new ZLinkServiceM6BWireCodec.BoundSessionBindReply(
-                                        1,
-                                        0,
-                                        0,
-                                        candidate.bindingGeneration(),
-                                        candidate.authorityOwnerGeneration()));
+                        command,
+                        result::complete);
+        operation.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) result.completeExceptionally(failure);
+                });
+        return result.thenCompose(
+                reply -> {
+                    if (reply.terminalResult() != 0 || reply.failureCode() != 0) {
+                        throw ZLinkRequestFailureMapping.receivedFailure(
+                                ZLinkBackendRequestResult.fromWireTerminal(reply.terminalResult())
+                                        .toFrameworkErrorKind(reply.failureCode()),
+                                reply.rejectionMessage().isEmpty()
+                                        ? "bound session binding was rejected"
+                                        : reply.rejectionMessage(),
+                                reply.failureCode(),
+                                java.util.Map.of());
+                    }
+                    return operation.thenApply(ignored -> reply);
+                });
     }
 
     /**
@@ -2836,9 +2825,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             long sessionOwnerLeaseGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionBind command,
             Consumer<ZLinkServiceM6BWireCodec.BoundSessionBindReply> reply) {
-        return remoteSessionBindingOwner.apply(
-                this,
-                command.actor().actor(),
+        Function<RemoteSessionBindingTransition, CompletionStage<Boolean>> transition =
                 applied ->
                         acceptRemoteStreamBindingOnOwner(
                                 sourceNodeRid,
@@ -2847,7 +2834,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 sessionOwnerLeaseGeneration,
                                 command,
                                 reply,
-                                applied));
+                                applied);
+        return remoteSessionBindingOwner.apply(this, command.actor().actor(), transition);
     }
 
     private CompletionStage<Boolean> acceptRemoteStreamBindingOnOwner(
@@ -2872,7 +2860,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         command.bindingGeneration(),
                         route.authorityOwnerGeneration(),
                         route.ownerLeaseGeneration(),
-                        true);
+                        !sourceNodeRid.equals(routingId()));
         BindingEntry entry = actorBindings.get(actor.actorId());
         ActorSessionBinding current = entry == null ? null : entry.binding();
         if (!command.active()) {
@@ -2898,10 +2886,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     bindReply(command.correlation(), unavailable[0], unavailable[1], null, ""));
             return CompletableFuture.completedFuture(false);
         }
-        if (current == null || samePhysicalSession(current, candidate)) {
-            return commitRemoteStreamBinding(route, candidate, command, reply, applied);
-        }
+        return applied.acceptBinding(
+                sessionBindingIdentity(candidate),
+                command.sessionRid(),
+                accepted -> decideRemoteStreamBinding(route, candidate, command, reply, accepted));
+    }
 
+    private CompletionStage<Boolean> decideRemoteStreamBinding(
+            ZLinkServiceM6BWireCodec.ActorRouteFence route,
+            ActorSessionBinding candidate,
+            ZLinkServiceM6BWireCodec.BoundSessionBind command,
+            Consumer<ZLinkServiceM6BWireCodec.BoundSessionBindReply> reply,
+            RemoteSessionBindingTransition applied) {
         var result = new CompletableFuture<Boolean>();
         var decided = new AtomicBoolean();
         var cancellation = new AtomicBoolean();
@@ -2993,7 +2989,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         result.complete(false);
                         return;
                     }
-                    commitRemoteStreamBinding(route, candidate, command, reply, applied)
+                    applied.commit(
+                                    () ->
+                                            commitRemoteStreamBinding(
+                                                    route, candidate, command, reply, applied))
                             .whenComplete(
                                     (accepted, commitFailure) -> {
                                         if (commitFailure != null) {

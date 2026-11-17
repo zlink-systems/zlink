@@ -1,3 +1,4 @@
+const { sessionBindingControlPorts } = require('./fixtures/session-binding-control');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate: barrier } = require('node:timers/promises');
@@ -3515,15 +3516,19 @@ for (const shared of [false, true]) {
             finish,
             correlation;
           const raw = {
-            setServiceIngress() {},
-            reserveLocalIngress: () => permit.promise
+            ...sessionBindingControlPorts(),
+            setServiceIngress() {}
           };
           const runtime = withTestSessionOwners(
             new ServiceStatefulRuntime(raw, 'source', 7n, undefined, requests)
           );
           const actor = runtime.createActor('local-actor').ref;
           if (kind === 'boundSessionClose')
-            await runtime.bindSession('session', actor, 50, async () => true).promise;
+            assert.equal(
+              (await runtime.bindSession('session', actor, 50, async () => true).promise).terminalResult,
+              RequestResult.Ok
+            );
+          raw.reserveLocalIngress = () => permit.promise;
           const decode = wire.decodeStatefulReply;
           t.mock.method(wire, 'decodeStatefulReply', (...args) => {
             codecCalls++;
