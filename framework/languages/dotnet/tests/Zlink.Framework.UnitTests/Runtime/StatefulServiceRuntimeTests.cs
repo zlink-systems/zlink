@@ -2147,7 +2147,9 @@ public sealed partial class StatefulServiceRuntimeTests
         );
         caller.SetLocalRequestSourceFence(requestSource);
         var callerBackend = new ZLinkBackendSpotNodeWrapper(caller);
-        caller.SetRelocationReplyRelayTarget(new ZLinkRelocationReplyTarget(callerBackend));
+        caller.SetRelocationReplyRelayTarget(
+            new ZLinkRelocationReplyTarget(callerBackend.TryCompleteRelocationReply)
+        );
         caller.Start();
         owner.Start();
         await WaitUntilAsync(() =>
@@ -2402,7 +2404,9 @@ public sealed partial class StatefulServiceRuntimeTests
             caller.Status().LifecycleGeneration
         );
         caller.SetLocalRequestSourceFence(requestSource);
-        var replyTarget = new ZLinkRelocationReplyTarget(new ZLinkBackendSpotNodeWrapper(caller));
+        var replyTarget = new ZLinkRelocationReplyTarget(
+            new ZLinkBackendSpotNodeWrapper(caller).TryCompleteRelocationReply
+        );
         caller.SetRelocationReplyRelayTarget(replyTarget);
         caller.Start();
         oldOwner.Start();
@@ -4609,7 +4613,9 @@ public sealed partial class StatefulServiceRuntimeTests
         );
         caller.SetLocalRequestSourceFence(requestSource);
         caller.SetRelocationReplyRelayTarget(
-            new ZLinkRelocationReplyTarget(new ZLinkBackendSpotNodeWrapper(caller))
+            new ZLinkRelocationReplyTarget(
+                new ZLinkBackendSpotNodeWrapper(caller).TryCompleteRelocationReply
+            )
         );
         caller.Start();
         oldOwner.Start();

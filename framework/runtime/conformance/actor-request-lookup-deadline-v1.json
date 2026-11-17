@@ -1,0 +1,6 @@
+{
+  "timeoutMs": 100,
+  "observationMs": 600,
+  "expectedError": "DeadlineExceeded",
+  "lateHandlerCalls": 0
+}

@@ -1,12 +1,13 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/actors/actor_client.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
-#include "runtime/timers/async_delay.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 
@@ -16,6 +17,10 @@
 #include <array>
 #include <atomic>
 #include <future>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+#include <nlohmann/json.hpp>
 
 namespace zlink::framework::runtime::mesh
 {
@@ -61,6 +66,10 @@ struct raw_mesh_node_owner_test_access_t
     {
         injected_registry_now =
           foundation::operation_registry_t::clock_t::now () + std::chrono::hours (1);
+    }
+    static void schedule_registry (raw_mesh_node_owner_t &owner)
+    {
+        owner._operations = foundation::operation_registry_t::create_scheduled (owner._lane);
     }
     static task_t<bool>
     submit_unadmitted (raw_mesh_node_owner_t &owner,
@@ -142,6 +151,11 @@ struct public_host_runtime_test_access_t
 };
 }
 
+namespace zlink::framework::detail::test_creation_probe
+{
+std::size_t actor_request_submission_count () noexcept;
+}
+
 namespace
 {
 namespace fw = zlink::framework;
@@ -155,8 +169,6 @@ using terminal_t = fd::operation_terminal_t;
 class submitted_actor_receiver_t : public testing::Test
 {
   protected:
-    std::mutex delay_mutex;
-    fw::detail::delay_owner_t delays{delay_mutex};
     rt::in_memory_location_repository_t store;
     rt::live_location_reader_t locations{store};
     fw::serializer_registry_t serializers;
@@ -180,7 +192,7 @@ class submitted_actor_receiver_t : public testing::Test
           [] (const std::string &value) { return fw::encoded_payload_t::from_string (value); },
           [] (const fw::encoded_payload_t &value) { return value.to_string (); },
           "application/json");
-        client = rt::make_actor_client (locations, serializers, {runtime}, {}, {}, delays);
+        client = rt::make_actor_client (locations, serializers, {runtime}, {}, {});
         access::cache (*client, fence);
     }
     void TearDown () override
@@ -205,7 +217,8 @@ class submitted_actor_receiver_t : public testing::Test
     void verify (terminal_t terminal,
                  bool expected_registered = true,
                  std::optional<fw::framework_error_kind_t> expected_terminal = {},
-                 bool expected_bad_alloc = false)
+                 bool expected_bad_alloc = false,
+                 bool fails_source_registration = false)
     {
         namespace probe = fw::detail::test_creation_probe;
         const auto deliveries = probe::request_deliveries.load ();
@@ -254,7 +267,12 @@ class submitted_actor_receiver_t : public testing::Test
         }
         EXPECT_EQ (registered.load (), expected_registered);
         runtime->stop ();
-        EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
+        if (fails_source_registration) {
+            EXPECT_EQ (probe::request_deliveries.load () - deliveries, 0u);
+            EXPECT_EQ (probe::request_capture_bytes.load (), capture_bytes);
+            EXPECT_EQ (probe::request_block_bytes.load (), block_bytes);
+        } else
+            EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
         ASSERT_EQ (published.wait_for (2s), std::future_status::ready);
         EXPECT_EQ (public_results.load (), 1u);
         std::printf ("actor receiver registered=%d captures=%zu values=%zu block=%zu "
@@ -285,19 +303,19 @@ TEST_F (submitted_actor_receiver_t, ShutdownWhileAdmissionPendingDeliversOnce)
     verify (terminal_t::shutdown);
 }
 
-TEST_F (submitted_actor_receiver_t, PublicationExceptionDeliversPhysicalFailureOnce)
+TEST_F (submitted_actor_receiver_t, SourcePublicationExceptionEndsOnceWithoutPhysicalHandoff)
 {
     peer (true);
     rt::mesh::raw_mesh_node_owner_test_access_t::fail_publication (
       runtime->native_node ().transport (), registered);
-    verify (terminal_t::transport_failed, true, {}, true);
+    verify (terminal_t::transport_failed, true, {}, true, true);
 }
 
-TEST_F (submitted_actor_receiver_t, RejectionBeforeRegistrationDeliversOnce)
+TEST_F (submitted_actor_receiver_t, SourceRegistrationRejectionEndsOnceWithoutPhysicalHandoff)
 {
     rt::mesh::raw_mesh_node_owner_test_access_t::close_registry (
       runtime->native_node ().transport ());
-    verify (terminal_t::shutdown, false);
+    verify (terminal_t::shutdown, false, {}, false, true);
 }
 
 // The fake binding retains the same delivered-result callback as raw_route_port_t.
@@ -320,13 +338,12 @@ class late_actor_fixture_t : public testing::Test
         options.mesh.descriptor.lifecycle_generation = 1;
         return options;
     }
-    std::mutex delay_mutex;
-    fw::detail::delay_owner_t delays{delay_mutex};
+
     rt::in_memory_location_repository_t store;
     rt::live_location_reader_t locations{store};
     fw::serializer_registry_t serializers;
     std::shared_ptr<fw::actor_client_t> client =
-      rt::make_actor_client (locations, serializers, {}, {}, {}, delays);
+      rt::make_actor_client (locations, serializers, {}, {}, {});
     std::shared_ptr<fw::detail::mesh_node_runtime_t> runtime =
       std::make_shared<fw::detail::mesh_node_runtime_t> (
         std::make_shared<fw::detail::mesh_node_builder_state_t> ("mesh"));
@@ -535,8 +552,7 @@ TEST (ActorSendFence, MissingAuthorityInvalidatesOnlyTheUsedFence)
     // replace each fence component before allowing that send to fail.
     for (int changed = -1; changed != 5; ++changed) {
         SCOPED_TRACE (changed);
-        std::mutex delay_mutex;
-        fw::detail::delay_owner_t delays{delay_mutex};
+
         held_authority_store_t store;
         rt::live_location_reader_t locations{store};
         fw::serializer_registry_t serializers;
@@ -544,8 +560,7 @@ TEST (ActorSendFence, MissingAuthorityInvalidatesOnlyTheUsedFence)
           std::make_shared<fw::detail::mesh_node_builder_state_t> ("mesh"));
         fw::location_options_t options;
         options.route_cache_max_age = 1h;
-        auto client =
-          rt::make_actor_client (locations, serializers, {runtime}, {}, options, delays);
+        auto client = rt::make_actor_client (locations, serializers, {runtime}, {}, options);
         wire::actor_route_fence_t used{"actor", 3, {'n', 'o', 'd', 'e'}, 5, 7, 11};
         access::cache (*client, used);
         auto pending = client->send (fw::actor_id_t ("actor"), std::string ("command")).async ();
@@ -597,8 +612,6 @@ class counting_actor_authority_store_t final : public rt::in_memory_location_rep
 class local_actor_receiver_t : public testing::Test
 {
   protected:
-    std::mutex delay_mutex;
-    fw::detail::delay_owner_t delays{delay_mutex};
     counting_actor_authority_store_t store;
     rt::live_location_reader_t locations{store};
     fw::serializer_registry_t serializers;
@@ -641,7 +654,7 @@ class local_actor_receiver_t : public testing::Test
           },
           [] (const fw::encoded_payload_t &value) { return value.to_string (); },
           "application/json");
-        client = rt::make_actor_client (locations, serializers, {runtime}, {}, {}, delays);
+        client = rt::make_actor_client (locations, serializers, {runtime}, {}, {});
         access::cache (*client, fence);
     }
 
@@ -681,6 +694,24 @@ class local_actor_receiver_t : public testing::Test
         EXPECT_TRUE (retained.expired ());
     }
 };
+
+TEST_F (local_actor_receiver_t, ExpiredLocalContinuationPreservesTheRegisteredDeadlineTerminal)
+{
+    for (int iteration = 0; iteration != 32; ++iteration) {
+        SCOPED_TRACE (iteration);
+        auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                         .timeout (5s)
+                         .async<std::string> ();
+        const auto result = pending.result ();
+        ASSERT_FALSE (result);
+        EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+        auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+        const auto physical_result = physical.result ();
+        EXPECT_FALSE (physical_result);
+        EXPECT_EQ (physical_result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+        EXPECT_EQ (runtime->pending_transport_operations (), 0u);
+    }
+}
 
 TEST_F (local_actor_receiver_t, RejectedLocalRegistrationDeliversPhysicalFailureOnce)
 {
@@ -745,6 +776,10 @@ TEST_F (local_actor_receiver_t, LocalCompletionSinkConstructionFailureDeliversPh
 // that entry in the serializer gives a deterministic selection/submission boundary.
 TEST_F (local_actor_receiver_t, MissingDescriptorTimeoutPreservesEveryCachedFence)
 {
+    // Wait for the registered deadline; a manual expiry would race the scheduler.
+    // The expired-continuation contract above retains the fixture's future clock.
+    rt::mesh::raw_mesh_node_owner_test_access_t::schedule_registry (
+      runtime->native_node ().transport ());
     for (int changed = -1; changed != 5; ++changed) {
         SCOPED_TRACE (changed);
         auto used = fence;
@@ -773,8 +808,6 @@ TEST_F (local_actor_receiver_t, MissingDescriptorTimeoutPreservesEveryCachedFenc
         auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
                          .timeout (5ms)
                          .async<std::string> ();
-        rt::mesh::raw_mesh_node_owner_test_access_t::end_local (
-          runtime->native_node ().transport (), {}, terminal_t::timed_out);
         const auto result = pending.result ();
         ASSERT_FALSE (result);
         EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
@@ -784,7 +817,7 @@ TEST_F (local_actor_receiver_t, MissingDescriptorTimeoutPreservesEveryCachedFenc
     }
 }
 
-TEST_F (local_actor_receiver_t, SubmitFenceMismatchInvalidatesOnlyTheUsedFenceAndReresolves)
+TEST_F (local_actor_receiver_t, SubmitFenceMismatchInvalidatesOnlyTheUsedFenceForTheNextRequest)
 {
     auto &transport = runtime->native_node ().transport ();
     auto peer = transport.topology ().local_descriptor ();
@@ -825,9 +858,23 @@ TEST_F (local_actor_receiver_t, SubmitFenceMismatchInvalidatesOnlyTheUsedFenceAn
         const auto result = pending.result ();
         ASSERT_FALSE (result);
         EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::not_found);
-        const auto deadline = std::chrono::steady_clock::now () + 2s;
-        while (changed == -1 && store.reads == 0 && std::chrono::steady_clock::now () < deadline)
-            std::this_thread::yield ();
+        // Cache invalidation belongs to the physical result, which can follow C1 publication.
+        auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+        EXPECT_FALSE (physical.result ());
+        EXPECT_EQ (store.reads, 0);
+        if (changed == -1) {
+            // Actor model §9 resolves Ready authority once per logical request.
+            // Only a new operation resolves the invalidated route again.
+            before_submit = {};
+            auto next = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                          .timeout (1h)
+                          .async<std::string> ();
+            const auto next_result = next.result ();
+            ASSERT_FALSE (next_result);
+            EXPECT_EQ (next_result.error_kind (), fw::framework_error_kind_t::not_found);
+            auto next_physical = fw::detail::request_task_access_t::physical_reply (next);
+            EXPECT_FALSE (next_physical.result ());
+        }
         EXPECT_EQ (store.reads, changed == -1 ? 1 : 0);
         EXPECT_EQ (access::cached (*client, "actor"), changed != -1);
         before_submit = {};
@@ -1225,6 +1272,251 @@ TEST (ActorLatePublicResult, PublicFailureWinsEvenWhenPhysicalIsReadyBeforeObser
     });
     auto pending = map_selected_failure (std::move (selected));
     EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+}
+
+}
+
+namespace
+{
+class held_actor_authority_store_t final : public fw::location_store_t
+{
+  public:
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        if (hold
+            && key.value
+                 == (std::string ("authority") + '\0' + "actor" + '\0' + "deadline-actor")) {
+            entered.set_value ();
+            co_await release.task ();
+        }
+        co_return co_await inner.read (std::move (key));
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    rt::in_memory_location_store_t inner;
+    bool hold = false;
+    std::promise<void> entered;
+    fw::task_completion_source_t<void> release;
+};
+
+TEST (ActorRequestLookupDeadline, DeadlineIncludesPendingAuthorityReadAndPreventsLateSubmit)
+{
+    auto root = std::filesystem::path (__FILE__).parent_path ();
+    const auto relative =
+      std::filesystem::path ("runtime/conformance/actor-request-lookup-deadline-v1.json");
+    while (!root.empty () && !std::filesystem::is_regular_file (root / relative)) {
+        const auto parent = root.parent_path ();
+        if (parent == root)
+            root.clear ();
+        else
+            root = parent;
+    }
+    ASSERT_FALSE (root.empty ());
+    std::ifstream input (root / relative);
+    const auto fixture = nlohmann::json::parse (input);
+    held_actor_authority_store_t opaque;
+    rt::provider_location_repository_t repository (opaque);
+    auto owner = std::get<fw::owner_lease_claimed_t> (
+                   repository.claim_owner_lease ("deadline-owner", 60s).result ().value ())
+                   .token;
+    fw::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "mesh";
+    descriptor.rid = zlink::routing_id_t::from ("deadline-target");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:1";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    descriptor.object_role = fw::object_role_t::server;
+    descriptor.state = fw::framework_runtime_state_t::serving;
+    descriptor.application_version = 1;
+    descriptor.security_identity = "deadline-target";
+    descriptor.entry_spot_id = "deadline-entry";
+    descriptor.activation_concurrency.limit = 1;
+    descriptor.object_capabilities.push_back ({fw::placement_object_kind_t::actor, "player",
+                                               fw::maintenance_policy_kind_t::disabled, false, 0});
+    descriptor.capacity.actors.limit = 1;
+    ASSERT_TRUE (
+      repository.update_mesh_node (descriptor, fw::location_write_intent_t::new_claim).result ());
+    fw::object_reserve_request_t request;
+    request.key = {fw::placement_object_kind_t::actor, "deadline-actor"};
+    request.intent.stable_type = "player";
+    request.target = {"mesh", fw::node_rid_t::from_string ("deadline-target"), 1, owner};
+    request.capacity_bundle.actor_slots = 1;
+    auto reserved =
+      std::get<fw::object_reserved_t> (repository.reserve (request).result ().value ());
+    auto ready = rt::encode_actor_authority_payload (rt::actor_authority_payload_t{
+      .state = rt::actor_authority_state_t::ready,
+      .stable_type = "player",
+      .actor_id = "deadline-actor",
+      .current_spot_id = "deadline-entry",
+      .current_spot_generation = 1,
+      .current_spot_kind = rt::actor_authority_spot_kind_t::entry,
+      .owner_id = owner.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+      .mesh_name = "mesh",
+      .node_rid = request.target.node_rid,
+      .node_generation = 1});
+    ASSERT_TRUE (repository.commit ({request.key, reserved.fence, ready}).result ());
+    rt::live_location_reader_t locations (repository);
+
+    fw::serializer_registry_t serializers;
+    auto state = fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("mesh");
+    state->listen_endpoint = "tcp://127.0.0.1:0";
+    state->routing_id = zlink::routing_id_t::from ("deadline-source");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    auto runtime = std::make_shared<fw::detail::mesh_node_runtime_t> (state);
+    runtime->start ().result ().value ();
+    struct stop_t
+    {
+        std::shared_ptr<fw::detail::mesh_node_runtime_t> runtime;
+        ~stop_t () { runtime->stop (); }
+    } stop{runtime};
+    fw::location_options_t options;
+    options.route_cache_max_age = 0ms;
+    auto client = rt::make_actor_client (locations, serializers, {runtime}, {}, options);
+    const auto submissions = fw::detail::test_creation_probe::actor_request_submission_count ();
+    opaque.hold = true;
+    auto entered = opaque.entered.get_future ();
+    auto call = client->request (fw::actor_id_t ("deadline-actor"), std::string ("ping"))
+                  .timeout (std::chrono::milliseconds (fixture.at ("timeoutMs").get<int> ()))
+                  .async<std::string> ();
+    auto public_reply = fw::detail::request_task_access_t::public_reply (call);
+    std::promise<fw::result_t<std::string>> terminal;
+    auto terminal_result = terminal.get_future ();
+    fw::detail::observe_task_terminal (
+      public_reply, [&terminal] (const auto &value) { terminal.set_value (value); });
+    EXPECT_EQ (entered.wait_for (5s), std::future_status::ready);
+    const auto status = terminal_result.wait_for (
+      std::chrono::milliseconds (fixture.at ("observationMs").get<int> ()));
+    EXPECT_EQ (status, std::future_status::ready)
+      << "request must end before Store read is released";
+    EXPECT_EQ (fw::detail::test_creation_probe::actor_request_submission_count (), submissions);
+    opaque.release.complete (fw::result_t<void>::success ());
+    const auto result = terminal_result.get ();
+    EXPECT_FALSE (result);
+    EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+    auto physical = fw::detail::request_task_access_t::physical_reply (call);
+    (void) physical.result ();
+    EXPECT_EQ (fw::detail::test_creation_probe::actor_request_submission_count (), submissions);
+    EXPECT_EQ (runtime->pending_transport_operations (), 0u);
+}
+}
+
+namespace
+{
+TEST (ActorRequestOperationOwner, CanonicalReplyKeepsTheOriginalRegistryAcrossPhysicalMeshes)
+{
+    auto original_options = fw::test::runtime_failure_options (rt::mesh::raw_mesh_node_options_t{});
+    original_options.descriptor = {"lookup-original",
+                                   {'o'},
+                                   41,
+                                   1,
+                                   "tcp://127.0.0.1:0",
+                                   {{"actor", 100}},
+                                   rt::mesh::service_node_state_t::preparing};
+    auto physical_options = original_options;
+    physical_options.descriptor.mesh_name = "lookup-physical";
+    physical_options.descriptor.node_routing_id = {'p'};
+    physical_options.descriptor.lifecycle_generation = 43;
+    rt::mesh::raw_mesh_node_owner_t original (original_options);
+    rt::mesh::raw_mesh_node_owner_t physical (physical_options);
+    auto lease = std::make_shared<fw::location_owner_token_t> ();
+    lease->owner_id = "lookup-process";
+    lease->lease_generation = 1;
+    original.configure_request_sources (nullptr, [lease] { return lease; });
+    physical.configure_request_sources (nullptr, [lease] { return lease; });
+    original.start ();
+    physical.start ();
+    const auto reservation = original.prepare_local_operation_async ().result ().value ();
+    ASSERT_TRUE (reservation);
+    auto terminal = std::make_shared<std::promise<terminal_t>> ();
+    auto received = terminal->get_future ();
+    auto calls = std::make_shared<std::atomic_uint> (0);
+    const auto deadline = fd::operation_registry_t::clock_t::now () + 30s;
+    ASSERT_TRUE (original.register_prepared_local_operation (
+      *reservation, deadline,
+      [terminal, calls] (auto ended, auto) {
+          ++*calls;
+          terminal->set_value (ended);
+      },
+      rt::mesh_request_surface_t::actor));
+    const auto id = reservation->first;
+    const wire::wire_operation_id_t wire_id{id.high, id.low};
+    EXPECT_FALSE (physical.relocated_request_source (wire_id, id.low));
+    physical.set_operation_owner_resolver ([&] (auto operation, auto reply_route_id) {
+        if (auto owner = original.local_operation_owner (operation, reply_route_id))
+            return owner;
+        return physical.local_operation_owner (operation, reply_route_id);
+    });
+    const auto source = physical.relocated_request_source (wire_id, id.low);
+    ASSERT_TRUE (source);
+    EXPECT_EQ (source->node_routing_id, physical_options.descriptor.node_routing_id);
+    EXPECT_EQ (source->node_generation, physical_options.descriptor.lifecycle_generation);
+    EXPECT_EQ (source->owner_id, lease->owner_id);
+    EXPECT_EQ (original.pending_operation_count (), 1u);
+    EXPECT_EQ (physical.pending_operation_count (), 0u);
+    EXPECT_EQ (original.operation_registry ()->deadline (id), deadline);
+    wire::reply_relay_t relay;
+    relay.operation = wire_id;
+    relay.reply_route_id = id.low;
+    const wire::application_payload_t reply{"reply", "application/json", {123, 125}};
+    auto wrong = relay;
+    ++wrong.operation.high;
+    EXPECT_FALSE (physical.complete_relocated_request (wrong, reply));
+    ASSERT_TRUE (physical.complete_relocated_request (relay, reply));
+    ASSERT_EQ (received.wait_for (5s), std::future_status::ready);
+    EXPECT_EQ (received.get (), terminal_t::completed);
+    EXPECT_EQ (calls->load (), 1u);
+    EXPECT_EQ (original.pending_operation_count (), 0u);
+    EXPECT_EQ (physical.pending_operation_count (), 0u);
+    EXPECT_FALSE (physical.complete_relocated_request (relay, reply));
+    EXPECT_EQ (original.expire_requests (deadline + 1s).result ().value (), 0u);
+}
+
+TEST (ActorRequestOperationOwner, ConcurrentRegistryLookupReleasesStoppedMesh)
+{
+    auto state = fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("mesh");
+    state->listen_endpoint = "tcp://127.0.0.1:0";
+    state->routing_id = zlink::routing_id_t::from ("lookup-lifecycle-source");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    auto runtime = std::make_shared<fw::detail::mesh_node_runtime_t> (state);
+    auto lease = std::make_shared<fw::location_owner_token_t> ();
+    lease->owner_id = "lookup-lifecycle";
+    lease->lease_generation = 1;
+    runtime->configure_stateful_dispatch ([lease] { return lease; });
+    runtime->start ().result ().value ();
+    rt::host::pending_operation_t operation;
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    runtime->register_actor_request (operation, 1h, admitted).result ().value ();
+    ASSERT_TRUE (runtime->local_operation_owner (operation.id, operation.id.low));
+    std::promise<void> entered;
+    auto started = entered.get_future ();
+    std::atomic_uint visits{0};
+    std::jthread reader ([&] (std::stop_token stop) {
+        do {
+            if (auto owner = runtime->local_operation_owner (operation.id, operation.id.low)) {
+                EXPECT_EQ (owner->first, operation.registry);
+                EXPECT_EQ (owner->second, operation.id);
+            }
+            if (visits.fetch_add (1) == 0)
+                entered.set_value ();
+            std::this_thread::yield ();
+        } while (!stop.stop_requested ());
+    });
+    started.get ();
+    runtime->stop ();
+    reader.request_stop ();
+    reader.join ();
+    EXPECT_GT (visits.load (), 0u);
+    EXPECT_FALSE (runtime->local_operation_owner (operation.id, operation.id.low));
+    EXPECT_FALSE (operation.registry->contains (operation.id));
 }
 
 }
