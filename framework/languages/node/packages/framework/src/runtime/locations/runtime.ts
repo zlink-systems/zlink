@@ -1518,14 +1518,23 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     let cursor =
       requestedCursor === undefined ? undefined : PublicAuthorityScanCursor.from(requestedCursor);
     const items: ZLinkLocationObjectEntry[] = [];
+    const itemRows: { start: PublicAuthorityScanCursor | undefined; rows: number }[] = [];
+    let encodedItemsBytes = 0;
+    const prefix = filter.objectKind === 'actor' ? 'zla1:a:' : 'zla1:s:';
     for (;;) {
-      // Keep the Store cursor at the public page boundary. Scanning 1000 rows
-      // and returning only a smaller page would discard the unreturned rows.
-      const result = await this.stores.authorityStore.listAuthorities('', cursor, pageSize, signal);
+      const batchCursor = cursor;
+      const result = await this.stores.authorityStore.listAuthorities(
+        prefix,
+        batchCursor,
+        pageSize - items.length,
+        signal
+      );
       if (result.kind === 'scanExpired') {
         throw new Error('The authority query snapshot expired.');
       }
-      for (const entry of result.items) {
+      let index = 0;
+      for (; index < result.items.length && items.length < pageSize; index++) {
+        const entry = result.items[index]!;
         const identity = decodeAuthorityKey(entry.key);
         const allocation = entry.snapshot.allocation;
         if (
@@ -1547,18 +1556,85 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
               ),
             signal
           )) !== undefined;
-        items.push(this.objectLocationEntry(identity.globalId, entry.snapshot, live));
-        if (items.length >= pageSize) break;
+        const projected = this.objectLocationEntry(identity.globalId, entry.snapshot, live);
+        const entryBytes = this.encodedObjectSize(projected);
+        const candidateItemsBytes = encodedItemsBytes + entryBytes;
+        const continuation = result.nextCursor?.encoded;
+        if (!this.encodedObjectPageFits(candidateItemsBytes, items.length + 1, continuation)) {
+          if (items.length === 0)
+            throw new Error('The encoded object location entry exceeds 4 MiB.');
+          break;
+        }
+        items.push(projected);
+        itemRows.push({ start: batchCursor, rows: index + 1 });
+        encodedItemsBytes = candidateItemsBytes;
       }
-      const nextCursor = result.nextCursor;
-      if (items.length >= pageSize || nextCursor === undefined) {
-        return {
-          items,
-          continuationToken: nextCursor?.encoded
-        };
+      cursor = result.nextCursor;
+      if (index < result.items.length) {
+        if (index === 0) cursor = batchCursor;
+        else {
+          const consumed = await this.stores.authorityStore.listAuthorities(
+            prefix,
+            batchCursor,
+            index,
+            signal
+          );
+          if (consumed.kind === 'scanExpired')
+            throw new Error('The authority query snapshot expired.');
+          cursor = consumed.nextCursor;
+        }
+        while (!this.encodedObjectPageFits(encodedItemsBytes, items.length, cursor?.encoded)) {
+          encodedItemsBytes -= this.encodedObjectSize(items.pop()!);
+          const position = itemRows.pop()!;
+          if (items.length === 0)
+            throw new Error('The encoded object location entry exceeds 4 MiB.');
+          if (position.rows === 1) {
+            cursor = position.start;
+            continue;
+          }
+          const prior = await this.stores.authorityStore.listAuthorities(
+            prefix,
+            position.start,
+            position.rows - 1,
+            signal
+          );
+          if (prior.kind === 'scanExpired') {
+            throw new Error('The authority query snapshot expired.');
+          }
+          cursor = prior.nextCursor;
+        }
+        return { items, continuationToken: cursor?.encoded };
       }
-      cursor = nextCursor;
+      if (items.length >= pageSize || cursor === undefined) {
+        return { items, continuationToken: cursor?.encoded };
+      }
     }
+  }
+
+  private encodedObjectPageFits(
+    encodedItemsBytes: number,
+    itemCount: number,
+    continuationToken: string | undefined
+  ): boolean {
+    return (
+      Buffer.byteLength('{"items":[') +
+        encodedItemsBytes +
+        Math.max(0, itemCount - 1) +
+        Buffer.byteLength(']') +
+        (continuationToken === undefined
+          ? 0
+          : Buffer.byteLength(`,"continuationToken":${JSON.stringify(continuationToken)}`)) +
+        1 <=
+      4 * 1024 * 1024
+    );
+  }
+
+  private encodedObjectSize(entry: ZLinkLocationObjectEntry): number {
+    return Buffer.byteLength(
+      `{"globalId":${JSON.stringify(entry.globalId)},"objectGeneration":${entry.objectGeneration.toString()},` +
+        `"meshName":${JSON.stringify(entry.meshName)},"nodeRid":${JSON.stringify(entry.nodeRid.toString())},` +
+        `"state":${JSON.stringify(entry.state)},"stableType":${JSON.stringify(entry.stableType)}}`
+    );
   }
 
   async findActorLocation(
