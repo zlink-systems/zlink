@@ -7,12 +7,7 @@ internal sealed record ZLinkRelocationRecoveryCandidate(
 );
 
 /// <summary>
-/// Finds durable Actor, User Spot and Instance Spot relocations whose authority
-/// already publishes an immutable root. Entry Spots are intentionally excluded.
-/// A root is offered once per scan even when a Spot aggregate has several
-/// authority rows. The resume callback owns
-/// target materialization, replay, source cleanup, and steady normalization;
-/// it must be idempotent for the aggregate identity.
+/// Reads the published relocation root from the exact staged participant authorities.
 /// </summary>
 internal sealed class ZLinkRelocationStartupRecovery(
     IZLinkRuntimeFailureReporter failureReporter,
@@ -20,92 +15,6 @@ internal sealed class ZLinkRelocationStartupRecovery(
     IZLinkRelocationRepository relocationStore
 )
 {
-    private const int PageSize = 128;
-    private static readonly string[] Prefixes =
-    [
-        ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Actor),
-        ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Spot),
-    ];
-
-    internal async ValueTask RecoverAsync(
-        Func<ZLinkRelocationRecoveryCandidate, CancellationToken, ValueTask> resume,
-        CancellationToken cancellationToken = default
-    ) =>
-        await RecoverAsync(resume, recoverPreparing: null, cancellationToken).ConfigureAwait(false);
-
-    internal async ValueTask RecoverAsync(
-        Func<ZLinkRelocationRecoveryCandidate, CancellationToken, ValueTask> resume,
-        Func<ZLinkAuthorityEntry, CancellationToken, ValueTask>? recoverPreparing,
-        CancellationToken cancellationToken = default
-    )
-    {
-        ArgumentNullException.ThrowIfNull(resume);
-        var linked = new Dictionary<string, RecoveryGroup>(StringComparer.Ordinal);
-        var preparing = new Dictionary<string, ZLinkAuthorityEntry>(StringComparer.Ordinal);
-        foreach (var prefix in Prefixes)
-            await ScanPrefixAsync(prefix, linked, preparing, cancellationToken)
-                .ConfigureAwait(false);
-
-        if (recoverPreparing is not null)
-            foreach (
-                var entry in preparing.Values.OrderBy(
-                    static value => value.Key.Value,
-                    StringComparer.Ordinal
-                )
-            )
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await recoverPreparing(entry, cancellationToken).ConfigureAwait(false);
-            }
-
-        var reader = new ZLinkRelocationPublicationCoordinator(
-            failureReporter,
-            authorityStore,
-            relocationStore
-        );
-        foreach (
-            var group in linked.Values.OrderBy(
-                static value => value.Reference.Reference,
-                StringComparer.Ordinal
-            )
-        )
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ZLinkRelocationEnvelope envelope;
-            try
-            {
-                envelope = await reader
-                    .ReadPreparedAsync(group.Reference, cancellationToken)
-                    .ConfigureAwait(false);
-                envelope = BindManifestGeneration(envelope, group.Reference);
-            }
-            catch (ZLinkRelocationDataLostException error)
-            {
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DataLost,
-                    error.Message,
-                    retryAdvice: ZLinkRetryAdvice.DoNotRetry,
-                    error
-                );
-            }
-            ValidateLinkedAuthorities(group.Authorities, envelope);
-            await resume(
-                    new ZLinkRelocationRecoveryCandidate(
-                        group.Reference,
-                        envelope,
-                        group
-                            .Authorities.OrderBy(
-                                static entry => entry.Key.Value,
-                                StringComparer.Ordinal
-                            )
-                            .ToArray()
-                    ),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-    }
-
     internal async ValueTask<ZLinkRelocationRecoveryCandidate?> TryReadExactPublishedAsync(
         ZLinkRelocationEnvelope staging,
         CancellationToken cancellationToken = default
@@ -178,93 +87,9 @@ internal sealed class ZLinkRelocationStartupRecovery(
                 AggregateGeneration = reference.AggregateGeneration,
             };
 
-    private async ValueTask ScanPrefixAsync(
-        string prefix,
-        Dictionary<string, RecoveryGroup> linked,
-        Dictionary<string, ZLinkAuthorityEntry> preparing,
-        CancellationToken cancellationToken
-    )
-    {
-        ZLinkAuthorityScanCursor? cursor = null;
-        while (true)
-        {
-            var scan = await authorityStore
-                .ListAuthoritiesAsync(prefix, cursor, PageSize, cancellationToken)
-                .ConfigureAwait(false);
-            if (scan is ZLinkAuthorityScanResult.ScanExpired)
-            {
-                RemovePrefix(linked, prefix);
-                RemovePrefix(preparing, prefix);
-                cursor = null;
-                continue;
-            }
-
-            var page = ((ZLinkAuthorityScanResult.Page)scan).Value;
-            foreach (var entry in page.Items)
-            {
-                await AbortExpiredPendingCreationAsync(entry, cancellationToken)
-                    .ConfigureAwait(false);
-                AddPublished(entry, linked, preparing);
-            }
-            cursor = page.NextCursor;
-            if (cursor is null)
-                return;
-        }
-    }
-
-    private async ValueTask AbortExpiredPendingCreationAsync(
-        ZLinkAuthorityEntry entry,
-        CancellationToken cancellationToken
-    )
-    {
-        var snapshot = entry.Snapshot;
-        if (
-            snapshot.Allocation.ObjectKind
-                is not (
-                    ZLinkPlacementObjectKind.Actor
-                    or ZLinkPlacementObjectKind.UserSpot
-                    or ZLinkPlacementObjectKind.InstanceSpot
-                )
-            || snapshot.Allocation.State != ZLinkPlacementAllocationState.Reserved
-            || snapshot.ReservedCreation is not { } pending
-        )
-            return;
-
-        var owner = await authorityStore
-            .ReadOwnerLeaseAsync(snapshot.OwnerId, cancellationToken)
-            .ConfigureAwait(false);
-        if (
-            owner is ZLinkOwnerLeaseReadResult.Found found
-            && found.Token.LeaseGeneration == snapshot.OwnerLeaseGeneration
-            && found.LeaseExpiresAt > found.StoreNow
-        )
-            return;
-
-        var reservation = new ZLinkObjectReservation(
-            entry.Key,
-            snapshot.StoreVersion,
-            snapshot.ObjectGeneration,
-            snapshot.AuthorityOwnerGeneration,
-            pending.ReservationId,
-            snapshot.Allocation.Descriptor,
-            snapshot.Allocation.DescriptorLifecycleGeneration,
-            new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration)
-        );
-        var aborted = await authorityStore
-            .AbortAsync(reservation, cancellationToken)
-            .ConfigureAwait(false);
-        if (aborted is ZLinkObjectAbortResult.GenerationExhausted)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DataLost,
-                $"Pending creation '{entry.Key.Value}' cannot be fenced after its owner lease ended.",
-                retryAdvice: ZLinkRetryAdvice.DoNotRetry
-            );
-    }
-
     private static void AddPublished(
         ZLinkAuthorityEntry entry,
-        Dictionary<string, RecoveryGroup> linked,
-        Dictionary<string, ZLinkAuthorityEntry>? preparing = null
+        Dictionary<string, RecoveryGroup> linked
     )
     {
         if (
@@ -276,18 +101,6 @@ internal sealed class ZLinkRelocationStartupRecovery(
             )
         )
             return;
-        if (
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                entry.Snapshot.Payload.Span,
-                out var preparingCanonical
-            )
-            && preparingCanonical.Phase == 1
-        )
-        {
-            if (preparing is not null)
-                preparing[entry.Key.Value] = entry;
-            return;
-        }
         if (
             !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                 entry.Snapshot.Payload.Span,
@@ -305,12 +118,7 @@ internal sealed class ZLinkRelocationStartupRecovery(
         )
         {
             if (canonical.Phase == 1)
-            {
-                if (preparing is not null)
-                    preparing[entry.Key.Value] = entry;
                 return;
-            }
-            preparing?.Remove(entry.Key.Value);
             var sourceOwned = canonical.Phase is 2 or 3 or 9;
             expectedOwnerId = sourceOwned ? canonical.State.SourceOwnerId : canonical.TargetOwnerId;
             expectedOwnerLeaseGeneration = checked(
@@ -413,31 +221,6 @@ internal sealed class ZLinkRelocationStartupRecovery(
                     $"Relocation root does not contain exact authority participant '{authority.Key.Value}'."
                 );
         }
-    }
-
-    private static void RemovePrefix(Dictionary<string, RecoveryGroup> linked, string prefix)
-    {
-        foreach (var (reference, group) in linked.ToArray())
-        {
-            group.Authorities.RemoveAll(entry =>
-                entry.Key.Value.StartsWith(prefix, StringComparison.Ordinal)
-            );
-            if (group.Authorities.Count == 0)
-                linked.Remove(reference);
-        }
-    }
-
-    private static void RemovePrefix(
-        Dictionary<string, ZLinkAuthorityEntry> preparing,
-        string prefix
-    )
-    {
-        foreach (
-            var key in preparing
-                .Keys.Where(key => key.StartsWith(prefix, StringComparison.Ordinal))
-                .ToArray()
-        )
-            preparing.Remove(key);
     }
 
     private static ZLinkFrameworkException DataLost(

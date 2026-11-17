@@ -641,7 +641,7 @@ class provider_location_repository_t final : public location_repository_t
         if (limit == 0 || limit > location_page_item_limit)
             throw std::invalid_argument ("authority scan limit must be between 1 and 1000");
         store_scan_request_t scan_request{
-          prefix_authority (),
+          prefix_authority (key_prefix),
           cursor ? std::optional<store_scan_cursor_t>{store_scan_cursor_t{
                      std::string (cursor->encoded ())}}
                  : std::nullopt,
@@ -657,8 +657,6 @@ class provider_location_repository_t final : public location_repository_t
             if (!key)
                 continue;
             const auto &logical_key = key->value;
-            if (!logical_key.starts_with (key_prefix))
-                continue;
             auto snapshot = co_await effective_authority_async (
               logical_key, item.value.bytes, item.value.version, page->store_now);
             if (!snapshot)
@@ -3030,15 +3028,35 @@ class provider_location_repository_t final : public location_repository_t
         return std::nullopt;
     }
 
-    static std::string prefix_authority () { return preimage ({authority_domain, ""}); }
+    static std::string prefix_authority (std::string_view key_prefix = {})
+    {
+        if (key_prefix.empty ())
+            return preimage ({authority_domain, ""});
+        // A kind prefix is the codec prefix followed by one kind byte and ':'.
+        const auto &codec_prefix = authority_key_codec_detail::prefix;
+        if (key_prefix.size () != codec_prefix.size () + 2 || !key_prefix.starts_with (codec_prefix)
+            || key_prefix.back () != ':')
+            throw std::invalid_argument ("unsupported authority scan prefix");
+        return preimage (
+          {authority_domain, authority_kind_name (key_prefix[codec_prefix.size ()]), ""});
+    }
+
+    static std::string_view authority_kind_name (char kind)
+    {
+        if (kind == 'a')
+            return "actor";
+        if (kind == 's')
+            return "spot";
+        throw std::invalid_argument ("unsupported authority kind");
+    }
 
     static store_key_t key_authority (std::string_view value)
     {
         const auto decoded = authority_key_codec_detail::decode_authority_key (value);
         if (!decoded)
             throw std::invalid_argument ("authority store key requires a valid identity");
-        return {preimage (
-          {authority_domain, decoded->kind == 'a' ? "actor" : "spot", decoded->object_id})};
+        return {
+          preimage ({authority_domain, authority_kind_name (decoded->kind), decoded->object_id})};
     }
 
     static store_key_t key_creation_terminal (const creation_operation_identity_t &operation)
