@@ -57,12 +57,12 @@ struct in_memory_location_repository_test_access_t
 
 struct location_runtime_test_access_t
 {
-    static task_t<void> drain_publications (location_runtime_t &runtime)
+    static task_t<void> drain_repository_operations (location_runtime_t &runtime)
     {
         auto ambient = detail::capture_ambient_context ();
         ambient.infrastructure_wait = true;
         const auto context = detail::enter_ambient_context (ambient);
-        return runtime.drain_descriptor_publications ();
+        return runtime.drain_repository_operations ();
     }
 
     static void settle_publication (location_runtime_t &runtime)
@@ -6381,7 +6381,7 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, PublicationDrainWaitsForActualProvider
         const auto context = detail::enter_ambient_context (ambient);
         return runtime.descriptor_write_confirmed ([&] { return provider.task (); });
     }();
-    auto drained = location_runtime_test_access_t::drain_publications (runtime);
+    auto drained = location_runtime_test_access_t::drain_repository_operations (runtime);
     const bool cancelled = publication.await_ready ();
     EXPECT_TRUE (cancelled);
     if (cancelled)
