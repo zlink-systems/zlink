@@ -83,8 +83,6 @@ test('generated ChannelHeader codec matches every shared golden vector', async t
       const bytes = Buffer.from(vector.hex, 'hex');
       if (vector.encode !== false) {
         assert.equal(encodeChannelHeader(camelHeader(vector.header)).toString('hex'), vector.hex);
-      }
-      if (vector.encode !== false) {
         assert.deepEqual(snakeHeader(decodeGeneratedHeader(bytes)), vector.header);
       }
       for (const tracing of tracingStates(vector)) {
