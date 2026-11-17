@@ -348,6 +348,7 @@ distinguishes exactly which are prohibited.
 | An eligible `SpotWide`/Instance context waits with `Yield` on a request or Actor/Spot create/get-or-create call | Allowed. Releases the shared gate and resumes in a new turn at the back of the queue |
 | The runtime internally composes an execution context to run a handler | Allowed. This isn't a submission of new work |
 | A handler submits work to its own target without waiting for the result | Allowed. It's appended to the back of the queue |
+| A Spot lifecycle callback (Join, Leave, and so on, [§7](#7-lane-separation-and-priority-implementation)) calls close on that same Spot | Forbidden. `InvalidOperation` at call time, whether or not the result is awaited. Close returns its terminal at call time, so awaiting cannot be told apart from not awaiting, and that Close can proceed only after the current callback ends |
 
 "Before submission" matters. If it fails after the request has gone out,
 only a side effect is left remotely and the caller receives a failure.

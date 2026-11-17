@@ -3713,6 +3713,9 @@ task_t<bool> spot_context_t::close_erased ()
         return task_t<bool> (result_t<bool>::success (false));
     const auto state = _state;
     state->ensure_relocation_turn_open ();
+    if (state->serial_queue && state->serial_queue->is_current_lifecycle_turn ())
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "A Spot cannot close itself from its lifecycle callback.");
     auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto closed = completion->task ();
     state->request_close (

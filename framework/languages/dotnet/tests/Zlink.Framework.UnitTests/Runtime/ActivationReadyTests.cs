@@ -129,6 +129,7 @@ public sealed class ActivationReadyTests
         try
         {
             await probe.Entered.Task.WaitAsync(Timeout);
+            probe.Close = probe.SubmitClose!().AsTask();
             Assert.Equal(1, admission.Active);
             var serial = probe.Activation!._serial;
             await Assert.IsType<ZLinkTimer>(probe.Timer).NotifyDueAsync(1);
@@ -190,6 +191,7 @@ public sealed class ActivationReadyTests
         internal CancellationToken CallbackToken;
         internal IZLinkTimer? Timer;
         internal Task<bool>? Close;
+        internal Func<ValueTask<bool>>? SubmitClose;
         internal int Messages;
         internal int Ticks;
         internal int Closing;
@@ -217,7 +219,7 @@ public sealed class ActivationReadyTests
                         TimeSpan.FromHours(1),
                         cancellationToken: ct
                     );
-            Close = close().AsTask();
+            SubmitClose = close;
             Entered.TrySetResult();
             await Release.Task.WaitAsync(ct);
         }
@@ -466,8 +468,8 @@ public sealed class ActivationReadyTests
         host.Store.HoldReplayCursorFor = spotId;
         var handlerEntered = Signal();
         var releaseHandler = Signal();
-        host.State.OnInstanceInitializing = context =>
-            host.State.ContextCloseTask = context.CloseAsync().AsTask();
+        IZLinkInstanceSpotContext? context = null;
+        host.State.OnInstanceInitializing = current => context = current;
         host.State.OnInstanceHandler = async ct =>
         {
             handlerEntered.TrySetResult();
@@ -477,6 +479,7 @@ public sealed class ActivationReadyTests
         try
         {
             await handlerEntered.Task.WaitAsync(Timeout);
+            host.State.ContextCloseTask = context!.CloseAsync().AsTask();
             Assert.False(host.State.ContextCloseTask!.IsCompleted);
             Assert.False(host.State.OnClosingEntered.Task.IsCompleted);
             releaseHandler.TrySetResult();
@@ -728,6 +731,15 @@ public sealed class ActivationReadyTests
                 .InMesh("ready-probe")
                 .Async()
                 .AsTask();
+            var closeContext = await probe.CloseEntered.Task.WaitAsync(Timeout);
+            try
+            {
+                probe.Close = closeContext.CloseAsync().AsTask();
+            }
+            finally
+            {
+                probe.CloseSubmitted.TrySetResult();
+            }
             if (fail || failStore)
                 await Assert.ThrowsAnyAsync<Exception>(() => creation.WaitAsync(Timeout));
             else if (rejected)
@@ -751,6 +763,7 @@ public sealed class ActivationReadyTests
         }
         finally
         {
+            probe.CloseSubmitted.TrySetResult();
             store.Release.TrySetResult();
             await hosted.StopAsync(CancellationToken.None);
         }
@@ -772,11 +785,24 @@ public sealed class ActivationReadyTests
         internal TaskCompletionSource<Task<bool>> Tick { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        internal TaskCompletionSource<IZLinkSpotContext> CloseEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource CloseSubmitted { get; } = Signal();
+
         internal void Visit(IZLinkSpotContext context, int current)
         {
             Activation = (ZLinkSpotActivation)context;
             if (current == phase)
-                Close = context.CloseAsync().AsTask();
+                CloseEntered.TrySetResult(context);
+        }
+
+        internal Task WaitForExternalCloseAsync(int current) =>
+            current == phase ? CloseSubmitted.Task : Task.CompletedTask;
+
+        internal async ValueTask VisitAsync(IZLinkSpotContext context, int current)
+        {
+            Visit(context, current);
+            await WaitForExternalCloseAsync(current);
             if (current == 2 && fail)
                 throw new InvalidOperationException("ready-probe initialization failed");
         }
@@ -793,6 +819,7 @@ public sealed class ActivationReadyTests
             CancellationToken ct
         )
         {
+            await probe.WaitForExternalCloseAsync(0);
             if (probe.RegisterTimerInCreate)
             {
                 probe.Timer = await Context.AddTimer<ReadyTick>(
@@ -802,7 +829,7 @@ public sealed class ActivationReadyTests
                 );
                 await Assert.IsType<ZLinkTimer>(probe.Timer).NotifyDueAsync(1);
             }
-            probe.Visit(Context, 1);
+            await probe.VisitAsync(Context, 1);
             return probe.RejectCreation
                 ? ZLinkSpotCreateResponse.Reject()
                 : ZLinkSpotCreateResponse.Accept();
@@ -810,7 +837,7 @@ public sealed class ActivationReadyTests
 
         public async ValueTask OnInitializeAsync(CancellationToken ct)
         {
-            probe.Visit(Context, 2);
+            await probe.VisitAsync(Context, 2);
             if (probe.RegisterTimer)
             {
                 probe.Activation = (ZLinkSpotActivation)Context;
