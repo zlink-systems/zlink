@@ -1006,10 +1006,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("actor Spot is not local"));
         }
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                logical, dispatched);
         logical.whenComplete(
                 (ignored, failure) -> {
                     if (actorRequests.remove(requestId, completion)) completion.cancel(false);
-                    dispatched.toCompletableFuture().cancel(false);
                 });
         dispatched.whenComplete(
                 (ignored, error) -> {

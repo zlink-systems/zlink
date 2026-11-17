@@ -106,14 +106,16 @@ struct local_completion_sink_t
         if (terminal != foundation::operation_terminal_t::completed && terminal_message.empty ())
             terminal_message = "Local operation did not complete";
         if (terminal != foundation::operation_terminal_t::completed && incomplete)
-            (void) finish_failure (std::move (*this), terminal, std::move (terminal_message));
+            (void) finish_failure (std::move (*this), terminal, std::move (terminal_message),
+                                   completion_payload.exception ());
         else
-            publish (terminal, terminal_message);
+            publish (terminal, terminal_message, completion_payload.exception ());
     }
 
     static task_t<void> finish_failure (local_completion_sink_t sink,
                                         foundation::operation_terminal_t terminal,
-                                        std::string terminal_message)
+                                        std::string terminal_message,
+                                        std::exception_ptr failure)
     {
         try {
             co_await sink.incomplete ();
@@ -125,17 +127,17 @@ struct local_completion_sink_t
         catch (...) {
             terminal_message += ": rollback failed with an unknown exception";
         }
-        sink.publish (terminal, terminal_message);
+        sink.publish (terminal, terminal_message, failure);
         co_return;
     }
 
-    void publish (foundation::operation_terminal_t terminal, const std::string &terminal_message)
+    void publish (foundation::operation_terminal_t terminal,
+                  const std::string &terminal_message,
+                  std::exception_ptr failure)
     {
         if (completion) {
             auto decoded =
-              !completion_payload
-                ? detail::result_access_t::failure<std::vector<zlink::message_t>> (
-                    completion_payload.exception ())
+              failure ? detail::result_access_t::failure<std::vector<zlink::message_t>> (failure)
               : terminal == foundation::operation_terminal_t::completed
                 ? result_t<std::vector<zlink::message_t>>::success (std::move (result->parts))
               : terminal == foundation::operation_terminal_t::shutdown
@@ -148,9 +150,8 @@ struct local_completion_sink_t
                     framework_error_kind_t::internal_failure, terminal_message);
             completion (terminal, std::move (decoded));
         } else {
-            auto decoded = !completion_payload
-                             ? detail::result_access_t::failure<operation_completion_t> (
-                                 completion_payload.exception ())
+            auto decoded = failure
+                             ? detail::result_access_t::failure<operation_completion_t> (failure)
                            : terminal == foundation::operation_terminal_t::completed
                              ? result_t<operation_completion_t>::success (std::move (*result))
                            : terminal == foundation::operation_terminal_t::shutdown

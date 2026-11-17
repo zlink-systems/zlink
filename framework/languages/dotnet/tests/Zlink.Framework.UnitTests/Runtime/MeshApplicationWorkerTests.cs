@@ -408,13 +408,15 @@ public sealed class MeshApplicationWorkerTests
     public async Task QueuedLocalRequestTerminal_ContinuationObservesReleasedAdmission(bool cancel)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var operationLane = new ZLinkStateLane();
         using var jobs = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
         );
         await using var node = new ZLinkManagedMeshNode(
             context,
             "local-terminal",
-            applicationJobQueue: jobs
+            applicationJobQueue: jobs,
+            operationLane: operationLane
         );
         var rid = RoutingId.From("local-terminal-node");
         node.SetRoutingId(rid);
@@ -441,6 +443,9 @@ public sealed class MeshApplicationWorkerTests
             TaskScheduler.Default
         );
         Assert.Equal(1UL, jobs.GetStatus().PermitsInUse);
+        // The grant posts to the operation lane; observe acceptance before ending the caller.
+        await operationLane.RunAsync(() => { });
+        Assert.Equal(1UL, node.Status().PendingApplicationMessages);
         if (cancel)
             cancellation.Cancel();
         if (cancel)
