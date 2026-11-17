@@ -34,6 +34,12 @@ internal sealed class ZLinkDispatchErrorReporter(
     )
     {
         failureCode ??= error.Data[BoundaryKey] as ServiceWireConstants.FrameworkErrorCode?;
+        if (
+            failureCode is null
+            && error is ZLinkFrameworkException { FrameworkFailureCode: not 0 } frameworkFailure
+        )
+            failureCode = (ServiceWireConstants.FrameworkErrorCode)
+                frameworkFailure.FrameworkFailureCode;
         if (failureCode == ServiceWireConstants.FrameworkErrorCode.PayloadDecodeFailed)
             return ZLinkDispatchErrorReason.PayloadDecodeFailed;
         if (
@@ -44,13 +50,17 @@ internal sealed class ZLinkDispatchErrorReporter(
                 or ServiceWireConstants.FrameworkErrorCode.SpotMoving
         )
             return ZLinkDispatchErrorReason.StaleTarget;
-        if (error is ZLinkFrameworkException { InnerException: ZlinkSubmitException submit })
+        if (
+            (error as ZlinkSubmitException ?? error.InnerException as ZlinkSubmitException) is
+            { } submit
+        )
         {
             // The transport has projected the binding terminal. Preserve that
             // typed cause instead of attributing it to the application handler.
             switch (submit.Result)
             {
                 case ZlinkSubmitException.ErrorCode.NotConnected:
+                case ZlinkSubmitException.ErrorCode.NotFound:
                     return ZLinkDispatchErrorReason.StaleTarget;
                 case ZlinkSubmitException.ErrorCode.Backpressured:
                     return ZLinkDispatchErrorReason.Backpressure;

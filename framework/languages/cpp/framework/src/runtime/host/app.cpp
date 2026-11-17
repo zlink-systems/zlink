@@ -908,7 +908,8 @@ void trace_instance_spot_activation (
   zlink::framework::dispatch_message_kind_t message_kind,
   const instance_spot_activation_trace_context_t &context,
   std::optional<zlink::framework::message_flow_result_t> result = std::nullopt,
-  std::optional<zlink::framework::message_flow_reason_t> reason = std::nullopt)
+  std::optional<zlink::framework::message_flow_reason_t> reason = std::nullopt,
+  std::exception_ptr failure = {})
 {
     if (zlink::framework::detail::message_flow_tracer_t (dispatch).enabled_for (outcome, result)) {
         zlink::framework::detail::message_flow_tracer_t (dispatch).trace (outcome, result, [&] {
@@ -946,6 +947,7 @@ void trace_instance_spot_activation (
                 event.result = *result;
             if (reason)
                 event.reason = *reason;
+            event.exception = failure;
             return event;
         });
     }
@@ -2421,9 +2423,10 @@ void app_t::_apply_zlink_framework ()
                     application_payload.flow_origin = flow->origin;
                 }
                 const auto trace_context = make_instance_spot_activation_trace_context (
-                  detail::message_flow_tracer_t (dispatch).capture_enabled (), packet_name,
-                  selected.value ().target.mesh_name, selected.value ().target.rid, spot_id,
-                  header);
+                  detail::message_flow_tracer_t (dispatch).enabled_for (
+                    message_flow_outcome_t::reply_received, message_flow_result_t::failed),
+                  packet_name, selected.value ().target.mesh_name, selected.value ().target.rid,
+                  spot_id, header);
                 if (trace_context) {
                     trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::sent,
                                                     dispatch_message_kind_t::request,
@@ -2443,43 +2446,46 @@ void app_t::_apply_zlink_framework ()
                       runtime::protocol::reply_header_t reply,
                       std::optional<runtime::protocol::application_payload_t> application_reply) {
                         if (terminal != runtime::foundation::operation_terminal_t::completed) {
-                            if (trace_context) {
-                                trace_instance_spot_activation (
-                                  dispatch, flow, message_flow_outcome_t::reply_received,
-                                  dispatch_message_kind_t::request, *trace_context,
-                                  message_flow_result_t::failed);
-                            }
-                            completion->complete (result_t<zlink::message_t>::failure (
+                            auto failure = result_t<zlink::message_t>::failure (
                               framework_error_kind_t::unavailable,
-                              "Instance Spot activation transport did not complete"));
-                            return;
-                        }
-                        if (reply.terminal_result != 0) {
-                            if (trace_context) {
+                              "Instance Spot activation transport did not complete");
+                            const auto error = failure.exception ();
+                            if (completion->complete (std::move (failure)) && trace_context) {
                                 trace_instance_spot_activation (
                                   dispatch, flow, message_flow_outcome_t::reply_received,
                                   dispatch_message_kind_t::request, *trace_context,
                                   message_flow_result_t::failed,
-                                  message_flow_reason_t::activation_rejected);
+                                  message_flow_reason_t::stale_target, error);
                             }
-                            completion->complete (
-                              detail::result_access_t::failure<zlink::message_t> (
-                                runtime::messaging::request_failure_mapper_t{}
-                                  .reply_header_exception (reply.terminal_result,
-                                                           reply.failure_code,
-                                                           "Instance Spot activation request")));
                             return;
                         }
-                        if (!application_reply) {
-                            if (trace_context) {
+                        if (reply.terminal_result != 0) {
+                            auto failure = detail::result_access_t::failure<zlink::message_t> (
+                              runtime::messaging::request_failure_mapper_t{}
+                                .reply_header_exception (reply.terminal_result, reply.failure_code,
+                                                         "Instance Spot activation request"));
+                            const auto error = failure.exception ();
+                            if (completion->complete (std::move (failure)) && trace_context) {
                                 trace_instance_spot_activation (
                                   dispatch, flow, message_flow_outcome_t::reply_received,
                                   dispatch_message_kind_t::request, *trace_context,
-                                  message_flow_result_t::failed);
+                                  message_flow_result_t::failed,
+                                  message_flow_reason_t::activation_rejected, error);
                             }
-                            completion->complete (result_t<zlink::message_t>::failure (
+                            return;
+                        }
+                        if (!application_reply) {
+                            auto failure = result_t<zlink::message_t>::failure (
                               framework_error_kind_t::protocol_error,
-                              "Instance Spot activation reply payload is missing"));
+                              "Instance Spot activation reply payload is missing");
+                            const auto error = failure.exception ();
+                            if (completion->complete (std::move (failure)) && trace_context) {
+                                trace_instance_spot_activation (
+                                  dispatch, flow, message_flow_outcome_t::reply_received,
+                                  dispatch_message_kind_t::request, *trace_context,
+                                  message_flow_result_t::failed,
+                                  message_flow_reason_t::activation_rejected, error);
+                            }
                             return;
                         }
                         if (trace_context) {
@@ -2492,16 +2498,17 @@ void app_t::_apply_zlink_framework ()
                             std::move (application_reply->payload_bytes ()))));
                     });
                 if (!submitted) {
-                    if (trace_context) {
+                    auto failure = result_t<zlink::message_t>::failure (
+                      framework_error_kind_t::unavailable,
+                      "Instance Spot activation was not admitted");
+                    const auto error = failure.exception ();
+                    if (completion->complete (std::move (failure)) && trace_context) {
                         trace_instance_spot_activation (
                           dispatch, flow, message_flow_outcome_t::reply_received,
                           dispatch_message_kind_t::request, *trace_context,
-                          message_flow_result_t::failed,
-                          message_flow_reason_t::activation_rejected);
+                          message_flow_result_t::failed, message_flow_reason_t::stale_target,
+                          error);
                     }
-                    completion->complete (result_t<zlink::message_t>::failure (
-                      framework_error_kind_t::unavailable,
-                      "Instance Spot activation was not admitted"));
                 }
                 if (submitted)
                     co_await detail::request_admitted_t{};
@@ -2544,7 +2551,7 @@ void app_t::_apply_zlink_framework ()
                 }
                 const auto trace_context = make_instance_spot_activation_trace_context (
                   detail::message_flow_tracer_t (dispatch).enabled_for (
-                    message_flow_outcome_t::sent),
+                    message_flow_outcome_t::dropped),
                   packet_name, selected.value ().target.mesh_name, selected.value ().target.rid,
                   spot_id, header);
                 if (trace_context) {
@@ -2557,10 +2564,17 @@ void app_t::_apply_zlink_framework ()
                     metadata_frame.empty () ? std::optional<std::vector<std::uint8_t>>{}
                                             : std::make_optional (std::move (metadata_frame)),
                     std::move (application_payload));
-                co_return submitted
-                  ? result_t<void>::success ()
-                  : result_t<void>::failure (framework_error_kind_t::unavailable,
-                                             "Instance Spot activation was not admitted");
+                if (submitted)
+                    co_return result_t<void>::success ();
+                auto failure = result_t<void>::failure (
+                  framework_error_kind_t::unavailable, "Instance Spot activation was not admitted");
+                if (trace_context) {
+                    trace_instance_spot_activation (
+                      dispatch, flow, message_flow_outcome_t::dropped,
+                      dispatch_message_kind_t::send, *trace_context, message_flow_result_t::failed,
+                      message_flow_reason_t::stale_target, failure.exception ());
+                }
+                co_return failure;
             }
         };
         channel_runtime.bind_instance_spot_activator (
