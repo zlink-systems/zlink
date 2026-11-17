@@ -1434,7 +1434,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     let cursor =
       requestedCursor === undefined ? undefined : PublicAuthorityScanCursor.from(requestedCursor);
     const items: ZLinkLocationObjectEntry[] = [];
-    const itemRows: { start: ZLinkAuthorityScanCursor | undefined; rows: number }[] = [];
+    const itemRows: { start: PublicAuthorityScanCursor | undefined; rows: number }[] = [];
     let encodedItemsBytes = 0;
     const prefix = filter.objectKind === 'actor' ? 'zla1:a:' : 'zla1:s:';
     for (;;) {

@@ -259,7 +259,7 @@ public sealed class LocationRuntimeQueryTests
     public async Task Object_Location_Pages_Follow_Shared_Fixture(string name)
     {
         var encodingProbe = new ZLinkLocationObjectEntry(
-            "actor-é\"\\\b\t\n\f\r\u0001",
+            "actor-é\"\\\b\t\n\f\r\u0001\u00a0\u2028\u2029\ue000",
             1,
             "mesh-é\"\\\b\t\n\f\r\u0001",
             RoutingId.From("node-1"),

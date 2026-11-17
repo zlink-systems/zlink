@@ -17,6 +17,15 @@ const {
 const authorityKeys = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 const msgpack = require('@msgpack/msgpack');
 
+const encodeObjectEntry = (entry) => ({
+  globalId: entry.globalId,
+  objectGeneration: Number(entry.objectGeneration),
+  meshName: entry.meshName,
+  nodeRid: entry.nodeRid.toString(),
+  state: entry.state,
+  stableType: entry.stableType
+});
+
 // Target-contract pin for checklist C-3 (store record golden fixture). The
 // generic value vectors remain decode-side pins; creation-terminal also
 // exercises the production logical-key builder added to the opaque store.
@@ -826,14 +835,6 @@ test('object location pages follow the shared continuation fixture', async (t) =
       };
       const runtime = runtimeFor(testInMemoryLocationStore(), { authorityStore });
       const all = [];
-      const encodeObjectEntry = (entry) => ({
-        globalId: entry.globalId,
-        objectGeneration: Number(entry.objectGeneration),
-        meshName: entry.meshName,
-        nodeRid: entry.nodeRid.toString(),
-        state: entry.state,
-        stableType: entry.stableType
-      });
       let continuationToken;
       let previousBoundaryPage;
       for (let pageIndex = 0; pageIndex < scenario.expectedPages.length; pageIndex++) {
@@ -846,30 +847,6 @@ test('object location pages follow the shared continuation fixture', async (t) =
         if (page.continuationToken !== undefined)
           serializedPage.continuationToken = page.continuationToken;
         const serializedPageBytes = Buffer.byteLength(JSON.stringify(serializedPage));
-        const calculatedItemsBytes = page.items.reduce(
-          (bytes, entry) => bytes + runtime.encodedObjectSize(entry),
-          0
-        );
-        assert.equal(
-          runtime.encodedObjectPageSize(
-            calculatedItemsBytes,
-            page.items.length,
-            page.continuationToken ?? undefined
-          ),
-          serializedPageBytes
-        );
-        if (pageIndex === 0 && page.items.length > 0) {
-          const encodingProbe = {
-            ...page.items[0],
-            globalId: 'actor-é"\\\b\t\n\f\r\u0001',
-            meshName: 'mesh-é"\\\b\t\n\f\r\u0001',
-            stableType: 'type-é"\\\b\t\n\f\r\u0001'
-          };
-          assert.equal(
-            runtime.encodedObjectSize(encodingProbe),
-            Buffer.byteLength(JSON.stringify(encodeObjectEntry(encodingProbe)))
-          );
-        }
         assert.ok(serializedPageBytes <= 4 * 1024 * 1024, `${scenario.name} encoded page size`);
         if (
           previousBoundaryPage !== undefined &&
@@ -906,6 +883,79 @@ test('object location pages follow the shared continuation fixture', async (t) =
         )
       );
     });
+});
+
+test('object location pages pack escaped fields to the actual JSON byte boundary', async () => {
+  const encodingProbe = 'é"\\\b\t\n\f\r\u0001\u00a0\u2028\u2029\ue000';
+  const records = Array.from({ length: 1050 }, (_, index) => ({
+    key: authorityKeys.encodeAuthorityKey(
+      'user_spot',
+      `room-${String(index).padStart(4, '0')}-${encodingProbe}`
+    ),
+    snapshot: {
+      storeVersion: { value: 'v1' },
+      payload: Buffer.alloc(0),
+      objectGeneration: 1n,
+      authorityOwnerGeneration: 1n,
+      ownerId: 'owner',
+      ownerLeaseGeneration: 1n,
+      allocation: {
+        state: 'active',
+        objectKind: 'user_spot',
+        stableType: encodingProbe.repeat(220),
+        descriptor: { meshName: encodingProbe, rid: rid('node-1') },
+        descriptorLifecycleGeneration: 1n
+      }
+    }
+  }));
+  const authorityStore = {
+    async listAuthorities(prefix, cursor, limit) {
+      assert.equal(prefix, 'zla1:s:');
+      assert.ok(limit > 0);
+      const offset = cursor === undefined ? 0 : Number(cursor.encoded);
+      const end = Math.min(offset + 1, records.length);
+      return {
+        kind: 'page',
+        items: records.slice(offset, end),
+        nextCursor: end < records.length ? { encoded: String(end).padStart(4, '0') } : undefined
+      };
+    }
+  };
+  const runtime = runtimeFor(testInMemoryLocationStore(), { authorityStore });
+  const all = [];
+  let continuationToken;
+  let previousPage;
+  do {
+    const page = await runtime.listObjectLocations(
+      { objectKind: 'user_spot' },
+      { pageSize: 1000, continuationToken }
+    );
+    assert.ok(page.items.length > 0);
+    const wire = JSON.stringify({
+      items: page.items.map(encodeObjectEntry),
+      continuationToken: page.continuationToken
+    });
+    assert.ok(Buffer.byteLength(wire) <= 4 * 1024 * 1024);
+    for (const entry of page.items) {
+      assert.equal(entry.meshName, encodingProbe);
+      assert.equal(entry.stableType, encodingProbe.repeat(220));
+    }
+    if (previousPage !== undefined) {
+      assert.ok(previousPage.items.length < 1000);
+      const withNext = JSON.stringify({
+        items: [...previousPage.items, page.items[0]].map(encodeObjectEntry),
+        continuationToken: previousPage.continuationToken
+      });
+      assert.ok(Buffer.byteLength(withNext) > 4 * 1024 * 1024);
+    }
+    all.push(...page.items.map((entry) => entry.globalId));
+    continuationToken = page.continuationToken;
+    previousPage = page;
+  } while (continuationToken !== undefined);
+  assert.deepEqual(
+    all,
+    records.map((record) => authorityKeys.decodeAuthorityKey(record.key).globalId)
+  );
 });
 
 test('object location page rechecks a cursor returned for its consumed rows', async () => {
@@ -962,9 +1012,7 @@ test('object location page rechecks a cursor returned for its consumed rows', as
   let continuationToken;
   do {
     const requestedOffset =
-      continuationToken === undefined
-        ? undefined
-        : Number(continuationToken.split(':', 1)[0]);
+      continuationToken === undefined ? undefined : Number(continuationToken.split(':', 1)[0]);
     const page = await runtime.listObjectLocations(
       { objectKind: 'user_spot' },
       { pageSize: 1000, continuationToken }
@@ -975,14 +1023,7 @@ test('object location page rechecks a cursor returned for its consumed rows', as
         authorityKeys.decodeAuthorityKey(records[firstRowRequeryOffset].key).globalId
       );
     const wire = JSON.stringify({
-      items: page.items.map((entry) => ({
-        globalId: entry.globalId,
-        objectGeneration: Number(entry.objectGeneration),
-        meshName: entry.meshName,
-        nodeRid: entry.nodeRid.toString(),
-        state: entry.state,
-        stableType: entry.stableType
-      })),
+      items: page.items.map(encodeObjectEntry),
       continuationToken: page.continuationToken
     });
     assert.ok(Buffer.byteLength(wire) <= 4 * 1024 * 1024);

@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Spots;
 
@@ -301,18 +303,11 @@ internal sealed class ZLinkLocationObjectQuery(
         + JsonStringSize(entry.StableType)
         + 1;
 
-    private static long JsonStringSize(string value)
-    {
-        long bytes = Encoding.UTF8.GetByteCount(value) + 2;
-        foreach (var character in value)
-        {
-            if (character is '"' or '\\')
-                bytes++;
-            else if (character < 0x20)
-                bytes += character is '\b' or '\t' or '\n' or '\f' or '\r' ? 1 : 5;
-        }
-        return bytes;
-    }
+    private static long JsonStringSize(string value) =>
+        (long)
+            JsonEncodedText
+                .Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping)
+                .EncodedUtf8Bytes.Length + 2;
 
     private static ZLinkFrameworkException Unavailable(string message, Exception? error = null) =>
         new(
