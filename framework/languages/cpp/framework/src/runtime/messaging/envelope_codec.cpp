@@ -342,12 +342,19 @@ void copy_optional (const std::optional<header_text_t> &source, Setter &&set)
         std::forward<Setter> (set) (std::string (*source));
 }
 
-channel_header_proto_t to_proto (const envelope_header_t &header,
-                                 std::string_view content_type,
-                                 const std::string *flow_id,
-                                 std::optional<flow_origin_t> flow_origin)
+channel_header_proto_t &channel_header_scratch ()
 {
-    channel_header_proto_t proto;
+    thread_local channel_header_proto_t value;
+    value.Clear ();
+    return value;
+}
+
+void to_proto (channel_header_proto_t &proto,
+               const envelope_header_t &header,
+               std::string_view content_type,
+               const std::string *flow_id,
+               std::optional<flow_origin_t> flow_origin)
+{
     proto.set_kind (static_cast<zlink::framework::channel::v1::ChannelKind> (header.kind));
     proto.set_channel_name (header.channel_name.data (), header.channel_name.size ());
     proto.set_message_name (header.message_name.data (), header.message_name.size ());
@@ -370,7 +377,6 @@ channel_header_proto_t to_proto (const envelope_header_t &header,
         entry->set_key (key);
         entry->set_value (value);
     }
-    return proto;
 }
 
 std::size_t serialized_header_size (const channel_header_proto_t &proto)
@@ -382,11 +388,15 @@ std::size_t serialized_header_size (const channel_header_proto_t &proto)
     return size;
 }
 
-void serialize_header_into (const channel_header_proto_t &proto, std::span<std::byte> destination)
+void serialize_header_into (const channel_header_proto_t &proto,
+                            std::span<std::byte> destination,
+                            std::size_t size)
 {
-    const auto size = serialized_header_size (proto);
     if (destination.size () != size
-        || !proto.SerializeToArray (destination.data (), static_cast<int> (size)))
+        || proto.GetCachedSize () != static_cast<int> (size)
+        || proto.SerializeWithCachedSizesToArray (
+             reinterpret_cast<std::uint8_t *> (destination.data ()))
+             != reinterpret_cast<std::uint8_t *> (destination.data ()) + size)
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "ZLink envelope header cannot be encoded");
 }
@@ -397,52 +407,8 @@ zlink::message_t serialize_header (const channel_header_proto_t &proto)
     auto message = zlink::message_t::allocate (size);
     if (!message.valid ())
         throw std::bad_alloc ();
-    serialize_header_into (proto, {message.data (), size});
+    serialize_header_into (proto, {message.data (), size}, size);
     return message;
-}
-
-struct encoded_header_cache_t
-{
-    std::optional<envelope_header_t> header;
-    std::string bytes;
-
-    bool matches (const envelope_header_t &value,
-                  std::string_view content_type,
-                  const std::string *flow_id,
-                  std::optional<flow_origin_t> flow_origin) const noexcept
-    {
-        return header && header->kind == value.kind && header->channel_name == value.channel_name
-               && header->message_name == value.message_name && header->content_type == content_type
-               && header->correlation_id == value.correlation_id
-               && header->deadline == value.deadline && header->topic == value.topic
-               && header->error_code == value.error_code
-               && header->error_message == value.error_message && header->source == value.source
-               && header->metadata == value.metadata
-               && header->flow_id.has_value () == (flow_id != nullptr)
-               && (!flow_id || *header->flow_id == *flow_id) && header->flow_origin == flow_origin;
-    }
-
-    void replace (const envelope_header_t &value,
-                  std::string_view content_type,
-                  const std::string *flow_id,
-                  std::optional<flow_origin_t> flow_origin,
-                  const zlink::message_t &message)
-    {
-        auto key = value;
-        key.content_type.assign (content_type);
-        key.flow_id = flow_id ? std::optional<std::string> (*flow_id) : std::nullopt;
-        key.flow_origin = flow_origin;
-        auto encoded = message.to_string ();
-        header.reset ();
-        bytes = std::move (encoded);
-        header = std::move (key);
-    }
-};
-
-encoded_header_cache_t &encoded_header_cache ()
-{
-    thread_local encoded_header_cache_t value;
-    return value;
 }
 
 result_t<envelope_header_t>
@@ -567,20 +533,12 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
                                                   std::string_view content_type) const
 {
     const auto [flow_id, origin] = validate_outgoing_header (header);
-    auto &cache = encoded_header_cache ();
-    if (cache.matches (header, content_type, flow_id, origin)) {
-        auto message = zlink::message_t::from (cache.bytes);
-        if (!message.valid ())
-            throw std::bad_alloc ();
-        return message;
-    }
-    auto proto = to_proto (header, content_type, flow_id, origin);
+    auto &proto = channel_header_scratch ();
+    to_proto (proto, header, content_type, flow_id, origin);
     auto valid = validate_protocol_header (header, true, &proto);
     if (!valid)
         throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
-    auto message = serialize_header (proto);
-    cache.replace (header, content_type, flow_id, origin, message);
-    return message;
+    return serialize_header (proto);
 }
 
 zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header,
@@ -599,7 +557,8 @@ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_paylo
     if (flow_id && !header.flow_id)
         header.flow_id = *flow_id;
     header.flow_origin = origin;
-    auto proto = to_proto (header, type->content_type, flow_id, origin);
+    channel_header_proto_t proto;
+    to_proto (proto, header, type->content_type, flow_id, origin);
     auto valid = validate_protocol_header (header, true, &proto);
     if (!valid)
         throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
@@ -610,8 +569,8 @@ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_paylo
         const auto header_size = serialized_header_size (state->first);
         return protocol::encode_application_envelope_message (
           header_size,
-          [state] (std::span<std::byte> destination) {
-              serialize_header_into (state->first, destination);
+          [state, header_size] (std::span<std::byte> destination) {
+              serialize_header_into (state->first, destination, header_size);
           },
           state->second.bytes (), flow_id, flow_origin);
     };
