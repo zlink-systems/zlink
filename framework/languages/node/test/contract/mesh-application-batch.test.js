@@ -317,7 +317,7 @@ test('raw local Spot send preserves a normal sibling after the first record fail
   }
 });
 
-test('dispose during a pre-admitted batch returns unstarted leases and closes their parts once', async () => {
+test('dispose after a pre-admitted batch starts returns suspended leases and closes their parts once', async () => {
   const fixture = createFixture();
   const observed = [];
   const firstDispatch = deferred();
@@ -344,7 +344,7 @@ test('dispose during a pre-admitted batch returns unstarted leases and closes th
     releaseFirst.resolve();
     await disposing;
 
-    assert.equal(dispatches, 1);
+    assert.equal(dispatches, 64);
     assert.equal(observed.length, 64);
     for (const record of observed) {
       assert.equal(record.released(), 1);

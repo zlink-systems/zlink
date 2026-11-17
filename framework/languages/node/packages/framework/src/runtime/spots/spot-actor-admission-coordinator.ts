@@ -54,7 +54,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
     messageFollowOrigin?: ZLinkMessageFollowOrigin
   ): Promise<unknown> {
     return dispatchActorPacketInMailbox<ZLinkSpotSerialTurnExecutor>(
-      (operation) => activation.executeActor(actorId, operation),
+      (operation) => activation.executeActor(actorId, operation, undefined, operation),
       (serial) =>
         this.actorPacketDispatch(activation).admitDelivery(
           serial,

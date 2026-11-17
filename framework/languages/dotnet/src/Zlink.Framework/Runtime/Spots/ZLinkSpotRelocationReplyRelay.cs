@@ -5,8 +5,13 @@ internal static class ZLinkRelocationReplyLifetime
     internal static readonly TimeSpan TerminalRetention = TimeSpan.FromHours(24);
 }
 
-internal sealed class ZLinkRelocationReplyTarget(IZLinkBackendRelocationReplyRelay backend)
-    : IRelocationReplyRelayTarget
+internal sealed class ZLinkRelocationReplyTarget(
+    Func<
+        ZLinkServiceWireCodec.ReplyRelayRecord,
+        IReadOnlyList<Message>,
+        ZLinkRelocationReplyCompletion
+    > complete
+) : IRelocationReplyRelayTarget
 {
     public ValueTask<ZLinkServiceWireCodec.ReplyRelayAckRecord?> RelayAsync(
         ZLinkServiceWireCodec.ReplyRelayRecord relay,
@@ -25,7 +30,7 @@ internal sealed class ZLinkRelocationReplyTarget(IZLinkBackendRelocationReplyRel
             )
                 return ValueTask.FromResult<ZLinkServiceWireCodec.ReplyRelayAckRecord?>(null);
             cancellationToken.ThrowIfCancellationRequested();
-            var completion = backend.TryCompleteRelocationReply(relay, payload);
+            var completion = complete(relay, payload);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"canonical_reply_relay_completion operation={relay.OperationId.High:x16}{relay.OperationId.Low:x16} reply_route={relay.ReplyRouteId:x16} state={completion.State}"
             );

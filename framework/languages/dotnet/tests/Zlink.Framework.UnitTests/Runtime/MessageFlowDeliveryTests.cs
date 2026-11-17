@@ -938,6 +938,7 @@ public sealed class MessageFlowDeliveryAbsenceTests(Xunit.Abstractions.ITestOutp
         const string childMarker = "ZLINK_TELEMETRY_ABSENCE_CHILD";
         if (Environment.GetEnvironmentVariable(childMarker) != "1")
         {
+            var resultsDirectory = Directory.CreateTempSubdirectory("zlink-message-flow-absence-");
             var start = new ProcessStartInfo("dotnet")
             {
                 RedirectStandardOutput = true,
@@ -949,38 +950,54 @@ public sealed class MessageFlowDeliveryAbsenceTests(Xunit.Abstractions.ITestOutp
             start.ArgumentList.Add(
                 "/TestCaseFilter:FullyQualifiedName~MessageFlowDeliveryAbsenceTests"
             );
+            start.ArgumentList.Add("/logger:trx;LogFileName=results.trx");
+            start.ArgumentList.Add($"/ResultsDirectory:{resultsDirectory.FullName}");
             start.Environment[childMarker] = "1";
-            using var child = Process.Start(start)!;
-            output.WriteLine(
-                "child-pid={0} argv=dotnet {1}",
-                child.Id,
-                string.Join(" ", start.ArgumentList)
-            );
-            var assembly = typeof(MessageFlowDeliveryAbsenceTests).Assembly.Location;
-            output.WriteLine(
-                "test-assembly={0} sha256={1}",
-                assembly,
-                Convert.ToHexString(
-                    System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(assembly))
-                )
-            );
-            var stdout = child.StandardOutput.ReadToEndAsync();
-            var stderr = child.StandardError.ReadToEndAsync();
             try
             {
-                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
-                output.WriteLine(await stdout);
-                output.WriteLine(await stderr);
-                Assert.Equal(0, child.ExitCode);
-                Assert.Contains("Passed:     1", await stdout);
+                using var child = Process.Start(start)!;
+                output.WriteLine(
+                    "child-pid={0} argv=dotnet {1}",
+                    child.Id,
+                    string.Join(" ", start.ArgumentList)
+                );
+                var assembly = typeof(MessageFlowDeliveryAbsenceTests).Assembly.Location;
+                output.WriteLine(
+                    "test-assembly={0} sha256={1}",
+                    assembly,
+                    Convert.ToHexString(
+                        System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(assembly))
+                    )
+                );
+                var stdout = child.StandardOutput.ReadToEndAsync();
+                var stderr = child.StandardError.ReadToEndAsync();
+                try
+                {
+                    await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                    output.WriteLine(await stdout);
+                    output.WriteLine(await stderr);
+                    Assert.Equal(0, child.ExitCode);
+
+                    var trx = System.Xml.Linq.XDocument.Load(
+                        Path.Combine(resultsDirectory.FullName, "results.trx")
+                    );
+                    var counters = trx.Descendants()
+                        .Single(element => element.Name.LocalName == "Counters");
+                    Assert.Equal("1", (string?)counters.Attribute("passed"));
+                    Assert.Equal("1", (string?)counters.Attribute("total"));
+                }
+                finally
+                {
+                    if (!child.HasExited)
+                    {
+                        child.Kill(entireProcessTree: true);
+                        await child.WaitForExitAsync();
+                    }
+                }
             }
             finally
             {
-                if (!child.HasExited)
-                {
-                    child.Kill(entireProcessTree: true);
-                    await child.WaitForExitAsync();
-                }
+                resultsDirectory.Delete(recursive: true);
             }
             return;
         }

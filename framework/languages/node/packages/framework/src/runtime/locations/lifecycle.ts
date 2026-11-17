@@ -2,7 +2,7 @@ import type { ActorRef, RoutingId } from '../../contracts/Common';
 import { decodeAuthorityKey } from './authority-key-codec';
 import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
 import { ZLinkSpotKind } from '../../contracts/Spots';
-import { routingIdsEqual } from '../routing-id';
+import { sameAuthorityIncarnation } from './lifecycle-runtime';
 import { rewriteActorAuthorityOwner } from '../actors/actor-authority-publication';
 import { rewriteServiceAuthorityOwner } from '../foundation/service-authority-payload-codec';
 import { isIndeterminateLocationStoreFailure } from './location-store-failure';
@@ -24,6 +24,7 @@ import type {
   ZLinkSpotLocationStore
 } from './internal-store-contracts';
 import type {
+  ZLinkDiscardedAuthorityFence,
   ZLinkExecutionRecovery,
   IZLinkLocationLifecycleRuntime,
   ZLinkOwnershipLostEvent
@@ -83,7 +84,7 @@ export class ZLinkLocationLifecycle {
   trackExecution(
     owner: object,
     steadyReady: () => boolean,
-    discard: (error: unknown) => void
+    discard: (error: unknown) => void | Promise<void>
   ): void {
     this.runtime.trackExecution?.(owner, steadyReady, discard, (reference) =>
       this.captureRecovery(reference)
@@ -249,7 +250,7 @@ export class ZLinkLocationLifecycle {
     authority: ZLinkAuthoritySnapshot,
     expected?: ZLinkRecoveryAuthorityFence
   ): void {
-    if (expected !== undefined && !sameRecoveryIncarnation(authority, expected)) return;
+    if (expected !== undefined && !sameAuthorityIncarnation(authority, expected)) return;
     const kind = authority.allocation.objectKind;
     if (kind === 'actor') {
       const identity = decodeActorAuthorityIdentity(authority.payload, authority.objectGeneration);
@@ -273,8 +274,12 @@ export class ZLinkLocationLifecycle {
   private captureRecovery(reference: WeakRef<object>): ZLinkExecutionRecovery | undefined {
     const execution = reference.deref();
     if (execution === undefined) return undefined;
-    const tracked =
-      this.actorClaims.recoveryAuthority(execution) ?? this.spotClaims.recoveryAuthority(execution);
+    const actor = this.actorClaims.recoveryAuthority(execution);
+    const tracked = actor ?? this.spotClaims.recoveryAuthority(execution);
+    const identity =
+      actor === undefined
+        ? undefined
+        : decodeActorAuthorityIdentity(actor.fence.payload, actor.fence.objectGeneration);
     const key = tracked?.key;
     const snapshot = tracked?.fence;
     const fence =
@@ -299,12 +304,18 @@ export class ZLinkLocationLifecycle {
     return {
       key,
       meshName: fence.allocation.descriptor.meshName,
+      memberOf:
+        identity?.spotKind === ZLinkSpotKind.User
+          ? { spotId: identity.spotId, objectGeneration: identity.spotGeneration }
+          : undefined,
       incarnation: fence,
+      cleanup: async (owner, signal) =>
+        (await store.cleanupDiscardedAuthority?.(key, fence, owner, signal)) ?? false,
       run: async (owner, canSubmit, signal) => {
         const current = await store.readAuthority(key, signal);
         const original =
           current.kind === 'snapshot' &&
-          sameRecoveryIncarnation(current, fence) &&
+          sameAuthorityIncarnation(current, fence) &&
           current.storeVersion.value === fence.storeVersion.value &&
           current.ownerLeaseGeneration === fence.ownerLeaseGeneration;
         if (submission === undefined) {
@@ -354,7 +365,7 @@ export class ZLinkLocationLifecycle {
         }
         if (
           confirmed.kind !== 'snapshot' ||
-          !sameRecoveryIncarnation(confirmed, fence) ||
+          !sameAuthorityIncarnation(confirmed, fence) ||
           confirmed.ownerLeaseGeneration !== submitted.owner.leaseGeneration
         ) {
           if (failure !== undefined) throw failure;
@@ -369,7 +380,7 @@ export class ZLinkLocationLifecycle {
         if (
           currentTracked === undefined ||
           currentTracked.key.value !== key.value ||
-          !sameRecoveryIncarnation(confirmed, currentTracked.fence)
+          !sameAuthorityIncarnation(confirmed, currentTracked.fence)
         )
           return false;
         if (currentTracked.fence.ownerLeaseGeneration === submitted.owner.leaseGeneration)
@@ -400,32 +411,5 @@ export class ZLinkLocationLifecycle {
   }
 }
 
-export type ZLinkRecoveryAuthorityFence = Pick<
-  ZLinkAuthoritySnapshot,
-  | 'storeVersion'
-  | 'ownerId'
-  | 'ownerLeaseGeneration'
-  | 'objectGeneration'
-  | 'authorityOwnerGeneration'
-> & {
-  readonly allocation: Pick<
-    ZLinkAuthoritySnapshot['allocation'],
-    'descriptor' | 'descriptorLifecycleGeneration'
-  >;
-};
-
-function sameRecoveryIncarnation(
-  current: ZLinkAuthoritySnapshot,
-  fence: ZLinkRecoveryAuthorityFence
-): boolean {
-  return (
-    current.allocation.state === 'active' &&
-    current.ownerId === fence.ownerId &&
-    current.objectGeneration === fence.objectGeneration &&
-    current.authorityOwnerGeneration === fence.authorityOwnerGeneration &&
-    current.allocation.descriptor.meshName === fence.allocation.descriptor.meshName &&
-    routingIdsEqual(current.allocation.descriptor.rid, fence.allocation.descriptor.rid) &&
-    current.allocation.descriptorLifecycleGeneration ===
-      fence.allocation.descriptorLifecycleGeneration
-  );
-}
+export type ZLinkRecoveryAuthorityFence = ZLinkDiscardedAuthorityFence &
+  Pick<ZLinkAuthoritySnapshot, 'storeVersion'>;

@@ -40,6 +40,24 @@ internal sealed class ZLinkRuntimeErrorSink : IZLinkRuntimeFailureReporter, IDis
         NotifyUnhandledCallbackException(exception);
     }
 
+    /// <summary>
+    /// Binds runtime task failure reporting to the current generation's subscribers, so a
+    /// report that follows this generation's cleanup still reaches them.
+    /// </summary>
+    public Action<string, Exception> CaptureRuntimeTaskReporter()
+    {
+        var callback = _unhandledCallbackException;
+        return (taskName, exception) =>
+        {
+            ZLinkFrameworkDebugLog.TaskFailure(taskName, exception);
+            try
+            {
+                callback?.Invoke(exception);
+            }
+            catch { }
+        };
+    }
+
     public Action<Exception> CaptureGenerationReporter()
     {
         var callback = _unhandledCallbackException;

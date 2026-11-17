@@ -5858,9 +5858,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
             DefaultSpotContext context) {
         if (userSpotLocationRuntime == null) return null;
-        return userSpotLocationRuntime.execution(
-                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
-                        context.spotId()),
+        return userSpotLocationRuntime.executionAsync(
+                () ->
+                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                                context.spotId()),
                 context::steady,
                 snapshot ->
                         context.serials.spotQueue.enqueueLifecycleBarrier(
@@ -5870,9 +5871,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 }),
                 () -> null,
                 () -> {
-                    actorAdmissions.discardLocalMembers(context.spot());
-                    context.serials.discardApplications();
-                    spotLifecycle.discardExecution(context);
+                    return context.serials
+                            .discardApplications()
+                            .thenCompose(
+                                    ignored -> actorAdmissions.discardTargetJoins(context.spot()))
+                            .thenCompose(
+                                    ignored ->
+                                            context.awaitAllLanes(
+                                                    ZLinkSerialExecutionQueue.Quiescence.ALL))
+                            .thenCompose(
+                                    ignored -> actorAdmissions.discardLocalMembers(context.spot()))
+                            .thenCompose(ignored -> spotLifecycle.discardExecution(context));
                 });
     }
 
