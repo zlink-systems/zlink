@@ -35,7 +35,22 @@ function descriptor(nodeRoutingId) {
 
 function fixture(deferred, options = {}) {
   const sent = [];
+  const admissionRecords = [];
   const received = [];
+  function recordSend(parts) {
+    const command = wire.decodeHeader(parts[0]).command;
+    sent.push(command);
+    if ([
+      wire.M6aServiceWireCommand.hello,
+      wire.M6aServiceWireCommand.admit,
+      wire.M6aServiceWireCommand.update
+    ].includes(command)) {
+      admissionRecords.push({
+        command, descriptor: wire.decodeRouteMeshAdmission(parts[0], command, 'local')
+      });
+    }
+    return command;
+  }
   let complete;
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor('local'),
@@ -52,9 +67,12 @@ function fixture(deferred, options = {}) {
           bind() {},
           localEndpoint: () => descriptor('local').advertisedEndpoint,
           routesSnapshot: () => options.routes ?? [{ routingId: 'peer', routeGeneration: 11n }],
+          async send(target, parts) {
+            recordSend(parts);
+            return true;
+          },
           submitSend(target, parts) {
-            const command = wire.decodeHeader(parts[0]).command;
-            sent.push(command);
+            const command = recordSend(parts);
             if (deferred && command === wire.M6aServiceWireCommand.hello) {
               return {
                 result: SubmitResult.Backpressured,
@@ -75,6 +93,7 @@ function fixture(deferred, options = {}) {
   runtime.start();
   return {
     runtime,
+    admissionRecords,
     hellos: () => sent.filter((command) => command === wire.M6aServiceWireCommand.hello).length,
     async completeHello() {
       complete?.();
@@ -207,6 +226,29 @@ test('route observation submits one initial HELLO per selected generation before
     assert.equal(f.hellos(), 2, 'replacement begins a new handshake immediately');
     await f.runtime.observeSelectedRoutes();
     assert.equal(f.hellos(), 2);
+  } finally {
+    f.runtime.close();
+  }
+});
+
+test('route admission keeps the first descriptor across publication until remote ADMIT', async (t) => {
+  t.mock.method(performance, 'now', () => 1000);
+  const f = fixture(false);
+  try {
+    await f.runtime.observeSelectedRoutes();
+    const initial = f.admissionRecords[0].descriptor;
+    await f.receive(wire.M6aServiceWireCommand.hello);
+    await f.runtime.updateLocalDescriptor({ placementWeight: 101 });
+    f.runtime.announcePeer('peer');
+    await f.receive(wire.M6aServiceWireCommand.hello);
+    const admission = f.admissionRecords.filter(({ command }) => command !== wire.M6aServiceWireCommand.update);
+    assert.ok(admission.some(({ command }) => command === wire.M6aServiceWireCommand.hello));
+    assert.ok(admission.some(({ command }) => command === wire.M6aServiceWireCommand.admit));
+    assert.equal(admission.length, 4);
+    for (const record of admission) assert.deepEqual(record.descriptor, initial);
+    await f.receive(wire.M6aServiceWireCommand.admit);
+    assert.equal(f.admissionRecords.at(-1).command, wire.M6aServiceWireCommand.update);
+    assert.equal(f.admissionRecords.at(-1).descriptor.descriptorRevision, initial.descriptorRevision + 1n);
   } finally {
     f.runtime.close();
   }
