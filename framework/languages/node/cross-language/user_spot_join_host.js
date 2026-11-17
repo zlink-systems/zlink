@@ -635,6 +635,19 @@ async function userSpotJoinTarget() {
   );
   installCanonicalReceiverProbe(app);
   const spots = app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false });
+  const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+  let serving = false;
+  for await (const observed of runtime.observe()) {
+    if (observed.status.state === framework.ZLinkFrameworkRuntimeState.Serving) {
+      serving = true;
+      break;
+    }
+    if (observed.status.state === framework.ZLinkFrameworkRuntimeState.Error
+      || observed.status.state === framework.ZLinkFrameworkRuntimeState.Stopped) {
+      throw new Error(`Framework runtime reached ${observed.status.state} before serving`);
+    }
+  }
+  if (!serving) throw new Error('Framework runtime observation ended before serving');
   const created = await spots
     .getOrCreate(spotId, 'cross-lang-relocation-user-spot-type')
     .inMesh(meshName)

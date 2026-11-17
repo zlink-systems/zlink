@@ -296,8 +296,16 @@ wait_for_line() {
   local file="$1"
   local needle="$2"
   local timeout_seconds="${3:-30}"
+  local error_needle="${4:-}"
   local deadline=$((SECONDS + timeout_seconds))
   while ((SECONDS < deadline)); do
+    if [[ -n "${error_needle}" ]] \
+      && [[ -f "${file}" ]] \
+      && grep -qF -- "${error_needle}" "${file}"; then
+      echo "failed while waiting for '${needle}' in ${file}" >&2
+      tail -40 "${file}" >&2
+      return 1
+    fi
     if [[ -f "${file}" ]] && grep -qF -- "${needle}" "${file}"; then
       return 0
     fi
@@ -1293,7 +1301,8 @@ outage_command() {
   local prefix="$1" events="$2" run_id="$3" sequence="$4" phase="$5"
   printf '%s\t%s\t%s\n' "${run_id}" "${sequence}" "${phase}" >"${prefix}.next"
   mv "${prefix}.next" "${prefix}.command"
-  wait_for_line "${events}" "outage-ack|run=${run_id}|seq=${sequence}|phase=${phase}" 60
+  wait_for_line "${events}" "outage-ack|run=${run_id}|seq=${sequence}|phase=${phase}" 60 \
+    "outage-error|run=${run_id}|"
 }
 
 start_outage_host() {

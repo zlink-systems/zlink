@@ -436,6 +436,7 @@ internal sealed class UserSpotProbeHandler(TestHostEventSink sink)
 }
 
 internal sealed class UserSpotTargetHostedService(
+    IZLinkFrameworkRuntime runtime,
     IZLinkSpotManager spots,
     IZLinkActorClient actors,
     IZLinkRouteClient routes,
@@ -452,6 +453,27 @@ internal sealed class UserSpotTargetHostedService(
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        var serving = false;
+        await foreach (var observed in runtime.ObserveAsync(cancellationToken))
+        {
+            if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+            {
+                serving = true;
+                break;
+            }
+
+            if (observed.Status.State is ZLinkFrameworkRuntimeState.Error or ZLinkFrameworkRuntimeState.Stopped)
+            {
+                throw new InvalidOperationException(
+                    $"Framework runtime reached {observed.Status.State} before serving."
+                );
+            }
+        }
+        if (!serving)
+        {
+            throw new InvalidOperationException("Framework runtime observation ended before serving.");
+        }
+
         var created = await spots
             .GetOrCreate(spotId, RelocationUserSpot.SpotType)
             .InMesh(meshName)

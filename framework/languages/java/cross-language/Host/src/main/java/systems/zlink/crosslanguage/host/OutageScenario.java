@@ -179,12 +179,27 @@ final class OutageScenario {
                 require(!first.nodeRid().equals(original.allocation().descriptor().rid().toString()),
                     "post-commit reply came from source");
                 require(first.nodeRid().equals(next.nodeRid()), "follow-up reply changed owner");
-                store.observeRelocation(authority());
                 if (!target) {
-                    require(store.relocationSourceLease() == newLease && store.relocationCoordinatorLease() == newLease,
-                        "relocation source/coordinator fence did not use the recovered lease");
-                    sink.append("outage-relocation-fence|sourceLease=" + store.relocationSourceLease()
-                        + "|coordinatorLease=" + store.relocationCoordinatorLease());
+                    require(store.relocationObserved(), "PREPARE relocation source/coordinator fence was not observed");
+                    require(store.relocationSourceOwner().equals(original.ownerId())
+                            && store.relocationCoordinatorOwner().equals(original.ownerId())
+                            && store.relocationSourceLease() == newLease
+                            && store.relocationCoordinatorLease() == newLease,
+                        "PREPARE relocation fence mismatch: sourceOwner=" + store.relocationSourceOwner()
+                            + "|sourceLease=" + store.relocationSourceLease()
+                            + "|coordinatorOwner=" + store.relocationCoordinatorOwner()
+                            + "|coordinatorLease=" + store.relocationCoordinatorLease()
+                            + "|expectedOwner=" + original.ownerId() + "|expectedLease=" + newLease
+                            + "|relocationId=" + store.relocationId()
+                            + "|expectedStoreVersion=" + store.relocationExpectedStoreVersion());
+                    sink.append("outage-relocation-fence|run=" + runId
+                        + "|relocationId=" + store.relocationId()
+                        + "|sourceLease=" + store.relocationSourceLease()
+                        + "|coordinatorLease=" + store.relocationCoordinatorLease()
+                        + "|sourceOwner=" + store.relocationSourceOwner()
+                        + "|coordinatorOwner=" + store.relocationCoordinatorOwner()
+                        + "|expectedStoreVersion=" + store.relocationExpectedStoreVersion()
+                        + "|expectedLease=" + newLease);
                 }
                 sink.append("outage-completed|nodeRid=" + next.nodeRid());
             }

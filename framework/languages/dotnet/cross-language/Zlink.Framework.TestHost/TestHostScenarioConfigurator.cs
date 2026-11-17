@@ -448,6 +448,7 @@ internal static class TestHostScenarioConfigurator
         });
 
         services.AddHostedService(provider => new UserSpotTargetHostedService(
+            provider.GetRequiredService<IZLinkFrameworkRuntime>(),
             provider.GetRequiredService<IZLinkSpotManager>(),
             provider.GetRequiredService<IZLinkActorClient>(),
             provider.GetRequiredService<IZLinkRouteClient>(),

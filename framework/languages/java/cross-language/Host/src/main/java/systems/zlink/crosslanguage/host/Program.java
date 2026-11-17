@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.springframework.beans.factory.ObjectProvider;
@@ -39,6 +40,8 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -52,6 +55,8 @@ import systems.zlink.framework.runtime.internal.locations.CrossLanguageOutageSto
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
@@ -349,6 +354,7 @@ public final class Program {
                     args,
                     sink,
                     observer,
+                    lifecycleProvider.getObject().runtimeBean(),
                     spotsProvider.getObject(),
                     actorClientProvider.getObject(),
                     routeClientProvider.getObject(),
@@ -445,6 +451,7 @@ public final class Program {
         HostArgs args,
         EventSink sink,
         UserSpotJoinObserver observer,
+        ZLinkFrameworkRuntime runtime,
         ZLinkSpotManager spots,
         ZLinkActorClient actorClient,
         ZLinkRouteClient routes,
@@ -455,6 +462,7 @@ public final class Program {
         String actorId = args.option("actor-id", "cross-lang-user-spot-actor");
         String sourceNodeRid = args.option("peer-rid", null);
         try {
+            awaitServing(runtime);
             ZLinkSpotCreateResult created = spots
                 .getOrCreate(spotId, RelocationUserSpot.SPOT_TYPE)
                 .inMesh(meshName)
@@ -489,6 +497,46 @@ public final class Program {
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static void awaitServing(ZLinkFrameworkRuntime runtime)
+            throws InterruptedException, ExecutionException {
+        var serving = new java.util.concurrent.CompletableFuture<Void>();
+        runtime.observe().subscribe(new Flow.Subscriber<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>() {
+            private Flow.Subscription subscription;
+
+            @Override
+            public void onSubscribe(Flow.Subscription value) {
+                subscription = value;
+                value.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> observed) {
+                var state = observed.status().state();
+                if (state == ZLinkFrameworkRuntimeState.SERVING) {
+                    serving.complete(null);
+                    subscription.cancel();
+                } else if (state == ZLinkFrameworkRuntimeState.ERROR
+                        || state == ZLinkFrameworkRuntimeState.STOPPED) {
+                    serving.completeExceptionally(
+                            new IllegalStateException("Framework runtime reached " + state + " before serving"));
+                    subscription.cancel();
+                }
+            }
+
+            @Override
+            public void onError(Throwable failure) {
+                serving.completeExceptionally(failure);
+            }
+
+            @Override
+            public void onComplete() {
+                serving.completeExceptionally(
+                        new IllegalStateException("Framework runtime observation ended before serving"));
+            }
+        });
+        serving.get();
     }
 
     private static void observeSourcePeer(

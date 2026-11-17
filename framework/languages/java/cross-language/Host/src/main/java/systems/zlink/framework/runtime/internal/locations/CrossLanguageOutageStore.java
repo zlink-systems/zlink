@@ -22,6 +22,11 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
     private volatile long preserveLease;
     private volatile long relocationSourceLease;
     private volatile long relocationCoordinatorLease;
+    private volatile String relocationSourceOwner;
+    private volatile String relocationCoordinatorOwner;
+    private volatile String relocationId;
+    private volatile String relocationExpectedStoreVersion;
+    private volatile boolean relocationObserved;
     private final CompletableFuture<Void> failedOperation = new CompletableFuture<>();
     private final CompletableFuture<Void> descriptorSeen = new CompletableFuture<>();
     private final CompletableFuture<Void> casSeen = new CompletableFuture<>();
@@ -58,12 +63,22 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
     public long preserveLease() { return preserveLease; }
     public long relocationSourceLease() { return relocationSourceLease; }
     public long relocationCoordinatorLease() { return relocationCoordinatorLease; }
+    public String relocationSourceOwner() { return relocationSourceOwner; }
+    public String relocationCoordinatorOwner() { return relocationCoordinatorOwner; }
+    public String relocationId() { return relocationId; }
+    public String relocationExpectedStoreVersion() { return relocationExpectedStoreVersion; }
+    public boolean relocationObserved() { return relocationObserved; }
 
     public void observeRelocation(ZLinkAuthoritySnapshot authority) {
         var relocation = ZLinkCanonicalRelocationAuthorityStateCodec.decode(authority.payload());
-        if (relocation != null && relocation.sourceOwnerId().equals(sourceOwnerId)) {
+        if (relocation != null) {
+            relocationId = relocation.aggregateId().toString();
+            relocationSourceOwner = relocation.sourceOwnerId();
             relocationSourceLease = relocation.sourceOwnerLeaseGeneration();
+            relocationCoordinatorOwner = relocation.coordinatorOwnerId();
             relocationCoordinatorLease = relocation.coordinatorLeaseGeneration();
+            relocationExpectedStoreVersion = relocation.coordinatorExpectedStoreVersion();
+            relocationObserved = true;
         }
     }
     public CompletionStage<Void> bothConfirmationsSeen() {
