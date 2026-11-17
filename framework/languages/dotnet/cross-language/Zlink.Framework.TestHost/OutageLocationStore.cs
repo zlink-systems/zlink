@@ -248,6 +248,19 @@ internal sealed class OutageLocationStore(
         return result;
     }
 
+    private string DescribeMutations(ZLinkStoreWriteRequest request) =>
+        string.Join(",", request.Mutations.Select(mutation =>
+        {
+            var key = mutation switch
+            {
+                ZLinkStoreMutation.Put put => put.Key,
+                ZLinkStoreMutation.Delete delete => delete.Key,
+                _ => default,
+            };
+            var name = key == _actorKey ? "actor" : key == _meshKey ? "descriptor" : key == _ownerKey ? "owner" : "other";
+            return $"{mutation.GetType().Name}:{name}";
+        }));
+
     private async Task<ZLinkStoreWriteResult> WriteObservedAsync(
         ZLinkStoreWriteRequest request, double startedMs, CancellationToken cancellationToken)
     {
@@ -261,7 +274,19 @@ internal sealed class OutageLocationStore(
         }
         try
         {
-            var result = await write;
+            ZLinkStoreWriteResult result;
+            try
+            {
+                result = await write;
+            }
+            catch (Exception error) when (source && _recovering)
+            {
+                // Temporary #4609 trail: recovery writes that throw before the Store applies them.
+                _events?.Append($"outage-write|result=exception|mutations={DescribeMutations(request)}|error={error.GetType().Name}:{error.Message}");
+                throw;
+            }
+            if (source && _recovering)
+                _events?.Append($"outage-write|result={result.GetType().Name}|mutations={DescribeMutations(request)}");
             if (source && !_recovering && result is ZLinkStoreWriteResult.Applied)
                 foreach (var put in request.Mutations.OfType<ZLinkStoreMutation.Put>())
                     _successfulWriteStarts.AddOrUpdate(put.Key, startedMs, (_, previous) => Math.Max(previous, startedMs));
