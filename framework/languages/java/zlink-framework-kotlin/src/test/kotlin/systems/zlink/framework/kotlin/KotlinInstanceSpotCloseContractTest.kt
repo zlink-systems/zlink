@@ -29,6 +29,7 @@ import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext
 import systems.zlink.framework.spots.ZLinkSpotClosingContext
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
+import systems.zlink.framework.testsupport.ZLinkHostServing
 
 class KotlinInstanceSpotCloseContractTest {
     @Test
@@ -40,6 +41,8 @@ class KotlinInstanceSpotCloseContractTest {
             val observation = CloseObservation()
             currentObservation = observation
             val options = DefaultZLinkFrameworkOptions()
+            // This case checks closing replay, not the fixed-RID release wait (MeshNode §3.3).
+            options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1))
             options.addLocationStore(ZLinkInMemoryLocationStore())
             options.addRelocationStore(systems.zlink.framework.runtime.InMemoryRelocationStore())
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
@@ -62,6 +65,7 @@ class KotlinInstanceSpotCloseContractTest {
             logger.addHandler(flow)
             try {
                 lifecycle.start()
+                ZLinkHostServing.await(lifecycle.runtimeBean())
                 val outbound =
                     (lifecycle as systems.zlink.framework.channels.ZLinkRouteClient).kotlin()
                 val originalGeneration =

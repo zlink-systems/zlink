@@ -18,6 +18,7 @@ import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.testsupport.ZLinkHostServing;
 import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.time.Duration;

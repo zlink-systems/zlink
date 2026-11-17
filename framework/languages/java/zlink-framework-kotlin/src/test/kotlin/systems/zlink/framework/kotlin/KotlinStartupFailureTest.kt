@@ -1,5 +1,6 @@
 package systems.zlink.framework.kotlin
 
+import java.time.Duration
 import java.util.function.Supplier
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -24,8 +25,9 @@ class KotlinStartupFailureTest {
     fun routingIdConflictFailsContextRefresh() =
         runBlocking<Unit> {
             val store = ZLinkInMemoryProviderLocationStore()
-            context(store, "inproc://kotlin-startup-owner").use { owner ->
-                context(store, "inproc://kotlin-startup-conflict").use { conflict ->
+            val fixedRid = RoutingId.from("kotlin-startup-conflict")
+            context(store, "inproc://kotlin-startup-owner", fixedRid).use { owner ->
+                context(store, "inproc://kotlin-startup-conflict", fixedRid).use { conflict ->
                     owner.refresh()
                     val runtime = owner.getBean(ZLinkFrameworkRuntime::class.java)
                     withTimeout(3000) { runtime.observe().asFlow().first { runtime.isReady } }
@@ -45,6 +47,7 @@ class KotlinStartupFailureTest {
     private fun context(
         store: ZLinkLocationStore,
         endpoint: String,
+        fixedRid: RoutingId? = null,
     ): AnnotationConfigApplicationContext {
         val context = AnnotationConfigApplicationContext()
         context.registerBean(ZLinkLocationStore::class.java, Supplier { store })
@@ -56,10 +59,15 @@ class KotlinStartupFailureTest {
             ZLinkFrameworkConfigurer::class.java,
             Supplier {
                 ZLinkFrameworkConfigurer { options ->
-                    options
-                        .addRouteMesh("startup")
-                        .listen(endpoint)
-                        .setRoutingId(RoutingId.from("kotlin-startup-conflict"))
+                    val mesh = options.addRouteMesh("startup").listen(endpoint)
+                    if (fixedRid != null) {
+                        mesh.setRoutingId(fixedRid)
+                        // Match Java StartupFailureTest: test conflict, not the release wait.
+                        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1))
+                        options
+                            .configureLocations()
+                            .setOwnerLeaseRenewInterval(Duration.ofMillis(100))
+                    }
                 }
             },
         )

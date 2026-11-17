@@ -18,6 +18,7 @@ dependencies {
     testImplementation("systems.zlink:zlink")
     testImplementation(project(":zlink-framework-spring-boot-starter"))
     testImplementation(project(":zlink-framework-testkit"))
+    testImplementation(testFixtures(project(":zlink-framework-core")))
     testImplementation(rootProject.project(":zlink-framework-core").extensions.getByType<SourceSetContainer>()["test"].output)
 }
 
