@@ -42,7 +42,7 @@ test('normalizeNewlines leaves an LF checkout untouched', () => {
 //  다른 계약 test는 줄바꿈이 주제인 바늘을 쓰지 않아 목록에 없다.
 test('sample and cross-language source assertions read through the shared helper', () => {
   const offenders = [];
-  for (const file of ['sample-regression.test.js', 'cross-language-smoke-wrapper.test.js']) {
+  for (const file of ['samples-source-contract.test.js', 'cross-language-smoke-wrapper.test.js']) {
     const source = readSourceText(path.join(contractRoot, file));
     if (source.includes('fs.readFileSync(')) {
       offenders.push(file);
