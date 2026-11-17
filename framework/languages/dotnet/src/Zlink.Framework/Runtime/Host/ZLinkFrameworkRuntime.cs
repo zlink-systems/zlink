@@ -1066,13 +1066,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         )
         {
             EnsureAmbientOperationCurrent(current);
-            if (
-                !(
-                    boundExecution
-                        ? (_locationRuntime?.IsBoundExecutionOpen ?? true)
-                        : IsOwnerAdmissionOpen
-                )
-            )
+            var executionStatus = boundExecution
+                ? _locationRuntime?.GetExecutionStatus(null) ?? ZLinkObjectExecutionStatus.Allowed
+                : ZLinkObjectExecutionStatus.Allowed;
+            if (executionStatus == ZLinkObjectExecutionStatus.Paused)
+                return ValueTask.FromResult(ZLinkRuntimeOperationAdmission.Refused);
+            if (!(boundExecution ? executionStatus == ZLinkObjectExecutionStatus.Allowed : IsOwnerAdmissionOpen))
                 throw NotAcceptingOperations("owner admission is closed");
             return countAsRequest
                 ? AdmitNestedRequestAsync()
@@ -1103,7 +1102,13 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 //  shutdown) refuses it.
                 if (RefuseClosedApplicationAdmission() is not null)
                     return null;
-                return AdmitOperationOnLane(countAsRequest, boundExecution);
+                var executionStatus = boundExecution
+                    ? _locationRuntime?.GetExecutionStatus(null) ?? ZLinkObjectExecutionStatus.Allowed
+                    : ZLinkObjectExecutionStatus.Allowed;
+                if (executionStatus == ZLinkObjectExecutionStatus.Paused)
+                    return null;
+                return AdmitOperationOnLane(countAsRequest,
+                    boundExecution ? executionStatus == ZLinkObjectExecutionStatus.Allowed : IsOwnerAdmissionOpen);
             })
             .ConfigureAwait(false);
         return admitted is null
@@ -1821,7 +1826,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     /// </summary>
     private ZLinkFrameworkComponentState AdmitOperationOnLane(
         bool countAsRequest,
-        bool? boundExecution = null
+        bool? ownerAdmissionOpen = null
     )
     {
         var phase = (ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase);
@@ -1838,10 +1843,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             {
                 Origin = ZLinkErrorOrigin.Framework,
             };
-        if (
-            boundExecution is { } bound
-            && !(bound ? (_locationRuntime?.IsBoundExecutionOpen ?? true) : IsOwnerAdmissionOpen)
-        )
+        if (ownerAdmissionOpen == false)
             throw NotAcceptingOperations("owner admission is closed");
         _activeOperations++;
         _operationEpoch++;

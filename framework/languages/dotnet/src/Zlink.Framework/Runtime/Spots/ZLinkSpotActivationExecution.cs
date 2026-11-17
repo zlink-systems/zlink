@@ -2811,11 +2811,9 @@ internal abstract partial class ZLinkSpotActivation
         ).EnterInbound();
         if (!operationAdmission.Accepted)
         {
-            // Host admission or the owner fence can close before this Spot
-            // reaches its relocation turn. Keep the exact tick pending for
-            // the Spot snapshot instead of reporting an application handler
-            // failure.
-            _timers.FreezeForApplicationAdmissionSeal();
+            // Admission may close temporarily or for lifecycle cleanup. A false
+            // result keeps the exact tick pending under the timer's existing
+            // schedule; the lifecycle boundary owns freezing and disposal.
             return false;
         }
         using (operationAdmission.Lease)

@@ -266,7 +266,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
 
         if (countAsPendingRequest)
             _pendingRequests--;
-        waiter.Dispose();
+        waiter.DisposeCancellationRegistration();
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.ShuttingDown,
             "Actor dispatch queue is closed."
