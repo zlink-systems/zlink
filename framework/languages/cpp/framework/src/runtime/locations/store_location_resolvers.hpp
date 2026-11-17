@@ -668,9 +668,8 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                   stored_page->next_cursor
                     ? std::optional<std::string_view> (stored_page->next_cursor->encoded ())
                     : std::nullopt;
-                if (encoded_object_page_size (candidate_items_bytes, output.items.size () + 1,
-                                              continuation)
-                    > 4u * 1024u * 1024u) {
+                if (!encoded_object_page_fits (candidate_items_bytes, output.items.size () + 1,
+                                               continuation)) {
                     if (output.items.empty ())
                         co_return co_await unavailable<location_page_t<location_object_entry_t>> (
                           "Location Store encoded object entry exceeds 4 MiB");
@@ -692,11 +691,9 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                           "Location Store object scan cursor expired");
                     cursor = consumed_page->next_cursor;
                 }
-                while (
-                  encoded_object_page_size (
-                    encoded_items_bytes, output.items.size (),
-                    cursor ? std::optional<std::string_view> (cursor->encoded ()) : std::nullopt)
-                  > 4u * 1024u * 1024u) {
+                while (!encoded_object_page_fits (
+                  encoded_items_bytes, output.items.size (),
+                  cursor ? std::optional<std::string_view> (cursor->encoded ()) : std::nullopt)) {
                     const auto entry_bytes = encoded_object_size (output.items.back ());
                     output.items.pop_back ();
                     encoded_items_bytes -= entry_bytes;
@@ -811,14 +808,15 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                + json_string_size (entry.stable_type) + 1;
     }
 
-    static std::size_t encoded_object_page_size (std::size_t encoded_items_bytes,
-                                                 std::size_t item_count,
-                                                 std::optional<std::string_view> continuation_token)
+    static bool encoded_object_page_fits (std::size_t encoded_items_bytes,
+                                          std::size_t item_count,
+                                          std::optional<std::string_view> continuation_token)
     {
         return std::string_view ("{\"items\":[").size () + encoded_items_bytes
-               + (item_count == 0 ? 0 : item_count - 1)
-               + std::string_view ("],\"continuationToken\":").size ()
-               + (continuation_token ? json_string_size (*continuation_token) : 4) + 1;
+                 + (item_count == 0 ? 0 : item_count - 1)
+                 + std::string_view ("],\"continuationToken\":").size ()
+                 + (continuation_token ? json_string_size (*continuation_token) : 4) + 1
+               <= 4u * 1024u * 1024u;
     }
 
     static bool matches (const authority_snapshot_t &snapshot,

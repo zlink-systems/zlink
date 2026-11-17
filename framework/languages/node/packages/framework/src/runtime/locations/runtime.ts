@@ -1560,10 +1560,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         const entryBytes = this.encodedObjectSize(projected);
         const candidateItemsBytes = encodedItemsBytes + entryBytes;
         const continuation = result.nextCursor?.encoded;
-        if (
-          this.encodedObjectPageSize(candidateItemsBytes, items.length + 1, continuation) >
-          4 * 1024 * 1024
-        ) {
+        if (!this.encodedObjectPageFits(candidateItemsBytes, items.length + 1, continuation)) {
           if (items.length === 0)
             throw new Error('The encoded object location entry exceeds 4 MiB.');
           break;
@@ -1586,10 +1583,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
             throw new Error('The authority query snapshot expired.');
           cursor = consumed.nextCursor;
         }
-        while (
-          this.encodedObjectPageSize(encodedItemsBytes, items.length, cursor?.encoded) >
-          4 * 1024 * 1024
-        ) {
+        while (!this.encodedObjectPageFits(encodedItemsBytes, items.length, cursor?.encoded)) {
           encodedItemsBytes -= this.encodedObjectSize(items.pop()!);
           const position = itemRows.pop()!;
           if (items.length === 0)
@@ -1617,20 +1611,21 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
   }
 
-  private encodedObjectPageSize(
+  private encodedObjectPageFits(
     encodedItemsBytes: number,
     itemCount: number,
     continuationToken: string | undefined
-  ): number {
+  ): boolean {
     return (
       Buffer.byteLength('{"items":[') +
-      encodedItemsBytes +
-      Math.max(0, itemCount - 1) +
-      Buffer.byteLength(']') +
-      (continuationToken === undefined
-        ? 0
-        : Buffer.byteLength(`,"continuationToken":${JSON.stringify(continuationToken)}`)) +
-      1
+        encodedItemsBytes +
+        Math.max(0, itemCount - 1) +
+        Buffer.byteLength(']') +
+        (continuationToken === undefined
+          ? 0
+          : Buffer.byteLength(`,"continuationToken":${JSON.stringify(continuationToken)}`)) +
+        1 <=
+      4 * 1024 * 1024
     );
   }
 

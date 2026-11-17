@@ -188,7 +188,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
             List<BatchPosition> itemPositions) {
         return stores.unifiedStore()
                 .list(prefix, cursor, pageSize - values.size(), OPEN)
-                .thenCompose(
+                .thenComposeAsync(
                         page -> {
                             if (!(page instanceof ZLinkAuthorityPage batch))
                                 return CompletableFuture.failedFuture(
@@ -242,13 +242,10 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                                                         int candidateItemsBytes =
                                                                                 bytes[0]
                                                                                         + entryBytes;
-                                                                        if (encodedObjectPageBytes(
-                                                                                        candidateItemsBytes,
-                                                                                        values
-                                                                                                        .size()
-                                                                                                + 1,
-                                                                                        continuation)
-                                                                                > MAX_OBJECT_PAGE_BYTES)
+                                                                        if (!encodedObjectPageFits(
+                                                                                candidateItemsBytes,
+                                                                                values.size() + 1,
+                                                                                continuation))
                                                                             return used;
                                                                         values.add(projected);
                                                                         itemPositions.add(
@@ -284,7 +281,10 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                                                     return CompletableFuture
                                                                             .failedFuture(
                                                                                     new IllegalStateException(
-                                                                                            "location scan cursor expired"));
+                                                                                            "location"
+                                                                                                    + " scan"
+                                                                                                    + " cursor"
+                                                                                                    + " expired"));
                                                                 return fitObjectPage(
                                                                         prefix,
                                                                         values,
@@ -326,7 +326,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
             Optional<ZLinkAuthorityScanCursor> finalCursor,
             Optional<ZLinkAuthorityScanCursor> batchStart) {
         String token = finalCursor.map(next -> encodeCursor(next.encoded())).orElse(null);
-        if (encodedObjectPageBytes(encodedBytes, values.size(), token) <= MAX_OBJECT_PAGE_BYTES)
+        if (encodedObjectPageFits(encodedBytes, values.size(), token))
             return CompletableFuture.completedFuture(
                     new ZLinkLocationPage<>(List.copyOf(values), token));
         if (itemPositions.isEmpty())
@@ -341,36 +341,40 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         if (values.isEmpty())
             return CompletableFuture.failedFuture(
                     new IllegalStateException("encoded object location entry exceeds 4 MiB"));
-        if (position.rows() == 1)
-            return fitObjectPage(
-                    prefix, values, remainingBytes, itemPositions, position.start(), batchStart);
-        return stores.unifiedStore()
-                .list(prefix, position.start(), position.rows() - 1, OPEN)
-                .thenCompose(
-                        read -> {
-                            if (!(read instanceof ZLinkAuthorityPage page))
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException("location scan cursor expired"));
-                            return fitObjectPage(
-                                    prefix,
-                                    values,
-                                    remainingBytes,
-                                    itemPositions,
-                                    page.nextCursor(),
-                                    batchStart);
-                        });
+        CompletionStage<Optional<ZLinkAuthorityScanCursor>> priorCursor =
+                position.rows() == 1
+                        ? CompletableFuture.completedFuture(position.start())
+                        : stores.unifiedStore()
+                                .list(prefix, position.start(), position.rows() - 1, OPEN)
+                                .thenApply(
+                                        read -> {
+                                            if (!(read instanceof ZLinkAuthorityPage page))
+                                                throw new IllegalStateException(
+                                                        "location scan cursor expired");
+                                            return page.nextCursor();
+                                        });
+        return priorCursor.thenComposeAsync(
+                previous ->
+                        fitObjectPage(
+                                prefix,
+                                values,
+                                remainingBytes,
+                                itemPositions,
+                                previous,
+                                batchStart));
     }
 
     private record BatchPosition(Optional<ZLinkAuthorityScanCursor> start, int rows) {}
 
-    static int encodedObjectPageBytes(
+    static boolean encodedObjectPageFits(
             int encodedItemsBytes, int itemCount, String continuationToken) {
         return "{\"items\":[".getBytes(StandardCharsets.UTF_8).length
-                + encodedItemsBytes
-                + Math.max(0, itemCount - 1)
-                + "],\"continuationToken\":".getBytes(StandardCharsets.UTF_8).length
-                + (continuationToken == null ? 4 : jsonStringBytes(continuationToken))
-                + 1;
+                        + encodedItemsBytes
+                        + Math.max(0, itemCount - 1)
+                        + "],\"continuationToken\":".getBytes(StandardCharsets.UTF_8).length
+                        + (continuationToken == null ? 4 : jsonStringBytes(continuationToken))
+                        + 1
+                <= MAX_OBJECT_PAGE_BYTES;
     }
 
     static int encodedObjectBytes(ZLinkLocationObjectEntry object) {
@@ -509,7 +513,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         return stores.unifiedStore()
                 .listMeshNodes(
                         meshName, new ZLinkPageRequest(DESCRIPTOR_SCAN_PAGE_ITEMS, continuation))
-                .thenCompose(
+                .thenComposeAsync(
                         page ->
                                 scanTopologyItems(
                                         meshes,
@@ -556,7 +560,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         }
         ZLinkMeshNodeDescriptor node = page.items().get(itemIndex);
         return liveRows.ownerLeaseRemaining(node.ownerId(), node.leaseGeneration())
-                .thenCompose(
+                .thenComposeAsync(
                         remaining -> {
                             ZLinkLocationTopologyEntry entry =
                                     new ZLinkLocationTopologyEntry(
@@ -621,7 +625,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         return stores.unifiedStore()
                 .listMeshNodes(
                         meshName, new ZLinkPageRequest(DESCRIPTOR_SCAN_PAGE_ITEMS, continuation))
-                .thenCompose(page -> scanServiceSummaryItems(meshes, meshIndex, page, 0, grouped));
+                .thenComposeAsync(
+                        page -> scanServiceSummaryItems(meshes, meshIndex, page, 0, grouped));
     }
 
     private CompletionStage<Map<String, MutableSummary>> scanServiceSummaryItems(
@@ -637,7 +642,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         }
         ZLinkMeshNodeDescriptor node = page.items().get(itemIndex);
         return liveRows.ownerLeaseRemaining(node.ownerId(), node.leaseGeneration())
-                .thenCompose(
+                .thenComposeAsync(
                         remaining -> {
                             grouped.computeIfAbsent(
                                             node.meshName(), ignored -> new MutableSummary())

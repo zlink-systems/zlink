@@ -372,10 +372,17 @@ public sealed class LocationRuntimeQueryTests
                 ObjectPageJsonOptions
             );
             var calculatedItemsBytes = page.Items.Sum(ZLinkLocationObjectQuery.EncodedObjectSize);
-            Assert.Equal(
-                encodedPage.Length,
-                ZLinkLocationObjectQuery.EncodedPageSize(
-                    calculatedItemsBytes,
+            var boundaryItemsBytes = calculatedItemsBytes + 4 * 1024 * 1024 - encodedPage.Length;
+            Assert.True(
+                ZLinkLocationObjectQuery.EncodedPageFits(
+                    boundaryItemsBytes,
+                    page.Items.Count,
+                    page.ContinuationToken
+                )
+            );
+            Assert.False(
+                ZLinkLocationObjectQuery.EncodedPageFits(
+                    boundaryItemsBytes + 1,
                     page.Items.Count,
                     page.ContinuationToken
                 )

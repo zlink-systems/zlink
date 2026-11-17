@@ -562,10 +562,16 @@ final class ZLinkStoreLocationResolversTest {
                             page.items().stream()
                                     .mapToInt(ZLinkLocationRuntimeQueryService::encodedObjectBytes)
                                     .sum();
-                    assertEquals(
-                            actualPageBytes,
-                            ZLinkLocationRuntimeQueryService.encodedObjectPageBytes(
-                                    calculatedItemsBytes,
+                    int boundaryItemsBytes =
+                            calculatedItemsBytes + 4 * 1024 * 1024 - actualPageBytes;
+                    assertTrue(
+                            ZLinkLocationRuntimeQueryService.encodedObjectPageFits(
+                                    boundaryItemsBytes,
+                                    page.items().size(),
+                                    page.continuationToken()));
+                    assertFalse(
+                            ZLinkLocationRuntimeQueryService.encodedObjectPageFits(
+                                    boundaryItemsBytes + 1,
                                     page.items().size(),
                                     page.continuationToken()));
                     assertTrue(actualPageBytes <= 4 * 1024 * 1024);
@@ -866,6 +872,65 @@ final class ZLinkStoreLocationResolversTest {
             assertEquals(1, page.items().size());
             assertNull(page.continuationToken());
             assertEquals(2, scans.get());
+        }
+    }
+
+    @Test
+    void objectQueryContinuesPastTenThousandSynchronouslyCompletedPages() {
+        var scans = new AtomicInteger();
+        ZLinkLocationRepository store =
+                repository(
+                        (method, arguments) ->
+                                switch (method) {
+                                    case "list" -> {
+                                        int index = scans.getAndIncrement();
+                                        assertEquals(
+                                                index == 0
+                                                        ? Optional.empty()
+                                                        : Optional.of(
+                                                                new ZLinkAuthorityScanCursor(
+                                                                        Integer.toString(index))),
+                                                arguments[1]);
+                                        yield CompletableFuture.completedFuture(
+                                                index < 10001
+                                                        ? new ZLinkAuthorityPage(
+                                                                List.of(),
+                                                                Optional.of(
+                                                                        new ZLinkAuthorityScanCursor(
+                                                                                Integer.toString(
+                                                                                        index
+                                                                                                + 1))))
+                                                        : new ZLinkAuthorityPage(
+                                                                List.of(
+                                                                        new ZLinkAuthorityEntry(
+                                                                                ZLinkAuthorityKeyCodec
+                                                                                        .spot(
+                                                                                                "room"),
+                                                                                readySpotSnapshot())),
+                                                                Optional.empty()));
+                                    }
+                                    case "readOwnerLease" ->
+                                            CompletableFuture.completedFuture(
+                                                    new ZLinkOwnerLeaseMissing());
+                                    default -> throw new UnsupportedOperationException(method);
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            var page =
+                    query.listObjectLocations(
+                                    ZLinkLocationObjectFilter.of(
+                                            ZLinkPlacementObjectKind.USER_SPOT),
+                                    ZLinkPageRequest.firstPage())
+                            .toCompletableFuture()
+                            .join();
+            assertEquals(1, page.items().size());
+            assertNull(page.continuationToken());
+            assertEquals(10002, scans.get());
+            assertEquals("room", page.items().getFirst().globalId());
         }
     }
 
@@ -1456,6 +1521,108 @@ final class ZLinkStoreLocationResolversTest {
                         live.rid(),
                         live.endpoint());
         assertEquals("self", ZLinkAutoConnectPlanner.decideAll(self, peers).get(0).skipReason());
+    }
+
+    @Test
+    void topologyQueryContinuesPastTenThousandSynchronouslyCompletedPages() {
+        assertSynchronousDescriptorQuery(false, 10001, 1);
+    }
+
+    @Test
+    void serviceSummaryQueryContinuesPastTenThousandSynchronouslyCompletedPages() {
+        assertSynchronousDescriptorQuery(true, 10001, 1);
+    }
+
+    @Test
+    void topologyQueryProjectsOneThousandSynchronouslyCompletedRows() {
+        assertSynchronousDescriptorQuery(false, 0, 1000);
+    }
+
+    @Test
+    void serviceSummaryQueryProjectsOneThousandSynchronouslyCompletedRows() {
+        assertSynchronousDescriptorQuery(true, 0, 1000);
+    }
+
+    private static void assertSynchronousDescriptorQuery(
+            boolean summaries, int emptyPages, int rowCount) {
+        var scans = new AtomicInteger();
+        var leaseReads = new AtomicInteger();
+        var rows =
+                java.util.stream.IntStream.range(0, rowCount)
+                        .mapToObj(
+                                index ->
+                                        meshNodeDescriptor(
+                                                "mesh",
+                                                RoutingId.from("node-" + index),
+                                                "owner-" + index))
+                        .toList();
+        var store =
+                repository(
+                        (method, arguments) ->
+                                switch (method) {
+                                    case "listMeshNodes" -> {
+                                        assertEquals("mesh", arguments[0]);
+                                        int index = scans.getAndIncrement();
+                                        var request = (ZLinkPageRequest) arguments[1];
+                                        assertEquals(1000, request.pageSize());
+                                        assertEquals(
+                                                index == 0 ? null : Integer.toString(index),
+                                                request.continuationToken());
+                                        yield CompletableFuture.completedFuture(
+                                                new ZLinkLocationPage<>(
+                                                        index < emptyPages ? List.of() : rows,
+                                                        index < emptyPages
+                                                                ? Integer.toString(index + 1)
+                                                                : null));
+                                    }
+                                    case "readOwnerLease" -> {
+                                        leaseReads.incrementAndGet();
+                                        yield CompletableFuture.completedFuture(
+                                                new ZLinkOwnerLeaseMissing());
+                                    }
+                                    default -> throw new UnsupportedOperationException(method);
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            if (summaries) {
+                var result =
+                        query.listServiceSummaries(
+                                        new ZLinkLocationServiceSummaryFilter("mesh"),
+                                        new ZLinkPageRequest(1000, null))
+                                .toCompletableFuture()
+                                .join();
+                assertEquals(1, result.items().size());
+                var summary = result.items().getFirst();
+                assertEquals("mesh", summary.meshName());
+                assertEquals(rowCount, summary.totalCount());
+                assertEquals(rowCount, summary.stoppedCount());
+                assertEquals(0, summary.readyCount());
+                assertEquals(0, summary.errorCount());
+                assertEquals(NOW, summary.lastUpdatedAt());
+                assertNull(result.continuationToken());
+            } else {
+                var result =
+                        query.listTopology(
+                                        new ZLinkLocationTopologyFilter("mesh", null, null),
+                                        new ZLinkPageRequest(1000, null))
+                                .toCompletableFuture()
+                                .join();
+                assertEquals(
+                        rows.stream().map(ZLinkMeshNodeDescriptor::rid).toList(),
+                        result.items().stream().map(ZLinkLocationTopologyEntry::nodeRid).toList());
+                assertTrue(
+                        result.items().stream()
+                                .allMatch(
+                                        entry -> entry.state() == ZLinkLocationTopologyState.LOST));
+                assertNull(result.continuationToken());
+            }
+            assertEquals(emptyPages + 1, scans.get());
+            assertEquals(rowCount, leaseReads.get());
+        }
     }
 
     private static ZLinkMeshNodeDescriptor meshNodeDescriptor(

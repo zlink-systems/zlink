@@ -75,11 +75,11 @@ struct store_location_runtime_query_test_access_t
         return store_location_runtime_query_t::encoded_object_size (entry);
     }
 
-    static std::size_t encoded_object_page_size (std::size_t items_bytes,
-                                                 std::size_t item_count,
-                                                 std::optional<std::string_view> continuation_token)
+    static bool encoded_object_page_fits (std::size_t items_bytes,
+                                          std::size_t item_count,
+                                          std::optional<std::string_view> continuation_token)
     {
-        return store_location_runtime_query_t::encoded_object_page_size (items_bytes, item_count,
+        return store_location_runtime_query_t::encoded_object_page_fits (items_bytes, item_count,
                                                                          continuation_token);
     }
 };
@@ -3460,10 +3460,14 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ObjectLocationPagesFollowSharedFixtu
                        token}}.dump ();
                     const auto token_view =
                       token ? std::optional<std::string_view> (*token) : std::nullopt;
-                    const auto calculated =
-                      zlink::framework::runtime::store_location_runtime_query_test_access_t::
-                        encoded_object_page_size (encoded_items_bytes, items.size (), token_view);
-                    EXPECT_EQ (encoded.size (), calculated);
+                    const auto boundary_items_bytes =
+                      encoded_items_bytes + 4u * 1024u * 1024u - encoded.size ();
+                    using access =
+                      zlink::framework::runtime::store_location_runtime_query_test_access_t;
+                    EXPECT_TRUE (access::encoded_object_page_fits (boundary_items_bytes,
+                                                                   items.size (), token_view));
+                    EXPECT_FALSE (access::encoded_object_page_fits (boundary_items_bytes + 1,
+                                                                    items.size (), token_view));
                     return encoded;
                 };
                 EXPECT_LE (encoded_page (page.items, page.continuation_token).size (),

@@ -103,10 +103,7 @@ internal sealed class ZLinkLocationObjectQuery(
                 var entryBytes = EncodedObjectSize(entry);
                 var candidateItemsBytes = encodedItemsBytes + entryBytes;
                 var continuation = result.Value.NextCursor?.Encoded;
-                if (
-                    EncodedPageSize(candidateItemsBytes, items.Count + 1, continuation)
-                    > MaximumEncodedPageBytes
-                )
+                if (!EncodedPageFits(candidateItemsBytes, items.Count + 1, continuation))
                 {
                     if (items.Count == 0)
                         throw Unavailable(
@@ -136,10 +133,7 @@ internal sealed class ZLinkLocationObjectQuery(
                         throw Unavailable("The object location continuation token expired.");
                     cursor = consumedPage.Value.NextCursor;
                 }
-                while (
-                    EncodedPageSize(encodedItemsBytes, items.Count, cursor?.Encoded)
-                    > MaximumEncodedPageBytes
-                )
+                while (!EncodedPageFits(encodedItemsBytes, items.Count, cursor?.Encoded))
                 {
                     encodedItemsBytes -= EncodedObjectSize(items[^1]);
                     items.RemoveAt(items.Count - 1);
@@ -276,17 +270,18 @@ internal sealed class ZLinkLocationObjectQuery(
             || string.Equals(entry.MeshName, filter.MeshName, StringComparison.Ordinal)
         );
 
-    internal static long EncodedPageSize(
+    internal static bool EncodedPageFits(
         long encodedItemsBytes,
         int itemCount,
         string? continuationToken
     ) =>
         Encoding.UTF8.GetByteCount("{\"items\":[")
-        + encodedItemsBytes
-        + Math.Max(0, itemCount - 1)
-        + Encoding.UTF8.GetByteCount("],\"continuationToken\":")
-        + (continuationToken is null ? 4 : JsonStringSize(continuationToken))
-        + 1;
+            + encodedItemsBytes
+            + Math.Max(0, itemCount - 1)
+            + Encoding.UTF8.GetByteCount("],\"continuationToken\":")
+            + (continuationToken is null ? 4 : JsonStringSize(continuationToken))
+            + 1
+        <= MaximumEncodedPageBytes;
 
     internal static long EncodedObjectSize(ZLinkLocationObjectEntry entry) =>
         Encoding.UTF8.GetByteCount("{\"globalId\":")
