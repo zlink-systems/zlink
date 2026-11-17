@@ -17,6 +17,9 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "../support/scope_exit.hpp"
+#include "../support/manual_internal_scheduler.hpp"
+#include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/execution/serial_application_record.hpp"
 
 #include <gtest/gtest.h>
 
@@ -33,6 +36,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <latch>
 #include <typeinfo>
 #include <utility>
 #include <vector>
@@ -785,6 +789,211 @@ TEST (ZLinkFrameworkApplicationJobQueue, ImmediateLocalRequestPublishesOnItsOwni
         EXPECT_EQ (1u, dispatched);
         EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
         native->close ();
+    }
+}
+
+TEST (ZLinkFrameworkApplicationJobQueue, LocalTerminalCleansAdmissionBeforeContinuation)
+{
+    namespace host = zlink::framework::runtime::host;
+    namespace foundation = zlink::framework::runtime::foundation;
+    for (const bool actor_request : {false, true}) {
+        for (const bool cancel : {false, true}) {
+            auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+            auto native = local_admission_host (queue);
+            auto spot = native->get_or_create_spot ("local-spot");
+            auto actor = native->create_actor ("player", "local-actor");
+            auto held = queue->try_reserve_supply ();
+            ASSERT_TRUE (held);
+            host::pending_operation_t operation;
+            zlink::framework::task_completion_source_t<std::uint64_t> observed;
+            operation.receiver = [queue, &observed] (const auto &) {
+                observed.complete (zlink::framework::result_t<std::uint64_t>::success (
+                  queue->snapshot ().capacity_waiters));
+            };
+            const std::vector<zlink::message_t> parts;
+            const auto submitted =
+              actor_request ? actor
+                                .request_to (actor.ref (), parts, operation,
+                                             zlink::send_flags_t::none, std::chrono::seconds (1))
+                                .result ()
+                                .value ()
+                            : spot
+                                .request_to_spot (native->status ().routing_id (), "local-spot", 1,
+                                                  parts, operation, zlink::send_flags_t::none,
+                                                  std::chrono::seconds (1))
+                                .result ()
+                                .value ();
+            ASSERT_EQ (zlink::submit_result_t::ok, submitted);
+            ASSERT_EQ (1u, queue->snapshot ().capacity_waiters);
+            auto caller = operation.completion->task ();
+            if (cancel)
+                ASSERT_TRUE (native->transport ().fail_local_operation (
+                  operation.id, foundation::operation_terminal_t::cancelled));
+            else
+                EXPECT_EQ (1u, native->transport ()
+                                 .expire_requests (foundation::operation_registry_t::clock_t::now ()
+                                                   + std::chrono::seconds (2))
+                                 .result ()
+                                 .value ());
+            EXPECT_EQ (0u, observed.task ().result ().value ());
+            EXPECT_FALSE (caller.result ());
+            EXPECT_EQ (1u, queue->snapshot ().permits_in_use);
+            held.reset ();
+            native->close ();
+        }
+    }
+}
+
+TEST (ZLinkFrameworkApplicationJobQueue, TerminalReturnsGrantWhilePublicationIsPending)
+{
+    auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+    auto held = queue->try_reserve_supply ();
+    ASSERT_TRUE (held);
+    std::latch granted (1), publish (1);
+    auto registration = queue->register_request_supply (
+      [&] (auto permit) {
+          EXPECT_TRUE (permit);
+          granted.count_down ();
+          publish.wait ();
+          if (permit)
+              EXPECT_FALSE (static_cast<bool> (*permit));
+      },
+      queue_t::origin_t::local);
+    auto lifetime = std::move (registration.waiter);
+    std::thread grant ([&] { held.reset (); });
+    granted.wait ();
+    EXPECT_TRUE (lifetime.cancel ());
+    EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
+    EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+    auto occupied = queue->try_reserve_supply ();
+    EXPECT_TRUE (occupied);
+    publish.count_down ();
+    grant.join ();
+    EXPECT_EQ (1u, queue->snapshot ().permits_in_use);
+    occupied.reset ();
+    EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+}
+
+TEST (ZLinkFrameworkApplicationJobQueue, CallerReturnRacingQueueAdmissionDoesNotRestoreGrant)
+{
+    auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+    for (unsigned i = 0; i != 128; ++i) {
+        std::optional<queue_t::permit_t> accepted;
+        auto registration = queue->register_request_supply (
+          [&] (auto permit) { accepted = std::move (permit); }, queue_t::origin_t::local);
+        auto lifetime = std::move (registration.waiter);
+        queue->deliver_immediate (registration, lifetime);
+        ASSERT_TRUE (accepted);
+        std::latch start (1);
+        std::thread admission ([&] {
+            start.wait ();
+            accepted->mark_queued ();
+        });
+        start.count_down ();
+        EXPECT_TRUE (lifetime.cancel ());
+        admission.join ();
+        EXPECT_FALSE (static_cast<bool> (*accepted));
+        EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+        EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
+        accepted.reset ();
+        EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+    }
+}
+
+TEST (ZLinkFrameworkApplicationJobQueue, QueuedLocalTerminalReturnsPermitBeforeContinuation)
+{
+    namespace rt = zlink::framework::runtime;
+    namespace host = zlink::framework::runtime::host;
+    namespace foundation = zlink::framework::runtime::foundation;
+    for (const bool actor_request : {false, true}) {
+        for (const bool cancel : {false, true}) {
+            auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+            auto native = local_admission_host (queue);
+            auto spot = native->get_or_create_spot ("local-spot");
+            auto actor = native->create_actor ("player", "local-actor");
+            zlink::framework::test::manual_internal_scheduler_t worker;
+            auto target = std::make_shared<rt::serial_execution_queue_t> (worker);
+            rt::serial_execution_queue_t::async_completion_t finish;
+            ASSERT_TRUE (target->try_post_async (
+              "running", [&] (auto complete) { finish = std::move (complete); }));
+            worker.run_all ();
+            ASSERT_TRUE (finish);
+            std::vector<std::string> calls;
+            host::pending_operation_t operation;
+            zlink::framework::task_completion_source_t<std::uint64_t> observed;
+            operation.receiver = [queue, &observed] (const auto &) {
+                observed.complete (zlink::framework::result_t<std::uint64_t>::success (
+                  queue->snapshot ().permits_in_use));
+            };
+            const std::vector<zlink::message_t> parts;
+            const auto submitted =
+              actor_request ? actor
+                                .request_to (actor.ref (), parts, operation,
+                                             zlink::send_flags_t::none, std::chrono::seconds (1))
+                                .result ()
+                                .value ()
+                            : spot
+                                .request_to_spot (native->status ().routing_id (), "local-spot", 1,
+                                                  parts, operation, zlink::send_flags_t::none,
+                                                  std::chrono::seconds (1))
+                                .result ()
+                                .value ();
+            ASSERT_EQ (zlink::submit_result_t::ok, submitted);
+            ASSERT_EQ (1u, queue->snapshot ().permits_in_use);
+            auto caller = operation.completion->task ();
+            if (cancel)
+                ASSERT_TRUE (native->transport ().fail_local_operation (
+                  operation.id, foundation::operation_terminal_t::cancelled));
+            else
+                EXPECT_EQ (1u, native->transport ()
+                                 .expire_requests (foundation::operation_registry_t::clock_t::now ()
+                                                   + std::chrono::seconds (2))
+                                 .result ()
+                                 .value ());
+            EXPECT_EQ (0u, observed.task ().result ().value ());
+            EXPECT_FALSE (caller.result ());
+            EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
+            std::size_t accepted = 0;
+            (void) native
+              ->dispatch_ready (
+                [&] (const auto &, const auto &record, auto, auto permit) {
+                    auto payload = std::make_shared<rt::serial_application_record_t> ();
+                    payload->admission.jobs = queue;
+                    payload->admission.retain_initial (
+                      rt::handler_entry_t (record.before_application_handler, std::move (permit)));
+                    rt::serial_work_options_t options;
+                    options.application_record = payload;
+                    EXPECT_TRUE (target->try_post (
+                      "accepted",
+                      [payload, &calls] {
+                          payload->admission.enter_handler ();
+                          calls.emplace_back ("accepted");
+                      },
+                      options));
+                    ++accepted;
+                },
+                true)
+              .result ()
+              .value ();
+            EXPECT_EQ (1u, accepted);
+            auto occupied = queue->try_reserve_supply ();
+            ASSERT_TRUE (occupied);
+            EXPECT_TRUE (target->try_post ("following", [&] { calls.emplace_back ("following"); }));
+            finish ([] {});
+            worker.run_all ();
+            EXPECT_TRUE (calls.empty ());
+            EXPECT_EQ (1u, queue->snapshot ().capacity_waiters);
+            occupied.reset ();
+            worker.run_all ();
+            EXPECT_EQ (calls, (std::vector<std::string>{"accepted", "following"}));
+            EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+            EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
+            target->close ();
+            worker.run_all ();
+            target->drain ();
+            worker.retire ();
+            native->close ();
+        }
     }
 }
 
