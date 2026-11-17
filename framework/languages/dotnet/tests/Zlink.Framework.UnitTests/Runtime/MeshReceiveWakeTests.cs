@@ -3,6 +3,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Xunit.Abstractions;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
@@ -513,6 +514,40 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             decodedParts,
             part => Assert.Throws<ObjectDisposedException>(() => part.AsReadOnlySpan())
         );
+    }
+
+    [Fact]
+    public async Task Lifecycle_payload_that_parses_as_a_header_counts_all_parts()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "lifecycle-payload-size");
+        using var controlPayload = ZLinkEnvelopeCodec.EncodeHeader(
+            new ZLinkEnvelopeHeader(
+                ZLinkMessageKind.Command,
+                "channel",
+                "message",
+                ZLinkEnvelopeCodec.DefaultContentType,
+                null,
+                null,
+                null,
+                null,
+                null
+            )
+        );
+        var expectedBytes = (ulong)controlPayload.Size;
+
+        node.SetRoutingId(RoutingId.From("lifecycle-payload-size"));
+        node.CreateActor("lifecycle-payload-size-actor", [controlPayload]);
+
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        Assert.Equal(1, ready.Count);
+        using var claim = ready.TakeClaim(0);
+        using var received = new MeshReceiveBatch();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(1, received.Count);
+        Assert.Equal(MeshRecordKind.SpotControl, received[0].Kind);
+        Assert.Equal(expectedBytes, received.GetApplicationPayloadBytes(0));
     }
 
     private static ActorRef CreateRegistrationActor(ZLinkManagedMeshNode node, string actorId)
