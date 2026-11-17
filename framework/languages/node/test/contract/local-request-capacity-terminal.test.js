@@ -76,8 +76,13 @@ function fixture() {
 }
 
 for (const kind of ['spot', 'actor']) {
-  for (const terminal of ['cancel', 'deadline']) {
-    test(`accepted local ${kind} reacquires admission after ${terminal} before running`, async () => {
+  for (const [terminal, scheduling] of [
+    ['cancel', 'default'], ['cancel', 'yield'],
+    ['deadline', 'default'], ['deadline', 'yield']
+  ]) {
+    test(`accepted local ${kind} reacquires admission after ${terminal} before running (${scheduling})`, async t => {
+      let now = performance.now();
+      if (scheduling === 'yield') t.mock.method(performance, 'now', () => now);
       const f = fixture();
       const serial = kind === 'spot'
         ? new framework.ZLinkSpotSerialTurnExecutor()
@@ -93,6 +98,8 @@ for (const kind of ['spot', 'actor']) {
       const calls = [];
       let accepted;
       let occupied;
+      let admitted;
+      const atMailbox = new Promise(resolve => { admitted = resolve; });
       // Hold only target execution; admission and caller completion use the runtime owners.
       f.runtime.submitLocalRequest = async ingress => {
         const lease = ingress.applicationJobOwner.takeInitial('application');
@@ -109,14 +116,14 @@ for (const kind of ['spot', 'actor']) {
         }
       };
       try {
-        const pending = f.request(kind);
+        const pending = f.request(kind, admitted);
         let atPublication;
         pending.mapCaller(value => value, error => {
           atPublication = f.queue.snapshot();
           return error;
         });
         const rejected = assert.rejects(pending.promise);
-        await setImmediate();
+        await atMailbox;
         assert.ok(accepted);
         assert.equal(f.queue.snapshot().permitsInUse, 1n);
         if (terminal === 'cancel') f.runtime.operations.cancel(pending.id);
@@ -125,10 +132,23 @@ for (const kind of ['spot', 'actor']) {
         assert.equal(atPublication.permitsInUse, 0n);
         assert.equal(atPublication.capacityWaiters, 0n);
         occupied = await f.queue.acquire(undefined, 'remote');
+        const acquire = f.queue.acquire.bind(f.queue);
+        let registered;
+        const reacquiring = new Promise(resolve => { registered = resolve; });
+        // acquire registers its waiter synchronously, before returning its Promise.
+        t.mock.method(f.queue, 'acquire', (signal, origin) => {
+          const pending = acquire(signal, origin);
+          registered();
+          return pending;
+        });
         const following = serial.execute(() => calls.push('following'));
+        // Cross the default scheduler budget without a wall-clock wait.
+        now += 10;
         finish();
         await running;
-        await setImmediate();
+        await reacquiring;
+        assert.equal(f.queue.acquire.mock.callCount(), 1);
+        assert.equal(f.queue.acquire.mock.calls[0].arguments[1], 'local');
         assert.deepEqual(calls, []);
         assert.equal(f.queue.snapshot().capacityWaiters, 1n);
         occupied.releaseAfterInternalProcessing();
