@@ -379,6 +379,9 @@ activation의 늦은 reply를 새 Spot에 전달하지 않는다. Target 연결 
 Framework는 취소·deadline·실패 결과를 caller에게 공개하기 전에 그 request가 잡은 local admission(application
 job permit·capacity 대기)과 stale route 무효화를 끝낸다. Caller가 결과를 관찰하는 시점에는 이 정리가 이미
 반영되어 있다.
+Target queue가 이미 수락했지만 handler가 아직 시작하지 않은 request는 caller의 취소·deadline과 관계없이
+실행한다. 그 request는 실행 직전에 기존 FIFO 위치에서 local admission을 다시 얻는다. 원격 handler의 업무를
+되돌리지 않는 규칙과 같다.
 
 ## 10. Operation identity와 완료 자리 (구현)
 
