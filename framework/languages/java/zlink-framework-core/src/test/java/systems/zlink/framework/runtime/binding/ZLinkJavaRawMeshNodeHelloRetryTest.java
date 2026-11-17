@@ -72,7 +72,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     .get(remoteRid)
                     .submission()
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
-            var hello = receiveFrame(peerPort, peer);
+            var hello = receiveAdmissionFrame(peerPort, peer, wire);
             assertEquals(
                     descriptor(localRid),
                     wire.decodeAdmission(hello, ServiceWireConstants.COMMAND_HELLO, localRid));
@@ -86,9 +86,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     .toCompletableFuture()
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             dispatchNext(node, port, router, ServiceWireConstants.COMMAND_ADMIT);
-            byte[] update = receiveFrame(peerPort, peer);
-            if (wire.decodeHeader(update).command() == ServiceWireConstants.COMMAND_LIVENESS_PROBE)
-                update = receiveFrame(peerPort, peer);
+            byte[] update = receiveAdmissionFrame(peerPort, peer, wire);
             assertEquals(
                     descriptor(localRid, 2),
                     wire.decodeAdmission(update, ServiceWireConstants.COMMAND_UPDATE, localRid));
@@ -679,6 +677,16 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
     private static int receive(
             ZLinkJavaRawServicePort port, RouterSocket router, ZLinkServiceM6AWireCodec wire) {
         return wire.decodeHeader(receiveFrame(port, router)).command();
+    }
+
+    // The tick that submits HELLO may also emit a liveness probe; admission order is what is checked.
+    private static byte[] receiveAdmissionFrame(
+            ZLinkJavaRawServicePort port, RouterSocket router, ZLinkServiceM6AWireCodec wire) {
+        while (true) {
+            byte[] frame = receiveFrame(port, router);
+            if (wire.decodeHeader(frame).command() != ServiceWireConstants.COMMAND_LIVENESS_PROBE)
+                return frame;
+        }
     }
 
     private static byte[] receiveFrame(ZLinkJavaRawServicePort port, RouterSocket router) {
