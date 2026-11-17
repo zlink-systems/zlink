@@ -199,6 +199,7 @@ jobs:
           ./gradlew --no-daemon --max-workers="${worker_count}" \
             :zlink-framework-core:test \
             :zlink-framework-core:integrationTest \
+            :zlink-framework-kotlin:test \
             :zlink-framework-spring-boot-starter:test \
             :zlink-framework-spring-boot-starter:integrationTest \
             :zlink-framework-locations-redis:test \
