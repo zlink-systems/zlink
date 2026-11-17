@@ -110,7 +110,7 @@ export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
   }
 
   get isReleased(): boolean {
-    return this.permit === undefined || this.permit.isReleased === true;
+    return this.permit === undefined || this.permit.isReleased;
   }
 
   get origin(): ApplicationJobOrigin {

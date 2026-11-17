@@ -1405,6 +1405,56 @@ bool ready (host_t &host)
         std::this_thread::yield ();
     return host.app.is_ready ();
 }
+TEST (ActorDirectRequest, CachedIdReachesRecreatedActorOnTheSameOwner)
+{
+    auto evidence = std::make_shared<observations_t> ();
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t owner, caller;
+    configure (owner, evidence, "recreated-owner", store, relocations);
+    owner.start ();
+    ASSERT_TRUE (ready (owner));
+    auto owner_services = owner.app.advanced ().services ().build_provider ();
+    auto &actors = owner_services.get_required<fw::actor_manager_t> ();
+    ASSERT_TRUE (actors.get_or_create (fw::actor_id_t (actor_id), actor_type).async ().result ());
+    const auto previous = actors.find (fw::actor_id_t (actor_id)).result ();
+    ASSERT_TRUE (previous);
+    ASSERT_TRUE (previous.value ());
+    auto &options = caller.app.add_zlink_framework ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
+    options.add_location_store (store);
+    options.add_relocation_store (relocations);
+    caller.app.logging ().use_file ("recreated-client.flow");
+    options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
+    options.add_route_mesh (mesh_name)
+      .set_object_role (fw::object_role_t::client)
+      .set_routing_id (zlink::routing_id_t::from ("recreated-client"))
+      .listen ("tcp://127.0.0.1:0");
+    caller.start ();
+    ASSERT_TRUE (ready (caller));
+    auto client_services = caller.app.advanced ().services ().build_provider ();
+    auto &client = client_services.get_required<fw::actor_client_t> ();
+    const auto first = client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                         .timeout (wait_budget)
+                         .async<probe_t> ()
+                         .result ();
+    ASSERT_TRUE (first);
+    ASSERT_TRUE (actors.destroy (*previous.value ()).result ().value ());
+    ASSERT_TRUE (actors.get_or_create (fw::actor_id_t (actor_id), actor_type).async ().result ());
+    const auto current = actors.find (fw::actor_id_t (actor_id)).result ();
+    ASSERT_TRUE (current);
+    ASSERT_TRUE (current.value ());
+    ASSERT_NE (previous.value ()->object_generation (), current.value ()->object_generation ());
+    ASSERT_EQ (previous.value ()->node_rid ().value (), current.value ()->node_rid ().value ());
+    const auto second = client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                          .timeout (wait_budget)
+                          .async<probe_t> ()
+                          .result ();
+    ASSERT_TRUE (second);
+    EXPECT_NE (first.value ().value, second.value ().value);
+}
+
 TEST (UserSpotCreation, ExistingReadyDoesNotRequireNewCapacity)
 {
     auto evidence = std::make_shared<observations_t> ();
@@ -1986,6 +2036,35 @@ TEST (RelayAdmission, AcceptedSourceRejectsWrongFences)
     denied (bad, pair.source_wire.lifecycle_generation, stateful::stateful_error_t::conflict);
     denied (header, pair.source_wire.lifecycle_generation + 1,
             stateful::stateful_error_t::unavailable);
+}
+
+TEST (ActorDirectRequest, AdmissionDistinguishesIncarnationFromOwner)
+{
+    using namespace fw::runtime;
+    relay_peer_pair_t pair;
+    ASSERT_TRUE (pair.await_ready ());
+    stateful::object_ref_t actor{
+      stateful::object_kind_t::actor, actor_id, 2, 2, mesh_name, "relay-target"};
+    const auto created = begin_reserved_object (pair.target->objects (), actor, actor_type, {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (pair.target->objects ().commit_create (created.attempt),
+               stateful::stateful_error_t::none);
+    stateful::accepted_record_authority_query_t query{
+      .target = actor,
+      .source_node_routing_id = pair.source_wire.node_routing_id,
+      .source_node_generation = pair.source_wire.lifecycle_generation,
+      .source_original = pair.accepted_source (pair.source_wire.lifecycle_generation),
+      .target_node_routing_id = pair.target_wire.node_routing_id,
+      .target_node_generation = pair.target_wire.lifecycle_generation,
+      .requested_authority_owner_generation = 1,
+      .requested_object_generation = 1};
+    const auto recreated =
+      pair.target->accepted_record_authority (query, pair.lease, &pair.source_reader).result ();
+    ASSERT_TRUE (recreated);
+    ASSERT_TRUE (recreated.value ());
+    query.requested_object_generation = actor.object_generation;
+    EXPECT_FALSE (
+      pair.target->accepted_record_authority (query, pair.lease, &pair.source_reader).result ());
 }
 
 // Location runtime §9.3: a record keeps the source original that was valid when it was

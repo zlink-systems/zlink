@@ -17,7 +17,10 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         var node = GetSpotNodeRuntime(relay.Coordinator.NodeRid);
-        var messages = payload.Select(static part => Message.From(part)).ToArray();
+        var messages = ZLinkRawRouterServicePort.CreateMessages(
+            payload,
+            static part => Message.From(part)
+        );
         ZLinkServiceWireCodec.ReplyRelayAckRecord ack;
         try
         {
@@ -1418,7 +1421,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         IReadOnlyList<byte[]> replyParts
     )
     {
-        var parts = replyParts.Select(static part => Message.From(part)).ToArray();
+        var parts = ZLinkRawRouterServicePort.CreateMessages(
+            replyParts,
+            static part => Message.From(part)
+        );
         try
         {
             var header = ZLinkEnvelopeCodec.DecodeHeader(parts);

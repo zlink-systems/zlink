@@ -231,6 +231,7 @@ struct pending_operation_t
     }
 
     call_id_t id;
+    std::shared_ptr<foundation::operation_registry_t> registry;
     std::shared_ptr<task_completion_source_t<operation_completion_t>> completion =
       std::make_shared<task_completion_source_t<operation_completion_t>> ();
     std::function<void (const result_t<operation_completion_t> &)> receiver;
@@ -669,6 +670,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::size_t pending_operation_count () const noexcept;
     task_t<void> seal_relocation_targets ();
     void set_channel_weight (const std::string &channel_name, std::uint32_t weight);
+    task_t<void> register_actor_request (pending_operation_t &operation,
+                                         std::chrono::milliseconds timeout);
     mesh::raw_mesh_node_owner_t &transport () noexcept;
     task_t<bool> send_message_follow (const std::vector<std::uint8_t> &target_routing_id,
                                       const protocol::message_follow_notice_t &notice);

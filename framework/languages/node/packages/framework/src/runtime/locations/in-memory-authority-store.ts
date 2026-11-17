@@ -1,3 +1,4 @@
+import { sameAuthorityIncarnation, type ZLinkDiscardedAuthorityFence } from './lifecycle-runtime';
 import { routingIdsEqual } from '../routing-id';
 import {
   AUTHORITY_ENVELOPE_MAX_BYTES,
@@ -340,6 +341,14 @@ export class ZLinkInMemoryAuthorityStore {
     return BigInt(removed);
   }
 
+  async releaseDiscardedAuthority(
+    key: ZLinkAuthorityKey,
+    current: ZLinkAuthoritySnapshot,
+    fence: ZLinkDiscardedAuthorityFence
+  ): Promise<boolean> {
+    return this.tryReleaseEndedReservation(key, current.storeVersion.value, { discarded: fence });
+  }
+
   async releaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
@@ -380,14 +389,22 @@ export class ZLinkInMemoryAuthorityStore {
   private tryReleaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    request?: ZLinkEndedOwnerReleaseIntent
+    request?: ZLinkEndedOwnerReleaseIntent | { readonly discarded: ZLinkDiscardedAuthorityFence }
   ): boolean {
+    const discarded =
+      request !== undefined && 'discarded' in request ? request.discarded : undefined;
+    const creation = request !== undefined && 'key' in request ? request : undefined;
     const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
     const current = this.rows.get(key.value);
     if (current === undefined) {
       this.ownerLeaseReleaseDelay.clearAuthority(key.value);
       return false;
     }
+    if (
+      discarded !== undefined &&
+      !sameAuthorityIncarnation(this.read(key.value) as ZLinkAuthoritySnapshot, discarded)
+    )
+      return true;
     if (
       current.snapshot.storeVersion.value !== expectedStoreVersion ||
       (current.snapshot.allocation.state === 'active'
@@ -417,12 +434,12 @@ export class ZLinkInMemoryAuthorityStore {
         current.snapshot.allocation.objectKind === 'actor'
           ? undefined
           : decodeServiceReadySpotAuthority(current.snapshot.payload);
-      if (current.snapshot.allocation.objectKind !== 'actor') {
+      if (discarded === undefined && current.snapshot.allocation.objectKind !== 'actor') {
         unavailable ||=
           spot === undefined ||
-          spot.kind !== request?.key.kind ||
-          spot.stableType !== request.intent.stableType ||
-          spot.spotId !== request.key.globalId ||
+          spot.kind !== creation?.key.kind ||
+          spot.stableType !== creation.intent.stableType ||
+          spot.spotId !== creation.key.globalId ||
           spot.activationRecovery !== undefined;
       }
       const actor =
@@ -433,24 +450,30 @@ export class ZLinkInMemoryAuthorityStore {
           : undefined;
       const releaseCandidate =
         !unavailable &&
-        request?.actorRelocationPolicy === 'disabled' &&
-        request.key.kind === current.snapshot.allocation.objectKind &&
-        request.intent.stableType === current.snapshot.allocation.stableType &&
-        (spot !== undefined || actor?.state === 'ready');
+        (discarded !== undefined ||
+          (creation?.actorRelocationPolicy === 'disabled' &&
+            creation.key.kind === current.snapshot.allocation.objectKind &&
+            creation.intent.stableType === current.snapshot.allocation.stableType &&
+            (spot !== undefined || actor?.state === 'ready')));
       const ownerLive = this.validation.isOwnerLive(owner);
       const releaseAllowed = releaseCandidate
         ? this.ownerLeaseReleaseDelay.allows(releaseDelayScope, owner, ownerLive)
         : (this.ownerLeaseReleaseDelay.clearAuthority(key.value), false);
       if (ownerLive) return false;
-      if (unavailable || request?.actorRelocationPolicy !== 'disabled')
+      if (discarded !== undefined && unavailable) return false;
+      if (
+        unavailable ||
+        (discarded === undefined && creation?.actorRelocationPolicy !== 'disabled')
+      )
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
           'Object owner lease is unavailable.'
         );
-      if (spot?.kind === 'user_spot') {
+      if (discarded === undefined && spot?.kind === 'user_spot') {
         endedSpotId = spot.spotId;
         members = this.endedSpotMembers(key.value, current.snapshot, spot.spotId);
       }
+      if (discarded !== undefined && releaseCandidate && !releaseAllowed) return false;
       if (releaseCandidate && !releaseAllowed)
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,

@@ -5557,6 +5557,12 @@ export class ServiceStatefulRuntime {
         `Actor '${fence.actor.actorId}' has no current Ready authority.`
       );
     }
+    if (
+      actor.ref.generation === fence.actor.generation &&
+      actor.authorityOwnerGeneration !== fence.authorityOwnerGeneration
+    ) {
+      throw new ServiceStaleGenerationError('actor', fence.actor.actorId);
+    }
     return actor;
   }
 

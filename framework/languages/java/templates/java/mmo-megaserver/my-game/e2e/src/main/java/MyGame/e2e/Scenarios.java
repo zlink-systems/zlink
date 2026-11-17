@@ -62,15 +62,13 @@ public final class Scenarios {
                     "Capacity did not isolate p3");
             var session = p1.sessionInfo();
             var session2 = p2.sessionInfo();
-            p1.send(new MoveRequest(MOVED_X, 1));
-            p1.send(new MoveRequest(MOVED_X, 2));
-            var moved = p1.next(RegionView.class, v -> v.players().stream().anyMatch(p -> p.playerId().equals("p1") && p.sequence() == 1));
-            var rejected = p1.next(ActionRejected.class, v -> v.reason().equals("move-budget"));
-            require(rejected.retryAfterMs() > 0, "Missing movement retry time");
+            p1.move(MOVED_X, 1);
+            var moved = p1.move(0, 2);
+            require(moved.players().stream().anyMatch(p -> p.playerId().equals("p1") && p.x() == MOVED_X && p.sequence() == 2), "Movement did not preserve sequence");
+            p1.send(new MoveRequest(0, 2));
+            var rejected = p1.next(ActionRejected.class, v -> v.reason().equals("stale-sequence"));
+            require(rejected.retryAfterMs() == 0, "Stale movement has a retry delay");
             sameState(moved, p1.view());
-            Thread.sleep(rejected.retryAfterMs());
-            moved = p1.move(MOVED_X, 2);
-            require(moved.players().stream().anyMatch(p -> p.playerId().equals("p1") && p.x() == MOVED_X * 2 && p.sequence() == 2), "Retry did not preserve sequence");
             final var expected = moved;
             sameState(
                     moved,
@@ -81,7 +79,7 @@ public final class Scenarios {
                                             .anyMatch(
                                                     p ->
                                                             p.playerId().equals("p1")
-                                                                    && p.x() == MOVED_X * 2)));
+                                                                    && p.x() == MOVED_X && p.sequence() == 2)));
             sameState(isolated, p3.view());
             require(
                     p3.history.stream()

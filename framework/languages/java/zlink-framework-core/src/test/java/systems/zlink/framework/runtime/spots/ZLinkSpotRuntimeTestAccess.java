@@ -37,6 +37,10 @@ import java.util.function.UnaryOperator;
 public final class ZLinkSpotRuntimeTestAccess {
     private ZLinkSpotRuntimeTestAccess() {}
 
+    public static void discardExecution(ZLinkSpot<?> spot) {
+        ((DefaultSpotContext) spot.context()).execution.discard();
+    }
+
     public static ThreadPoolExecutor multicastExecutor(ZLinkSpotRuntime runtime) {
         return runtime.publishers.multicastExecutor;
     }

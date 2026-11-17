@@ -211,8 +211,10 @@ accepted_record_authority_resolver_t make_store_authority_resolver (location_rep
                         || (query.target.kind == object_kind_t::actor
                             && snapshot->authority_owner_generation
                                  != query.target.authority_owner_generation)
-                        || snapshot->authority_owner_generation
-                             != query.requested_authority_owner_generation
+                        || ((query.target.kind != object_kind_t::actor
+                             || snapshot->object_generation == query.requested_object_generation)
+                            && snapshot->authority_owner_generation
+                                 != query.requested_authority_owner_generation)
                         || snapshot->allocation.target.mesh_name != query.target.mesh_name
                         || snapshot->allocation.target.node_rid.value () != target_rid.value ()
                         || snapshot->allocation.target.node_lifecycle_generation

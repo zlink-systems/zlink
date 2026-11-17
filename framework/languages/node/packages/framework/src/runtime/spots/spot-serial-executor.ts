@@ -134,10 +134,15 @@ export class ZLinkSpotSerialExecutor {
   executeActor<T>(
     actorId: string,
     operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T,
-    workOptions?: ZLinkSerialWorkOptions
+    workOptions?: ZLinkSerialWorkOptions,
+    capture?: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T
   ): Promise<T> {
     const serial = this.actorSerial(actorId);
-    return this.actorExecutor(actorId).execute(() => operation(serial), workOptions);
+    return this.actorExecutor(actorId).execute(
+      () => operation(serial),
+      workOptions,
+      capture === undefined ? undefined : () => capture(serial)
+    );
   }
 
   executeTimer<T>(

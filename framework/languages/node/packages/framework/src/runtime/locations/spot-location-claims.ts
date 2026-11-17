@@ -20,6 +20,7 @@ import type { ZLinkAuthorityStore } from './internal-store-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { routingIdsEqual } from '../routing-id';
 import {
+  decodeServiceReadySpotAuthority,
   decodeServiceInstanceAuthorityPayload,
   encodeServiceInstanceAuthorityPayload
 } from '../foundation/service-authority-payload-codec';
@@ -244,6 +245,26 @@ export class ZLinkSpotLocationClaims {
     ) {
       tracked.storeVersion = authority.storeVersion.value;
       tracked.ownerLeaseGeneration = authority.ownerLeaseGeneration;
+    } else if (tracked === undefined && expectedStoreVersion === undefined) {
+      const spot = decodeServiceReadySpotAuthority(authority.payload);
+      if (spot === undefined || spot.kind !== 'user_spot') return;
+      this.spots.set(ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId }), {
+        kind: 'legacy',
+        authority,
+        generation: authority.authorityOwnerGeneration,
+        row: {
+          meshName,
+          spotId,
+          spotType: spot.stableType,
+          spotGeneration: authority.objectGeneration,
+          ownerNodeRid: authority.allocation.descriptor.rid,
+          ownerNodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+          spotKind: ZLinkSpotKind.User,
+          ownerId: authority.ownerId,
+          leaseGeneration: authority.ownerLeaseGeneration,
+          updatedAt: authority.storeNow
+        }
+      });
     }
   }
 
@@ -306,9 +327,9 @@ export class ZLinkSpotLocationClaims {
       return;
     }
     const tracked = this.spots.get(event.key);
-    this.forget(event.key);
     const executionOwner = tracked?.executionOwner?.deref();
     if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
+    this.forget(event.key);
     if (tracked !== undefined) {
       this.invalidateSpotRoute?.(
         tracked.kind === 'authority' ? tracked.spotId : tracked.row.spotId

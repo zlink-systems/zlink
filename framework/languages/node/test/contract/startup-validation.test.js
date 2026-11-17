@@ -423,6 +423,8 @@ test('Node registration rejects invalid Spot timer options before startup', () =
     spotNodes: {
       game: {
         router: { bind: 'tcp://127.0.0.1:0' },
+        spotFactories: [GameSpot],
+        entrySpotType: EntrySpot,
         [timerKind]: [timer]
       }
     }

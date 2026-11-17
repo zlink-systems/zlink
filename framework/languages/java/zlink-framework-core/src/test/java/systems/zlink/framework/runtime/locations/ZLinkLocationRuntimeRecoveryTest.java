@@ -1073,6 +1073,10 @@ final class ZLinkLocationRuntimeRecoveryTest {
                     });
             runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
 
+            AtomicInteger disposed = new AtomicInteger();
+            var execution = runtime.execution(() -> false, disposed::incrementAndGet);
+            execution.ready().toCompletableFuture().join();
+            store.onClaim = () -> assertEquals(1, disposed.get(), "terminal before new claim");
             assertTrue(runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
             assertTrue(runtime.ownerLeaseHealthy());
             assertEquals(2, store.claimCount.get());
@@ -1083,11 +1087,13 @@ final class ZLinkLocationRuntimeRecoveryTest {
 
     private static final class StaleThenClaimStore extends ZLinkLocationStoreTestAdapter {
         private final AtomicInteger claimCount = new AtomicInteger();
+        Runnable onClaim;
 
         @Override
         public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
                 String ownerId, Duration ttl) {
             int generation = claimCount.incrementAndGet();
+            if (onClaim != null) onClaim.run();
             Instant now = Instant.now();
             return CompletableFuture.completedFuture(
                     new ZLinkOwnerLeaseClaimed(

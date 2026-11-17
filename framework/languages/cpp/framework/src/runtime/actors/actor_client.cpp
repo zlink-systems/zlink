@@ -15,7 +15,6 @@
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
-#include "runtime/timers/async_delay.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
 
@@ -40,7 +39,6 @@ namespace detail
 namespace
 {
 
-constexpr std::chrono::milliseconds actor_lookup_retry_interval{50};
 inline thread_local std::optional<bool> current_actor_request_release_turn;
 
 class actor_request_turn_intent_scope_t
@@ -387,11 +385,6 @@ bool actor_request_requires_current_spot_gate (std::string_view target_spot_id, 
            && target_spot_id == current_actor_execution.spot_id;
 }
 
-namespace
-{
-
-
-} // namespace
 
 class actor_client_impl_t final : public actor_client_t,
                                   public std::enable_shared_from_this<actor_client_impl_t>
@@ -404,14 +397,12 @@ class actor_client_impl_t final : public actor_client_t,
                          std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                          std::shared_ptr<actor_location_observer_t> actor_locations,
                          location_options_t options,
-                         detail::delay_owner_t &delays,
                          std::function<void ()> admit_call) :
         _store (&store),
         _serializers (detail::serializer_registry_access_t::retain (serializers)),
         _mesh_nodes (std::move (mesh_nodes)),
         _actor_locations (std::move (actor_locations)),
         _location_options (std::move (options)),
-        _delays (delays),
         _admit_call (std::move (admit_call))
     {
         _message_follow_subscriptions.reserve (_mesh_nodes.size ());
@@ -485,8 +476,7 @@ class actor_client_impl_t final : public actor_client_t,
         if (!first_mesh_node ())
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "actor send requires a running MeshNode");
-        auto actor =
-          co_await resolve_actor (std::string (actor_id.value ()), stale_policy_t::route_not_found);
+        auto actor = co_await await_result (resolve_actor (std::string (actor_id.value ())));
         if (!actor) {
             const auto failed =
               detail::propagate_failure<void> (actor, "actor route was not found");
@@ -512,115 +502,60 @@ class actor_client_impl_t final : public actor_client_t,
                     std::optional<std::chrono::milliseconds> timeout,
                     const actor_request_call_t::metadata_map_t &metadata) override
     {
-        /* The metadata reference belongs to a caller-owned call object that
-         * can unwind while this coroutine is suspended: keep a frame-owned copy
-         * before the first await so no resume reads through the dead reference
-         * (session-reconnect-and-coroutine-lifetime doc). */
         const auto lifetime = shared_from_this ();
-        const actor_request_call_t::metadata_map_t metadata_frame = metadata;
         const auto release_turn = detail::actor_request_releases_current_turn ();
-        if (!release_turn && detail::current_serial_turn_allows_yield ()
-            && !runtime::current_actor_execution.spot_id.empty ()) {
-            const auto target = co_await resolve_actor (std::string (actor_id.value ()),
-                                                        stale_policy_t::route_not_found);
-            if (target
-                && actor_request_requires_current_spot_gate (target.value ().spot_id,
+        const actor_request_call_t::metadata_map_t metadata_frame = metadata;
+        const auto source = first_mesh_node ();
+        if (!source)
+            co_return result_t<message_t>::failure (framework_error_kind_t::unavailable,
+                                                    "Actor request requires a running MeshNode");
+        const auto admitted = co_await detail::request_admission_source_t{};
+        detail::host::pending_operation_t operation;
+        co_await source->register_actor_request (operation, timeout.value_or (_default_timeout),
+                                                 admitted);
+        try {
+            const auto actor_id_value = std::string (actor_id.value ());
+            auto actor = co_await await_result (resolve_actor (actor_id_value));
+            const auto deadline = operation.registry->deadline (operation.id);
+            if (!deadline || *deadline <= std::chrono::steady_clock::now ()) {
+                const auto ended = co_await await_result (operation.completion->task ());
+                co_return detail::propagate_failure<message_t> (
+                  ended, "Actor request ended during lookup");
+            }
+            if (!actor) {
+                auto failure =
+                  detail::propagate_failure<message_t> (actor, "actor route was not found");
+                operation.registry->fail (
+                  operation.id, runtime::foundation::operation_terminal_t::transport_failed,
+                  detail::result_access_t::failure<zlink::message_t> (failure.exception ()));
+                co_return failure;
+            }
+            if (!release_turn && detail::current_serial_turn_allows_yield ()
+                && !runtime::current_actor_execution.spot_id.empty ()
+                && actor_request_requires_current_spot_gate (actor.value ().spot_id,
                                                              release_turn)) {
-                co_return result_t<message_t>::failure (
+                auto failure = result_t<message_t>::failure (
                   framework_error_kind_t::invalid_operation,
                   "awaited request requires the current Spot execution gate");
+                operation.registry->fail (
+                  operation.id, runtime::foundation::operation_terminal_t::transport_failed,
+                  detail::result_access_t::failure<zlink::message_t> (failure.exception ()));
+                co_return failure;
             }
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+              *deadline - std::chrono::steady_clock::now ());
+            const auto request_id =
+              _request_id_prefix + std::to_string (_request_id_seq.fetch_add (1));
+            auto submitted =
+              submit_request (actor.value (), std::move (packet_name), std::move (request),
+                              remaining, request_id, metadata_frame, operation);
+            co_return co_await detail::request_submission (std::move (submitted));
         }
-        // In-flight handoff (spot-actor.ko.md 10.2-5): a request that lands
-        // while the actor is moving fails fast as retriable, and the sender
-        // re-resolves and retries. The caller's timeout keeps running across
-        // retries — the move does not reset it (10.5-2).
-        const auto actor_id_value = std::string (actor_id.value ());
-        // Stable across every retry and the commit replay so the target
-        // dispatches this request exactly once (§10.2-1). Scoped by the client
-        // instance so ids do not collide across nodes.
-        const auto request_id = _request_id_prefix + std::to_string (_request_id_seq.fetch_add (1));
-        const auto budget = timeout.value_or (_default_timeout);
-        const auto deadline = std::chrono::steady_clock::now () + budget;
-        auto policy = stale_policy_t::route_not_found;
-        result_t<message_t> last = result_t<message_t>::failure (
-          framework_error_kind_t::unavailable, "actor location is stale");
-        // The loop only ever retries a typed moving stale (the actor
-        // is mid-move and re-resolving will land the committed location). If such
-        // a request never lands within the budget it reports a plain timeout —
-        // the actor was reachable, just still moving (config-10 ST-F6). Any other
-        // stale is terminal and already returned from the loop body below.
-        const auto on_deadline = [] () -> result_t<message_t> {
-            return detail::boundary_failure<message_t> (detail::boundary_error_t::timed_out,
-                                                        "actor request timed out");
-        };
-        // A stale means "retry" only while the actor is moving/committing; a
-        // terminally wrong record (e.g. the generation does not match, config-9
-        // TA-B2) re-resolves to the same answer, so it is returned immediately as
-        // actor_location_stale rather than spun on until the deadline. The moving
-        // stale carries its failure origin through the actor-mesh reply.
-        const auto is_moving_stale = [] (const result_t<message_t> &result) {
-            if (result || !is_stale_actor_error (result.error_kind ())) {
-                return false;
-            }
-            const auto *error = result.error ();
-            return error != nullptr
-                   && detail::failure_origin (*error)
-                        == detail::failure_origin_t::actor_transfer_in_progress;
-        };
-        while (true) {
-            auto actor = co_await resolve_actor (actor_id_value, policy);
-            if (actor) {
-                const auto now = std::chrono::steady_clock::now ();
-                if (now >= deadline) {
-                    co_return on_deadline ();
-                }
-                const auto remaining =
-                  std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
-                auto submitted = submit_request (actor.value (), packet_name, request, remaining,
-                                                 request_id, metadata_frame);
-                auto public_reply = detail::request_task_access_t::public_reply (submitted);
-                last = co_await detail::request_submission (std::move (submitted));
-                // Public-only failure has already propagated to the caller. The physical
-                // receiver has finished; no authority lookup or retry remains for that call.
-                if (public_reply.await_ready () && !public_reply.result ())
-                    co_return last;
-                if (!is_moving_stale (last)) {
-                    /* A destructive lifecycle operation can remove the
-                     * authority while this client still has a positive route
-                     * cache entry.  The owner fence then reports an
-                     * unavailable/stale route, but the public ID-only
-                     * operation must expose the missing target as NotFound.
-                     * Re-read the authority only after that stale terminal;
-                     * transport failures with a live authority retain their
-                     * original Unavailable result. */
-                    if (!last
-                        && (last.error_kind () == framework_error_kind_t::unavailable
-                            || last.error_kind () == framework_error_kind_t::not_found)) {
-                        const auto current =
-                          co_await resolve_actor (actor_id_value, stale_policy_t::route_not_found);
-                        if (!current
-                            && current.error_kind () == framework_error_kind_t::not_found) {
-                            co_return detail::propagate_failure<message_t> (
-                              current, "actor route was not found");
-                        }
-                    }
-                    co_return last;
-                }
-            } else if (!actor.error () || !detail::is_transient_error (actor.error ()->kind ())) {
-                co_return detail::propagate_failure<message_t> (actor, "actor route was not found");
-            }
-            policy = stale_policy_t::location_stale;
-            if (std::chrono::steady_clock::now () + detail::actor_lookup_retry_interval
-                >= deadline) {
-                co_return on_deadline ();
-            }
-            // A stale-move retry only needs to wait out the admission
-            // window; the coroutine suspends here instead of blocking the
-            // thread it runs on, so a serial lane or worker stays free for
-            // other work in the meantime (session-actor-dispatch.en.md
-            // 187,193).
-            co_await detail::delay (_delays, detail::actor_lookup_retry_interval);
+        catch (...) {
+            operation.registry->fail (
+              operation.id, runtime::foundation::operation_terminal_t::transport_failed,
+              detail::result_access_t::failure<zlink::message_t> (std::current_exception ()));
+            throw;
         }
     }
 
@@ -635,12 +570,6 @@ class actor_client_impl_t final : public actor_client_t,
         _message_follow_subscriptions.clear ();
     }
 
-    enum class stale_policy_t
-    {
-        route_not_found,
-        location_stale
-    };
-
     struct resolved_actor_t
     {
         actor_ref_t framework_ref;
@@ -653,7 +582,7 @@ class actor_client_impl_t final : public actor_client_t,
         location_owner_token_t owner;
     };
 
-    task_t<result_t<resolved_actor_t>> resolve_actor (std::string actor_id, stale_policy_t policy)
+    task_t<resolved_actor_t> resolve_actor (std::string actor_id)
     {
         const auto runtime = first_mesh_node ();
         if (!runtime) {
@@ -683,18 +612,12 @@ class actor_client_impl_t final : public actor_client_t,
         if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
             || snapshot->allocation.object_kind != placement_object_kind_t::actor || !projection
             || projection->actor.actor_id ().value () != actor_id) {
-            co_return result_t<resolved_actor_t>::failure (
-              policy == stale_policy_t::route_not_found ? framework_error_kind_t::not_found
-                                                        : framework_error_kind_t::unavailable,
-              policy == stale_policy_t::route_not_found ? "actor route was not found"
-                                                        : "actor location became stale");
+            co_return result_t<resolved_actor_t>::failure (framework_error_kind_t::not_found,
+                                                           "actor route was not found");
         }
         if (projection->spot_id.empty ()) {
-            co_return result_t<resolved_actor_t>::failure (
-              policy == stale_policy_t::route_not_found ? framework_error_kind_t::not_found
-                                                        : framework_error_kind_t::unavailable,
-              policy == stale_policy_t::route_not_found ? "actor SPOT route was not found"
-                                                        : "actor SPOT location became stale");
+            co_return result_t<resolved_actor_t>::failure (framework_error_kind_t::not_found,
+                                                           "actor SPOT route was not found");
         }
         auto resolved =
           resolved_actor_t{projection->actor,
@@ -876,13 +799,15 @@ class actor_client_impl_t final : public actor_client_t,
         }
         catch (...) {
             const auto failure = std::current_exception ();
-            // Registration consumes operation.receiver. Only a rejection before
-            // that transfer has no physical producer and needs local delivery.
-            if (operation.receiver)
-                receiver.complete (
-                  detail::result_access_t::failure<result_t<runtime::messaging::message_parts_t>> (
-                    failure));
-            receiver.admitted->complete (detail::result_access_t::failure<void> (failure));
+            operation.registry->fail (operation.id,
+                                      runtime::foundation::operation_terminal_t::transport_failed,
+                                      detail::result_access_t::failure<zlink::message_t> (failure));
+            // Without a physical producer, the registry's terminal is the result.
+            // A rejected continuation may follow a timeout whose callback is queued.
+            if (operation.receiver) {
+                auto completion = operation.completion->task ();
+                detail::observe_task_terminal (completion, std::move (operation.receiver));
+            }
         }
     }
 
@@ -892,12 +817,13 @@ class actor_client_impl_t final : public actor_client_t,
                     message_t request,
                     std::chrono::milliseconds timeout,
                     std::string request_id,
-                    actor_request_call_t::metadata_map_t metadata)
+                    actor_request_call_t::metadata_map_t metadata,
+                    detail::host::pending_operation_t operation)
     {
         return detail::request_task_access_t::receive_public<result_t<message_t>> (
           [this, actor = std::move (actor), packet_name = std::move (packet_name),
            request = std::move (request), timeout, request_id = std::move (request_id),
-           metadata = std::move (metadata)] (auto receiver) mutable {
+           metadata = std::move (metadata), operation] (auto receiver) mutable {
               auto runtime = mesh_node (actor.mesh_name);
               if (!runtime)
                   throw framework_exception_t (framework_error_kind_t::unavailable,
@@ -912,7 +838,6 @@ class actor_client_impl_t final : public actor_client_t,
               auto parts = detail::encode_actor_packet (
                 header, detail::message_to_raw (request, _serializers));
               auto physical = prepare_request_receiver (actor, receiver);
-              detail::host::pending_operation_t operation;
               runtime->prepare_actor_request_reply (operation, physical);
               auto work = std::make_shared<std::function<task_t<void> ()>> (
                 [runtime, actor = std::move (actor), parts = std::move (parts), timeout, operation,
@@ -1034,12 +959,6 @@ class actor_client_impl_t final : public actor_client_t,
         return first_mesh_node ();
     }
 
-    static bool is_stale_actor_error (framework_error_kind_t kind)
-    {
-        return kind == framework_error_kind_t::not_found
-               || kind == framework_error_kind_t::unavailable;
-    }
-
     template <typename TResult>
     static result_t<TResult> map_native_exception (const std::exception &error,
                                                    const char *fallback)
@@ -1077,7 +996,6 @@ class actor_client_impl_t final : public actor_client_t,
     std::mutex _route_cache_gate;
     std::map<std::string, cached_actor_t> _route_cache;
     std::chrono::milliseconds _default_timeout{std::chrono::seconds (30)};
-    detail::delay_owner_t &_delays;
     std::function<void ()> _admit_call;
     const std::string _request_id_prefix =
       std::to_string (reinterpret_cast<std::uintptr_t> (this)) + "-";
@@ -1145,12 +1063,12 @@ make_actor_client (live_location_reader_t &store,
                    std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
                    location_options_t options,
-                   detail::delay_owner_t &delays,
+
                    std::function<void ()> admit_call)
 {
     return std::make_shared<actor_client_impl_t> (store, serializers, std::move (mesh_nodes),
                                                   std::move (actor_locations), std::move (options),
-                                                  delays, std::move (admit_call));
+                                                  std::move (admit_call));
 }
 
 task_t<void> send_to_actor_ref (actor_client_t &client,
