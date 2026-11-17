@@ -13,6 +13,8 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <new>
@@ -298,6 +300,42 @@ TEST (EnvelopeAllocations, HeaderEncodeAndDecodeMessageAllocations)
                  encode_allocations, decode_allocations);
     EXPECT_EQ (encode_allocations, 10u);
     EXPECT_EQ (decode_allocations, 50u);
+}
+
+TEST (EnvelopeHeaderMicro, FixedAndChangingCorrelation)
+{
+    if (!std::getenv ("ZLINK_ENVELOPE_HEADER_MICRO"))
+        GTEST_SKIP () << "Set ZLINK_ENVELOPE_HEADER_MICRO=1 to measure header encoding";
+    const char *input = std::getenv ("ZLINK_ENVELOPE_HEADER_MICRO_INPUT");
+    const bool changing = input && std::string_view (input) == "changing";
+    msg::envelope_codec_t codec;
+    msg::envelope_header_t header{.kind = msg::message_kind_t::request,
+                                  .channel_name = "bench",
+                                  .message_name = "BenchPayload",
+                                  .content_type = "application/x-protobuf",
+                                  .correlation_id = "00000000-0000-0000-0000-000000000000"};
+    constexpr std::size_t iterations = 500000;
+    std::uint64_t checksum = 0;
+    const auto begin = std::chrono::steady_clock::now ();
+    for (std::size_t index = 0; index != iterations; ++index) {
+        if (changing) {
+            auto value = index;
+            for (std::size_t digit = header.correlation_id.size (); digit > 26; --digit) {
+                header.correlation_id[digit - 1] = static_cast<char> ('0' + value % 10);
+                value /= 10;
+            }
+        }
+        auto encoded = codec.encode_header (header);
+        checksum += encoded.size ();
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds> (
+                           std::chrono::steady_clock::now () - begin)
+                           .count ();
+    std::printf ("header-micro input=%s iterations=%zu total_ns=%lld ns_per_message=%.2f "
+                 "checksum=%llu\n",
+                 changing ? "changing" : "fixed", iterations, static_cast<long long> (elapsed),
+                 static_cast<double> (elapsed) / iterations,
+                 static_cast<unsigned long long> (checksum));
 }
 
 // Container members (std::map metadata) may allocate even when empty, and how
