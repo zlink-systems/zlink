@@ -71,6 +71,16 @@ bool same_header (const envelope_header_t &left, const envelope_header_t &right)
            && left.metadata == right.metadata;
 }
 
+std::vector<bool> tracing_modes (const json &fixture)
+{
+    if (!fixture.contains ("tracing"))
+        return {true, false};
+    std::vector<bool> modes;
+    for (const auto &mode : fixture.at ("tracing"))
+        modes.push_back (mode.get<std::string> () == "on");
+    return modes;
+}
+
 } // namespace
 
 int main ()
@@ -79,26 +89,65 @@ int main ()
     assert (input.good ());
     const auto golden = json::parse (input);
     envelope_codec_t codec;
+    bool all_passed = true;
     for (const auto &fixture : golden.at ("valid")) {
-        const auto expected = expected_header (fixture.at ("header"));
+        const auto name = fixture.at ("name").get<std::string> ();
         const auto bytes = from_hex (fixture.at ("hex").get<std::string> ());
-        const auto decoded = codec.decode_header (std::span<const std::byte> (
-          reinterpret_cast<const std::byte *> (bytes.data ()), bytes.size ()));
-        assert (decoded && same_header (decoded.value (), expected));
-        const auto encoded = codec.encode_header (expected).bytes ();
-        const std::string encoded_bytes (reinterpret_cast<const char *> (encoded.data ()),
-                                         encoded.size ());
-        if (encoded_bytes != bytes)
-            std::cerr << "encode mismatch " << fixture.at ("name") << ": " << encoded_bytes.size ()
-                      << " bytes, expected " << bytes.size () << " bytes\n";
-        assert (encoded_bytes == bytes);
+        for (const bool capture_flow : tracing_modes (fixture)) {
+            const auto wire_header = expected_header (fixture.at ("header"));
+            auto expected = wire_header;
+            if (!capture_flow) {
+                expected.flow_id.reset ();
+                expected.flow_origin.reset ();
+            }
+            const auto decoded = codec.decode_header (
+              std::span<const std::byte> (reinterpret_cast<const std::byte *> (bytes.data ()),
+                                          bytes.size ()),
+              capture_flow);
+            if (!decoded || !same_header (decoded.value (), expected)) {
+                std::cerr << "valid fixture failed: " << name
+                          << " tracing=" << (capture_flow ? "on" : "off") << " decode\n";
+                all_passed = false;
+                continue;
+            }
+            if (fixture.value ("encode", true)) {
+                try {
+                    const auto encoded_message = codec.encode_header (wire_header);
+                    const auto encoded = encoded_message.bytes ();
+                    const std::string encoded_bytes (
+                      reinterpret_cast<const char *> (encoded.data ()), encoded.size ());
+                    if (encoded_bytes == bytes)
+                        continue;
+                }
+                catch (const zlink::framework::framework_exception_t &error) {
+                    std::cerr << "valid fixture encode rejected: " << name
+                              << " tracing=" << (capture_flow ? "on" : "off")
+                              << " error=" << error.what () << "\n";
+                }
+                {
+                    std::cerr << "valid fixture failed: " << name
+                              << " tracing=" << (capture_flow ? "on" : "off") << " encode\n";
+                    all_passed = false;
+                }
+            }
+        }
     }
     for (const auto &fixture : golden.at ("reject")) {
+        const auto name = fixture.at ("name").get<std::string> ();
         const auto bytes = from_hex (fixture.at ("hex").get<std::string> ());
-        const auto decoded = codec.decode_header (std::span<const std::byte> (
-          reinterpret_cast<const std::byte *> (bytes.data ()), bytes.size ()));
-        assert (!decoded
-                && decoded.error_kind ()
-                     == zlink::framework::framework_error_kind_t::protocol_error);
+        for (const bool capture_flow : tracing_modes (fixture)) {
+            const auto decoded = codec.decode_header (
+              std::span<const std::byte> (reinterpret_cast<const std::byte *> (bytes.data ()),
+                                          bytes.size ()),
+              capture_flow);
+            if (decoded
+                || decoded.error_kind ()
+                     != zlink::framework::framework_error_kind_t::protocol_error) {
+                std::cerr << "reject fixture failed: " << name
+                          << " tracing=" << (capture_flow ? "on" : "off") << "\n";
+                all_passed = false;
+            }
+        }
     }
+    assert (all_passed);
 }
