@@ -235,8 +235,12 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         );
     }
 
-    [Fact]
-    public async Task Context_Close_join_cannot_run_while_the_owner_yields_before_commit()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Context_Close_join_cannot_run_while_the_owner_yields_before_commit(
+        bool joinAfterOwnerYields
+    )
     {
         var flowPath = Path.Combine(
             Path.GetTempPath(),
@@ -259,39 +263,41 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             );
         Assert.NotNull(activation);
         Assert.NotNull(context);
-        var released = new TaskCompletionSource<(int Pending, bool Sealed, bool Committed)>(
+        var ownerYielded = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         ZLinkSerialExecutionQueue? gate = null;
         host.Store.HoldNextPutFor = spotId;
-        host.State.OnInstanceHandler = _ =>
+        host.State.OnInstanceHandler = async _ =>
         {
             gate = ZLinkSerialTurn.Current!.ExecutionGate!;
             gate.GateOperation = operation =>
             {
-                // Observe the idle selection after the owner yields at its Closing CAS.
+                // The owner has yielded at Closing CAS; the joining call may not be posted yet.
                 if (
                     operation == ZLinkSerialGateOperation.Release
                     && host.Store.PutHeld.Task.IsCompleted
                 )
-                    released.TrySetResult(
-                        (
-                            gate.LifecyclePendingCount,
-                            activation.HasClosingSeal,
-                            activation.HasCommittedClose
-                        )
-                    );
+                    ownerYielded.TrySetResult();
             };
             host.State.ContextCloseTask = context.CloseAsync().AsTask();
+            if (joinAfterOwnerYields)
+                await ownerYielded.Task;
             host.State.JoinedContextCloseTask = context.CloseAsync().AsTask();
-            return Task.CompletedTask;
         };
         try
         {
             await host.RequestInstanceAsync(spotId, "close-twice");
-            var observed = await released.Task.WaitAsync(Wait);
+            await ownerYielded.Task.WaitAsync(Wait);
+            // The request reply confirms that both Close calls have posted their lifecycle records.
+            // Put remains held, so the owner cannot commit before this observation.
+            var observed = (
+                Pending: gate!.LifecyclePendingCount,
+                Sealed: activation.HasClosingSeal,
+                Committed: activation.HasCommittedClose
+            );
             output.WriteLine(
-                $"Before commit at gate release: pending={observed.Pending}, sealed={observed.Sealed}, committed={observed.Committed}"
+                $"Before commit after both Close submissions: pending={observed.Pending}, sealed={observed.Sealed}, committed={observed.Committed}"
             );
             Assert.Equal(2, observed.Pending);
             Assert.True(observed.Sealed);
