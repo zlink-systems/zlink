@@ -58,9 +58,27 @@ test('protobuf header semantic validation rejects missing and unsupported fields
   assert.equal(envelope.decodeChannelHeader(parts(header({ channelName: '' })), false).channelName, '');
   assert.equal(envelope.decodeChannelHeader(parts(header({ messageName: '' })), false).messageName, '');
   assert.equal(envelope.decodeChannelHeader(parts(header({ contentType: '' })), false).contentType, '');
-  assert.throws(() => envelope.decodeChannelHeader(parts(header({ correlationId: null })), false), /correlationId/);
+  assert.equal(
+    envelope.decodeChannelHeader(parts(header({ correlationId: null })), false).correlationId,
+    null
+  );
   assert.throws(() => envelope.decodeChannelHeader(parts(header({ flowId: 'invalid', flowOrigin: 99 }))), /flowId/);
   assert.throws(() => envelope.decodeChannelHeader(parts(header({ metadata: [{ key: 'x', value: 'first' }, { key: 'x', value: 'last' }] })), false), /duplicate/);
+});
+
+test('protobuf correlation validation preserves ASCII values through the 64-byte boundary', () => {
+  for (const correlationId of ['\x01', '\x7f', 'a'.repeat(64)]) {
+    assert.equal(
+      envelope.decodeChannelHeader(parts(header({ correlationId })), false).correlationId,
+      correlationId
+    );
+  }
+  for (const correlationId of ['', 'a'.repeat(65), 'é', '\0']) {
+    assert.throws(
+      () => envelope.decodeChannelHeader(parts(header({ correlationId })), false),
+      /correlationId/
+    );
+  }
 });
 
 test('tracing Off ignores malformed optional flow fields but retains correlation', () => {
