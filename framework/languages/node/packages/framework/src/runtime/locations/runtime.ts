@@ -195,11 +195,18 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     readonly retainedByOwner: WeakMap<object, ZLinkRetainedExecution>;
   };
   private readonly discardedExecutions = new WeakSet<object>();
+  private readonly discardedAuthorities = new Map<
+    ZLinkExecutionRecovery,
+    {
+      settled?: Promise<void> | 'failed';
+      pending?: Promise<void>;
+    }
+  >();
   private readonly executions = new Map<
     object,
     {
       readonly steadyReady: () => boolean;
-      readonly discard: (error: unknown) => void;
+      readonly discard: (error: unknown) => void | Promise<void>;
       readonly captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined;
     }
   >();
@@ -210,7 +217,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   trackExecution(
     owner: object,
     steadyReady: () => boolean,
-    discard: (error: unknown) => void,
+    discard: (error: unknown) => void | Promise<void>,
     captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined
   ): void {
     if (!this.discardedExecutions.has(owner) && !this.executions.has(owner))
@@ -223,11 +230,34 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   discardExecution(owner: object): void {
     if (!this.started) return;
+    if (this.discardedExecutions.has(owner)) return;
     const execution = this.executions.get(owner);
+    const recovery = execution?.captureRecovery?.(new WeakRef(owner));
     this.discardedExecutions.add(owner);
     this.wakeExecution();
     this.forgetExecution(owner);
-    execution?.discard(this.executionFailure());
+    if (execution === undefined) return;
+    const record: { settled?: Promise<void> | 'failed'; pending?: Promise<void> } = {};
+    if (recovery !== undefined) this.discardedAuthorities.set(recovery, record);
+    try {
+      const settled = execution.discard(this.executionFailure());
+      if (settled !== undefined) {
+        record.settled = settled;
+        void settled.then(
+          () => {
+            record.settled = undefined;
+          },
+          (error: unknown) => {
+            record.settled = 'failed';
+            this.lastError = errorMessage(error);
+          }
+        );
+      }
+    } catch (error) {
+      this.lastError = errorMessage(error);
+      // A failed local disposal never qualifies as settled authority cleanup.
+      record.settled = 'failed';
+    }
   }
 
   discardSteadyExecution(owner: object): boolean {
@@ -375,6 +405,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   }
 
   get ownerLeaseRecoveryRequired(): boolean {
+    // A failed local disposal can never progress, so it must not keep recovery running.
+    for (const record of this.discardedAuthorities.values())
+      if (record.settled !== 'failed') return true;
     if (this.storeOutage !== undefined)
       for (const record of this.storeOutage.retained.values())
         if (record.phase !== 'recovered') return true;
@@ -418,6 +451,43 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
             );
           });
     await Promise.all([confirmedPublication, ...recoveries]);
+    if (owner !== undefined && this.ownerLeaseUsable) {
+      // Start Actor operations first; each Spot waits only for its own member incarnations.
+      const discarded = [...this.discardedAuthorities].sort(
+        ([left], [right]) =>
+          Number(decodeAuthorityKey(left.key).kind !== 'actor') -
+          Number(decodeAuthorityKey(right.key).kind !== 'actor')
+      );
+      const operations: Promise<void>[] = [];
+      for (const [recovery, record] of discarded) {
+        if (record.pending !== undefined) {
+          operations.push(record.pending);
+          continue;
+        }
+        if (record.settled !== undefined) continue;
+        const pending = (async () => {
+          const identity = decodeAuthorityKey(recovery.key);
+          if (identity.kind !== 'actor') {
+            const members = [...this.discardedAuthorities].filter(
+              ([member]) =>
+                member.memberOf?.spotId === identity.globalId &&
+                member.memberOf.objectGeneration === recovery.incarnation.objectGeneration
+            );
+            await Promise.all(members.map(([, member]) => member.pending));
+            if (members.some(([member]) => this.discardedAuthorities.has(member))) return;
+          }
+          if (!this.ownerLeaseUsable || this.ownerToken !== owner) return;
+          if (await recovery.cleanup(owner, signal)) this.discardedAuthorities.delete(recovery);
+        })();
+        record.pending = pending;
+        operations.push(
+          pending.finally(() => {
+            record.pending = undefined;
+          })
+        );
+      }
+      await Promise.all(operations);
+    }
     if (
       outage !== undefined &&
       !outage.discarded &&
@@ -589,7 +659,21 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
     this.leaseOperationStartedAtMs = 0;
     this.ownerLeaseDeadlineMs = undefined;
-    await this.cleanupOwner(signal);
+    try {
+      const pending = await Promise.allSettled(
+        [...this.discardedAuthorities.values()].map((record) => record.pending)
+      );
+      await this.cleanupOwner(signal);
+      const failures = pending.flatMap((result) =>
+        result.status === 'rejected' ? [result.reason] : []
+      );
+      if (failures.length > 0)
+        throw new AggregateError(failures, 'Discarded authority cleanup failed during shutdown.');
+    } finally {
+      this.discardedAuthorities.clear();
+      this.executions.clear();
+      this.storeOutage = undefined;
+    }
   }
 
   async cleanupOwner(signal?: AbortSignal): Promise<void> {

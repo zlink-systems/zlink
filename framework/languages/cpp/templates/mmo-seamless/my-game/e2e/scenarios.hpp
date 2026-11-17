@@ -29,20 +29,13 @@ inline void cross (const std::string &endpoint)
              "MaxStep rejection did not return step-too-large");
     same_state (before, client.state (), "step-too-large rejection");
 
-    auto first_response = client.observe<WorldState> ([] (const auto &state) { return state.sequence == 1; });
-    auto budget_response = client.observe<ActionRejected> ([] (const auto &rejection) {
-        return rejection.reason == "move-budget";
-    });
-    client.send_move (2, 1);
-    client.send_move (ZonePositionDomain::MaxStep, 2);
-    const auto first = first_response.wait ();
+    const auto first = client.move (2, 1);
     require (first.x == 296 && first.sequence == 1, "The first server-calculated move was incorrect");
-    const auto budget = budget_response.wait ();
-    require (budget.reason == "move-budget" && budget.retryAfterMs > 0,
-             "Move budget rejection did not include a positive server retry delay");
-    same_state (first, client.state (), "move-budget rejection");
-    std::this_thread::sleep_for (std::chrono::milliseconds (budget.retryAfterMs));
     const auto after = client.move (ZonePositionDomain::MaxStep, 2);
+    const auto stale = client.move_rejected (ZonePositionDomain::MaxStep, 2);
+    require (stale.reason == "stale-sequence" && stale.retryAfterMs == 0,
+             "Accepted movement sequence was not rejected as stale");
+    same_state (after, client.state (), "stale-sequence rejection");
     same_actor (identity, client.info ());
     require (after.zoneId == "zone-4" && after.nodeId == "zoneB" && after.x == 306
                && after.sequence == 2,

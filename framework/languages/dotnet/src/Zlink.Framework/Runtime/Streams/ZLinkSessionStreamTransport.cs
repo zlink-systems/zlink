@@ -13,7 +13,8 @@ internal sealed class ZLinkSessionStreamTransport(
             if (stream is ZLinkManagedStream managedStream)
                 return managedStream.WriteRaw(payload);
 
-            return stream.Write(ZLinkMessage.From(payload.ToArray()));
+            using (payload)
+                return stream.Write(ZLinkMessage.From(payload.ToArray()));
         }
         catch (ZlinkSubmitException failure)
         {
@@ -66,9 +67,9 @@ internal sealed class ZLinkSessionStreamTransport(
         if (stream is ZLinkManagedStream managedStream)
             return managedStream.SubmitRawAsync(payload, cancellationToken);
 
-        cancellationToken.ThrowIfCancellationRequested();
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!stream.Write(ZLinkMessage.From(payload.ToArray())))
                 throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
         }

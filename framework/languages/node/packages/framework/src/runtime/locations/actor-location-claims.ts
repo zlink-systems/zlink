@@ -289,16 +289,11 @@ export class ZLinkActorLocationClaims {
     const tracked = this.actors.get(canonical);
     const ownerToken = this.runtime.currentOwnerToken;
     if (tracked !== undefined) {
-      const status = await this.runtime.removeActor(
-        key,
-        ownerToken?.leaseGeneration ?? tracked.generation
-      );
+      await this.runtime.removeActor(key, ownerToken?.leaseGeneration ?? tracked.generation);
       if (this.actors.get(canonical) === tracked) {
         this.forget(canonical);
       }
-      if (status === ZLinkLocationWriteStatus.Stored) {
-        await this.releaseAuthority(actorId, actorRef ?? tracked.row.actorRef, ownerToken);
-      }
+      await this.releaseAuthority(actorId, actorRef ?? tracked.row.actorRef, ownerToken);
       return;
     }
     await this.releaseAuthority(actorId, actorRef, ownerToken);
@@ -337,6 +332,32 @@ export class ZLinkActorLocationClaims {
     )
       return;
     if (tracked !== undefined) tracked.authority = authority;
+    else {
+      const identity = decodeActorAuthorityIdentity(authority.payload, authority.objectGeneration);
+      if (identity === undefined) return;
+      this.actors.set(
+        ZLinkLocationKeyCodec.encodeActorKey({ meshName: this.entryMeshName, actorId }),
+        {
+          authority,
+          generation: authority.authorityOwnerGeneration,
+          row: {
+            meshName: identity.meshName,
+            actorType: identity.actorType,
+            actorId,
+            actorRef: identity.actor,
+            ownerNodeRid: identity.actor.nodeRid,
+            ownerNodeGeneration: identity.ownerNodeGeneration,
+            spotKind: identity.spotKind,
+            spotId: identity.spotId as RoutingId,
+            spotGeneration: identity.spotGeneration,
+            membershipEpoch: 0n,
+            ownerId: authority.ownerId,
+            leaseGeneration: authority.ownerLeaseGeneration,
+            updatedAt: authority.storeNow
+          }
+        }
+      );
+    }
     this.observeActorAuthorityVersion?.(actorId, authority.storeVersion.value);
   }
 
@@ -379,9 +400,9 @@ export class ZLinkActorLocationClaims {
       return;
     }
     const tracked = this.actors.get(event.key);
-    this.forget(event.key);
     const executionOwner = tracked?.executionOwner?.deref();
     if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
+    this.forget(event.key);
     if (tracked?.deactivate !== undefined) {
       void tracked.deactivate().catch(() => undefined);
     }

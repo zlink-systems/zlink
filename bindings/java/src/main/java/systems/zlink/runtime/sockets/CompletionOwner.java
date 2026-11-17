@@ -397,7 +397,7 @@ final class CompletionOwner implements AutoCloseable {
             Pending<T> state = new Pending<>(token, kind, target, retained,
                 requestTimeoutMs);
             pending.put(token, state);
-            core.reserveNativeCallLocked();
+            core.reserveNativeCall();
             return state;
         }
     }
@@ -406,7 +406,7 @@ final class CompletionOwner implements AutoCloseable {
         synchronized (core.ownerLock) {
             core.ensureOpenForSubmitLocked();
             long token = nextContextTokenLocked();
-            core.reserveNativeCallLocked();
+            core.reserveNativeCall();
             return token;
         }
     }
@@ -419,7 +419,7 @@ final class CompletionOwner implements AutoCloseable {
                 unpublishedSends = Arrays.copyOf(unpublishedSends,
                     unpublishedSends.length * 2);
             unpublishedSends[unpublishedSendCount++] = token;
-            core.reserveNativeCallLocked();
+            core.reserveNativeCall();
             return token;
         }
     }

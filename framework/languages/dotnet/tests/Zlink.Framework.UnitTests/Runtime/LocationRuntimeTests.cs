@@ -9,7 +9,7 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class LocationRuntimeTests
+public sealed partial class LocationRuntimeTests
 {
     [Theory]
     [InlineData(false)]
@@ -2103,6 +2103,21 @@ public sealed class LocationRuntimeTests
     internal sealed class OutageLeaseStore(IZLinkLocationRepository inner)
         : ZLinkLocationStoreTestDouble
     {
+        internal Func<ValueTask>? AfterMembershipCommit;
+        internal Func<ValueTask>? BeforeAuthorityRead;
+        internal int DiscardedCleanupCalls;
+
+        public override ValueTask<bool> CleanupDiscardedAuthorityAsync(
+            ZLinkAuthorityKey key,
+            ZLinkAuthoritySnapshot discarded,
+            ZLinkLocationOwnerToken owner,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Interlocked.Increment(ref DiscardedCleanupCalls);
+            return inner.CleanupDiscardedAuthorityAsync(key, discarded, owner, cancellationToken);
+        }
+
         internal Func<ValueTask>? BeforeRecoveryCas;
         internal ZLinkMeshNodeDescriptor? RecoveryDescriptor;
         internal int MeshListReads;
@@ -2171,10 +2186,15 @@ public sealed class LocationRuntimeTests
             return inner.ListMeshNodesAsync(meshName, page, cancellationToken);
         }
 
-        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+        public override async ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
             ZLinkAuthorityKey key,
             CancellationToken cancellationToken = default
-        ) => inner.ReadAuthorityAsync(key, cancellationToken);
+        )
+        {
+            if (BeforeAuthorityRead is { } before)
+                await before();
+            return await inner.ReadAuthorityAsync(key, cancellationToken);
+        }
 
         public override async ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
             ZLinkAuthorityKey key,
@@ -2211,6 +2231,16 @@ public sealed class LocationRuntimeTests
                 mutation,
                 cancellationToken
             );
+            if (
+                mutation is ZLinkAuthorityMutation.Put membershipPut
+                && ZLinkActorAuthorityPayloadCodec.TryDecode(
+                    membershipPut.Payload.Span,
+                    out var membership
+                )
+                && membership.CurrentSpotKind == ZLinkSpotKind.User
+                && AfterMembershipCommit is { } afterMembership
+            )
+                await afterMembership();
             if (
                 recovery
                 && HoldRecoveryCas

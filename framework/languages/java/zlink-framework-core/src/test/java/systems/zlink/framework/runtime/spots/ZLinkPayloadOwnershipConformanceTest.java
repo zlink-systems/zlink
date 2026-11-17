@@ -212,7 +212,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
             Object value = invoker.deserializeSubscription(firstRegistration, owner);
             invoker.invokeSubscriptionDecoded(
                             firstRegistration,
-                            new Object(),
+                            new PayloadSpot(),
                             "channel",
                             "topic",
                             Optional.empty(),
@@ -224,7 +224,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
                     .join();
             invoker.invokeSubscriptionDecoded(
                             secondRegistration,
-                            new Object(),
+                            new PayloadSpot(),
                             "channel",
                             "topic",
                             Optional.empty(),
@@ -247,7 +247,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
                         "channel", "topic"),
                 handlerType,
                 null,
-                Object.class,
+                PayloadSpot.class,
                 Probe.class,
                 "Probe",
                 java.util.List.of());
@@ -274,11 +274,14 @@ final class ZLinkPayloadOwnershipConformanceTest {
     private record OtherProbe(String value) {}
 
     @ZLinkSpotSubscription(channelName = "channel", topic = "topic")
-    private static final class FirstHandler implements ZLinkSpotSubscriptionHandler<Object, Probe> {
+    private static final class PayloadSpot {}
+
+    private static final class FirstHandler
+            implements ZLinkSpotSubscriptionHandler<PayloadSpot, Probe> {
         private Probe received;
 
         @Override
-        public CompletableFuture<Void> handle(Object spot, Probe event) {
+        public CompletableFuture<Void> handle(PayloadSpot spot, Probe event) {
             received = event;
             return CompletableFuture.completedFuture(null);
         }
@@ -286,11 +289,11 @@ final class ZLinkPayloadOwnershipConformanceTest {
 
     @ZLinkSpotSubscription(channelName = "channel", topic = "topic")
     private static final class SecondHandler
-            implements ZLinkSpotSubscriptionHandler<Object, Probe> {
+            implements ZLinkSpotSubscriptionHandler<PayloadSpot, Probe> {
         private Probe received;
 
         @Override
-        public CompletableFuture<Void> handle(Object spot, Probe event) {
+        public CompletableFuture<Void> handle(PayloadSpot spot, Probe event) {
             received = event;
             return CompletableFuture.completedFuture(null);
         }

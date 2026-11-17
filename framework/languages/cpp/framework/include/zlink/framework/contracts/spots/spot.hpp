@@ -2173,6 +2173,16 @@ class spot_node_builder_t
                   "Spot factory must return a Spot that exposes the provided Context");
             }
             instance->configure ();
+            for (const auto &handler : instance->context ().handlers ().descriptors ()) {
+                if (handler.handler_type != std::type_index (typeid (void))
+                    && handler.handler_type != std::type_index (typeid (TSpot))) {
+                    throw framework_exception_t (framework_error_kind_t::not_configured,
+                                                 "SPOT handler owner '"
+                                                   + std::string (handler.handler_type.name ())
+                                                   + "' does not match the registered Spot type '"
+                                                   + typeid (TSpot).name () + "'");
+                }
+            }
             // Spot model §3.2: an Entry or User Spot that names an Actor type supports that
             // Actor's membership whether or not it registers an Actor handler.
             if constexpr (detail::entry_spot_type<TSpot> || detail::user_spot_type<TSpot>)

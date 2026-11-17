@@ -127,18 +127,32 @@ class socket_call_t
 {
   public:
     explicit socket_call_t (socket_handle_t &socket_) :
-        _socket (socket_)
+        _socket (&socket_)
     {
-        require_submit_open (_socket.reserve ());
+        require_submit_open (_socket->reserve ());
     }
-    ~socket_call_t () { _socket.release (); }
+    socket_call_t (socket_handle_t *socket_, recv_result_t &result_) noexcept :
+        _socket (socket_ && socket_->reserve () ? socket_ : nullptr)
+    {
+        result_ = recv_result_t::ok;
+        if (!_socket) {
+            const bool has_handle = socket_ && native_handle (*socket_);
+            result_ = has_handle ? recv_result_t::invalid_state : recv_result_t::invalid_handle;
+            errno = has_handle ? ESHUTDOWN : EFAULT;
+        }
+    }
+    ~socket_call_t ()
+    {
+        if (_socket)
+            _socket->release ();
+    }
     socket_call_t (const socket_call_t &) = delete;
     socket_call_t &operator= (const socket_call_t &) = delete;
 
-    void *handle () const noexcept { return native_handle (_socket); }
+    void *handle () const noexcept { return _socket ? native_handle (*_socket) : nullptr; }
 
   private:
-    socket_handle_t &_socket;
+    socket_handle_t *_socket;
 };
 
 } // namespace detail

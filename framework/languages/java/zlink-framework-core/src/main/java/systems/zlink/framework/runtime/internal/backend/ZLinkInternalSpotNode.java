@@ -680,7 +680,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             Duration timeout,
             CompletableFuture<Void> requestAdmission);
 
-    /** Delivers to the prepared receiver; the decoder consumes the reply messages. */
+    /** Continues the registered logical request; the decoder consumes the reply messages. */
     default <T> void requestToActor(
             ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             List<Message> parts,
@@ -700,14 +700,17 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         reply.whenComplete(
                 (messages, failure) -> {
                     if (failure != null) {
-                        completion.completeExceptionally(mapFailure.apply(failure));
+                        operationRegistry()
+                                .completeExceptionally(completion.id(), mapFailure.apply(failure));
                         return;
                     }
                     try {
-                        ZLinkCompletionBridge.completeOrDiscard(
-                                completion, decodeReply.apply(messages), discardReply);
+                        T value = decodeReply.apply(messages);
+                        if (!operationRegistry().complete(completion.id(), value))
+                            discardReply.accept(value);
                     } catch (RuntimeException | Error error) {
-                        completion.completeExceptionally(mapFailure.apply(error));
+                        operationRegistry()
+                                .completeExceptionally(completion.id(), mapFailure.apply(error));
                     }
                 });
     }

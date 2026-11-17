@@ -262,6 +262,27 @@ internal sealed partial class ZLinkFrameworkRuntime
             ? nodeRuntime
             : throw new ZLinkConfigurationException($"RouteMesh '{meshName}' is not registered.");
 
+    internal ZLinkRelocationReplyCompletion CompleteRelocationReply(
+        ZLinkSpotNodeRuntime physicalSource,
+        ZLinkServiceWireCodec.ReplyRelayRecord relay,
+        IReadOnlyList<Message> payload
+    )
+    {
+        if (physicalSource.LocalSessionOwner is not { } source)
+            return default;
+        foreach (var node in GetOrStartState().SpotNodes.Values)
+        {
+            var completion = node.Node.RequestOperations.TryCompleteRelocationReply(
+                relay,
+                payload,
+                source
+            );
+            if (completion.State != ZLinkRelocationReplyCompletionState.NotFound)
+                return completion;
+        }
+        return default;
+    }
+
     internal ValueTask<ZLinkSpotNodeRuntime> GetMeshNodeRuntimeAsync(string meshName)
     {
         try

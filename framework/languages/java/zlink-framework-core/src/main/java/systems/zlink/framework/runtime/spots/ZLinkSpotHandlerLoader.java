@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static systems.zlink.framework.runtime.handlers.ZLinkHandlerInterfaceNames.KOTLIN_SPOT_PACKET_HANDLER;
 import static systems.zlink.framework.runtime.handlers.ZLinkHandlerInterfaceNames.KOTLIN_SPOT_REQUEST_HANDLER;
 import static systems.zlink.framework.runtime.handlers.ZLinkHandlerInterfaceNames.KOTLIN_SPOT_SUBSCRIPTION_HANDLER;
+import static systems.zlink.framework.runtime.handlers.ZLinkHandlerScanValidation.requireExactSpotType;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
@@ -135,9 +136,8 @@ final class ZLinkSpotHandlerLoader {
                     && (handler.kind() == ZLinkScannedHandlerKind.ACTOR_SEND
                             || handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST)) {
                 var registration = actorHandlers.createScannedRegistration(handler);
-                if (registration.spotType() == null
-                        || registration.spotType().isAssignableFrom(spotType)) {
-                    actorHandlers.add(actorPacketHandlers, registration);
+                if (registration.spotType() == null || registration.spotType() == spotType) {
+                    actorHandlers.add(actorPacketHandlers, registration, spotType);
                 }
                 continue;
             }
@@ -461,19 +461,6 @@ final class ZLinkSpotHandlerLoader {
         }
         throw new ZLinkConfigurationException(
                 failurePrefix + handlerType.getName() + "." + method.getName());
-    }
-
-    private static void requireExactSpotType(
-            Class<?> handlerType, Class<?> expectedSpotType, Class<?> actualSpotType) {
-        if (actualSpotType != expectedSpotType) {
-            throw new ZLinkConfigurationException(
-                    "SPOT handler "
-                            + handlerType.getName()
-                            + " targets "
-                            + actualSpotType.getName()
-                            + " but expected "
-                            + expectedSpotType.getName());
-        }
     }
 
     private static ParameterizedType findInterface(Class<?> type, Class<?> targetRawType) {

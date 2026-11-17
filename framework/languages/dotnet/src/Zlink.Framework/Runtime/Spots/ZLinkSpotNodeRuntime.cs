@@ -186,7 +186,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             && node is IZLinkBackendRelocationReplyRelay relayBackend
         )
         {
-            _relocationReplyRelayTarget = new ZLinkRelocationReplyTarget(relayBackend);
+            _relocationReplyRelayTarget = new ZLinkRelocationReplyTarget(
+                (relay, payload) => runtime.CompleteRelocationReply(this, relay, payload)
+            );
             relayBackend.SetRelocationReplyRelayTarget(_relocationReplyRelayTarget);
         }
         if (
@@ -422,7 +424,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
         var reply = terminal.ReplyParts is null
             ? Array.Empty<Message>()
-            : terminal.ReplyParts.Select(static part => Message.From(part.Span)).ToArray();
+            : ZLinkRawRouterServicePort.CreateMessages(terminal.ReplyParts);
         return (completion, reply);
     }
 
@@ -587,7 +589,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
         var reply = terminal.ReplyParts is null
             ? Array.Empty<Message>()
-            : terminal.ReplyParts.Select(static part => Message.From(part.Span)).ToArray();
+            : ZLinkRawRouterServicePort.CreateMessages(terminal.ReplyParts);
         return (terminal.Completion, reply);
     }
 

@@ -165,57 +165,20 @@ public final class Scenarios {
         var target = player(beforeMove, other.playerId);
         var moveDelta = target.x() >= source.x() ? Rules.MAX_STEP : -Rules.MAX_STEP;
         var moveSequence = source.lastSequence() + 1;
-        var acceptedMove = new MoveRequest(moveDelta, 0, moveSequence);
-        var rejectedMove = new MoveRequest(moveDelta, 0, moveSequence + 1);
-        mover.send(acceptedMove);
-        mover.send(rejectedMove);
-        var moveResult = mover.next(MoveResult.class);
-        var moveRejection = mover.next(ActionRejected.class);
-        Structure.require(moveResult.sequence() == moveSequence, "Accepted move result sequence differs");
-        Structure.require(moveRejection.reason().equals(Rules.MOVE_BUDGET) && moveRejection.retryAfterMs() > 0,
-                "Expected movement-budget rejection");
-        var afterMoveA = view(mover);
-        var afterMover = player(afterMoveA, mover.playerId);
-        Structure.require(afterMover.x() == moveResult.x() && afterMover.y() == moveResult.y()
-                        && afterMover.lastSequence() == moveSequence
-                        && player(afterMoveA, other.playerId).hp() == target.hp(),
-                "Movement-budget rejection changed the accepted movement state");
-        Thread.sleep(moveRejection.retryAfterMs());
-        mover.send(rejectedMove);
-        var retriedMove = mover.next(MoveResult.class);
-        Structure.require(retriedMove.sequence() == rejectedMove.sequence(), "Server movement retry delay was insufficient");
-        var afterMoveB = view(mover);
-        var afterRetryMove = player(afterMoveB, mover.playerId);
-        Structure.require(afterRetryMove.lastSequence() == rejectedMove.sequence()
-                        && afterRetryMove.x() == retriedMove.x()
-                        && afterRetryMove.y() == retriedMove.y(),
-                "Retried movement result differs from RoomView");
+        move(p1, p2, mover, moveDelta, 0, moveSequence);
+        var afterMove = move(p1, p2, mover, moveDelta, 0, moveSequence + 1);
+        Structure.require(player(afterMove, mover.playerId).lastSequence() == moveSequence + 1
+                        && player(afterMove, other.playerId).hp() == target.hp(),
+                "Movement changed sequence or player HP");
+        rejectAction(mover, new MoveRequest(moveDelta, 0, moveSequence + 1), Rules.STALE_SEQUENCE);
 
         var beforeShot = view(p1);
         var shotTarget = player(beforeShot, p2.playerId);
         var shotSequence = player(beforeShot, p1.playerId).lastSequence() + 1;
-        var acceptedShot = new ShootRequest(p2.playerId, shotSequence);
-        var rejectedShot = new ShootRequest(p2.playerId, shotSequence + 1);
-        p1.send(acceptedShot);
-        p1.send(rejectedShot);
-        var shotResult = p1.next(ShotResult.class);
-        var fireRejection = p1.next(ActionRejected.class);
-        Structure.require(shotResult.sequence() == shotSequence && shotResult.outcome().equals("hit"),
-                "Expected accepted hit before fire-too-soon rejection");
-        Structure.require(fireRejection.reason().equals(Rules.FIRE_TOO_SOON) && fireRejection.retryAfterMs() > 0,
-                "Expected fire-interval rejection");
-        var afterShotA = view(p1);
-        Structure.require(player(afterShotA, p2.playerId).hp() == shotTarget.hp() - Rules.DAMAGE
-                        && player(afterShotA, p1.playerId).lastSequence() == shotSequence,
-                "Fire-too-soon rejection changed the accepted shot state");
-        Thread.sleep(fireRejection.retryAfterMs());
-        p1.send(rejectedShot);
-        var retriedShot = p1.next(ShotResult.class);
-        Structure.require(retriedShot.sequence() == rejectedShot.sequence(), "Server fire retry delay was insufficient");
-        var afterShotB = view(p1);
-        Structure.require(player(afterShotB, p2.playerId).hp() == shotTarget.hp() - 2 * Rules.DAMAGE
-                        && player(afterShotB, p1.playerId).lastSequence() == rejectedShot.sequence(),
-                "Retried shot did not update the target state");
+        var afterShot = hit(p1, p2, shotSequence, shotTarget.hp() - Rules.DAMAGE);
+        Structure.require(player(afterShot, p1.playerId).lastSequence() == shotSequence,
+                "Shots lost sequence");
+        rejectAction(p1, new ShootRequest(p2.playerId, shotSequence), Rules.STALE_SEQUENCE);
 
         long staleSequence = player(view(mover), mover.playerId).lastSequence();
         rejectAction(mover, new MoveRequest(0, 0, staleSequence), Rules.STALE_SEQUENCE);
