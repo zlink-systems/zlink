@@ -246,35 +246,36 @@ final class ZLinkTopologyStatusSourceTest {
     @Test
     void signalsPublishChangedPayloadAfterLastObserverCancels() throws Exception {
         var state = new AtomicReference<>(ZLinkTopologyState.READY);
-        var read = new AtomicReference<CountDownLatch>();
+        var published = new LinkedBlockingQueue<Status>();
         var source =
                 new ZLinkTopologyStatusSource<Status>(
-                        (key, previous) -> {
-                            var barrier = read.get();
-                            if (barrier != null) {
-                                barrier.countDown();
-                            }
-                            return new Status(key, state.get(), 0);
-                        },
+                        (key, previous) -> new Status(key, state.get(), 0),
                         Status::state,
-                        (status, sequence) -> new Status(status.key(), status.state(), sequence),
+                        (status, sequence) -> {
+                            var current = new Status(status.key(), status.state(), sequence);
+                            published.add(current);
+                            return current;
+                        },
                         Status::sequence,
                         status -> status.state() == ZLinkTopologyState.STOPPED,
                         status -> status.state() == ZLinkTopologyState.STOPPING);
         var initial = first(source.observe("first", 1));
+        assertEquals(initial, published.poll(1, TimeUnit.SECONDS));
         state.set(ZLinkTopologyState.STOPPING);
-        var signaledRead = new CountDownLatch(1);
-        read.set(signaledRead);
         source.signal("first");
-        org.junit.jupiter.api.Assertions.assertTrue(signaledRead.await(1, TimeUnit.SECONDS));
-        var changed = source.snapshot("first");
+        // Sequence allocation belongs to the publication turn; projection entry precedes it.
+        // The source stores the payload after this callback returns, so the test reads the
+        // published values here instead of racing snapshot() against that store.
+        var changed = published.poll(1, TimeUnit.SECONDS);
+        assertNotNull(changed);
+        assertEquals(ZLinkTopologyState.STOPPING, changed.state());
         assertEquals(initial.sequence() + 1, changed.sequence());
         state.set(ZLinkTopologyState.STOPPED);
-        var broadcastRead = new CountDownLatch(1);
-        read.set(broadcastRead);
         source.signalAll();
-        org.junit.jupiter.api.Assertions.assertTrue(broadcastRead.await(1, TimeUnit.SECONDS));
-        assertEquals(changed.sequence() + 1, source.snapshot("first").sequence());
+        var stopped = published.poll(1, TimeUnit.SECONDS);
+        assertNotNull(stopped);
+        assertEquals(ZLinkTopologyState.STOPPED, stopped.state());
+        assertEquals(changed.sequence() + 1, stopped.sequence());
     }
 
     @Test
