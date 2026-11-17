@@ -766,8 +766,7 @@ struct application_claim_batch_t
         if (stateful && (kind == owner_kind_t::actor || kind == owner_kind_t::spot))
             return;
         for (std::size_t index = 0; index < claim->claimed_messages; ++index)
-            entries[index].original.emplace (
-              mesh::service_mailbox_t::transfer_locked (*claim->records[index]));
+            entries[index].original.emplace (std::move (*claim->records[index]));
     }
 
     std::array<entry_t, dispatch_limits::receive_batch_messages> storage;
