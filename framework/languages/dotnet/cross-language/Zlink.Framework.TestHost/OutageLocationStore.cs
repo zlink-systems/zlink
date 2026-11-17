@@ -191,44 +191,52 @@ internal sealed class OutageLocationStore(
         if (result is not ZLinkStoreWriteResult.Applied) return result;
         if (_recovering && source)
         {
-            var owner = request.Mutations.OfType<ZLinkStoreMutation.Put>().SingleOrDefault(put => put.Key == _ownerKey);
-            if (owner is not null)
+            try
             {
-                var lease = Property<long>(Call("DecodeOwner", owner.Bytes), "LeaseGeneration");
-                if (lease != _oldLease && _newLease == 0)
+                var owner = request.Mutations.OfType<ZLinkStoreMutation.Put>().SingleOrDefault(put => put.Key == _ownerKey);
+                if (owner is not null)
                 {
-                    _newLease = lease;
-                    Timing("new-claim", MonotonicMs());
-                    _claimed.TrySetResult();
+                    var lease = Property<long>(Call("DecodeOwner", owner.Bytes), "LeaseGeneration");
+                    if (lease != _oldLease && _newLease == 0)
+                    {
+                        _newLease = lease;
+                        Timing("new-claim", MonotonicMs());
+                        _claimed.TrySetResult();
+                    }
+                }
+                var descriptor = request.Mutations.OfType<ZLinkStoreMutation.Put>().SingleOrDefault(put => put.Key == _meshKey);
+                if (descriptor is not null && _descriptorConfirmedMs == 0)
+                {
+                    var descriptorType = Repository.Assembly.GetType("Zlink.Framework.Runtime.Locations.ZLinkMeshNodeDescriptor", true)!;
+                    var record = Repository.GetMethod("DecodeDescriptor", Static)!.MakeGenericMethod(descriptorType).Invoke(null, [descriptor.Bytes])!;
+                    Require(Property<long>(Property(record, "Descriptor"), "LeaseGeneration") == _newLease, "Recovery descriptor did not use the recovered lease.");
+                    Require(Property<string>(Property(record, "Descriptor"), "OwnerId") == Property<string>(_authorityBefore!, "OwnerId"), "Recovery descriptor changed owner identity.");
+                    _descriptorHeld.TrySetResult();
+                    await WaitForRecoveryAsync(_descriptorRelease.Task, cancellationToken);
+                    _descriptorConfirmedMs = MonotonicMs();
+                    Timing("descriptor-confirmed", _descriptorConfirmedMs);
+                    RequireBeforeCutoff(_descriptorConfirmedMs, "descriptor-confirmed");
+                }
+                if (actor is not null && _casConfirmedMs == 0)
+                {
+                    var meta = Call("DecodeAuthorityMeta", actor.Bytes);
+                    Require(_authorityBefore is not null, "Missing steady authority observation.");
+                    Require(Property<ulong>(_authorityBefore!, "ObjectGeneration") == Property<ulong>(meta, "ObjectGeneration"), "Recovery changed object generation.");
+                    Require(Property<ulong>(_authorityBefore!, "AuthorityOwnerGeneration") == Property<ulong>(meta, "AuthorityOwnerGeneration"), "Recovery did not Preserve authority generation.");
+                    Require(Property<string>(_authorityBefore!, "OwnerId") == Property<string>(meta, "OwnerId"), "Recovery changed owner identity.");
+                    Require(Property<long>(meta, "OwnerLeaseGeneration") == _newLease && _newLease != _oldLease, "Preserve did not use the recovered lease.");
+                    _authorityRecovered = meta;
+                    _casHeld.TrySetResult();
+                    await WaitForRecoveryAsync(_casRelease.Task, cancellationToken);
+                    _casConfirmedMs = MonotonicMs();
+                    Timing("cas-confirmed", _casConfirmedMs);
+                    RequireBeforeCutoff(_casConfirmedMs, "cas-confirmed");
                 }
             }
-            var descriptor = request.Mutations.OfType<ZLinkStoreMutation.Put>().SingleOrDefault(put => put.Key == _meshKey);
-            if (descriptor is not null && _descriptorConfirmedMs == 0)
+            catch (Exception error) when (!_recoveryFailure.Task.IsCompleted)
             {
-                var descriptorType = Repository.Assembly.GetType("Zlink.Framework.Runtime.Locations.ZLinkMeshNodeDescriptor", true)!;
-                var record = Repository.GetMethod("DecodeDescriptor", Static)!.MakeGenericMethod(descriptorType).Invoke(null, [descriptor.Bytes])!;
-                Require(Property<long>(Property(record, "Descriptor"), "LeaseGeneration") == _newLease, "Recovery descriptor did not use the recovered lease.");
-                Require(Property<string>(Property(record, "Descriptor"), "OwnerId") == Property<string>(_authorityBefore!, "OwnerId"), "Recovery descriptor changed owner identity.");
-                _descriptorHeld.TrySetResult();
-                await WaitForRecoveryAsync(_descriptorRelease.Task, cancellationToken);
-                _descriptorConfirmedMs = MonotonicMs();
-                Timing("descriptor-confirmed", _descriptorConfirmedMs);
-                RequireBeforeCutoff(_descriptorConfirmedMs, "descriptor-confirmed");
-            }
-            if (actor is not null && _casConfirmedMs == 0)
-            {
-                var meta = Call("DecodeAuthorityMeta", actor.Bytes);
-                Require(_authorityBefore is not null, "Missing steady authority observation.");
-                Require(Property<ulong>(_authorityBefore!, "ObjectGeneration") == Property<ulong>(meta, "ObjectGeneration"), "Recovery changed object generation.");
-                Require(Property<ulong>(_authorityBefore!, "AuthorityOwnerGeneration") == Property<ulong>(meta, "AuthorityOwnerGeneration"), "Recovery did not Preserve authority generation.");
-                Require(Property<string>(_authorityBefore!, "OwnerId") == Property<string>(meta, "OwnerId"), "Recovery changed owner identity.");
-                Require(Property<long>(meta, "OwnerLeaseGeneration") == _newLease && _newLease != _oldLease, "Preserve did not use the recovered lease.");
-                _authorityRecovered = meta;
-                _casHeld.TrySetResult();
-                await WaitForRecoveryAsync(_casRelease.Task, cancellationToken);
-                _casConfirmedMs = MonotonicMs();
-                Timing("cas-confirmed", _casConfirmedMs);
-                RequireBeforeCutoff(_casConfirmedMs, "cas-confirmed");
+                // Observation faults must fail the run with their cause, not as a later deadline.
+                throw FailRecovery($"wrapper-observation|{error.GetType().Name}:{(error.InnerException ?? error).Message}");
             }
         }
         if (source && !_recovering && _newLease != 0 && actor is not null)
