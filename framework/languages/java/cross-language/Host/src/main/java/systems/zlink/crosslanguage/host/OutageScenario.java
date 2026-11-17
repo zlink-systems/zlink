@@ -213,14 +213,11 @@ final class OutageScenario {
     }
 
     private boolean stagedFenceAbsent(long objectGeneration) throws Exception {
-        var decode = ZLinkCanonicalRelocationAuthorityStateCodec.class.getDeclaredMethod("decodeStrict", byte[].class);
-        decode.setAccessible(true);
-        Object relocation = decode.invoke(null, authority().payload());
-        require(relocation != null, "staged source relocation state is missing");
-        Object id = observe(relocation, "aggregateId");
-        long attemptGeneration = (long) observe(relocation, "targetAttemptGeneration");
+        // The scenario stages one relocation of one actor. Matching by incarnation keeps this
+        // check independent of whether the source records relocation state in authority (#4718).
         Object retire = field(runtime, "spotRetire");
         Object matched = null;
+        int scanned = 0;
         for (Object machine : (Iterable<?>) field(retire, "stateMachines")) {
             var snapshot = machine.getClass().getDeclaredMethod("inStateLane", java.util.function.Supplier.class);
             snapshot.setAccessible(true);
@@ -229,18 +226,15 @@ final class OutageScenario {
             java.util.Map<?, ?> targets = (java.util.Map<?, ?>) targetsField.get(machine);
             java.util.function.Supplier<java.util.Map<?, ?>> copy = () -> java.util.Map.copyOf(targets);
             for (Object candidate : ((java.util.Map<?, ?>) snapshot.invoke(machine, copy)).values()) {
-                Object prepare = observe(candidate, "prepare");
-                if (!id.equals(observe(prepare, "id"))
-                        || attemptGeneration != (long) observe(prepare, "targetAttemptGeneration")) continue;
-                Object participant = observe(prepare, "object");
-                require(actorId.equals(observe(participant, "objectId"))
-                        && objectGeneration == (long) observe(participant, "objectGeneration"),
-                    "staged target actor incarnation differs");
+                scanned++;
+                Object participant = observe(observe(candidate, "prepare"), "object");
+                if (!actorId.equals(observe(participant, "objectId"))
+                        || objectGeneration != (long) observe(participant, "objectGeneration")) continue;
                 require(matched == null, "multiple matching target attempts");
                 matched = candidate;
             }
         }
-        require(matched != null, "matching staged target attempt is missing");
+        require(matched != null, "matching staged target attempt is missing (scanned=" + scanned + ")");
         stagedTargetAttempt = matched;
         return !(boolean) observe(stagedTargetAttempt, "committed");
     }

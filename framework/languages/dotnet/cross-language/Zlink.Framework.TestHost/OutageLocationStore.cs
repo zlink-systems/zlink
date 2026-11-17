@@ -457,25 +457,21 @@ internal sealed class OutageLocationStore(
 
     private void RequireStagedFenceAbsent(object runtime, string actorId, ulong generation)
     {
-        var relocation = ReadRelocation(Property<byte[]>(_authorityBefore!, "Payload"));
-        Require(relocation is not null, "Staged source relocation state is missing.");
-        var state = Property(relocation!, "State");
+        // The scenario stages one relocation of one actor. Matching by incarnation keeps this
+        // check independent of whether the source records relocation state in authority (#4718).
         var owner = Property(runtime, "StandaloneActorRelocationRuntime");
         var attempts = (System.Collections.IEnumerable)owner.GetType().GetField("_targetAttempts", Instance)!.GetValue(owner)!;
         var matches = new List<object>();
         foreach (var entry in attempts)
         {
-            var key = Property(entry, "Key");
-            if (Property<ulong>(key, "RelocationHigh") != Property<ulong>(state, "RelocationHigh")
-                || Property<ulong>(key, "RelocationLow") != Property<ulong>(state, "RelocationLow")
-                || Property<ulong>(key, "AttemptGeneration") != Property<ulong>(state, "TargetAttemptGeneration"))
-                continue;
             var stage = Property(Property(entry, "Value"), "Stage");
-            Require(stage is not null, "Matching target attempt has no stage.");
-            var participant = Property(Property(stage!, "Prepare"), "Object");
-            Require(Property<string>(participant, "ObjectId") == actorId
-                && Property<ulong>(participant, "ObjectGeneration") == generation, "Staged target actor incarnation differs.");
-            matches.Add(stage!);
+            if (stage is null)
+                continue;
+            var participant = Property(Property(stage, "Prepare"), "Object");
+            if (Property<string>(participant, "ObjectId") != actorId
+                || Property<ulong>(participant, "ObjectGeneration") != generation)
+                continue;
+            matches.Add(stage);
         }
         Require(matches.Count == 1, "Expected exactly one matching staged target attempt.");
         _stagedTarget = matches[0];
