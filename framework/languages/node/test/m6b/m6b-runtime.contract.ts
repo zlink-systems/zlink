@@ -181,8 +181,12 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
 // owner over inert queue/permit ports and attach it at the capture point.
 function testIngressJobOwner(): ApplicationIngressRecordOwner {
   let detached = false;
+  let released = false;
   const permit: ApplicationJobPermitPort = {
     origin: 'remote',
+    get isReleased() {
+      return released;
+    },
     markApplicationQueued() {},
     get detachedForHandlerTurn() {
       return detached;
@@ -190,8 +194,12 @@ function testIngressJobOwner(): ApplicationIngressRecordOwner {
     detachForHandlerTurn() {
       detached = true;
     },
-    releaseBeforeHandler() {},
-    releaseAfterInternalProcessing() {}
+    releaseBeforeHandler() {
+      released = true;
+    },
+    releaseAfterInternalProcessing() {
+      released = true;
+    }
   };
   const queue: ApplicationJobQueuePort = {
     createReceiveRotation: () => {

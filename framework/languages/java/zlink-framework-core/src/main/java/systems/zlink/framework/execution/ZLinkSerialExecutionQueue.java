@@ -28,6 +28,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -365,6 +366,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private synchronized void publish(Entry entry) {
+        if (entry.ownerMailbox == null) entry.ownerMailbox = this;
         if (entry.lane == Lane.APPLICATION
                 && !entry.continuation
                 && lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery) {
@@ -441,12 +443,13 @@ public final class ZLinkSerialExecutionQueue {
         if (entry == null) {
             return CompletableFuture.completedFuture(null);
         }
-        if (this != gateOwner) {
-            entry.result.whenComplete(
-                    (ignored, failure) -> sharedSpotGate.post(() -> finish(entry, false)));
-        }
         entry.ownerMailbox = entry.origin == null ? this : entry.origin.ownerMailbox;
-        CompletionStage<Void> turn = gateOwner.invokeInline(entry);
+        CompletionStage<Void> turn =
+                gateOwner.invokeInline(
+                        entry,
+                        this == gateOwner
+                                ? null
+                                : () -> sharedSpotGate.post(() -> finish(entry, false)));
         if (this == gateOwner) {
             return turn.whenComplete(
                     (ignored, failure) -> {
@@ -1572,7 +1575,7 @@ public final class ZLinkSerialExecutionQueue {
                                     record,
                                     operation,
                                     relocationRelease,
-                                    new CompletableFuture<>(),
+                                    null,
                                     ZLinkFlowContext.current(),
                                     null,
                                     Lane.APPLICATION,
@@ -1693,7 +1696,7 @@ public final class ZLinkSerialExecutionQueue {
                         record,
                         operation,
                         relocationRelease,
-                        terminal == null ? new CompletableFuture<>() : terminal,
+                        terminal,
                         ZLinkFlowContext.current(),
                         null,
                         Lane.APPLICATION,
@@ -1728,7 +1731,7 @@ public final class ZLinkSerialExecutionQueue {
                         record,
                         operation,
                         relocationRelease,
-                        terminal == null ? new CompletableFuture<>() : terminal,
+                        terminal,
                         ZLinkFlowContext.current(),
                         null,
                         Lane.APPLICATION,
@@ -1751,7 +1754,7 @@ public final class ZLinkSerialExecutionQueue {
                         record,
                         operation,
                         relocationRelease,
-                        new CompletableFuture<>(),
+                        null,
                         ZLinkFlowContext.current(),
                         null,
                         Lane.APPLICATION,
@@ -1763,6 +1766,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void holdRelocationEntry(Entry entry) {
+        if (entry.ownerMailbox == null) entry.ownerMailbox = this;
         if (relocation == null) {
             throw new IllegalStateException("relocation ingress requires an active seal");
         }
@@ -1772,6 +1776,7 @@ public final class ZLinkSerialExecutionQueue {
         relocation.held.addLast(entry);
         relocation.acceptanceEpoch++;
         if (entry.lane == Lane.APPLICATION && !entry.continuation) takeDurable(entry);
+        watchDurableCancellation(entry);
     }
 
     private void release(Entry entry) {
@@ -1783,11 +1788,15 @@ public final class ZLinkSerialExecutionQueue {
     void settleOwnership(Entry entry) {
         if (entry == null || entry.applicationJobOwnership == null) return;
         Object settled = entry.applicationJobOwnership.settleAdmission();
-        if (settled
-                instanceof
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit)
-            watchDurableCancellation(entry);
         if (settled != null) wakeHead(entry);
+    }
+
+    private void returnCallerAdmission(Entry entry) {
+        synchronized (this) {
+            entry.applicationJobOwnership.suspendRunnable();
+            updatePendingApplicationTailDurable();
+        }
+        entry.applicationJobOwnership.settleAdmission();
     }
 
     private Entry preparePendingHead() {
@@ -1806,8 +1815,7 @@ public final class ZLinkSerialExecutionQueue {
                 || head.continuation
                 || head.applicationJobOwnership == null
                 || !head.applicationJobOwnership.isDurable()) return head;
-        if (head.result.isCancelled()) cancelPending(head);
-        else head.applicationJobOwnership.prepareRunnable(() -> wakeHead(head));
+        head.applicationJobOwnership.prepareRunnable(() -> wakeHead(head));
         return head;
     }
 
@@ -2047,7 +2055,7 @@ public final class ZLinkSerialExecutionQueue {
     private void drainBatch(Entry first) {
         Entry entry = first;
         while (entry != null) {
-            CompletableFuture<Void> invocation = invokeInline(entry).toCompletableFuture();
+            CompletableFuture<Void> invocation = invokeInline(entry, null).toCompletableFuture();
             if (!invocation.isDone()) {
                 Entry suspended = entry;
                 invocation.whenComplete(
@@ -2406,6 +2414,7 @@ public final class ZLinkSerialExecutionQueue {
                             : List.of();
         }
         captured.forEach(this::settleOwnership);
+        captured.forEach(this::watchDurableCancellation);
         return seal;
     }
 
@@ -2572,13 +2581,23 @@ public final class ZLinkSerialExecutionQueue {
                 && relocation.seal == seal;
     }
 
-    private CompletionStage<Void> invokeInline(Entry entry) {
+    private CompletionStage<Void> invokeInline(Entry entry, Runnable physicalTerminal) {
         completeAdmission(entry);
         CompletableFuture<Void> gate = new CompletableFuture<>();
         boolean releaseGateOnIncompleteStage =
                 lanePolicy.releasesGateOnIncompleteStage() && entry.relocationBoundary == null;
         SerialTurn previous = CURRENT.get();
         SerialTurn physical = new SerialTurn(this, gate, entry);
+        BiConsumer<Void, Throwable> completion =
+                (value, error) -> {
+                    try {
+                        if (error != null) physical.entry.result.completeExceptionally(error);
+                        else physical.entry.result.complete(null);
+                    } finally {
+                        physical.gate.complete(null);
+                        if (physicalTerminal != null) physicalTerminal.run();
+                    }
+                };
         CURRENT.set(physical);
         try (var serial =
                         systems.zlink.framework.runtime.internal.handlers
@@ -2593,23 +2612,12 @@ public final class ZLinkSerialExecutionQueue {
                 entry.applicationJobOwnership.requireRunnable();
             CompletionStage<Void> execution =
                     Objects.requireNonNull(entry.operation.get(), "operation result");
-            execution.whenComplete(
-                    (value, error) -> {
-                        if (error != null) {
-                            entry.result.completeExceptionally(error);
-                        } else {
-                            entry.result.complete(null);
-                        }
-                        if (!releaseGateOnIncompleteStage) {
-                            gate.complete(null);
-                        }
-                    });
+            execution.whenComplete(completion);
             if (releaseGateOnIncompleteStage) {
                 gate.complete(null);
             }
         } catch (RuntimeException | Error error) {
-            entry.result.completeExceptionally(error);
-            gate.complete(null);
+            completion.accept(null, error);
         } finally {
             if (previous == null) {
                 CURRENT.remove();
@@ -3376,10 +3384,10 @@ public final class ZLinkSerialExecutionQueue {
             this.lazyRecord = null;
             this.operation = operation;
             this.relocationRelease = relocationRelease;
-            this.result = result;
+            this.applicationJobOwnership = ZLinkApplicationJobContext.transferQueuedOwnership();
+            this.result = result == null ? acceptedResult() : result;
             this.admission = admission;
             this.flow = flow;
-            this.applicationJobOwnership = ZLinkApplicationJobContext.transferQueuedOwnership();
             this.relocationBoundary = relocationBoundary;
             this.lane = lane;
             this.continuation = continuation;
@@ -3424,13 +3432,23 @@ public final class ZLinkSerialExecutionQueue {
             this.lazyRecord = Objects.requireNonNull(lazyRecord, "lazyRecord");
             this.operation = operation;
             this.relocationRelease = relocationRelease;
-            this.result = result;
+            this.applicationJobOwnership = ZLinkApplicationJobContext.transferQueuedOwnership();
+            this.result = result == null ? acceptedResult() : result;
             this.admission = admission;
             this.flow = flow;
-            this.applicationJobOwnership = ZLinkApplicationJobContext.transferQueuedOwnership();
             this.relocationBoundary = relocationBoundary;
             this.lane = lane;
             this.continuation = continuation;
+        }
+
+        private CompletableFuture<Void> acceptedResult() {
+            if (applicationJobOwnership == null) return new CompletableFuture<>();
+            return ZLinkCompletionBridge.newCancellationFuture(
+                    failure -> {
+                        if (failure != null) {
+                            ownerMailbox.returnCallerAdmission(this);
+                        }
+                    });
         }
 
         private boolean hasRelocationRecord() {
