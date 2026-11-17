@@ -25,24 +25,28 @@ module.exports = function observeMessageFlow(delivery, { onLog, onSpan } = {}) {
   };
   function command(kind, value) {
     channel.ref();
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const id = ++sequence;
-      pending.set(id, () => { channel.unref(); resolve(); });
+      const timeout = setTimeout(() => {
+        pending.delete(id);
+        channel.unref();
+        reject(new Error('message-flow observation marker deadline'));
+      }, 5000);
+      pending.set(id, () => { clearTimeout(timeout); channel.unref(); resolve(); });
       channel.postMessage({ kind, value, id });
     });
   }
   async function observed() {
     channel.ref();
     const owner = delivery.messageFlowDelivery();
-    // The owner rejects ready with the worker failure, so a failed bootstrap
-    // surfaces here instead of after an assumed startup time.
     try {
       await owner.ready;
     } finally {
       channel.unref();
     }
+    const deadline = Date.now() + 5000;
     while (owner.executing || Atomics.load(owner.state, delivery.TelemetryState.Pending) !== 0) {
-      assert.equal(owner.failure, undefined, 'message-flow worker failed during observation');
+      assert.ok(Date.now() < deadline, 'message-flow provider observation deadline');
       await delay(1);
     }
     // All provider observations precede this marker on the same channel.
