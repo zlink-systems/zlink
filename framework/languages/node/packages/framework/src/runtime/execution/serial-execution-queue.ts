@@ -36,6 +36,7 @@ export interface ZLinkSerialWorkRecord<T> {
   readonly lane: ZLinkSerialWorkLane;
   operation: () => Promise<T> | T;
   readonly context?: unknown;
+  readonly packetAdmission?: () => Promise<T> | T;
   resolve(value: T): void;
   reject(reason: unknown): void;
   /** Releases this owner's reservation exactly once after the real terminal. */
@@ -119,10 +120,11 @@ export class ZLinkSerialExecutionQueue {
   submit<T>(
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
-    context?: unknown
+    context?: unknown,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     try {
-      return this.admit(operation, options, context);
+      return this.admit(operation, options, context, undefined, false, packetAdmission);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -158,9 +160,17 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
     context?: unknown,
-    preparation?: ZLinkSerialWorkPreparation
+    preparation?: ZLinkSerialWorkPreparation,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
-    return this.admit(operation, { ...options, lane: 'application' }, context, preparation);
+    return this.admit(
+      operation,
+      { ...options, lane: 'application' },
+      context,
+      preparation,
+      false,
+      packetAdmission
+    );
   }
 
   /**
@@ -170,9 +180,10 @@ export class ZLinkSerialExecutionQueue {
   submitPreAdmitted<T>(
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
-    context?: unknown
+    context?: unknown,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
-    return this.admit(operation, options, context);
+    return this.admit(operation, options, context, undefined, false, packetAdmission);
   }
 
   /** Holds lifecycle FIFO through an operation result while its application turns can run. */
@@ -251,7 +262,8 @@ export class ZLinkSerialExecutionQueue {
     options: ZLinkSerialWorkOptions | undefined,
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation,
-    operationEnvelope = false
+    operationEnvelope = false,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options?.lane ?? 'application';
@@ -283,6 +295,7 @@ export class ZLinkSerialExecutionQueue {
       executionOwner,
       operationEnvelope,
       context,
+      packetAdmission,
       preparation,
       preparationState: preparation === undefined ? 'ready' : 'idle',
       resolve: resolveResult,
@@ -650,11 +663,12 @@ if (isStructuralGuardEnabled()) {
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
-    context?: unknown
+    context?: unknown,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
-        submit.call(this, operation, options, context) as Promise<T>,
+        submit.call(this, operation, options, context, packetAdmission) as Promise<T>,
         `serial ${options?.lane ?? 'application'} ${diagnosticWorkName(operation)}`
       ),
       'serial completion'
@@ -666,11 +680,12 @@ if (isStructuralGuardEnabled()) {
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
-    context?: unknown
+    context?: unknown,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
-        submitPreAdmitted.call(this, operation, options, context) as Promise<T>,
+        submitPreAdmitted.call(this, operation, options, context, packetAdmission) as Promise<T>,
         `serial ${options?.lane ?? 'application'} ${diagnosticWorkName(operation)}`
       ),
       'serial completion'
@@ -698,11 +713,19 @@ if (isStructuralGuardEnabled()) {
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
     context?: unknown,
-    preparation?: ZLinkSerialWorkPreparation
+    preparation?: ZLinkSerialWorkPreparation,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
-        admitDurablePrefix.call(this, operation, options, context, preparation) as Promise<T>,
+        admitDurablePrefix.call(
+          this,
+          operation,
+          options,
+          context,
+          preparation,
+          packetAdmission
+        ) as Promise<T>,
         `serial durable ${diagnosticWorkName(operation)}`
       ),
       'serial completion'

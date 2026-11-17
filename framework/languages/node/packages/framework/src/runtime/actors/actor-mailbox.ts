@@ -29,8 +29,13 @@ export class ZLinkActorSerialExecutor {
     );
   }
 
-  execute<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
+  execute<T>(
+    operation: () => Promise<T> | T,
+    workOptions?: ZLinkSerialWorkOptions,
+    capture?: () => Promise<T> | T
+  ): Promise<T> {
     const initial = currentApplicationJobPermit();
+    const packetAdmission = capture === undefined ? undefined : bindApplicationJobPermit(capture);
     if (
       initial !== undefined &&
       workOptions?.lane !== 'lifecycle' &&
@@ -61,7 +66,8 @@ export class ZLinkActorSerialExecutor {
             prepared.markApplicationQueued();
           },
           cancel
-        }
+        },
+        packetAdmission
       );
       initial.releaseAfterInternalProcessing();
       return terminal;
@@ -70,8 +76,8 @@ export class ZLinkActorSerialExecutor {
       runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
     );
     return initial !== undefined
-      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions)
-      : this.scheduler.submit(boundOperation, workOptions);
+      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, undefined, packetAdmission)
+      : this.scheduler.submit(boundOperation, workOptions, undefined, packetAdmission);
   }
 
   /**
@@ -103,6 +109,19 @@ export class ZLinkActorSerialExecutor {
         record.preparation
       )
     );
+  }
+
+  /** Moves accepted packet admissions into the active handoff in source FIFO order. */
+  capturePacketPrefix(): void {
+    while (this.scheduler.application.records.length > 0) {
+      const record = this.scheduler.application.records[0]!;
+      if (record.packetAdmission === undefined) break;
+      const admission = record.packetAdmission();
+      record.preparationController?.abort(new Error('Packet transferred to the Actor handoff.'));
+      record.preparation?.cancel();
+      this.scheduler.takeSelected(record);
+      void Promise.resolve(admission).then(record.resolve, record.reject).finally(record.release);
+    }
   }
 
   close(): Promise<void> {

@@ -182,10 +182,10 @@ final class ZLinkFrameworkActorSubsystem {
                                 storeLocationResolvers,
                                 serializer,
                                 registration.defaultRequestTimeout(),
-                                null,
                                 runtimeReady,
                                 flowTracer::captureEnabled)
                         : null;
+        if (actorClient != null) actorClient.setFlowTracer(flowTracer);
         registerActorServices(runtimeHandlers, actorClient, actorDirectory, actors);
         wireActorRuntime(
                 registration,
