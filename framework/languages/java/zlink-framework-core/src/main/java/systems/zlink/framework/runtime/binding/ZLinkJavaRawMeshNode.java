@@ -3790,15 +3790,26 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         var completion =
                 ZLinkServiceOperationRegistry.<List<Message>>prepareOperation(
                         ZLinkServiceOperationIds.next());
-        requestActor(
-                target,
-                parts,
-                timeout,
-                requestAdmission,
-                Function.identity(),
-                reply -> reply.forEach(Message::close),
-                Function.identity(),
-                completion);
+        var retained = ZLinkJavaRawSpot.copy(parts);
+        operations
+                .<List<Message>>submitTerminal(
+                        completion.id(),
+                        timeout,
+                        terminal -> {
+                            requestActor(
+                                    target,
+                                    retained,
+                                    timeout,
+                                    requestAdmission,
+                                    Function.identity(),
+                                    Message::closeAll,
+                                    Function.identity(),
+                                    completion);
+                            return completion;
+                        },
+                        Message::closeAll,
+                        completion)
+                .whenComplete((accepted, failure) -> Message.closeAll(retained));
         return completion;
     }
 
@@ -3811,7 +3822,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             Consumer<T> discardReply,
             Function<Throwable, Throwable> mapFailure,
             ZLinkServiceOperationRegistry.Operation<T> completion) {
-        long startedAt = System.nanoTime();
         ZLinkBackendActorRef actor = target.actor();
         long correlation = allocateCorrelation();
         UUID operationId = completion.id();
@@ -3832,13 +3842,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         try {
             inSourceTurn(
                             () -> {
-                                Duration remaining =
-                                        ZLinkRequestCalls.remainingTimeout(
-                                                timeout, startedAt, System::nanoTime);
                                 operations
-                                        .submitTerminal(
+                                        .submitRegistered(
                                                 operationId,
-                                                remaining,
                                                 terminal -> {
                                                     BiConsumer<T, Throwable> receiver =
                                                             (value, failure) ->
@@ -3875,8 +3881,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                                             requestAdmission),
                                                             target.targetNodeGeneration());
                                                 },
-                                                discardReply,
-                                                completion)
+                                                discardReply)
                                         .whenComplete(
                                                 (accepted, failure) -> {
                                                     if (failure != null || !accepted)
@@ -3888,7 +3893,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             (ignored, failure) -> {
                                 if (failure != null) {
                                     Message.closeAll(frames);
-                                    completion.completeExceptionally(mapFailure.apply(failure));
+                                    operations.completeExceptionally(
+                                            operationId, mapFailure.apply(failure));
                                 }
                             });
         } catch (RuntimeException | Error failure) {
