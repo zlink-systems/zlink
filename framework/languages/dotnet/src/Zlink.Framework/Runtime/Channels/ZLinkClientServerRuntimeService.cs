@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Locations;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+using ThreadChannels = System.Threading.Channels;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -315,16 +316,15 @@ internal sealed class ZLinkClientServerRuntimeService(
 
     private sealed class StateChangeSignal : IDisposable
     {
-        private readonly Channel<bool> _channel =
-            global::System.Threading.Channels.Channel.CreateBounded<bool>(
-                new BoundedChannelOptions(1)
-                {
-                    SingleReader = true,
-                    SingleWriter = false,
-                    AllowSynchronousContinuations = false,
-                    FullMode = BoundedChannelFullMode.DropWrite,
-                }
-            );
+        private readonly Channel<bool> _channel = ThreadChannels.Channel.CreateBounded<bool>(
+            new BoundedChannelOptions(1)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false,
+                FullMode = BoundedChannelFullMode.DropWrite,
+            }
+        );
 
         internal void Signal() => _channel.Writer.TryWrite(true);
 

@@ -15,34 +15,48 @@ public sealed class ChannelHeaderGoldenConformanceTests
         using var document = JsonDocument.Parse(File.ReadAllText(GoldenPath));
         foreach (var vector in document.RootElement.GetProperty("valid").EnumerateArray())
         {
-            var name = vector.GetProperty("name").GetString();
             var expected = vector.GetProperty("header");
             var bytes = Convert.FromHexString(vector.GetProperty("hex").GetString()!);
-            using var encodedInput = Message.From(bytes);
+            var tracingStates = ReadTracingStates(vector);
+            foreach (var tracingEnabled in tracingStates)
+            {
+                using var encodedInput = Message.From(bytes);
+                var decoded = ZLinkEnvelopeCodec.DecodeHeader(encodedInput, tracingEnabled);
+                Assert.Equal(expected.GetProperty("kind").GetInt32(), (int)decoded.Kind);
+                Assert.Equal(expected.GetProperty("channel_name").GetString(), decoded.ChannelName);
+                Assert.Equal(expected.GetProperty("message_name").GetString(), decoded.MessageName);
+                Assert.Equal(expected.GetProperty("content_type").GetString(), decoded.ContentType);
+                Assert.Equal(OptionalString(expected, "correlation_id"), decoded.CorrelationId);
+                Assert.Equal(OptionalString(expected, "deadline"), decoded.DeadlineText);
+                Assert.Equal(OptionalString(expected, "topic"), decoded.Topic);
+                Assert.Equal(OptionalString(expected, "error_code"), decoded.ErrorCode);
+                Assert.Equal(OptionalString(expected, "error_message"), decoded.ErrorMessage);
+                Assert.Equal(OptionalString(expected, "source"), decoded.Source);
+                Assert.Equal(
+                    tracingEnabled ? OptionalString(expected, "flow_id") : null,
+                    decoded.FlowId
+                );
+                Assert.Equal(
+                    tracingEnabled ? OptionalInteger(expected, "flow_origin") : null,
+                    decoded.FlowOrigin is { } origin ? (int)origin : null
+                );
+                Assert.Equal(
+                    ReadMetadata(expected),
+                    decoded.Metadata ?? new Dictionary<string, string>()
+                );
 
-            var decoded = ZLinkEnvelopeCodec.DecodeHeader(encodedInput);
-            Assert.Equal(expected.GetProperty("kind").GetInt32(), (int)decoded.Kind);
-            Assert.Equal(expected.GetProperty("channel_name").GetString(), decoded.ChannelName);
-            Assert.Equal(expected.GetProperty("message_name").GetString(), decoded.MessageName);
-            Assert.Equal(expected.GetProperty("content_type").GetString(), decoded.ContentType);
-            Assert.Equal(OptionalString(expected, "correlation_id"), decoded.CorrelationId);
-            Assert.Equal(ParseDeadline(OptionalString(expected, "deadline")), decoded.Deadline);
-            Assert.Equal(OptionalString(expected, "topic"), decoded.Topic);
-            Assert.Equal(OptionalString(expected, "error_code"), decoded.ErrorCode);
-            Assert.Equal(OptionalString(expected, "error_message"), decoded.ErrorMessage);
-            Assert.Equal(OptionalString(expected, "source"), decoded.Source);
-            Assert.Equal(OptionalString(expected, "flow_id"), decoded.FlowId);
-            Assert.Equal(
-                OptionalInteger(expected, "flow_origin"),
-                decoded.FlowOrigin is { } origin ? (int)origin : null
-            );
-            Assert.Equal(
-                ReadMetadata(expected),
-                decoded.Metadata ?? new Dictionary<string, string>()
-            );
-
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(decoded, decoded.ContentType);
-            Assert.Equal(bytes, encoded.AsReadOnlySpan().ToArray());
+                if (
+                    tracingEnabled
+                    && (!vector.TryGetProperty("encode", out var encode) || encode.GetBoolean())
+                )
+                {
+                    using var encoded = ZLinkEnvelopeCodec.EncodeHeader(
+                        decoded,
+                        decoded.ContentType
+                    );
+                    Assert.Equal(bytes, encoded.AsReadOnlySpan().ToArray());
+                }
+            }
         }
     }
 
@@ -52,18 +66,28 @@ public sealed class ChannelHeaderGoldenConformanceTests
         using var document = JsonDocument.Parse(File.ReadAllText(GoldenPath));
         foreach (var vector in document.RootElement.GetProperty("reject").EnumerateArray())
         {
-            using var input = Message.From(
-                Convert.FromHexString(vector.GetProperty("hex").GetString()!)
-            );
-            try
+            foreach (var tracingEnabled in ReadTracingStates(vector))
             {
-                _ = ZLinkEnvelopeCodec.DecodeHeader(input);
-                Assert.Fail(
-                    $"Golden rejection '{vector.GetProperty("name").GetString()}' was accepted."
+                using var input = Message.From(
+                    Convert.FromHexString(vector.GetProperty("hex").GetString()!)
                 );
+                try
+                {
+                    _ = ZLinkEnvelopeCodec.DecodeHeader(input, tracingEnabled);
+                    Assert.Fail(
+                        $"Golden rejection '{vector.GetProperty("name").GetString()}' was accepted with tracing {(tracingEnabled ? "on" : "off")}."
+                    );
+                }
+                catch (ZLinkEnvelopeProtocolException) { }
             }
-            catch (ZLinkEnvelopeProtocolException) { }
         }
+    }
+
+    private static bool[] ReadTracingStates(JsonElement vector)
+    {
+        if (!vector.TryGetProperty("tracing", out var states))
+            return [true, false];
+        return states.EnumerateArray().Select(state => state.GetString() == "on").ToArray();
     }
 
     private static string? OptionalString(JsonElement header, string name) =>
@@ -71,11 +95,6 @@ public sealed class ChannelHeaderGoldenConformanceTests
 
     private static int? OptionalInteger(JsonElement header, string name) =>
         header.TryGetProperty(name, out var value) ? value.GetInt32() : null;
-
-    private static DateTimeOffset? ParseDeadline(string? value) =>
-        value is null
-            ? null
-            : DateTimeOffset.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
 
     private static Dictionary<string, string> ReadMetadata(JsonElement header)
     {
