@@ -1249,6 +1249,14 @@ apply_bound_session_bind_async (
         return ::zlink::framework::result_t<bind_result_t>::success (
           bind_result_t{runtime::stateful::stateful_error_t::none, std::move (replacement)});
     };
+    const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
+    const bool duplicate = current && current->session_rid && current->node_generation != 0
+                           && current->binding_generation != 0
+                           && (current->node_rid != incoming_route.node_rid
+                               || current->node_generation != incoming_route.node_generation
+                               || *current->session_rid != *incoming_route.session_rid);
+    if (!duplicate)
+        co_return replace_binding ();
     const bool callback_absent = co_await spot_state->lane.run_task ([spot_state, actor] {
         auto actor_type = std::string (actor_ref_access_t::actor_type (actor));
         if (actor_type.empty ()) {
@@ -1304,9 +1312,7 @@ apply_bound_session_bind_async (
     struct accept_session_binding_t
     {
         static task_t<::zlink::framework::result_t<bool>>
-        run (std::decay_t<decltype (actor_gateway_runtime)> actor_gateway_runtime,
-             std::decay_t<decltype (actor)> actor,
-             std::decay_t<decltype (incoming_route)> incoming_route,
+        run (actor_session_binding_identity_t current_identity,
              std::decay_t<decltype (actor_session_binding_identity_t{
                node_rid_t::from_string (session_owner.to_string ()), session_owner_generation,
                bind.binding.generation})> incoming_identity,
@@ -1317,36 +1323,21 @@ apply_bound_session_bind_async (
              actor_t *actor_instance,
              std::stop_token cancellation)
         {
-            const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
-            const bool duplicate = current && current->session_rid && current->node_generation != 0
-                                   && current->binding_generation != 0
-                                   && (current->node_rid != incoming_route.node_rid
-                                       || current->node_generation != incoming_route.node_generation
-                                       || *current->session_rid != *incoming_route.session_rid);
-            if (duplicate) {
-                const actor_session_binding_identity_t current_identity{
-                  node_rid_t::from_string (current->node_rid.to_string ()),
-                  current->node_generation, current->binding_generation};
-                start_callback_timeout ();
-                const auto rejection = co_await actor_instance->on_duplicate_bind (
-                  current_identity, incoming_identity, cancellation);
-                std::uint8_t pending = 0;
-                if (!race->decision.compare_exchange_strong (pending, 1))
-                    co_return ::zlink::framework::result_t<bool>::success (false);
-                if (rejection && !rejection->empty ()) {
-                    completion->complete (
-                      ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
-                        runtime::stateful::stateful_error_t::conflict, std::nullopt,
-                        static_cast<std::uint32_t> (
-                          runtime::protocol::request_terminal_result::rejected),
-                        static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
-                        runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
-                    co_return ::zlink::framework::result_t<bool>::success (false);
-                }
-            } else {
-                std::uint8_t pending = 0;
-                if (!race->decision.compare_exchange_strong (pending, 1))
-                    co_return ::zlink::framework::result_t<bool>::success (false);
+            start_callback_timeout ();
+            const auto rejection = co_await actor_instance->on_duplicate_bind (
+              current_identity, incoming_identity, cancellation);
+            std::uint8_t pending = 0;
+            if (!race->decision.compare_exchange_strong (pending, 1))
+                co_return ::zlink::framework::result_t<bool>::success (false);
+            if (rejection && !rejection->empty ()) {
+                completion->complete (
+                  ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
+                    runtime::stateful::stateful_error_t::conflict, std::nullopt,
+                    static_cast<std::uint32_t> (
+                      runtime::protocol::request_terminal_result::rejected),
+                    static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                    runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
+                co_return ::zlink::framework::result_t<bool>::success (false);
             }
             if (cancellation.stop_requested ())
                 co_return ::zlink::framework::result_t<bool>::success (false);
@@ -1363,7 +1354,10 @@ apply_bound_session_bind_async (
     };
     auto turn = spot_runtime.run_actor_turn (
       actor,
-      [actor_gateway_runtime, actor, incoming_route, replace_binding = std::move (replace_binding),
+      [current_identity =
+         actor_session_binding_identity_t{node_rid_t::from_string (current->node_rid.to_string ()),
+                                          current->node_generation, current->binding_generation},
+       replace_binding = std::move (replace_binding),
        incoming_identity =
          actor_session_binding_identity_t{node_rid_t::from_string (session_owner.to_string ()),
                                           session_owner_generation, bind.binding.generation},
@@ -1371,10 +1365,9 @@ apply_bound_session_bind_async (
         actor_t &actor_instance,
         std::stop_token cancellation) mutable -> task_t<::zlink::framework::result_t<bool>> {
           // run_actor_turn owns the Actor instance until this task completes.
-          return accept_session_binding_t::run (actor_gateway_runtime, actor, incoming_route,
-                                                incoming_identity, std::move (replace_binding),
-                                                race, completion, start_callback_timeout,
-                                                &actor_instance, cancellation);
+          return accept_session_binding_t::run (
+            current_identity, incoming_identity, std::move (replace_binding), race, completion,
+            start_callback_timeout, &actor_instance, cancellation);
       },
       race->cancellation.get_token ());
     observe_task_completion (
@@ -2074,6 +2067,17 @@ void app_t::_apply_zlink_framework ()
     }
     std::vector<std::weak_ptr<detail::mesh_node_runtime_t>> weak_mesh_nodes (mesh_nodes.begin (),
                                                                              mesh_nodes.end ());
+    for (const auto &mesh : mesh_nodes) {
+        mesh->configure_operation_owner_resolver (
+          [weak_mesh_nodes] (runtime::foundation::call_id_t operation, std::uint64_t reply_route_id)
+            -> std::optional<runtime::mesh::raw_mesh_node_owner_t::operation_owner_t> {
+              for (const auto &weak : weak_mesh_nodes)
+                  if (const auto candidate = weak.lock ())
+                      if (auto owner = candidate->local_operation_owner (operation, reply_route_id))
+                          return owner;
+              return std::nullopt;
+          });
+    }
     if (!mesh_nodes.empty ()) {
         const auto application_mesh_it =
           std::find_if (mesh_nodes.begin (), mesh_nodes.end (), [&] (const auto &mesh) {
@@ -2766,26 +2770,9 @@ void app_t::_apply_zlink_framework ()
               const auto mesh = detail::lock_runtime_owner (weak_application_mesh);
               const auto gateway = detail::actor_gateway_runtime_t (
                 detail::lock_runtime_owner (weak_actor_gateway_runtime));
-              auto located = co_await resolver->resolve_spot_address ({}, target_spot);
-              if (!located) {
-                  co_return result_t<detail::actor_join_reply_t>::failure (
-                    framework_error_kind_t::not_found, "target Spot location was not found");
-              }
-              const auto &target = *located;
-              if (target.object_generation == 0) {
-                  co_return result_t<detail::actor_join_reply_t>::failure (
-                    framework_error_kind_t::not_found,
-                    "target Spot lifecycle generation was not published");
-              }
-              if (target.owner.lease_generation > 0) {
-                  mesh->observe_spot_authority (
-                    target.node_rid, target.spot_id, target.object_generation,
-                    target.node_generation, target.authority_owner_generation,
-                    static_cast<std::uint64_t> (target.owner.lease_generation));
-              }
               const auto bound_session = co_await gateway.bound_session_route_async (actor);
               co_return co_await mesh->join_application_actor_to_spot (
-                actor, target, request, timeout,
+                actor, std::move (target_spot), resolver, request, timeout,
                 bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
                 bound_session ? bound_session->session_rid : std::nullopt, std::move (packet_name),
                 std::move (content_type));
@@ -3246,13 +3233,13 @@ void app_t::_apply_zlink_framework ()
     }
     if (!_state->services.contains (std::type_index (typeid (actor_client_t)))) {
         _state->services.add_factory<actor_client_t> (
-          [mesh_nodes, actor_location_observer, delays = &_state->delays,
+          [mesh_nodes, actor_location_observer,
            admission = detail::channel_runtime_t::from (_state->zlink.message_bus ()),
            location_options = options.location_options ()] (service_provider_t &provider) mutable {
               return runtime::make_actor_client (
                 provider.get_required<runtime::live_location_reader_t> (),
                 provider.get_required<serializer_registry_t> (), mesh_nodes,
-                actor_location_observer, location_options, *delays,
+                actor_location_observer, location_options,
                 [admission] { admission.admit_outbound (); });
           },
           service_lifetime_t::singleton);

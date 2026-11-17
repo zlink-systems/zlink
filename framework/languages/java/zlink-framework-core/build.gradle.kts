@@ -194,7 +194,10 @@ tasks.named("test") {
 }
 
 dependencies {
+    testFixturesImplementation("io.lettuce:lettuce-core:7.6.0.RELEASE")
+    testFixturesImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")
     add("integrationTestImplementation", project(":zlink-framework-locations-redis"))
+    add("integrationTestImplementation", project(":zlink-stream-connector"))
     api(project(":zlink-framework-json-internal"))
     implementation(project(":zlink-framework-binding-internal"))
     api(project(":zlink-framework-provider-abstractions"))
@@ -211,4 +214,8 @@ dependencies {
 // Shared observability contract; the fixture remains outside language source trees.
 tasks.named<ProcessResources>("processTestResources") {
     from(rootProject.file("../../runtime/protocol/fixtures/runtime-metrics-v1.json"))
+}
+
+tasks.named<Test>("integrationTest") {
+    inputs.property("redisEndpoint", System.getenv("ZLINK_REDIS_TEST_ENDPOINT") ?: "")
 }

@@ -1,4 +1,9 @@
 import type { ZLinkExecutionPolicy } from '../admission';
+import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
+import {
+  currentApplicationJobPermit,
+  bindApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 import { macrotaskBoundary } from '../abort';
 import {
   diagnosticWorkName,
@@ -36,6 +41,7 @@ export interface ZLinkSerialWorkRecord<T> {
   readonly lane: ZLinkSerialWorkLane;
   operation: () => Promise<T> | T;
   readonly context?: unknown;
+  readonly packetAdmission?: () => Promise<T> | T;
   resolve(value: T): void;
   reject(reason: unknown): void;
   /** Releases this owner's reservation exactly once after the real terminal. */
@@ -59,7 +65,8 @@ type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & 
   readonly executionOwner?: object;
   readonly operationEnvelope: boolean;
   readonly mailbox?: ZLinkSerialExecutionQueue;
-  readonly preparation?: ZLinkSerialWorkPreparation;
+  preparation?: ZLinkSerialWorkPreparation;
+  applicationAdmission?: ApplicationJobPermitPort;
   preparationState: 'idle' | 'pending' | 'canceling' | 'ready' | 'failed';
   preparationController?: AbortController;
   preparationError?: unknown;
@@ -119,10 +126,11 @@ export class ZLinkSerialExecutionQueue {
   submit<T>(
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
-    context?: unknown
+    context?: unknown,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     try {
-      return this.admit(operation, options, context);
+      return this.admit(operation, options, context, undefined, false, packetAdmission);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -158,9 +166,17 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
     context?: unknown,
-    preparation?: ZLinkSerialWorkPreparation
+    preparation?: ZLinkSerialWorkPreparation,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
-    return this.admit(operation, { ...options, lane: 'application' }, context, preparation);
+    return this.admit(
+      operation,
+      { ...options, lane: 'application' },
+      context,
+      preparation,
+      false,
+      packetAdmission
+    );
   }
 
   /**
@@ -170,9 +186,18 @@ export class ZLinkSerialExecutionQueue {
   submitPreAdmitted<T>(
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
-    context?: unknown
+    context?: unknown,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
-    return this.admit(operation, options, context);
+    return this.admit(
+      operation,
+      options,
+      context,
+      undefined,
+      false,
+      packetAdmission,
+      currentApplicationJobPermit()
+    );
   }
 
   /** Holds lifecycle FIFO through an operation result while its application turns can run. */
@@ -210,12 +235,6 @@ export class ZLinkSerialExecutionQueue {
     if (!this.hasPendingWork) this.resolveIdleWaiters();
   }
 
-  get hasPendingDurableApplication(): boolean {
-    // Every application record accepted behind durable work inherits durable
-    // ownership, so the tail answers this without scanning the FIFO.
-    return this.application.records.at(-1)?.preparation !== undefined;
-  }
-
   get hasPendingWork(): boolean {
     return (
       this.consumer?.running === true ||
@@ -251,7 +270,9 @@ export class ZLinkSerialExecutionQueue {
     options: ZLinkSerialWorkOptions | undefined,
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation,
-    operationEnvelope = false
+    operationEnvelope = false,
+    packetAdmission?: () => Promise<T> | T,
+    applicationAdmission?: ApplicationJobPermitPort
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options?.lane ?? 'application';
@@ -283,7 +304,9 @@ export class ZLinkSerialExecutionQueue {
       executionOwner,
       operationEnvelope,
       context,
+      packetAdmission,
       preparation,
+      applicationAdmission,
       preparationState: preparation === undefined ? 'ready' : 'idle',
       resolve: resolveResult,
       reject: rejectResult,
@@ -294,6 +317,9 @@ export class ZLinkSerialExecutionQueue {
       }
     };
     const previousLength = target.records.length;
+    const preceding = target.records.at(-1);
+    if (applicationAdmission !== undefined)
+      record.operation = bindApplicationJobPermit(operation, () => record.applicationAdmission);
     try {
       record.acceptedSequence = this.nextAcceptedSequence;
       target.records.push(record as SerialWorkRecord<unknown>);
@@ -304,6 +330,12 @@ export class ZLinkSerialExecutionQueue {
       release();
       throw error;
     }
+    if (
+      applicationAdmission !== undefined &&
+      lane === 'application' &&
+      (preceding?.preparation !== undefined || preceding?.applicationAdmission?.isReleased === true)
+    )
+      applicationAdmission.releaseAfterInternalProcessing();
     options?.onAdmitted?.();
     options?.onWithdrawable?.(() => {
       const index = target.records.indexOf(record as SerialWorkRecord<unknown>);
@@ -482,6 +514,25 @@ export class ZLinkSerialExecutionQueue {
   }
 
   private prepareSelected(record: SerialWorkRecord<unknown>): boolean {
+    const initial = record.applicationAdmission;
+    if (initial?.isReleased === true && record.preparation === undefined) {
+      let prepared: ApplicationJobPermitPort | undefined;
+      record.preparation = {
+        prepare: async (signal) => {
+          if (initial.reacquire === undefined)
+            throw new Error('Accepted ingress requires its host permit source.');
+          prepared = await initial.reacquire(signal);
+          record.applicationAdmission = prepared;
+          if (signal.aborted) {
+            prepared.releaseAfterInternalProcessing();
+            throw signal.reason;
+          }
+          prepared.markApplicationQueued();
+        },
+        cancel: () => prepared?.releaseAfterInternalProcessing()
+      };
+      record.preparationState = 'idle';
+    }
     if (
       record.lane === 'lifecycle' &&
       this.application.records.length > 0 &&
@@ -650,11 +701,12 @@ if (isStructuralGuardEnabled()) {
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
-    context?: unknown
+    context?: unknown,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
-        submit.call(this, operation, options, context) as Promise<T>,
+        submit.call(this, operation, options, context, packetAdmission) as Promise<T>,
         `serial ${options?.lane ?? 'application'} ${diagnosticWorkName(operation)}`
       ),
       'serial completion'
@@ -666,11 +718,12 @@ if (isStructuralGuardEnabled()) {
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
-    context?: unknown
+    context?: unknown,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
-        submitPreAdmitted.call(this, operation, options, context) as Promise<T>,
+        submitPreAdmitted.call(this, operation, options, context, packetAdmission) as Promise<T>,
         `serial ${options?.lane ?? 'application'} ${diagnosticWorkName(operation)}`
       ),
       'serial completion'
@@ -698,11 +751,19 @@ if (isStructuralGuardEnabled()) {
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
     context?: unknown,
-    preparation?: ZLinkSerialWorkPreparation
+    preparation?: ZLinkSerialWorkPreparation,
+    packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
-        admitDurablePrefix.call(this, operation, options, context, preparation) as Promise<T>,
+        admitDurablePrefix.call(
+          this,
+          operation,
+          options,
+          context,
+          preparation,
+          packetAdmission
+        ) as Promise<T>,
         `serial durable ${diagnosticWorkName(operation)}`
       ),
       'serial completion'

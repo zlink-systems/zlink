@@ -2864,7 +2864,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         bool registerInstanceFactory = true,
         bool registerUserSpotFactory = true,
         int spotLimit = 100,
-        TimeProvider? timeProvider = null
+        TimeProvider? timeProvider = null,
+        bool clientOnly = false
     )
     {
         var store =
@@ -2875,6 +2876,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         services.AddTransient<SpotCloseProbeHandler>();
         services.AddScoped<SpotCloseScopedResource>();
         services.AddTransient<SpotCloseJoinHandler>();
+        services.AddTransient<SpotCloseEntryIdHandler>();
+        services.AddTransient<SpotCloseActorGenerationHandler>();
         services.AddTransient<SpotCloseInstanceHandler>();
         services.AddTransient<SpotCloseInstanceSignalHandler>();
         services.AddZLinkFramework(options =>
@@ -2884,6 +2887,16 @@ internal sealed class SpotCloseHost : IAsyncDisposable
             options.AddLocationStore(store);
             options.AddRelocationStore(new InMemoryRelocationStore());
             options.ConfigureLocations().PollingInterval = TimeSpan.FromMilliseconds(10);
+            if (clientOnly)
+            {
+                options
+                    .AddRouteMesh(MeshName)
+                    .Listen("tcp://127.0.0.1:0")
+                    .SetRoutingIdPrefix("actor-client")
+                    .Objects()
+                    .Client();
+                return;
+            }
             var server = options
                 .AddRouteMesh(MeshName)
                 .Listen("tcp://127.0.0.1:0")
@@ -3014,6 +3027,24 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                 .Async()
         );
         return actorId;
+    }
+
+    internal ValueTask<ZLinkActorCreateResult> GetExistingActorAsync(string actorId) =>
+        _provider
+            .GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, ActorType)
+            .InMesh(MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Async();
+
+    internal async Task<string> GetEntrySpotIdAsync(string actorId)
+    {
+        var reply = await _provider
+            .GetRequiredService<IZLinkActorClient>()
+            .RequestToActor(actorId, new SpotCloseEntryId())
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Async<SpotCloseProbeReply>();
+        return reply.Marker;
     }
 
     internal async Task JoinActorAsync(string spotId, string? actorId = null)
@@ -3226,10 +3257,18 @@ internal sealed class SpotCloseEntrySpot(IZLinkEntrySpotContext context)
 {
     public IZLinkEntrySpotContext Context { get; } = context;
 
-    public void Configure() =>
+    public void Configure()
+    {
         Context.Handlers.AddActorPacket<SpotCloseJoinHandler, SpotCloseActor>(
             nameof(SpotCloseJoin)
         );
+        Context.Handlers.AddActorPacket<SpotCloseEntryIdHandler, SpotCloseActor>(
+            nameof(SpotCloseEntryId)
+        );
+        Context.Handlers.AddActorPacket<SpotCloseActorGenerationHandler, SpotCloseActor>(
+            nameof(SpotCloseActorGeneration)
+        );
+    }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
         SpotCloseActor actor,
@@ -3271,6 +3310,44 @@ internal sealed class SpotCloseJoinHandler
         actor.Context.JoinSpot(request.SpotId).Timeout(TimeSpan.FromSeconds(10)).Defer();
         return ValueTask.FromResult(new SpotCloseProbeReply("join"));
     }
+}
+
+internal sealed record SpotCloseActorGeneration;
+
+internal sealed class SpotCloseActorGenerationHandler
+    : IZLinkEntrySpotActorRequestHandler<
+        SpotCloseEntrySpot,
+        SpotCloseActor,
+        SpotCloseActorGeneration,
+        SpotCloseProbeReply
+    >
+{
+    public ValueTask<SpotCloseProbeReply> HandleAsync(
+        SpotCloseEntrySpot spot,
+        SpotCloseActor actor,
+        IZLinkMessageContext context,
+        SpotCloseActorGeneration request,
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(new SpotCloseProbeReply(actor.Context.ObjectGeneration.ToString()));
+}
+
+internal sealed record SpotCloseEntryId;
+
+internal sealed class SpotCloseEntryIdHandler
+    : IZLinkEntrySpotActorRequestHandler<
+        SpotCloseEntrySpot,
+        SpotCloseActor,
+        SpotCloseEntryId,
+        SpotCloseProbeReply
+    >
+{
+    public ValueTask<SpotCloseProbeReply> HandleAsync(
+        SpotCloseEntrySpot spot,
+        SpotCloseActor actor,
+        IZLinkMessageContext context,
+        SpotCloseEntryId request,
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(new SpotCloseProbeReply(spot.Context.SpotId));
 }
 
 internal sealed class SpotCloseProbeSpot : IZLinkSpot<SpotCloseActor>

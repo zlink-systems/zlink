@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { ServiceStatefulRuntime } from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
+import type { RawServiceMeshRuntime } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
+import { ApplicationIngressRecordOwner } from '../../packages/framework/src/runtime/application-jobs/application-ingress-record-owner';
+import {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} from '../../packages/framework/src/runtime/host/application-job-queue';
+
 import { RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkFrameworkRuntimeHost } from '../../packages/framework/src/runtime/host';
 import {
@@ -212,3 +221,112 @@ test('duplicate bind without a callback preserves later-Session-wins behavior', 
   assert.equal(fixture.installed.length, 1);
   assert.equal(fixture.state.boundSession?.sessionRid, 'session-incoming');
 });
+
+const sameNodeCases = (
+  JSON.parse(
+    readFileSync('../../runtime/conformance/bound-session-relocation-v1.json', 'utf8')
+  ) as {
+    sameNodeDuplicateBind: Array<{
+      name: string;
+      rejectionMessage: string;
+      callbackCount: number;
+      accepted: boolean;
+      replacementCount: number;
+    }>;
+  }
+).sameNodeDuplicateBind;
+for (const scenario of sameNodeCases) {
+  const reject = !scenario.accepted;
+  test(`same-node physical Session bind runs the Actor decision and preserves rejection: ${reject}`, async () => {
+    let callbacks = 0;
+    const fixture = makeFixture(async () => {
+      callbacks += 1;
+      return scenario.rejectionMessage || undefined;
+    });
+    Object.assign(fixture.state, { boundSession: undefined, locationGeneration: 1n });
+    const queue = new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 2048n }, () => 1n)
+    );
+    const errors: unknown[] = [];
+    const raw = {
+      setServiceIngress() {},
+      reserveLocalIngress: async () =>
+        ApplicationIngressRecordOwner.create(queue, await queue.acquire(undefined, 'local'), {
+          close() {}
+        }),
+      topology: { peer: () => undefined },
+      mailbox: {
+        tryEnqueue(value: unknown) {
+          const record = value as {
+            stateful: {
+              kindData: unknown;
+              reply(terminal: number, code: number, payload?: unknown, tail?: unknown): boolean;
+            };
+            applicationJob: { close(): void };
+          };
+          void fixture.host
+            .dispatchMeshActorBinding('actor-mesh', {
+              kind: ReceiveKind.ActorBinding,
+              kindData: record.stateful.kindData,
+              reply: () =>
+                record.stateful.reply(RequestResult.Ok, 0)
+                  ? SubmitResult.Ok
+                  : SubmitResult.Terminated,
+              replyFailure: (terminal: number, code: number, tail: unknown) =>
+                record.stateful.reply(terminal, code, undefined, tail)
+                  ? SubmitResult.Ok
+                  : SubmitResult.Terminated
+            } as unknown as ReceiveRecord)
+            .catch((error) => errors.push(error))
+            .finally(() => record.applicationJob.close());
+          return true;
+        }
+      }
+    } as unknown as RawServiceMeshRuntime;
+    const runtime = new ServiceStatefulRuntime(raw, 'actor-node', 4n);
+    runtime.setSessionOwnerDescriptors({
+      local: () => ({ ownerId: 'local-owner', leaseGeneration: 9n }),
+      peer: async () => undefined
+    });
+    const actor = runtime.createActor('actor-a').ref;
+    Object.assign(fixture.state, { nativeActorRef: actor });
+    let replacementCount = 0;
+    let replaced!: () => void;
+    const replacement = new Promise<void>((resolve) => {
+      replaced = resolve;
+    });
+    try {
+      const first = await runtime.bindSession(
+        'session-current',
+        actor,
+        1000,
+        async () => true,
+        () => {
+          replacementCount += 1;
+          replaced();
+        }
+      ).promise;
+      assert.equal(first.terminalResult, RequestResult.Ok);
+      assert.equal(callbacks, 0);
+      const current = runtime.registry.binding(actor);
+      assert.ok(current);
+      const incoming = await runtime.bindSession('session-incoming', actor, 1000, async () => true)
+        .promise;
+      assert.equal(callbacks, scenario.callbackCount);
+      if (reject) {
+        assert.equal(incoming.terminalResult, RequestResult.Rejected);
+        assert.equal(runtime.registry.binding(actor), current);
+        assert.equal(fixture.state.boundSession.sessionRid, 'session-current');
+      } else {
+        assert.equal(incoming.terminalResult, RequestResult.Ok);
+        await replacement;
+        assert.equal(runtime.registry.binding(actor)?.sessionRid, 'session-incoming');
+        assert.equal(fixture.state.boundSession.sessionRid, 'session-incoming');
+      }
+      assert.equal(replacementCount, scenario.replacementCount);
+      assert.deepEqual(errors, []);
+    } finally {
+      runtime.close();
+    }
+  });
+}

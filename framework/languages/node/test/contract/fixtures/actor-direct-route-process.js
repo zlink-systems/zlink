@@ -2,6 +2,7 @@
 // The process lifecycle and native MeshNode setup follow the repository's
 // test/contract/fixtures/user-spot-native-process.js harness.
 const flow = require('../helpers/telemetry-log-capture');
+const { testRedisUrl } = require('../helpers/test-redis');
 const { inspectRuntime } = require('../../../packages/framework/dist/runtime/internal-observation');
 const {
   internalFrameworkErrorKind
@@ -105,7 +106,9 @@ class NoticeHandler {
   }
 }
 class AskHandler {
-  async handle(spot, _actor, _context, message) {
+  async handle(spot, actor, _context, message) {
+    if (message.value === 'incarnation')
+      return { generation: String(actor.context.objectGeneration), node: routingId };
     if (message.value === 'missing')
       throw new f.ZLinkFrameworkException(f.ZLinkFrameworkErrorKind.NotFound, 'application result');
     return { value: message.value, spot: String(spot.context.spotId), node: routingId };
@@ -141,13 +144,13 @@ async function start() {
     .ownerLeaseRenewTimeoutMs(500);
   b.addLocationStore(
     new ZLinkRedisLocationStore({
-      url: process.env.ZLINK_TEST_REDIS_URL,
+      url: testRedisUrl,
       keyPrefix: process.env.ZLINK_TEST_REDIS_PREFIX
     })
   );
   b.addRelocationStore(
     new ZLinkRedisRelocationStore({
-      url: process.env.ZLINK_TEST_REDIS_URL,
+      url: testRedisUrl,
       keyPrefix: process.env.ZLINK_TEST_REDIS_PREFIX + 'blobs:'
     })
   );
@@ -300,6 +303,8 @@ async function execute(action) {
       return await actorClient.requestToActor('alice', new Move(null)).submit();
     case 'ask':
       return await actorClient.requestToActor('alice', new Ask()).submit();
+    case 'askGeneration':
+      return await actorClient.requestToActor('alice', new Ask('incarnation')).submit();
     case 'notice':
       await actorClient.sendToActor('alice', new Notice()).submit();
       return true;

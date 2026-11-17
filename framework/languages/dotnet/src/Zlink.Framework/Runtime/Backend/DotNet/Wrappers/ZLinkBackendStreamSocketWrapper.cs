@@ -123,13 +123,25 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         }
     }
 
-    public Task SendAsync(
+    public async Task SendAsync(
         RoutingId routingId,
         Message payload,
         CancellationToken cancellationToken = default
     )
     {
-        return _socket.Send(routingId).Message(payload).Async().EnsureAcceptedAsync();
+        try
+        {
+            await _socket
+                .Send(routingId)
+                .Message(payload)
+                .Async(cancellationToken)
+                .EnsureAcceptedAsync()
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ZLinkMessageParts.Dispose(payload);
+        }
     }
 
     public void DisconnectPeer(RoutingId routingId)

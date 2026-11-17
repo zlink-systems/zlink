@@ -106,6 +106,10 @@ class operation_registry_t
                              mesh_request_metric_t request_metric = {},
                              std::optional<request_identity_t> request = {},
                              std::stop_token cancellation = {});
+    bool continue_operation (call_id_t id,
+                             callback_t &&callback,
+                             std::vector<std::uint8_t> target_routing_id = {});
+    std::optional<clock_t::time_point> deadline (const call_id_t &id) const;
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                              operation_terminal_t terminal);

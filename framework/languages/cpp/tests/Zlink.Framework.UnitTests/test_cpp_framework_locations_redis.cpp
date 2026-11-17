@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -34,28 +35,24 @@ std::string unique_prefix ()
            + std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ());
 }
 
-std::vector<std::string> redis_test_endpoints ()
-{
-    std::vector<std::string> endpoints;
-    if (const auto *endpoint = std::getenv ("ZLINK_REDIS_TEST_ENDPOINT"))
-        endpoints.emplace_back (endpoint);
-    endpoints.emplace_back ("tcp://127.0.0.1:16379");
-    endpoints.emplace_back ("tcp://127.0.0.1:6379");
-    return endpoints;
-}
-
+// ZLINK_REDIS_TEST_ENDPOINT (host:port) names the one Redis a test run uses in
+// every language (#4542). When it is set an unreachable Redis fails the test;
+// without it the tests try 127.0.0.1:6379 and skip when nothing answers.
 std::optional<redis_location_options_t> find_redis_options ()
 {
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-    for (const auto &endpoint : redis_test_endpoints ()) {
-        redis_location_options_t options{.connection_string = endpoint,
-                                         .key_prefix = unique_prefix ()};
-        redis_location_store_t store (options);
-        location_store_t &provider = store;
-        const auto probe = provider.read ({.value = "probe"}).result ();
-        if (probe.has_value ())
-            return options;
-    }
+    const auto *provided = std::getenv ("ZLINK_REDIS_TEST_ENDPOINT");
+    const std::string endpoint =
+      provided != nullptr && *provided != '\0' ? provided : "127.0.0.1:6379";
+    redis_location_options_t options{.connection_string = "tcp://" + endpoint,
+                                     .key_prefix = unique_prefix ()};
+    redis_location_store_t store (options);
+    location_store_t &provider = store;
+    if (provider.read ({.value = "probe"}).result ().has_value ())
+        return options;
+    if (provided != nullptr && *provided != '\0')
+        throw std::runtime_error ("ZLINK_REDIS_TEST_ENDPOINT is set but Redis is unreachable at "
+                                  + endpoint);
 #endif
     return std::nullopt;
 }
@@ -64,7 +61,7 @@ TEST (ZLinkFrameworkLocationsRedis, AggregatePageReadKeepsSourceVersionUntilComm
 {
     const auto options = find_redis_options ();
     if (!options)
-        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
     redis_location_store_t provider (*options);
     sw::redis::Redis raw (
       zlink::framework::redis::detail::normalize_connection_string (options->connection_string));
@@ -113,7 +110,7 @@ TEST (ZLinkFrameworkLocationsRedis, OpaqueLocationStoreProvidesAtomicCasAndScan)
 {
     const auto options = find_redis_options ();
     if (!options)
-        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
 
     redis_location_store_t store (*options);
     location_store_t &provider = store;
@@ -162,7 +159,7 @@ TEST (ZLinkFrameworkLocationsRedis, ValueConditionUsesLiveBytesAtCommit)
 {
     const auto options = find_redis_options ();
     if (!options)
-        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
 
     redis_location_store_t store (*options);
     location_store_t &provider = store;
@@ -216,7 +213,7 @@ TEST (ZLinkFrameworkLocationsRedis, PointReadRejectsCorruptedFormatTag)
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
     const auto options = find_redis_options ();
     if (!options)
-        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
 
     redis_location_store_t store (*options);
     location_store_t &provider = store;
@@ -258,7 +255,7 @@ TEST (ZLinkFrameworkLocationsRedis, OpaqueRelocationStoreKeepsPayloadImmutable)
 {
     const auto location_options = find_redis_options ();
     if (!location_options)
-        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
 
     redis_relocation_store_t store ({.connection_string = location_options->connection_string,
                                      .key_prefix = location_options->key_prefix + ":relocation"});
@@ -289,7 +286,7 @@ TEST (ZLinkFrameworkLocationsRedis, PrefixScanIncludesExactAndUtf8SuffixesOnly)
 {
     const auto options = find_redis_options ();
     if (!options)
-        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
 
     redis_location_store_t store (*options);
     location_store_t &provider = store;
@@ -323,7 +320,7 @@ TEST (ZLinkFrameworkLocationsRedis, SnapshotRetainsValuesAcrossImmediateVersionP
 {
     const auto options = find_redis_options ();
     if (!options)
-        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
 
     redis_location_store_t store (*options);
     location_store_t &provider = store;
@@ -353,6 +350,39 @@ TEST (ZLinkFrameworkLocationsRedis, SnapshotRetainsValuesAcrossImmediateVersionP
     EXPECT_FALSE (next.next_cursor);
     const auto current = std::get<store_found_t> (provider.read ({"mesh:b"}).result ().value ());
     EXPECT_EQ (current.value.bytes, bytes ("127"));
+}
+
+TEST (ZLinkFrameworkLocationsRedis, SnapshotUsesRedisClockAndKeepsItAcrossPages)
+{
+    const auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
+
+    redis_location_store_t store (*options);
+    location_store_t &provider = store;
+    const store_key_t expires_later{"mesh:a"};
+    const store_key_t never_expires{"mesh:b"};
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider
+        .write ({{},
+                 {store_put_t{expires_later, bytes ("a"), 5min},
+                  store_put_t{never_expires, bytes ("b"), std::nullopt}}})
+        .result ()
+        .value ()));
+
+    const auto first = std::get<store_scan_page_t> (
+      provider.scan ({.prefix = "mesh:", .limit = 1}).result ().value ());
+    ASSERT_EQ (first.items.size (), 1u);
+    EXPECT_EQ (first.items.front ().key.value, expires_later.value);
+    ASSERT_TRUE (first.next_cursor);
+
+    const auto second = std::get<store_scan_page_t> (
+      provider.scan ({.prefix = "mesh:", .cursor = first.next_cursor, .limit = 1})
+        .result ()
+        .value ());
+    ASSERT_EQ (second.items.size (), 1u);
+    EXPECT_EQ (second.items.front ().key.value, never_expires.value);
+    EXPECT_EQ (second.store_now, first.store_now);
 }
 
 } // namespace

@@ -223,7 +223,7 @@ async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard, re
   }
   const cas = store.compareExchangeAuthority.bind(store);
   store.compareExchangeAuthority = async (...args) => {
-    writes.push(args);
+    if (args[2].kind === 'rebindOwnerLease') writes.push(args);
     return cas(...args);
   };
   t.after(async () => {
@@ -348,10 +348,9 @@ for (const provider of [false, true]) {
     state.rememberMeshName('play');
     state.setNativeActorRef({ actorId: 'recovery-actor', generation: 1n, nodeRid: rid });
     DefaultZLinkActorManager.prototype.adoptCreatedAuthority.call(
-      { states: new Map([['recovery-actor', state]]) },
+      { states: new Map([['recovery-actor', state]]), options: {} },
       'recovery-actor',
-      s.authority.authorityOwnerGeneration,
-      s.originalOwner.leaseGeneration
+      s.authority
     );
     state.installBoundSessionBinding({
       bindingGeneration: 1n,
@@ -457,6 +456,7 @@ for (const provider of [false, true]) {
       const publication = deferred(),
         submitted = deferred();
       s.store.compareExchangeAuthority = async (...args) => {
+        if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
         s.writes.push(args);
         const result = await s.cas(...args);
         submitted.resolve();
@@ -539,6 +539,7 @@ for (const provider of [false, true]) {
     const reply = deferred(),
       submitted = deferred();
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       submitted.resolve();
@@ -568,6 +569,7 @@ for (const provider of [false, true]) {
     const reply = deferred(),
       submitted = deferred();
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       submitted.resolve();
@@ -628,6 +630,7 @@ for (const provider of [false, true]) {
     const publication = deferred(),
       submitted = deferred();
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       submitted.resolve();
@@ -663,6 +666,7 @@ for (const provider of [false, true]) {
       return result;
     };
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       submitted.resolve();
@@ -686,6 +690,7 @@ for (const provider of [false, true]) {
     const publication = deferred(),
       submitted = deferred();
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       submitted.resolve();
@@ -777,6 +782,7 @@ for (const provider of [false, true]) {
     const reply = deferred(),
       submitted = deferred();
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       submitted.resolve();
@@ -814,6 +820,7 @@ for (const provider of [false, true]) {
       return read(...args);
     };
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       await s.cas(...args);
       throw new Error('CAS reply unavailable');
@@ -838,6 +845,7 @@ for (const provider of [false, true]) {
       pendingSubmitted = deferred(),
       otherSubmitted = deferred();
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       if (args[0].value === s.key.value) {
@@ -892,6 +900,7 @@ for (const provider of [false, true]) {
       return update(...args);
     };
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       submitted.resolve();
@@ -922,6 +931,7 @@ for (const provider of [false, true]) {
     const reply = deferred(),
       submitted = deferred();
     s.store.compareExchangeAuthority = async (...args) => {
+      if (args[2].kind !== 'rebindOwnerLease') return s.cas(...args);
       s.writes.push(args);
       const result = await s.cas(...args);
       submitted.resolve();

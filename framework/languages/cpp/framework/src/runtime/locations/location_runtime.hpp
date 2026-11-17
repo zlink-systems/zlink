@@ -183,7 +183,7 @@ class location_runtime_t
   private:
     struct execution_observer_t
     {
-        std::function<void (serial_execution_queue_t::execution_admission_t)> discard;
+        std::function<task_t<void> (serial_execution_queue_t::execution_admission_t)> discard;
         std::function<void (authority_key_t, authority_snapshot_t)> observe;
         std::function<task_t<void> (execution_recovery_t, std::chrono::steady_clock::time_point)>
           recover;
@@ -225,8 +225,75 @@ class location_runtime_t
     {
         virtual ~repository_operation_t () = default;
         virtual void stop_observation () {}
+        virtual void progress (location_owner_token_t) {}
+        virtual std::optional<std::string> failure () const { return std::nullopt; }
         task_completion_source_t<void> submitted;
         task_completion_source_t<void> drained;
+    };
+
+    struct discarded_authority_t : repository_operation_t,
+                                   std::enable_shared_from_this<discarded_authority_t>
+    {
+        discarded_authority_t (location_repository_t &store,
+                               authority_key_t key,
+                               authority_snapshot_t fence,
+                               task_t<void> settled) :
+            store (store),
+            key (std::move (key)),
+            fence (std::move (fence)),
+            settled (std::move (settled))
+        {
+        }
+
+        location_repository_t &store;
+        authority_key_t key;
+        authority_snapshot_t fence;
+        task_t<void> settled;
+        std::optional<task_t<bool>> pending;
+
+        std::optional<std::string> failure () const override
+        {
+            if (settled.await_ready ()) {
+                const auto result = detail::task_result_access_t::read (settled);
+                if (!result)
+                    return result.error () ? result.error ()->what () : "Local discard failed";
+            }
+            if (pending && pending->await_ready ()) {
+                const auto result = detail::task_result_access_t::read (*pending);
+                if (!result)
+                    return result.error () ? result.error ()->what ()
+                                           : "Discard authority cleanup failed";
+            }
+            return std::nullopt;
+        }
+
+        void progress (location_owner_token_t owner) override
+        {
+            if (drained.task ().await_ready () || !settled.await_ready ()
+                || (pending && !pending->await_ready ()))
+                return;
+            if (!detail::task_result_access_t::read (settled))
+                return;
+            pending.emplace (store.cleanup_discarded (key, fence, std::move (owner)));
+            detail::observe_task_terminal (
+              *pending, [self = shared_from_this ()] (const result_t<bool> &result) {
+                  if (result && result.value ())
+                      self->drained.complete (result_t<void>::success ());
+              });
+        }
+
+        void stop_observation () override
+        {
+            // Logical cleanup may still need another heartbeat. Stop drains only
+            // the physical operation that has already borrowed the repository.
+            if (pending && !pending->await_ready ())
+                detail::observe_task_terminal (
+                  *pending, [self = shared_from_this ()] (const auto &) {
+                      self->drained.complete (result_t<void>::success ());
+                  });
+            else
+                drained.complete (result_t<void>::success ());
+        }
     };
 
     struct descriptor_publication_t : repository_operation_t
@@ -371,8 +438,9 @@ class location_runtime_t
         };
     }
 
+    template <typename Request>
     task_t<void> on_execution_discard (
-      std::function<void (serial_execution_queue_t::execution_admission_t)> request,
+      Request request,
       std::function<void (authority_key_t, authority_snapshot_t)> observe = {},
       std::function<task_t<void> (execution_recovery_t, std::chrono::steady_clock::time_point)>
         recover = {},
@@ -382,8 +450,56 @@ class location_runtime_t
                                  recover = std::move (recover),
                                  resume = std::move (resume)] () mutable {
             _execution_discard_requests->push_back (
-              {std::move (request), std::move (observe), std::move (recover), std::move (resume)});
+              {[request = std::move (request)] (auto policy) mutable -> task_t<void> {
+                   if constexpr (std::is_void_v<
+                                   std::invoke_result_t<Request &, decltype (policy)>>) {
+                       request (std::move (policy));
+                       return task_t<void> (result_t<void>::success ());
+                   } else
+                       return request (std::move (policy));
+               },
+               std::move (observe), std::move (recover), std::move (resume)});
         });
+    }
+
+    auto discarded_authority_cleanup () const
+    {
+        // The cleanup continuation may outlive this Runtime. Its existing owner
+        // stop and lane serialize registration before the repository drain.
+        return [lane = _lane, operations = _repository_operations, lease = _owner_lease,
+                now = _lease_now, owner = std::atomic_load (&_heartbeat_state), store = _store] (
+                 authority_key_t key, authority_snapshot_t fence, task_t<void> settled) {
+            return lane->run_task (
+              [lane, operations, lease, now, owner, store, key = std::move (key),
+               fence = std::move (fence),
+               settled = std::make_shared<task_t<void>> (std::move (settled))] () mutable {
+                  if (owner->stop.load (std::memory_order_acquire))
+                      return;
+                  auto operation = std::make_shared<discarded_authority_t> (
+                    *store, std::move (key), std::move (fence), std::move (*settled));
+                  register_repository_operation (operations, operation);
+                  // Registration is submitted; Store cleanup still waits for local
+                  // discard and accepted membership additions to settle.
+                  operation->submitted.complete (result_t<void>::success ());
+                  detail::observe_task_terminal (
+                    operation->settled, [lane, lease, now, owner, operation] (const auto &) {
+                        auto progress = [lease, now, owner, operation] {
+                            if (owner->stop.load (std::memory_order_acquire))
+                                return;
+                            const auto current =
+                              std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
+                            // During an outage, heartbeat_accept owns Store recovery
+                            // confirmation and progresses the registered cleanup.
+                            if (!current->outage && owner_lease_usable (*current, (*now) ()))
+                                operation->progress (*current->token);
+                        };
+                        if (lane->is_on_lane ())
+                            progress ();
+                        else
+                            lane->try_post (std::move (progress));
+                    });
+              });
+        };
     }
 
     using descriptor_publisher_t = std::function<task_t<bool> (
@@ -470,7 +586,7 @@ class location_runtime_t
           *_lease_now, cancellation, deadline);
         auto submissions = co_await _lane->run_task ([this] {
             auto tasks = std::make_shared<std::vector<task_t<void>>> ();
-            for (const auto &pending : _descriptor_publications)
+            for (const auto &pending : *_repository_operations)
                 tasks->push_back (pending->submitted.task ());
             return tasks;
         });
@@ -627,7 +743,7 @@ class location_runtime_t
     {
         const bool started = _started.exchange (false);
         stop_heartbeat (started);
-        infrastructure_result ([this] { return drain_descriptor_publications (); }).value ();
+        infrastructure_result ([this] { return drain_repository_operations (); }).value ();
         if (started)
             static_cast<void> (cleanup_owner ());
     }
@@ -710,8 +826,9 @@ class location_runtime_t
         std::stop_callback stopped (cancellation, cancel);
         std::stop_callback owner_stopped (owner_cancellation, cancel);
         try {
-            co_await lane->run_task (
-              [this, operation] { register_repository_operation (operation); });
+            co_await lane->run_task ([this, operation] {
+                register_repository_operation (_repository_operations, operation);
+            });
         }
         catch (...) {
             operation->finish (detail::current_exception_result<location_write_result_t> ());
@@ -1002,7 +1119,30 @@ class location_runtime_t
             auto episode = std::make_shared<store_outage_t> (
               observed_at, cutoff, lease.last_successful_lease->token, owner);
             for (const auto &request : *_execution_discard_requests)
-                episode->discard_requests.push_back (request.discard);
+                episode->discard_requests.push_back ([lane = _lane,
+                                                      operations = _repository_operations, owner,
+                                                      discard = request.discard] (auto policy) {
+                    auto submit = [operations, owner, discard,
+                                   policy = std::move (policy)] () mutable {
+                        // Stop's lane fence precedes its operation snapshot;
+                        // callbacks posted after that fence cannot borrow the Runtime.
+                        if (owner->stop.load (std::memory_order_acquire))
+                            return;
+                        auto operation = std::make_shared<repository_operation_t> ();
+                        register_repository_operation (operations, operation);
+                        operation->submitted.complete (result_t<void>::success ());
+                        auto retained =
+                          std::make_shared<task_t<void>> (discard (std::move (policy)));
+                        detail::observe_task_terminal (
+                          *retained, [operation, retained] (const auto &) {
+                              operation->drained.complete (result_t<void>::success ());
+                          });
+                    };
+                    if (lane->is_on_lane ())
+                        submit ();
+                    else if (!owner->stop.load (std::memory_order_acquire))
+                        lane->run_sync (std::move (submit));
+                });
             lease.outage = episode;
             episode->latch (episode->observed_at);
         });
@@ -1138,12 +1278,14 @@ class location_runtime_t
         co_return result;
     }
 
-    void register_repository_operation (std::shared_ptr<repository_operation_t> operation) const
+    static void register_repository_operation (
+      const std::shared_ptr<std::vector<std::shared_ptr<repository_operation_t>>> &operations,
+      std::shared_ptr<repository_operation_t> operation)
     {
-        std::erase_if (_descriptor_publications, [] (const auto &pending) {
+        std::erase_if (*operations, [] (const auto &pending) {
             return pending->drained.task ().await_ready ();
         });
-        _descriptor_publications.push_back (std::move (operation));
+        operations->push_back (std::move (operation));
     }
 
     template <typename T, typename Start>
@@ -1164,7 +1306,7 @@ class location_runtime_t
               }
               auto operation = std::make_shared<repository_operation_t> ();
               auto retained = std::make_shared<task_t<T>> (start ());
-              runtime->register_repository_operation (operation);
+              register_repository_operation (runtime->_repository_operations, operation);
               detail::observe_task_terminal (
                 *retained, [operation, retained, completion] (const result_t<T> &result) {
                     completion->complete (result);
@@ -1473,6 +1615,13 @@ class location_runtime_t
                 co_await finishing;
         }
         runtime->wake_owner_lease_observers ();
+        co_await lease_lane (attempt, [runtime, token] {
+            for (const auto &operation : *runtime->_repository_operations) {
+                if (const auto failure = operation->failure ())
+                    runtime->_last_error = *failure;
+                operation->progress (token);
+            }
+        });
     }
 
     static task_t<void> heartbeat_failure (std::shared_ptr<heartbeat_attempt_t> attempt,
@@ -1653,6 +1802,18 @@ class location_runtime_t
                         });
                         if (!expired)
                             co_return outcome;
+                    } else {
+                        const auto observers = co_await lease_lane (
+                          attempt, [runtime] { return *runtime->_execution_discard_requests; });
+                        // Discard registers authority cleanup on the lease lane.
+                        // Invoke it after leaving that lane, including inline completions.
+                        std::vector<task_t<void>> discards;
+                        for (const auto &observer : observers)
+                            discards.push_back (observer.discard ([] (const auto &) {
+                                return serial_execution_queue_t::execution_status_t::ownership_lost;
+                            }));
+                        for (auto &discard : discards)
+                            co_await discard;
                     }
                 } else {
                     co_await heartbeat_communication_failure (attempt);
@@ -1943,16 +2104,20 @@ class location_runtime_t
         }
     }
 
-    task_t<void> drain_descriptor_publications () const
+    task_t<void> drain_repository_operations () const
     {
-        auto operations = co_await _lane->run_task (
-          [this] { return std::exchange (_descriptor_publications, {}); });
-        for (const auto &operation : operations)
-            operation->stop_observation ();
-        // The caller's deadline cannot end opaque I/O. Preserve every repository
-        // coroutine and its input until its actual terminal, before provider teardown.
-        for (const auto &operation : operations)
-            co_await operation->drained.task ();
+        for (;;) {
+            auto operations = co_await _lane->run_task (
+              [this] { return std::exchange (*_repository_operations, {}); });
+            if (operations.empty ())
+                co_return;
+            for (const auto &operation : operations)
+                operation->stop_observation ();
+            // Accepted discard continuations may register cleanup while being
+            // drained. Collect those registrations before provider teardown too.
+            for (const auto &operation : operations)
+                co_await operation->drained.task ();
+        }
     }
 
     void record_failure (std::string message) const
@@ -1986,7 +2151,8 @@ class location_runtime_t
       std::make_shared<std::shared_ptr<const owner_lease_snapshot_t>> (
         std::make_shared<const owner_lease_snapshot_t> ())};
     mutable std::optional<std::string> _last_error;
-    mutable std::vector<std::shared_ptr<repository_operation_t>> _descriptor_publications;
+    std::shared_ptr<std::vector<std::shared_ptr<repository_operation_t>>> _repository_operations =
+      std::make_shared<std::vector<std::shared_ptr<repository_operation_t>>> ();
 
     // Owner subscriptions contain no retained object inventory or Ready evidence.
     descriptor_publisher_t _descriptor_publisher;

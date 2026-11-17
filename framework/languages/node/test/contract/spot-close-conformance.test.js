@@ -51,6 +51,84 @@ const fixture = JSON.parse(
   )
 );
 
+for (const row of fixture.joinFailureCases) {
+  test(`deferred Join failure contract: ${row.name}`, async () => {
+    const { ZLinkAuthoritySpotRouteResolver } = require('../../packages/framework/dist/runtime/locations/resolvers');
+    const { runActorHandlerWithDeferredJoins } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
+    const owner = await createOwner({ authority: 'Ready', holdOnClosing: true });
+    const ready = await owner.store.readAuthority(encodeAuthorityKey('user_spot', owner.spotId));
+    let replay = false;
+    let sourceReads = 0;
+    const resolver = new ZLinkAuthoritySpotRouteResolver({
+      readAuthority: async (key, signal) => {
+        sourceReads++;
+        return replay ? ready : owner.store.readAuthority(key, signal);
+      }
+    }, (mesh) => mesh, undefined, { remainingOwnerTokenLeaseMs: async () => 60_000 });
+    const target = row.target === 'missing' ? 'missing-room' : owner.spotId;
+    if (row.warmRoute) {
+      if (row.target === 'missing') {
+        await assert.rejects(resolver.resolve(target), (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+      } else {
+        assert.equal((await resolver.resolve(target)).spotId, target);
+      }
+    }
+    const actorRef = { actorId: 'join-failure-player', nodeRid: NODE_RID, generation: 1n };
+    const node = {
+      status: () => ({ routingId: NODE_RID, lifecycleGeneration: 1n }),
+      createActor: () => actorRef,
+      actorLookup: () => ({ actor: actorRef, spotId: NODE_RID, spotGeneration: 1n, membershipEpoch: 1n }),
+      entrySpot: () => ({ routingId: NODE_RID }),
+      restoreActorAuthority() { throw new Error('a refused Join must preserve source membership'); },
+      joinActorSpot() { throw new Error('same-node Join must use membership admission'); }
+    };
+    const completion = deferred();
+    const coordinator = new framework.ZLinkActorNativeJoinCoordinator({
+      node,
+      spotRouteResolver: resolver,
+      completionTableProvider: () => undefined,
+      localSpotJoin: (...args) => owner.manager.admitActorJoin(...args),
+      reportSourceLeaveError(error) { throw error; }
+    });
+    const actors = new framework.DefaultZLinkActorManager({
+      actorMeshNameProvider: () => MESH,
+      nativeActorNode: node,
+      actorFactories: new Map([['player', { create: (context) => ({
+        context,
+        onJoinCompleted(result) { completion.resolve(result); }
+      }) }]]),
+      joinCoordinator: coordinator
+    }, detachedTaskRunner);
+    const created = await actors.getOrCreate(actorRef.actorId, 'player').submit();
+    assert.equal(created.status, 'created');
+    const actor = await actors.findActor(actorRef.actorId);
+    const closing = owner.spots.close(owner.ref);
+    try {
+      await owner.closingEntered.promise;
+      assert.equal(await owner.authority(), 'Closing');
+      if (row.target !== 'closing') {
+        owner.finishClosing.resolve();
+        assert.equal(await closing, true);
+        replay = row.target === 'absent';
+      }
+      assert.equal((await actors.getOrCreate(actorRef.actorId, 'player').submit()).status, 'existing');
+      const readsBeforeJoin = sourceReads;
+      await runActorHandlerWithDeferredJoins(() => actor.context.joinSpot(target).defer());
+      const result = await completion.promise;
+      if (row.warmRoute && row.target !== 'missing') assert.equal(sourceReads, readsBeforeJoin);
+      else assert.ok(sourceReads > readsBeforeJoin);
+      assert.equal(result.status, 'failed');
+      const actual = Object.keys(framework.ZLinkFrameworkErrorKind).find((key) => framework.ZLinkFrameworkErrorKind[key] === result.kind);
+      console.log(`4510 ${row.name} expected=${row.errorKind} actual=${actual}`);
+      assert.equal(actual, row.errorKind);
+    } finally {
+      replay = false;
+      owner.finishClosing.resolve();
+      await closing;
+    }
+  });
+}
+
 const MESH = 'mesh';
 const NODE_RID = 'node-a';
 const OWNER_LIVENESS = `${MESH}:${NODE_RID}:1:owner-a:1`;

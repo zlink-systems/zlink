@@ -617,7 +617,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                                 snapshot.NodeGeneration,
                                 snapshot.AuthorityOwnerGeneration,
                                 snapshot.OwnerLeaseGeneration,
-                                wire.Select(Message.From).ToArray(),
+                                ZLinkRawRouterServicePort.CreateMessages(wire),
                                 RemainingTimeout(deadline.Monotonic),
                                 cancellationToken,
                                 requestAdmission: requestAdmission

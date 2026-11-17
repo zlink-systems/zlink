@@ -1,3 +1,4 @@
+import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import {
   type ActorRef,
   type RoutingId,
@@ -164,12 +165,8 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   async find(actorId: string, signal?: AbortSignal): Promise<ActorRef | undefined> {
     throwIfAborted(signal);
-    const state = this.states.get(actorId);
-    if (
-      !this.relocationStaged.has(actorId) &&
-      state?.actor !== undefined &&
-      state.nativeActorRef !== undefined
-    ) {
+    const state = this.publishedState(actorId);
+    if (state?.actor !== undefined && state.nativeActorRef !== undefined) {
       return this.actorRefForState(state);
     }
     return await this.options.actorRefResolver?.resolveActorRef(actorId, signal);
@@ -404,8 +401,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   /** @internal Uses the relocation owner's publication boundary for local dispatch. */
   resolveLocalActor(actorId: string): ZLinkActor | undefined {
-    if (this.relocationStaged.has(actorId)) return undefined;
-    return this.states.get(actorId)?.actor;
+    return this.publishedState(actorId)?.actor;
   }
 
   requireRelocationActorFactory(actorType: string): void {
@@ -582,7 +578,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         state.clearAfterDestroy();
         if (this.detachActorStateRegistration(state))
           this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
-        this.detachedTaskRunner.runDetached('Discard Actor execution', async () => {
+        const disposal = (async () => {
           try {
             await disposeLifecycleHandlers(actor, this.detachedTaskRunner);
           } catch (error) {
@@ -590,7 +586,9 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
           }
           if (failures.length > 0)
             throw new AggregateError(failures, 'Actor local disposal failed.');
-        });
+        })();
+        this.detachedTaskRunner.runDetached('Discard Actor execution', () => disposal);
+        return disposal;
       }
     );
   }
@@ -709,17 +707,29 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     };
   }
 
-  adoptCreatedAuthority(actorId: string, authorityOwnerGeneration: bigint): void {
+  adoptCreatedAuthority(
+    actorId: string,
+    authority: import('../locations/internal-location-contracts').ZLinkAuthoritySnapshot
+  ): void {
     const state = this.states.get(actorId);
     if (state === undefined) {
       throw new Error(`Actor '${actorId}' is not materialized.`);
     }
-    state.setLocationGeneration(authorityOwnerGeneration);
+    this.options.locationLifecycle?.confirmAuthority(
+      encodeAuthorityKey('actor', actorId),
+      authority
+    );
+    state.setLocationGeneration(authority.authorityOwnerGeneration);
     state.markLocationOwned();
   }
 
   getState(actorId: string): ZLinkActorRuntimeState | undefined {
     return this.states.get(actorId);
+  }
+
+  /** @internal Returns state only when the Actor is published. */
+  publishedState(actorId: string): ZLinkActorRuntimeState | undefined {
+    return this.relocationStaged.has(actorId) ? undefined : this.states.get(actorId);
   }
 
   snapshotStates(): readonly ZLinkActorRuntimeState[] {

@@ -138,7 +138,13 @@ internal static class ZLinkSpotDescriptorFactory
 
     private static void ValidateAttributedOwner(Type spotType, MethodInfo method, string kind)
     {
-        if (!typeof(IZLinkSpot).IsAssignableFrom(spotType) || method.DeclaringType != spotType)
+        ZLinkHandlerContractDescriptorSupport.RequireExactType(
+            spotType,
+            spotType,
+            method.DeclaringType!,
+            $"{kind} handler"
+        );
+        if (!typeof(IZLinkSpot).IsAssignableFrom(spotType))
             throw new ZLinkConfigurationException(
                 $"{kind} method '{method.DeclaringType?.FullName}.{method.Name}' must be declared by a concrete IZLinkSpot type."
             );

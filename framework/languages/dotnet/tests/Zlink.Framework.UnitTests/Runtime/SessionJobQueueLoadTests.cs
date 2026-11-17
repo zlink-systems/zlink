@@ -4,11 +4,81 @@ using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Tests.Common;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class SessionJobQueueLoadTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Stream_reply_terminal_closes_wrapper(bool handlerFailure)
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(Stream_reply_terminal_closes_wrapper)
+            )
+        )
+            return;
+        using var probe = new MessageFinalizerProbe();
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton<SessionCount>();
+        builder.Services.AddZLinkFramework(options =>
+            options
+                .AddStreamNode("wrapper-lifetime")
+                .Bind("tcp://127.0.0.1:0")
+                .AddSession<EchoSession>()
+        );
+        using var host = builder.Build();
+        await host.StartAsync();
+        try
+        {
+            var state = await host
+                .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                .GetStartedStateForRoutingAsync(CancellationToken.None);
+            await using var connector = ZlinkStreamConnectorFactory.Create(
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri(state.StreamNodes.Values.Single().BoundEndpoint!),
+                    DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                }
+            );
+            await connector.Connect.Async();
+            var count = await probe.CountAsync(async () =>
+            {
+                for (var index = 0; index < 16; index++)
+                {
+                    var completion = new TaskCompletionSource<ZlinkStreamResult<EchoReply>>(
+                        TaskCreationOptions.RunContinuationsAsynchronously
+                    );
+                    connector
+                        .Request(new EchoRequest(handlerFailure ? -1 : index))
+                        .PacketName(nameof(EchoRequest))
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Submit<EchoReply>(result => completion.TrySetResult(result));
+                    var result = await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal(!handlerFailure, result.IsSuccess);
+                    if (handlerFailure)
+                    {
+                        Assert.Equal(ZlinkStreamErrorCode.RemoteError, result.Error!.Code);
+                        Assert.Contains("wrapper-lifetime-handler-failure", result.Error.Message);
+                    }
+                    else
+                        Assert.Equal(index, result.Value!.Value);
+                }
+            });
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
+    }
+
     [Fact]
     public async Task One_hundred_sessions_connect_and_reply_with_concurrency_128()
     {
@@ -36,36 +106,18 @@ public sealed class SessionJobQueueLoadTests
                     .StreamNodes.Values.Single()
                     .BoundEndpoint
             );
-            using var connectConcurrency = new SemaphoreSlim(128);
-            var connected = await Task.WhenAll(
-                Enumerable
-                    .Range(0, sessionCount)
-                    .Select(async _ =>
-                    {
-                        await connectConcurrency.WaitAsync();
-                        try
-                        {
-                            var connector = ZlinkStreamConnectorFactory.Create(
-                                new ZlinkStreamConnectorOptions
-                                {
-                                    Endpoint = new Uri(endpoint),
-                                    DispatchMode = ZlinkStreamDispatchMode.Immediate,
-                                    ConnectTimeout = TimeSpan.FromSeconds(30),
-                                    RequestTimeout = TimeSpan.FromSeconds(1),
-                                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
-                                }
-                            );
-                            lock (connectors)
-                                connectors.Add(connector);
-                            await connector.Connect.Async();
-                            return connector;
-                        }
-                        finally
-                        {
-                            connectConcurrency.Release();
-                        }
-                    })
+            var connected = await StreamConnectionHarness.ConnectAsync(
+                connectors,
+                sessionCount,
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri(endpoint),
+                    DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                    ConnectTimeout = TimeSpan.FromSeconds(30),
+                    RequestTimeout = TimeSpan.FromSeconds(1),
+                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                }
             );
             await host
                 .Services.GetRequiredService<SessionCount>()
@@ -142,6 +194,12 @@ public sealed class SessionJobQueueLoadTests
             ZLinkSessionDispatchContext dispatch,
             ZLinkMessage payload,
             CancellationToken cancellationToken
-        ) => Context.Client.Reply(new EchoReply(payload.Decode<EchoRequest>().Value)).Async();
+        )
+        {
+            var request = payload.Decode<EchoRequest>();
+            if (request.Value < 0)
+                throw new InvalidOperationException("wrapper-lifetime-handler-failure");
+            return Context.Client.Reply(new EchoReply(request.Value)).Async();
+        }
     }
 }

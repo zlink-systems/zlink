@@ -45,6 +45,47 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkSerialExecutionQueueTest {
     private static final long LIFECYCLE_GATE_WAIT_SECONDS = 3;
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void queuedTerminalReturnsPermitBeforePublicContinuation(boolean deadline) throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var running = new CompletableFuture<Void>();
+        var first = queue.enqueue(() -> running, null).toCompletableFuture();
+        executor.take().run();
+        try (var jobs =
+                        new ZLinkApplicationJobQueue(
+                                ZLinkApplicationJobQueueProfile.BALANCED,
+                                OptionalLong.of(2),
+                                new ZLinkApplicationJobQueue.ProcessorCandidates(1, 1, 1, 1));
+                var held =
+                        jobs.acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                                .toCompletableFuture()
+                                .join()) {
+            var permit =
+                    jobs.acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                            .toCompletableFuture()
+                            .join();
+            CompletableFuture<Void> waiting;
+            try (var scope = ZLinkApplicationJobContext.enter(permit)) {
+                waiting =
+                        queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                                .toCompletableFuture();
+            }
+            var observed = waiting.handle((value, error) -> jobs.snapshot().permitsInUse());
+            assertTrue(
+                    deadline
+                            ? waiting.completeExceptionally(
+                                    new java.util.concurrent.TimeoutException())
+                            : waiting.cancel(false));
+            assertEquals(1, observed.join());
+        } finally {
+            running.complete(null);
+            executor.runUntil(first);
+            queue.close();
+        }
+    }
+
     @Test
     void lifecycleAdmissionObservesCurrentClosingSeal() throws Exception {
         for (boolean sealed : new boolean[] {false, true}) {
@@ -141,7 +182,9 @@ final class ZLinkSerialExecutionQueueTest {
                                                             () -> {
                                                                 assertFalse(
                                                                         foreignFrame.get(),
-                                                                        "managed completion must leave the foreign physical frame");
+                                                                        "managed completion must"
+                                                                                + " leave the foreign"
+                                                                                + " physical frame");
                                                                 assertTrue(owner.isCurrent());
                                                                 assertFalse(foreign.isCurrent());
                                                             })
@@ -2038,12 +2081,14 @@ final class ZLinkSerialExecutionQueueTest {
                     () ->
                             assertFalse(
                                     managed.get().toCompletableFuture().isDone(),
-                                    "the continuation completed before its late dependent was attached"),
+                                    "the continuation completed before its late dependent was"
+                                            + " attached"),
                     () ->
                             assertEquals(
                                     submittedWhileAssembling,
                                     tasks.submissions.get(),
-                                    "a new drain was posted while the physical invocation was assembling"));
+                                    "a new drain was posted while the physical invocation was"
+                                            + " assembling"));
             releaseAssembly.complete(null);
             for (Thread worker : workers) worker.join();
             tasks.runUntil(first);

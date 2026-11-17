@@ -211,8 +211,10 @@ accepted_record_authority_resolver_t make_store_authority_resolver (location_rep
                         || (query.target.kind == object_kind_t::actor
                             && snapshot->authority_owner_generation
                                  != query.target.authority_owner_generation)
-                        || snapshot->authority_owner_generation
-                             != query.requested_authority_owner_generation
+                        || ((query.target.kind != object_kind_t::actor
+                             || snapshot->object_generation == query.requested_object_generation)
+                            && snapshot->authority_owner_generation
+                                 != query.requested_authority_owner_generation)
                         || snapshot->allocation.target.mesh_name != query.target.mesh_name
                         || snapshot->allocation.target.node_rid.value () != target_rid.value ()
                         || snapshot->allocation.target.node_lifecycle_generation
@@ -936,7 +938,9 @@ raw_stateful_dispatch_t::claim_turn (const object_ref_t &owner,
     auto frozen = pending->second.frozen;
     auto accepted_owner = std::exchange (turn.accepted_owner, {});
     auto &transport = pending->second.transport;
-    if (transport.application_permit && *transport.application_permit) {
+    if (transport.application_permit
+        && (*transport.application_permit
+            || transport.application_permit->needs_reacquisition ())) {
         if (!accepted_owner)
             accepted_owner = std::make_shared<runtime::serial_application_record_t> ();
         accepted_owner->admission.retain_initial (

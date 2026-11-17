@@ -694,7 +694,7 @@ export class ZLinkFrameworkRuntimeHost
         );
       },
       currentOwnerFence: (actorId) => {
-        const state = this.actorManager?.getState(actorId);
+        const state = this.actorManager?.publishedState(actorId);
         const current = state?.nativeActorRef;
         const owner = this.locationOwner.currentRuntime?.currentOwnerToken;
         const node =
@@ -2344,10 +2344,7 @@ export class ZLinkFrameworkRuntimeHost
         runtimeEventPublisher: this.runtimeEventPublisher,
         spotNodeRuntime: () => this.spotNodeRuntime,
         actorManager: () => this.actorManager,
-        // User Spot visibility is published only by the generic authority
-        // coordinator after application initialization. The legacy location
-        // claim would expose a Creating object before that Ready barrier.
-        locationLifecycle: () => undefined,
+        locationLifecycle: () => this.locationOwner.currentLifecycle,
         releaseInstanceAuthority: async (meshName, spotId, objectGeneration) => {
           await this.locationOwner.currentLifecycle?.releaseSpot(
             meshName,
@@ -2830,8 +2827,7 @@ export class ZLinkFrameworkRuntimeHost
                   entrySpotId,
                   entrySpotGeneration: entrySpot.lifecycleGeneration,
                   ...(reply === undefined ? {} : { reply }),
-                  onPublished: () =>
-                    actors.adoptCreatedAuthority(record.actorId, authority.authorityOwnerGeneration)
+                  onPublished: (ready) => actors.adoptCreatedAuthority(record.actorId, ready)
                 };
               },
               signal
@@ -3423,20 +3419,21 @@ export class ZLinkFrameworkRuntimeHost
       sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
       bindingGeneration: binding.bindingGeneration
     };
-    const currentBinding = state.boundSession;
-    const currentActor = state.actor;
-    if (
-      currentBinding === undefined ||
-      currentActor?.onDuplicateBind === undefined ||
-      samePhysicalSession(currentBinding, incomingTarget)
-    ) {
-      state.installBoundSessionBinding(incomingTarget);
-      replyBindingSuccess();
-      return;
-    }
     const spotManager = this.spotManager;
     if (spotManager === undefined || state.meshName === undefined) {
       replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      return;
+    }
+
+    const current = state.boundSession;
+    const actor = state.actor;
+    const duplicateCallback =
+      current !== undefined && !samePhysicalSession(current, incomingTarget)
+        ? actor?.onDuplicateBind
+        : undefined;
+    if (duplicateCallback === undefined || actor === undefined || current === undefined) {
+      state.installBoundSessionBinding(incomingTarget);
+      replyBindingSuccess();
       return;
     }
 
@@ -3454,17 +3451,6 @@ export class ZLinkFrameworkRuntimeHost
       state.actor?.context.spotId,
       state.actorId,
       async () => {
-        const current = state.boundSession;
-        const actor = state.actor;
-        const duplicateCallback =
-          current !== undefined && !samePhysicalSession(current, incomingTarget)
-            ? actor?.onDuplicateBind
-            : undefined;
-        if (duplicateCallback === undefined || actor === undefined || current === undefined) {
-          state.installBoundSessionBinding(incomingTarget);
-          replyBindingSuccess();
-          return;
-        }
         callbackStarted();
         const decision = await duplicateCallback.call(
           actor,

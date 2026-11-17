@@ -5129,20 +5129,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     @SuppressWarnings({"rawtypes", "unchecked"})
     private CompletionStage<ZLinkSpotActorJoinResult> joinLocalActor(
             ZLinkActor actor, String targetSpotId, Message requestPart, long deadlineNanos) {
-        SpotActivation targetActivation = spotLifecycle.spotActivationFor(targetSpotId);
+        var resolvedTarget = spotLifecycle.actorJoinTarget(targetSpotId);
+        SpotActivation targetActivation =
+                resolvedTarget instanceof SpotActivation user ? user : null;
         EntrySpotActivation targetEntry =
-                targetActivation == null ? entrySpotActivationFor(targetSpotId) : null;
-        Object targetSurface =
-                targetActivation != null
-                        ? targetActivation.spot()
-                        : targetEntry == null ? null : targetEntry.entrySpot();
+                resolvedTarget instanceof EntrySpotActivation entry ? entry : null;
+        Object targetSurface = resolvedTarget.spotSurface;
         Object sourceSurface = localActorSpotSurface(actor);
-        if (targetSurface == null) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.NOT_FOUND,
-                            "local Join target is unavailable: " + targetSpotId));
-        }
         if (sourceSurface == targetSurface) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
         }
@@ -5291,39 +5284,42 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
         ZLinkActorSpotRoutePackets.TransferRequest request =
                 canonicalActorJoinRequest(join, sourcePeerRid, defaultRequestTimeout);
-        if (join.entry()) {
-            EntrySpotActivation entry = entrySpotActivationFor(target.id());
-            if (entry == null || entry.backendSpot.lifecycleGeneration() != target.generation()) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                "canonical actor Join Entry Spot is unavailable: " + target.id()));
-            }
-            return entry.admitCanonicalActorJoin(request, sourcePeerRid);
-        }
-        SpotActivation spot = spotLifecycle.spotActivationFor(target.id());
-        if (spot == null || spot.backendSpot.lifecycleGeneration() != target.generation()) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "canonical actor Join Spot is unavailable: " + target.id()));
-        }
-        Message payload =
-                Message.from(join.payload() == null ? new byte[0] : join.payload().payload());
-        try {
-            return spot.admitCanonicalActorJoin(
-                            request,
-                            sourcePeerRid,
-                            payload,
-                            join,
-                            join.payload() == null
-                                    ? "application/octet-stream"
-                                    : join.payload().contentType())
-                    .whenComplete((ignored, error) -> payload.close());
-        } catch (RuntimeException error) {
-            payload.close();
-            throw error;
-        }
+        return ZLinkHandlerStages.fromStageSupplier(
+                () -> {
+                    var activation = spotLifecycle.actorJoinTarget(target.id());
+                    if (activation.backendSpot.lifecycleGeneration() != target.generation()
+                            || (join.entry()
+                                    ? !(activation instanceof EntrySpotActivation)
+                                    : !(activation instanceof SpotActivation))) {
+                        return CompletableFuture.failedFuture(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "canonical actor Join target fence is unavailable: "
+                                                + target.id()));
+                    }
+                    if (activation instanceof EntrySpotActivation entry)
+                        return entry.admitCanonicalActorJoin(request, sourcePeerRid);
+                    SpotActivation spot = (SpotActivation) activation;
+                    Message payload =
+                            Message.from(
+                                    join.payload() == null
+                                            ? new byte[0]
+                                            : join.payload().payload());
+                    try {
+                        return spot.admitCanonicalActorJoin(
+                                        request,
+                                        sourcePeerRid,
+                                        payload,
+                                        join,
+                                        join.payload() == null
+                                                ? "application/octet-stream"
+                                                : join.payload().contentType())
+                                .whenComplete((ignored, error) -> payload.close());
+                    } catch (RuntimeException error) {
+                        payload.close();
+                        throw error;
+                    }
+                });
     }
 
     /**
@@ -5558,7 +5554,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 continue;
             }
             if (spotType != null) {
-                if (handler.spotType().isAssignableFrom(spotType)) {
+                if (handler.spotType() == spotType) {
                     return handler;
                 }
                 continue;
@@ -5862,9 +5858,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
             DefaultSpotContext context) {
         if (userSpotLocationRuntime == null) return null;
-        return userSpotLocationRuntime.execution(
-                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
-                        context.spotId()),
+        return userSpotLocationRuntime.executionAsync(
+                () ->
+                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                                context.spotId()),
                 context::steady,
                 snapshot ->
                         context.serials.spotQueue.enqueueLifecycleBarrier(
@@ -5874,9 +5871,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 }),
                 () -> null,
                 () -> {
-                    actorAdmissions.discardLocalMembers(context.spot());
-                    context.serials.discardApplications();
-                    spotLifecycle.discardExecution(context);
+                    return context.serials
+                            .discardApplications()
+                            .thenCompose(
+                                    ignored -> actorAdmissions.discardTargetJoins(context.spot()))
+                            .thenCompose(
+                                    ignored ->
+                                            context.awaitAllLanes(
+                                                    ZLinkSerialExecutionQueue.Quiescence.ALL))
+                            .thenCompose(
+                                    ignored -> actorAdmissions.discardLocalMembers(context.spot()))
+                            .thenCompose(ignored -> spotLifecycle.discardExecution(context));
                 });
     }
 

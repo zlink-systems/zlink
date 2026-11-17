@@ -14,7 +14,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private readonly ZLinkSessionSerialExecutor _controlIngress;
     private readonly CancellationTokenSource _stopSource = new();
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
-    private readonly IZLinkRuntimeFailureReporter _errorSink;
+    private readonly ZLinkFrameworkRuntime _runtime;
     private readonly TimeProvider _timeProvider;
     private readonly ZLinkStreamNodeRegistration _livenessOptions;
     private readonly string _transport;
@@ -72,7 +72,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _transport = transport;
         _maxMessageSize = maxMessageSize;
         var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
-        _errorSink = runtime.ErrorSink;
+        _runtime = runtime;
         _livenessOptions =
             runtime.Registration.StreamNodes.GetValueOrDefault(nodeName)
             ?? new ZLinkStreamNodeRegistration { StreamNodeName = nodeName };
@@ -86,7 +86,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             transport,
             _timeProvider,
             actorDispatchEnabled,
-            _errorSink,
+            _runtime.ErrorSink,
             _livenessOptions
         );
     }
@@ -240,7 +240,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             ZLinkUnawaitedSubmit.Observe(
                 new ValueTask(disposals[index]),
                 $"stream-session-late-dispose:{index}",
-                _errorSink
+                _runtime.ErrorSink
             );
         await Task.WhenAll(forcedCloses).ConfigureAwait(false);
     }
@@ -371,7 +371,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             received = null;
                             admission.Dispose();
                             admission = null;
-                            _errorSink.ReportRuntimeTaskException(
+                            _runtime.ErrorSink.ReportRuntimeTaskException(
                                 $"stream-recv:{NodeName}",
                                 new InvalidDataException(
                                     "STREAM packet did not provide a source routing id, header, and payload."
@@ -429,7 +429,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 }
                 catch (Exception exception)
                 {
-                    _errorSink.ReportRuntimeTaskException($"stream-recv:{NodeName}", exception);
+                    _runtime.ErrorSink.ReportRuntimeTaskException(
+                        $"stream-recv:{NodeName}",
+                        exception
+                    );
                     await failureBackoff.NoDataAsync(stopToken).ConfigureAwait(false);
                     return true;
                 }
@@ -453,13 +456,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
         catch (Exception disconnectFailure)
         {
-            _errorSink.ReportRuntimeTaskException(
+            _runtime.ErrorSink.ReportRuntimeTaskException(
                 $"stream-recv-disconnect:{NodeName}",
                 disconnectFailure
             );
         }
 
-        _errorSink.ReportRuntimeTaskException($"stream-recv-peer:{NodeName}", exception);
+        _runtime.ErrorSink.ReportRuntimeTaskException($"stream-recv-peer:{NodeName}", exception);
     }
 
     private async Task<bool> TryAdmitFrameAsync(RoutingId routingId, ZLinkStreamInboundFrame frame)
@@ -482,21 +485,70 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
         try
         {
-            var admitted = IsApplicationPacket(header)
-                ? await AdmitApplicationPacketAsync(
+            ZlinkStreamHeader decoded;
+            try
+            {
+                decoded = ZLinkStreamProtocolDefaults.DecodeHeader(
+                    header.AsReadOnlyMemory(),
+                    _runtime.Flow.CaptureEnabled
+                );
+            }
+            catch (Exception protocolError)
+            {
+                if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is not { } session)
+                    throw;
+                await session.CloseForProtocolErrorAsync(protocolError).ConfigureAwait(false);
+                return true;
+            }
+
+            if (decoded.Kind == ZlinkStreamMessageKind.Control)
+            {
+                // Control is transport infrastructure and does not create an application session.
+                if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } session)
+                    await session
+                        .DispatchControlPacketAsync(decoded, payload.AsReadOnlyMemory())
+                        .ConfigureAwait(false);
+                else
+                {
+                    var stream = new ZLinkManagedStream(
+                        Socket,
                         routingId,
-                        header,
-                        payload,
-                        frame.ApplicationJobAdmission
-                    )
-                    .ConfigureAwait(false)
-                : await AdmitControlPacketAsync(
-                        routingId,
-                        header,
-                        payload,
-                        frame.ApplicationJobAdmission
-                    )
-                    .ConfigureAwait(false);
+                        _runtime.Registration.Codecs,
+                        _transport
+                    );
+                    try
+                    {
+                        ZLinkStreamControlFrames.Dispatch(
+                            stream,
+                            decoded,
+                            payload.AsReadOnlyMemory(),
+                            ZLinkMessageFlowTracer.GetLogger(_runtime.Services)
+                        );
+                    }
+                    catch (Exception protocolError)
+                    {
+                        _runtime.ErrorSink.ReportHandlerException(protocolError);
+                        try
+                        {
+                            ZLinkStreamControlFrames.SendProtocolError(stream);
+                        }
+                        finally
+                        {
+                            await stream.CloseAsync().ConfigureAwait(false);
+                        }
+                    }
+                }
+                return true;
+            }
+
+            var admitted = await AdmitApplicationPacketAsync(
+                    routingId,
+                    header,
+                    payload,
+                    decoded,
+                    frame.ApplicationJobAdmission
+                )
+                .ConfigureAwait(false);
             if (admitted)
                 frame.Detach();
             return admitted;
@@ -508,7 +560,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _errorSink.ReportHandlerException(exception);
+            _runtime.ErrorSink.ReportHandlerException(exception);
             frame.Dispose();
             throw;
         }
@@ -518,13 +570,14 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         RoutingId routingId,
         Message header,
         Message payload,
+        ZlinkStreamHeader decoded,
         ZLinkApplicationJobQueueLease? applicationJobAdmission
     )
     {
         applicationJobAdmission?.MarkQueued();
         if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } existing)
         {
-            existing.EnqueuePacket(header, payload, applicationJobAdmission);
+            existing.EnqueuePacket(header, payload, decoded, applicationJobAdmission);
             return true;
         }
 
@@ -538,7 +591,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     .ConfigureAwait(false);
                 if (session is not null)
                 {
-                    session.EnqueuePacket(header, payload, applicationJobAdmission);
+                    session.EnqueuePacket(header, payload, decoded, applicationJobAdmission);
                     ownershipTransferred = true;
                 }
             }
@@ -557,74 +610,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
 
         throw new ZLinkStreamPeerAdmissionException("STREAM session ingress queue is closed.");
-    }
-
-    private async Task<bool> AdmitControlPacketAsync(
-        RoutingId routingId,
-        Message header,
-        Message payload,
-        ZLinkApplicationJobQueueLease? applicationJobAdmission
-    )
-    {
-        if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } existing)
-        {
-            var admission = existing.TryEnqueueControlPacket(
-                header,
-                payload,
-                applicationJobAdmission
-            );
-            if (admission == ZLinkSerialPostAdmission.Accepted)
-                return true;
-            throw new ZLinkStreamPeerAdmissionException("STREAM peer control queue is closed.");
-        }
-
-        if (
-            _controlIngress.ExecuteControl(async cancellationToken =>
-            {
-                var ownershipTransferred = false;
-                try
-                {
-                    var session = await _sessions
-                        .GetOrCreateAsync(routingId, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (session is not null)
-                        ownershipTransferred =
-                            session.TryEnqueueControlPacket(
-                                header,
-                                payload,
-                                applicationJobAdmission
-                            ) == ZLinkSerialPostAdmission.Accepted;
-                }
-                finally
-                {
-                    if (!ownershipTransferred)
-                    {
-                        DisposeRejectedPacket(header, payload);
-                        applicationJobAdmission?.Dispose();
-                    }
-                }
-            }) == ZLinkSerialPostAdmission.Accepted
-        )
-            return true;
-
-        return false;
-    }
-
-    private static bool IsApplicationPacket(Message header)
-    {
-        try
-        {
-            var bytes = header.AsReadOnlySpan();
-            if (bytes.Length < 2)
-                return false;
-            return (ZlinkStreamMessageKind)bytes[1]
-                is ZlinkStreamMessageKind.Send
-                    or ZlinkStreamMessageKind.Request;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private async Task OnMonitorEventAsync(ZLinkBackendSocketMonitorEvent monitorEvent)
@@ -716,7 +701,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         )
             return;
 
-        _errorSink.ReportRuntimeTaskException(
+        _runtime.ErrorSink.ReportRuntimeTaskException(
             operation,
             new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,

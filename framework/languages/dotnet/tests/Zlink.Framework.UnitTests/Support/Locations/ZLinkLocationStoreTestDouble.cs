@@ -86,6 +86,13 @@ internal abstract class ZLinkLocationStoreTestDouble : IZLinkLocationRepository
         CancellationToken cancellationToken = default
     ) => Unsupported<ZLinkOwnerLeaseReleaseResult>();
 
+    public virtual ValueTask<bool> CleanupDiscardedAuthorityAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot discarded,
+        ZLinkLocationOwnerToken owner,
+        CancellationToken cancellationToken = default
+    ) => Unsupported<bool>();
+
     public virtual ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
         ZLinkAuthorityKey key,
         CancellationToken cancellationToken = default

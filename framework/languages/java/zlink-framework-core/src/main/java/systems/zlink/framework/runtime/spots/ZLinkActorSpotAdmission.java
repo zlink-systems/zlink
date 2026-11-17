@@ -114,8 +114,8 @@ final class ZLinkActorSpotAdmission {
         if (draining.getAsBoolean()) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
         }
-        return requireActors()
-                .readActorJoinAuthority(request.actorId())
+        return systems.zlink.framework.execution.ZLinkSerialExecutionQueue.yieldCurrent(
+                        requireActors().readActorJoinAuthority(request.actorId()))
                 .thenCompose(
                         authority -> {
                             validateAuthorityFence(request, authority);
@@ -206,7 +206,8 @@ final class ZLinkActorSpotAdmission {
     private static CompletionStage<ZLinkSpotActorJoinResult> invokeAdmissionCallback(
             Function<String, CompletionStage<ZLinkSpotActorJoinResult>> callback, String actorId) {
         try {
-            return callback.apply(actorId);
+            return systems.zlink.framework.execution.ZLinkSerialExecutionQueue.manageCurrent(
+                    callback.apply(actorId));
         } catch (RuntimeException error) {
             return CompletableFuture.failedFuture(error);
         }
@@ -224,8 +225,16 @@ final class ZLinkActorSpotAdmission {
         return actors;
     }
 
-    void discardLocalMembers(systems.zlink.framework.spots.ZLinkSpot<?> spot) {
-        if (actors != null) actors.discardLocalMembers(spot);
+    CompletionStage<Void> discardLocalMembers(systems.zlink.framework.spots.ZLinkSpot<?> spot) {
+        return actors == null
+                ? CompletableFuture.completedFuture(null)
+                : actors.discardLocalMembers(spot);
+    }
+
+    CompletionStage<Void> discardTargetJoins(systems.zlink.framework.spots.ZLinkSpot<?> spot) {
+        return actors == null
+                ? CompletableFuture.completedFuture(null)
+                : actors.discardTargetJoins(spot);
     }
 
     ZLinkActorRuntime runtime() {

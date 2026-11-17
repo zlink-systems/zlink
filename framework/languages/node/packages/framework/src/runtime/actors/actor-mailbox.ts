@@ -8,10 +8,8 @@ import {
 import { runZLinkActorExecution } from './actor-execution-context';
 import {
   bindApplicationJobPermit,
-  currentApplicationJobPermit,
-  runWithApplicationJobPermit
+  currentApplicationJobPermit
 } from '../application-jobs/application-job-queue-scope';
-import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
 
 export class ZLinkActorSerialExecutor {
   readonly scheduler: ZLinkSerialExecutionQueue;
@@ -29,49 +27,17 @@ export class ZLinkActorSerialExecutor {
     );
   }
 
-  execute<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
+  execute<T>(
+    operation: () => Promise<T> | T,
+    workOptions?: ZLinkSerialWorkOptions,
+    capture?: () => Promise<T> | T
+  ): Promise<T> {
     const initial = currentApplicationJobPermit();
-    if (
-      initial !== undefined &&
-      workOptions?.lane !== 'lifecycle' &&
-      this.scheduler.hasPendingDurableApplication
-    ) {
-      let prepared: ApplicationJobPermitPort | undefined;
-      const cancel = (): void => {
-        prepared?.releaseAfterInternalProcessing();
-        prepared = undefined;
-      };
-      const terminal = this.scheduler.admitDurablePrefix(
-        () =>
-          runWithApplicationJobPermit(prepared!, () =>
-            runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
-          ),
-        workOptions,
-        undefined,
-        {
-          prepare: async (signal) => {
-            if (initial.reacquire === undefined) {
-              throw new Error('Durable Actor ingress requires its host permit source.');
-            }
-            prepared = await initial.reacquire(signal);
-            if (signal.aborted) {
-              cancel();
-              throw signal.reason;
-            }
-            prepared.markApplicationQueued();
-          },
-          cancel
-        }
-      );
-      initial.releaseAfterInternalProcessing();
-      return terminal;
-    }
-    const boundOperation = bindApplicationJobPermit(() =>
-      runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
-    );
+    const packetAdmission = capture === undefined ? undefined : bindApplicationJobPermit(capture);
+    const boundOperation = () => runZLinkActorExecution(this.actorId, this.sourceSpotId, operation);
     return initial !== undefined
-      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions)
-      : this.scheduler.submit(boundOperation, workOptions);
+      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, undefined, packetAdmission)
+      : this.scheduler.submit(boundOperation, workOptions, undefined, packetAdmission);
   }
 
   /**
@@ -103,6 +69,19 @@ export class ZLinkActorSerialExecutor {
         record.preparation
       )
     );
+  }
+
+  /** Moves accepted packet admissions into the active handoff in source FIFO order. */
+  capturePacketPrefix(): void {
+    while (this.scheduler.application.records.length > 0) {
+      const record = this.scheduler.application.records[0]!;
+      if (record.packetAdmission === undefined) break;
+      const admission = record.packetAdmission();
+      record.preparationController?.abort(new Error('Packet transferred to the Actor handoff.'));
+      record.preparation?.cancel();
+      this.scheduler.takeSelected(record);
+      void Promise.resolve(admission).then(record.resolve, record.reject).finally(record.release);
+    }
   }
 
   close(): Promise<void> {

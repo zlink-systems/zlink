@@ -157,6 +157,10 @@ jobs:
             bash scripts/local-package/java/build-wsl.sh \
               --core-prefix "${core_prefix}"
 
+      - name: Verify the packaged Java public contract and API snapshot
+        if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
+        run: bash framework/languages/java/scripts/verify_packaged_contract.sh java
+
       - name: Fetch Core and build the checkout Java binding package on Windows
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'win-')) }}
         shell: pwsh
@@ -180,6 +184,11 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "ZLINK_LIBRARY_PATH=$runtime"
           Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $corePrefix "bin")
 
+      # Redis-backed tests fail instead of skipping once the job provides Redis (#4542).
+      - name: Start Redis for Redis-backed tests
+        if: ${{ !inputs.skip_tests && startsWith(matrix.target.name, 'linux-') }}
+        uses: ./.github/actions/test-redis
+
       - name: Run Framework Java core, integration and Spring starter tests
         if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/java
@@ -194,7 +203,10 @@ jobs:
           ./gradlew --no-daemon --max-workers="${worker_count}" \
             :zlink-framework-core:test \
             :zlink-framework-core:integrationTest \
+            :zlink-framework-kotlin:test \
             :zlink-framework-spring-boot-starter:test \
+            :zlink-framework-spring-boot-starter:integrationTest \
+            :zlink-framework-locations-redis:test \
             -Pzlink.includeSamples=false
 
       # 위 step은 `-Pzlink.includeSamples=false`로 샘플 composite build를 아예 등록하지
@@ -216,7 +228,7 @@ jobs:
         run: |
           .\scripts\ci\framework-java-test-results.ps1 `
             -Mode summarize `
-            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results" `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results" `
             -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
             -Platform "${{ matrix.target.name }}" `
             -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS
@@ -232,6 +244,10 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           overwrite: true
+
+      - name: Stop Redis for Redis-backed tests
+        if: always() && env.ZLINK_TEST_REDIS_CONTAINER != ''
+        run: docker rm -f "${ZLINK_TEST_REDIS_CONTAINER}"
 
   framework-java-compare:
     name: Compare Linux and Windows Java results

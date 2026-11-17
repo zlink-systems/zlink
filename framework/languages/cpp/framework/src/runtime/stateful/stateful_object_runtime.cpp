@@ -427,6 +427,34 @@ task_t<void> stateful_object_runtime_t::confirm_location_ready (
     return _lane.run_task (std::move (confirm));
 }
 
+task_t<std::vector<std::pair<authority_key_t, authority_snapshot_t>>>
+stateful_object_runtime_t::discard_location_execution (
+  runtime::serial_execution_queue_t::execution_admission_t lost)
+{
+    return _lane.run_task ([this, lost = std::move (lost)] {
+        std::vector<std::pair<authority_key_t, authority_snapshot_t>> authorities;
+        for (auto &[_, object] : _objects) {
+            const auto gate = object.execution_gate.lock ();
+            if (!gate
+                || lost (*gate)
+                     != runtime::serial_execution_queue_t::execution_status_t::ownership_lost)
+                continue;
+            // cancel_pending installs the existing terminal before scheduling
+            // cancellation. It also works while admission is temporarily closed.
+            gate->cancel_pending (
+              runtime::serial_execution_queue_t::execution_status_t::ownership_lost);
+            if (object.location_fence) {
+                authorities.emplace_back (object.reference.kind == object_kind_t::actor
+                                            ? actor_authority_key (object.reference.key)
+                                            : spot_authority_key (object.reference.key),
+                                          std::move (*object.location_fence));
+                object.location_fence.reset ();
+            }
+        }
+        return authorities;
+    });
+}
+
 task_t<void> stateful_object_runtime_t::recover_location_execution (
   std::shared_ptr<stateful_object_runtime_t> self,
   std::function<task_t<runtime::serial_execution_queue_t::execution_operation_t> (
@@ -790,7 +818,7 @@ task_t<bool> stateful_object_runtime_t::contains_async (object_ref_t reference) 
 
 task_t<std::pair<stateful_error_t, membership_token_t>>
 stateful_object_runtime_t::begin_membership_move_async (const object_ref_t &actor,
-                                                        const object_ref_t &target_spot)
+                                                        std::optional<object_ref_t> target_spot)
 {
     return _lane.run_task ([this, actor,
                             target_spot] () -> std::pair<stateful_error_t, membership_token_t> {
@@ -799,12 +827,14 @@ stateful_object_runtime_t::begin_membership_move_async (const object_ref_t &acto
         if (actor_record == nullptr) {
             return {actor_error, {}};
         }
-        stateful_error_t spot_error = stateful_error_t::none;
-        auto *spot_record = find_record_locked (target_spot, spot_error);
+        stateful_error_t spot_error = stateful_error_t::not_found;
+        auto *spot_record = target_spot ? find_record_locked (*target_spot, spot_error) : nullptr;
         if (spot_record == nullptr) {
-            return {spot_error, {}};
+            return {spot_error == stateful_error_t::not_found ? stateful_error_t::unavailable
+                                                              : spot_error,
+                    {}};
         }
-        if (actor.kind != object_kind_t::actor || target_spot.kind != object_kind_t::user_spot) {
+        if (actor.kind != object_kind_t::actor || target_spot->kind != object_kind_t::user_spot) {
             return {stateful_error_t::invalid, {}};
         }
         if (state_on_lane (*actor_record) == object_state_t::moving) {

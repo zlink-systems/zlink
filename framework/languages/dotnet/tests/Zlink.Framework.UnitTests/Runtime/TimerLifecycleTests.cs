@@ -6,8 +6,139 @@ using Zlink.Framework.Runtime.Timers;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class TimerLifecycleTests
+public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task EarlierTimerRearmsDeadlineWithoutLosingTheWakeWaiter()
+    {
+        var time = new ControllableTimeProvider();
+        await using var scheduler = new ZLinkTimerScheduler(time);
+        var laterTicks = 0;
+        var earlierTicks = 0;
+        var laterArmed = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(10));
+        await using var later = Create("later", 10, () => laterTicks++);
+        later.Resume();
+        await laterArmed.WaitAsync(TimeSpan.FromSeconds(5));
+        var earlierArmed = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(1));
+        await using var earlier = Create("earlier", 1, () => earlierTicks++);
+        earlier.Resume();
+        await earlierArmed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, time.ActiveTimerCount);
+        var nextEarlier = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(1));
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        await nextEarlier.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, earlierTicks);
+        Assert.Equal(0, laterTicks);
+        var cancelledDeadline = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(1));
+        await earlier.CancelAsync();
+        await cancelledDeadline.WaitAsync(TimeSpan.FromSeconds(5));
+        var laterRearmed = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(8));
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        await laterRearmed.WaitAsync(TimeSpan.FromSeconds(5));
+        var nextLater = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(10));
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(8));
+        await nextLater.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, laterTicks);
+        Assert.Equal(1, earlierTicks);
+        await later.CancelAsync();
+        await scheduler.DisposeAsync();
+        Assert.Equal(0, time.ActiveTimerCount);
+        Assert.Equal(0, scheduler.ScheduledEntryCount);
+
+        ZLinkTimer Create(string name, int seconds, Action onTick) =>
+            new(
+                new ZLinkTimerLogicalSnapshot(
+                    name,
+                    TimeSpan.FromSeconds(seconds),
+                    new ZLinkTimerOptions(),
+                    time.GetUtcNow(),
+                    0,
+                    0,
+                    null,
+                    null
+                ),
+                CancellationToken.None,
+                (_, _) =>
+                {
+                    onTick();
+                    return ValueTask.FromResult(false);
+                },
+                static (_, _, _, _) => ValueTask.CompletedTask,
+                startFrozen: true,
+                scheduler: scheduler
+            );
+    }
+
+    [Fact]
+    public async Task NormalTicksDoNotThrowCancellationAndShutdownDrainsWaits()
+    {
+        var cancellations = 0;
+        void Observe(
+            object? sender,
+            System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e
+        )
+        {
+            if (e.Exception is OperationCanceledException)
+                Interlocked.Increment(ref cancellations);
+        }
+        AppDomain.CurrentDomain.FirstChanceException += Observe;
+        try
+        {
+            var time = new ControllableTimeProvider();
+            await using var scheduler = new ZLinkTimerScheduler(time);
+            var count = 0;
+            await using var timer = new ZLinkTimer(
+                new ZLinkTimerLogicalSnapshot(
+                    "normal",
+                    TimeSpan.FromSeconds(1),
+                    new ZLinkTimerOptions(),
+                    time.GetUtcNow(),
+                    0,
+                    0,
+                    null,
+                    null
+                ),
+                CancellationToken.None,
+                (_, _) =>
+                {
+                    Interlocked.Increment(ref count);
+                    return ValueTask.FromResult(false);
+                },
+                static (_, _, _, _) => ValueTask.CompletedTask,
+                startFrozen: true,
+                scheduler: scheduler
+            );
+            timer.Resume();
+            await WaitUntilAsync(() => time.ActiveTimerCount == 1);
+            for (var index = 1; index <= 100; index++)
+            {
+                var armed = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(1));
+                time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+                await armed.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal(index, Volatile.Read(ref count));
+            }
+            var tickCancellations = Volatile.Read(ref cancellations);
+            await timer.CancelAsync();
+            var drained = scheduler.DisposeAsync().AsTask();
+            await drained.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(drained.IsCompletedSuccessfully);
+            Assert.Equal(0, time.ActiveTimerCount);
+            Assert.Equal(0, scheduler.TimerCount);
+            Assert.Equal(0, scheduler.ScheduledEntryCount);
+            output.WriteLine(
+                $"tick cancellation exceptions: {tickCancellations}; shutdown cancellation exceptions: {cancellations - tickCancellations}; active timers: {time.ActiveTimerCount}"
+            );
+            Assert.True(
+                tickCancellations == 0,
+                $"scheduler tick cancellation exceptions: {tickCancellations}"
+            );
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= Observe;
+        }
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, false)]
