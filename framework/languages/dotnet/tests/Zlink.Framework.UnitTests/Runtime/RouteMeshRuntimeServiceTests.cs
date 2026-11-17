@@ -167,12 +167,41 @@ public sealed class RouteMeshRuntimeServiceTests(Xunit.Abstractions.ITestOutputH
         var initial = await WaitForStatusAsync(fixture.Runtime, status => status.Peers.Count == 1);
         Assert.NotEmpty(initial.Peers);
         Assert.NotEmpty(initial.Channels);
+        Assert.Same(initial, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
         fixture.SetHostState(ZLinkFrameworkRuntimeState.Relocating);
         var changed = fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
         Assert.NotSame(initial, changed);
         Assert.Same(initial.Peers, changed.Peers);
         Assert.Same(initial.Channels, changed.Channels);
         Assert.Equal(initial.Sequence + 1, changed.Sequence);
+        Assert.Same(changed, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
+    }
+
+    [Fact]
+    public async Task PeerReplacementWithUnchangedCountPublishesNewStatus()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Client);
+        var firstRid = RoutingId.From("z-status-peer");
+        var secondRid = RoutingId.From("a-status-peer");
+        await fixture.PublishDescriptorAsync(firstRid, ZLinkMeshNodeObjectRole.Client);
+        await fixture.PublishDescriptorAsync(secondRid, ZLinkMeshNodeObjectRole.Client);
+        var initial = await WaitForStatusAsync(fixture.Runtime, status => status.Peers.Count == 2);
+        Assert.Same(initial, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
+
+        await fixture.RemoveDescriptorAsync(firstRid);
+        var replacementRid = RoutingId.From("m-status-peer");
+        await fixture.PublishDescriptorAsync(replacementRid, ZLinkMeshNodeObjectRole.Client);
+        var changed = await WaitForStatusAsync(
+            fixture.Runtime,
+            status =>
+                status.Peers.Count == 2 && status.Peers.Any(peer => peer.NodeRid == replacementRid)
+        );
+        Assert.NotSame(initial, changed);
+        Assert.True(changed.Sequence > initial.Sequence);
+        Assert.DoesNotContain(changed.Peers, peer => peer.NodeRid == firstRid);
+        Assert.Contains(changed.Peers, peer => peer.NodeRid == secondRid);
+        Assert.Same(initial.Channels, changed.Channels);
+        Assert.Same(changed, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
     }
 
     [Fact]

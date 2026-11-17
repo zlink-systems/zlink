@@ -146,7 +146,7 @@ for (const preparation of [
       h.ready();
       await new Promise(setImmediate);
       if (preparation === 'abort') {
-        assert.deepEqual(events, ['prepare']);
+        assert.deepEqual(events, ['prepare', 'dispatch-1', 'claim', 'terminal-1', 'permit-1', 'part-1', 'retained-1']);
         const closing = h.pump.dispose();
         assert.equal(signal.aborted, true);
         resume(true);
@@ -155,14 +155,13 @@ for (const preparation of [
       const accepted = preparation === 'true' || preparation === 'async-true';
       assert.equal(events.includes('dispatch-0'), accepted);
       assert.equal(events.includes('terminal-0'), accepted);
-      assert.equal(events.includes('dispatch-1'), preparation !== 'abort');
-      assert.equal(events.includes('terminal-1'), preparation !== 'abort');
+      assert.equal(events.includes('dispatch-1'), true);
+      assert.equal(events.includes('terminal-1'), true);
       assert.deepEqual(errors, ['throw', 'reject'].includes(preparation) ? [failure] : []);
       for (const index of [0, 1]) {
         assert.equal(events.filter((event) => event === `part-${index}`).length, 1);
         assert.equal(events.filter((event) => event === `retained-${index}`).length, 1);
-        if (preparation !== 'abort' || index === 0)
-          assert.equal(events.filter((event) => event === `permit-${index}`).length, 1);
+        assert.equal(events.filter((event) => event === `permit-${index}`).length, 1);
       }
       assert.equal(events.filter((event) => event === 'claim').length, 1);
     } finally {
@@ -350,9 +349,14 @@ test('worker claim state releases suspended ownership before reuse and empty rec
   const suspended = new Promise((resolve) => {
     resume = resolve;
   });
+  const payload = Buffer.from('suspended record payload');
   const record = {
     parts: [
       {
+        data() {
+          assert.equal(events.includes('part'), false, 'payload is readable until terminal');
+          return payload;
+        },
         close() {
           events.push('part');
         }
@@ -364,7 +368,11 @@ test('worker claim state releases suspended ownership before reuse and empty rec
       }
     },
     onTerminalCompletion() {
+      assert.equal(record.parts[0].data().toString(), 'suspended record payload');
       events.push('terminal');
+    },
+    releaseRetainedIngress() {
+      events.push('retained');
     }
   };
   const h = harness(
@@ -390,7 +398,7 @@ test('worker claim state releases suspended ownership before reuse and empty rec
         recvBatch(batch) {
           assert.strictEqual(batch, firstBatch);
           assert.equal(batch.closed, undefined, 'worker retains its receive batch between claims');
-          assert.deepEqual(events, ['terminal', 'permit', 'part', 'first']);
+          assert.deepEqual(events, ['first']);
           return { ok: false, records: [] };
         },
         release() {
@@ -402,12 +410,14 @@ test('worker claim state releases suspended ownership before reuse and empty rec
   try {
     h.ready();
     await new Promise(setImmediate);
-    assert.deepEqual(events, []);
+    assert.deepEqual(events, ['first', 'second']);
     assert.equal(h.receiveBatches.length, 1);
-    await assertClaimState(firstBatch, record);
+    assert.equal(record.parts[0].data().toString(), 'suspended record payload');
+    assert.equal(events.includes('retained'), false, 'ingress remains retained before terminal');
+    await assertClaimState(firstBatch);
     resume();
     await new Promise(setImmediate);
-    assert.deepEqual(events, ['terminal', 'permit', 'part', 'first', 'second']);
+    assert.deepEqual(events, ['first', 'second', 'terminal', 'permit', 'part', 'retained']);
     await assertClaimState(firstBatch);
     assert.equal(firstBatch.closed, undefined, 'worker retains its batch while idle');
   } finally {
