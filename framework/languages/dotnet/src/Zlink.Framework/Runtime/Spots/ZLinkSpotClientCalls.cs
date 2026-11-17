@@ -336,7 +336,8 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                     ZLinkMessageKind.Request,
                     target.MeshName,
                     ZLinkMessageNameResolver.ResolveFromMessage(request),
-                    activationTimeout
+                    activationTimeout,
+                    timeProvider: runtime.Registration.TimeProvider
                 );
                 var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                     header,

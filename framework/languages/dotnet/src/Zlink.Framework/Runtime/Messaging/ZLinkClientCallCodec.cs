@@ -12,7 +12,8 @@ internal static class ZLinkClientCallCodec
         string? topic = null,
         string? source = null,
         bool includeDeadline = true,
-        IReadOnlyDictionary<string, string>? metadata = null
+        IReadOnlyDictionary<string, string>? metadata = null,
+        TimeProvider? timeProvider = null
     )
     {
         if (kind is ZLinkMessageKind.Response or ZLinkMessageKind.Error)
@@ -30,7 +31,9 @@ internal static class ZLinkClientCallCodec
             messageName,
             ZLinkEnvelopeCodec.DefaultContentType,
             correlationRequired ? ZlinkStreamCorrelation.Next() : null,
-            includeDeadline && timeout is { } value ? DateTimeOffset.UtcNow.Add(value) : null,
+            includeDeadline && timeout is { } value
+                ? (timeProvider ?? TimeProvider.System).GetUtcNow().Add(value)
+                : null,
             topic,
             null,
             null,

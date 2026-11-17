@@ -20,6 +20,13 @@ public sealed partial class EntrySpotActorDispatchTests
     [InlineData(true)]
     public async Task InstanceRequestSuccessAllocationDoesNotDependOnErrorTracing(bool ready)
     {
+        var fixedUtcNow = DateTimeOffset.UtcNow.AddMinutes(10);
+        fixedUtcNow = new DateTimeOffset(
+            fixedUtcNow.Ticks - fixedUtcNow.Ticks % TimeSpan.TicksPerSecond,
+            TimeSpan.Zero
+        );
+        var timeProvider = new FixedTimeProvider(fixedUtcNow);
+
         async Task<long> Measure(ZLinkDiagnosticsLevel level)
         {
             var node = new SuccessfulInstanceNode();
@@ -44,7 +51,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 relocationStore: new InMemoryRelocationStore(),
                 meshResolverWrapper: inner => new AllocationMeshResolver(
                     new ColdTypeResolver(inner, 1, 100)
-                )
+                ),
+                joinTimeProvider: timeProvider
             );
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "entry", "Probe"),
@@ -117,6 +125,22 @@ public sealed partial class EntrySpotActorDispatchTests
         var baseline = await Measure(ZLinkDiagnosticsLevel.Off);
         var errors = await Measure(ZLinkDiagnosticsLevel.Errors);
         Assert.Equal(baseline, errors);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+
+        public override long GetTimestamp() => TimeProvider.System.GetTimestamp();
+
+        public override long TimestampFrequency => TimeProvider.System.TimestampFrequency;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period
+        ) => TimeProvider.System.CreateTimer(callback, state, dueTime, period);
     }
 
     private sealed class SuccessfulInstanceNode : CapturingSpotNode, IZLinkBackendSpotNode

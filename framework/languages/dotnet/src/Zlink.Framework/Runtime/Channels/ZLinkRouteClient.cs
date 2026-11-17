@@ -668,7 +668,8 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                     ZLinkMessageKind.Request,
                     snapshot.RouterChannelId,
                     packetName,
-                    timeout
+                    timeout,
+                    timeProvider: runtime.Registration.TimeProvider
                 );
                 var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                     header,
