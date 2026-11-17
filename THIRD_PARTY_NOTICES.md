@@ -170,7 +170,7 @@ This repository uses three licenses, split by layer:
   connectors and the Framework runtime, and example code under language-specific
   `samples/`, `tutorial/`, `quickstart/`, and `framework/languages/shared_sample/`
   are licensed under Apache-2.0. Connector tests, performance-gate source, and
-  connector e2e fixtures retain zlink License 1.0.
+  connector e2e fixtures use the Elastic License 2.0.
   Packages include the Apache license text where their packaging configuration
   bundles a license file; the canonical text is
   `framework/languages/cpp/http-client/LICENSE`.

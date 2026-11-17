@@ -15,7 +15,7 @@ The Lobby and Instance roles (`lobby`, `instanceA`, and `instanceB`) explicitly 
 
 ## Prerequisites
 
-Docker Compose v2, and PowerShell 7 on Windows. Framework packages are pinned to 0.32.0 in `package.json`; the native binding is pinned to 1.23.0. These versions use public npm packages. Supply a ZLink license if required by your deployment.
+Docker Compose v2, and PowerShell 7 on Windows. Framework packages are pinned to 0.32.0 in `package.json`; the native binding is pinned to 1.23.0. These versions use public npm packages.
 
 ## Build
 

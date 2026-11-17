@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/telemetry_observation.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/session_disconnect_probe_spot.hpp"

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "runtime/mesh/service_liveness_registry.hpp"
 #include "runtime/mesh/service_topology_registry.hpp"
 #include "runtime/utils/available_processor_count.hpp"

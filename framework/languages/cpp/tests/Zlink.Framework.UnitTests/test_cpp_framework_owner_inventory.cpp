@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/stateful_object_sync.hpp"
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"

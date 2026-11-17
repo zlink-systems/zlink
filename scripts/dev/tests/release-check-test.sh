@@ -63,6 +63,7 @@ write_node_package() {
 {
   "name": "$name",
   "version": "1.2.3",
+  "license": "$(case "$name" in *framework*|*nestjs*) printf Elastic-2.0 ;; *) printf Apache-2.0 ;; esac)",
   "repository": {
     "type": "git",
     "url": "https://github.com/zlink-systems/zlink.git",
@@ -77,18 +78,22 @@ write_cpp_metadata() {
     local target=$1 port=$2 prefix=$3 tag=$4 asset=$5
     mkdir -p "$TEST_ROOT/repo/vcpkg/ports/$port" "$TEST_ROOT/repo/$prefix"
     cat >"$TEST_ROOT/repo/vcpkg/ports/$port/vcpkg.json" <<EOF
-{"name":"$port","version":"1.2.3"}
+{"name":"$port","version":"1.2.3"$(if [[ "$target" == framework ]]; then printf ',"license":"Elastic-2.0 AND Apache-2.0"'; fi)}
 EOF
     cat >"$TEST_ROOT/repo/vcpkg/ports/$port/portfile.cmake" <<EOF
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/$tag/$asset"
     SHA512 11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
 )
+$(if [[ "$target" == framework ]]; then printf 'vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE" "${SOURCE_PATH}/http-client/LICENSE")'; fi)
 EOF
     if [[ "$target" != core ]]; then
+        local license_line=""
+        [[ "$target" != framework ]] || license_line='    license = "Elastic-2.0"'
         cat >"$TEST_ROOT/repo/$prefix/conanfile.py" <<EOF
 class Recipe:
     version = "1.2.3"
+$license_line
 EOF
     else
         printf 'class Recipe: pass\n' >"$TEST_ROOT/repo/$prefix/conanfile.py"
@@ -166,7 +171,7 @@ EOF
 
     write_node_package bindings/node/package.json @zlink-systems/zlink bindings/node
     for package in stream-wire stream-connector framework framework-codec-protobuf \
-        framework-codec-msgpack framework-locations-redis http-client nestjs; do
+        framework-codec-msgpack framework-locations-etcd framework-locations-redis http-client nestjs; do
         write_node_package \
             "framework/languages/node/packages/$package/package.json" \
             "@zlink-systems/$package" \
@@ -196,16 +201,22 @@ EOF
 <PackageProjectUrl>https://github.com/zlink-systems/zlink</PackageProjectUrl>
 </PropertyGroup></Project>
 EOF
+    printf '<Project><ItemGroup><None Include="$(MSBuildThisFileDirectory)../../LICENSE" Pack="true" PackagePath="" Visible="false" /></ItemGroup></Project>\n' \
+        >"$TEST_ROOT/repo/framework/languages/dotnet/Directory.Build.targets"
+    printf 'Elastic License 2.0\n' >"$TEST_ROOT/repo/framework/LICENSE"
     for project in Systems.Zlink.Stream.Connector Zlink.Framework.AspNetCore \
         Zlink.Framework.Codecs.MessagePack Zlink.Framework.Codecs.Protobuf \
-        Zlink.Framework.Contracts Zlink.Framework.Locations.Redis \
+        Zlink.Framework.Contracts Zlink.Framework.Locations.Etcd Zlink.Framework.Locations.Redis \
         Zlink.Framework.Provider.Abstractions Zlink.Framework Zlink.HttpClient; do
         mkdir -p "$TEST_ROOT/repo/framework/languages/dotnet/src/$project"
         package_id=""
         [[ "$project" != Systems.Zlink.Stream.Connector ]] \
             || package_id='<PackageId>Zlink.Stream.Connector</PackageId>'
+        license=""
+        [[ "$project" != Systems.Zlink.Stream.Connector && "$project" != Zlink.HttpClient ]] \
+            || license='<PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>'
         cat >"$TEST_ROOT/repo/framework/languages/dotnet/src/$project/$project.csproj" <<EOF
-<Project><PropertyGroup><IsPackable>true</IsPackable><Description>$project</Description>$package_id</PropertyGroup></Project>
+<Project><PropertyGroup><IsPackable>true</IsPackable><Description>$project</Description>$package_id$license</PropertyGroup></Project>
 EOF
     done
 
@@ -239,6 +250,13 @@ scm { }
 withSourcesJar()
 withJavadocJar()
 name = "centralStaging"
+if (project.name in setOf(
+    "zlink-http-client", "zlink-http-client-kotlin",
+    "zlink-stream-connector", "zlink-framework-json-internal")) {
+    license { name.set("Apache-2.0"); url.set("https://www.apache.org/licenses/LICENSE-2.0") }
+} else {
+    license { name.set("Elastic License 2.0"); url.set("https://www.elastic.co/licensing/elastic-license") }
+}
 EOF
     cat >"$TEST_ROOT/repo/framework/languages/java/scripts/upload-central-bundle.sh" <<'EOF'
 java_root="framework/languages/java"
@@ -298,7 +316,7 @@ pass 'Core와 언어별 binding/framework 버전·노트·메타데이터·배�
 
 assert_success 'dry-run 검사 실패' release_check framework --dry-run dotnet 1.2.3
 assert_file_contains "$TEST_ROOT/last.out" '^dry-run: 읽기 전용 검사를 동일하게 수행'
-assert_file_contains "$TEST_ROOT/last.out" '^\| 1 \| framework-dotnet/v1.2.3 \| nuget.org \(9개\) \|$'
+assert_file_contains "$TEST_ROOT/last.out" '^\| 1 \| framework-dotnet/v1.2.3 \| nuget.org \(10개\) \|$'
 pass '전역 --dry-run도 같은 읽기 전용 검사와 배포 대상 표를 제공한다'
 
 assert_failure '인자 누락 거부 실패' 2 release_check bindings

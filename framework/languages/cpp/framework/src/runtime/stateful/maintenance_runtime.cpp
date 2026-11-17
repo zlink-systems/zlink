@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"

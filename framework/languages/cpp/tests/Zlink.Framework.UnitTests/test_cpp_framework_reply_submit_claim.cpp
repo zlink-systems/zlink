@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "mailbox_claim_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "../support/runtime_failure_fixture.hpp"
