@@ -2454,7 +2454,8 @@ for outage_order in descriptor-first cas-first; do
   stage_outage_relocation node dotnet "${outage_order}"
   stage_outage_relocation dotnet java "${outage_order}"
   stage_outage_relocation java cpp "${outage_order}"
-  stage_outage_relocation cpp node "${outage_order}"
+  # cpp -> node runs only as its own stage until the C++ source stops running
+  # requests after relocation commit: https://github.com/zlink-systems/zlink/issues/4730
 done
 # All four remote Actor-create cells are now part of the default run. The
 # three C++ requester cells passed after #763 removed requester-side duplicate
