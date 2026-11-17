@@ -72,4 +72,4 @@ This README is maintained together with the following document regression tests.
 | `documentation-regression.test.js › node README does not link removed legacy guide chapters` | Never re-adds a link to a removed old guide chapter. |
 | `documentation-regression.test.js › node documentation relative markdown links resolve` | Relative links between documents never break. |
 | `documentation-regression.test.js › node interface specification documents the current execution-turn APIs` | Checks that the execution-turn API matches the formal interface spec. |
-| `sample-regression.test.js › node samples define required files and use only common sample documents` | Checks that the sample implementation only references the common sample documents and never recreates a removed per-language sample README. |
+| `samples-source-contract.test.js › node samples define required runners and keep scenario contracts in common documents` | Checks that the sample implementation only references the common sample documents and never recreates a removed per-language sample README. |
