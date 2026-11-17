@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "mailbox_claim_fixture.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_runtime.hpp"

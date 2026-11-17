@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 /* Canonical relocation-envelope-v1 logical stream (28-relocation-flow §4.2,

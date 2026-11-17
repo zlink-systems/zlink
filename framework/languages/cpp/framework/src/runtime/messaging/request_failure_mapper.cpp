@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include <service_wire_constants.hpp>

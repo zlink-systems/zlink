@@ -6,7 +6,7 @@
 > framework — for services that manage connections, state, and routing together.
 
 [![Build](https://github.com/zlink-systems/zlink/actions/workflows/build.yml/badge.svg)](https://github.com/zlink-systems/zlink/actions/workflows/build.yml)
-[![License: MPL-2.0 / zlink License 1.0 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.md)
+[![License: MPL-2.0 / Elastic License 2.0 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.md)
 
 | | |
 |---|---|
@@ -197,14 +197,11 @@ Licensing differs by repository layer.
 | Scope | License |
 |---|---|
 | `core/`, `bindings/` | [Mozilla Public License 2.0](./LICENSE) |
-| Server Framework runtime under `framework/` | [zlink License 1.0](./framework/LICENSE) |
+| Server Framework runtime under `framework/` | [Elastic License 2.0](./framework/LICENSE) |
 | Client connectors, all shared C++ headers under `common/include/`, Node `stream-wire`, and examples under language-specific `samples/`, `tutorial/`, `quickstart/`, and `shared_sample/` directories | [Apache License 2.0](./framework/languages/cpp/http-client/LICENSE) |
 | Language-specific Framework `http-client` packages | Apache License 2.0 |
 
-The server Framework runtime uses the zlink License 1.0. Versions before 1.0.0 are free
-regardless of machine count. Starting with 1.0.0, one server machine is free
-and each additional machine requires a paid license. Releases through 0.30.0
-remain under FSL-1.1-ALv2.
+The server Framework runtime uses the Elastic License 2.0. Earlier releases remain under the license published with each release.
 
 See the [license guide](./doc/license/README.md) and
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for detailed terms and

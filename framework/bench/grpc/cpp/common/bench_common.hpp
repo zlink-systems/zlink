@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // Shared measurement plumbing for the C++ with-grpc bench.
 //
 // Everything here is measurement scaffolding, never judgement: the shared

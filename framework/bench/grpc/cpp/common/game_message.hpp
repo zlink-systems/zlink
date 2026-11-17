@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #ifndef ZLINK_CPP_BENCH_GAME_MESSAGE_HPP
 #define ZLINK_CPP_BENCH_GAME_MESSAGE_HPP
 

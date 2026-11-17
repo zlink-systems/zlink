@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LicenseRef-zlink-License-1.0
+# SPDX-License-Identifier: Elastic-2.0
 #
 # C++ with-grpc bench (spec: framework/bench/grpc/README.ko.md).
 #
