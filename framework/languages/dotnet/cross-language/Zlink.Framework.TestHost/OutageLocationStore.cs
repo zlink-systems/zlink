@@ -107,9 +107,9 @@ internal sealed class OutageLocationStore(
         var decode = method.CreateDelegate<SpanDecoder<T>>();
         return bytes => decode(bytes, out var decoded) ? decoded : null;
     }
-    private static void Require(bool condition, string message)
+    private void Require(bool condition, string message)
     {
-        if (!condition) throw new InvalidOperationException(message);
+        if (!condition) throw FailRecovery(message);
     }
 
     internal static IZLinkLocationStore Wrap(
@@ -279,7 +279,7 @@ internal sealed class OutageLocationStore(
     private TestHostEventSink? _events;
     private async Task<ActorRef> RequireSourceAsync(CancellationToken cancellationToken) =>
         await _actors!.FindAsync(options.ActorId ?? "cross-lang-user-spot-actor", cancellationToken)
-            ?? throw new InvalidOperationException("Public Find lost the source owner before commit.");
+            ?? throw FailRecovery("Public Find lost the source owner before commit.");
 
     internal async Task RunCommandAsync(string command, IServiceProvider services, CancellationToken cancellationToken)
     {

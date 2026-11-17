@@ -1374,13 +1374,28 @@ class outage_control_t
                 } else if (command == "completed") {
                     // Recovered source/coordinator fence is observed only on .NET; the other sources record Preparing/Captured in authority after https://github.com/zlink-systems/zlink/issues/4718.
                     const auto reply = probe ("outage-target-response");
+                    if (!reply) {
+                        if (!reply.error ())
+                            std::rethrow_exception (reply.exception ());
+                        throw std::runtime_error (
+                          std::string ("relocation target probe failed|kind=")
+                          + error_kind_wire_name (reply.error_kind ()) + "|error="
+                          + reply.error ()->what ());
+                    }
                     const auto owner = _manager.find (fw::actor_id_t (_actor)).result ().value ();
-                    check (owner && reply && reply.value ().spot_id == require ("spot-id")
-                             && reply.value ().node_rid == owner->node_rid ().value ()
-                             && (g_outage_store->target
-                                   ? reply.value ().node_rid == g_user_spot_node_rid
-                                   : reply.value ().node_rid != g_user_spot_node_rid),
-                           "relocation did not deliver the target response");
+                    check (owner.has_value (), "relocation public Find returned no Actor");
+                    check (reply.value ().spot_id == require ("spot-id"),
+                           "relocation target probe returned unexpected Spot|actual="
+                             + reply.value ().spot_id + "|expected=" + require ("spot-id"));
+                    check (reply.value ().node_rid == owner->node_rid ().value (),
+                           "relocation target probe disagreed with public Find|reply="
+                             + reply.value ().node_rid + "|owner="
+                             + std::string (owner->node_rid ().value ()));
+                    check (g_outage_store->target
+                             ? reply.value ().node_rid == g_user_spot_node_rid
+                             : reply.value ().node_rid != g_user_spot_node_rid,
+                           "relocation target probe executed on unexpected node|node="
+                             + reply.value ().node_rid + "|local=" + g_user_spot_node_rid);
                     const auto followup = probe ("outage-followup");
                     check (followup && followup.value ().node_rid == reply.value ().node_rid,
                            "followup did not execute on the committed target");
