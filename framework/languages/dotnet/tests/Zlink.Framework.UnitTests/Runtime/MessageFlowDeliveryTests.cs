@@ -561,8 +561,29 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
     }
 
     [Fact]
-    public void ProviderFailuresAreRoleCountedAndFailedFallbackIsNeverRetried()
+    public async Task ProviderFailureAssertionsAreIndependentOfEarlierProviderFailure()
     {
+        WaitForDelivery();
+        var owner = ZLinkMessageFlowDelivery.Shared;
+        var loggerBefore = owner.FailureCount(ZLinkTelemetryProviderRole.Logger);
+        var tracer = new ZLinkMessageFlowTracer(Options(), new ThrowingLogger());
+        tracer.Trace(Event("earlier-provider-failure"));
+        WaitForDelivery();
+        Assert.Equal(loggerBefore + 1, owner.FailureCount(ZLinkTelemetryProviderRole.Logger));
+        await ProviderFailuresAreRoleCountedAndFailedFallbackIsNeverRetried();
+    }
+
+    [Fact]
+    public async Task ProviderFailuresAreRoleCountedAndFailedFallbackIsNeverRetried()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MessageFlowDeliveryTests),
+                nameof(ProviderFailuresAreRoleCountedAndFailedFallbackIsNeverRetried)
+            )
+        )
+            return;
+
         WaitForDelivery();
         var owner = ZLinkMessageFlowDelivery.Shared;
         var loggerBefore = owner.FailureCount(ZLinkTelemetryProviderRole.Logger);
