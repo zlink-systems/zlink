@@ -8692,7 +8692,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         null,
                         SpotId: operation.Target.TargetSpotId,
                         Exception: error,
-                        MeshName: operation.Target.MeshName
+                        MeshName: operation.Target.MeshName,
+                        TargetRid: operation.Target.TargetNodeRid.ToString()
                     )
                 );
             }
@@ -13063,7 +13064,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     requestAdmission: requestAdmission
                 );
             },
-            ZLinkApplicationJobOrigin.Local
+            ZLinkApplicationJobOrigin.Local,
+            terminal
         );
         _ = FinishAdmissionAsync();
 

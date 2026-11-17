@@ -223,6 +223,7 @@ def validate_npm():
             "framework",
             "framework-codec-protobuf",
             "framework-codec-msgpack",
+            "framework-locations-etcd",
             "framework-locations-redis",
             "http-client",
             "nestjs",
@@ -231,6 +232,13 @@ def validate_npm():
                 f"framework/languages/node/packages/{package}/package.json",
                 f"framework/languages/node/packages/{package}",
             )
+            license = json_file(f"framework/languages/node/packages/{package}/package.json").get("license")
+            expected_license = "Elastic-2.0" if package in {
+                "framework", "framework-codec-protobuf", "framework-codec-msgpack",
+                "framework-locations-etcd", "framework-locations-redis", "nestjs",
+            } else "Apache-2.0"
+            if license != expected_license:
+                error(f"framework/languages/node/packages/{package}/package.json: license={license!r}, 기대={expected_license!r}")
 
 
 def validate_nuget():
@@ -270,6 +278,7 @@ def validate_nuget():
         "Zlink.Framework.Codecs.Protobuf",
         "Zlink.Framework.Contracts",
         "Zlink.Framework.Locations.Redis",
+        "Zlink.Framework.Locations.Etcd",
         "Zlink.Framework.Provider.Abstractions",
         "Zlink.Framework",
         "Zlink.HttpClient",
@@ -293,6 +302,18 @@ def validate_nuget():
         effective_id = package_id.group(1) if package_id else path.stem
         if not (effective_id == "Zlink" or effective_id.startswith("Zlink.")):
             error(f"{path.relative_to(root)}: 공개 PackageId가 Zlink.*가 아님: {effective_id}")
+        if path.parent.name == "Systems.Zlink.Stream.Connector" or effective_id == "Zlink.HttpClient":
+            if "<PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>" not in source:
+                error(f"{path.relative_to(root)}: PackageLicenseExpression이 Apache-2.0이 아님")
+        elif "<PackageLicenseExpression>" in source:
+            error(f"{path.relative_to(root)}: 서버 package는 framework/LICENSE 파일을 사용해야 함")
+    contains(
+        "framework/languages/dotnet/Directory.Build.targets",
+        "$(MSBuildThisFileDirectory)../../LICENSE",
+    )
+    contains("framework/languages/dotnet/Directory.Build.props", "<PackageLicenseFile>LICENSE</PackageLicenseFile>")
+    if "Elastic License 2.0" not in text("framework/LICENSE"):
+        error("framework/LICENSE: Elastic License 2.0 정본이 아님")
 
 
 def validate_go():
@@ -356,7 +377,31 @@ def validate_maven():
             "withSourcesJar()",
             "withJavadocJar()",
             'name = "centralStaging"',
+            'name.set("Elastic License 2.0")',
+            'url.set("https://www.elastic.co/licensing/elastic-license")',
+            'name.set("Apache-2.0")',
+            'url.set("https://www.apache.org/licenses/LICENSE-2.0")',
         )
+        source = text(build)
+        license_branch = re.search(
+            r"if \(project\.name in setOf\((?P<names>.*?)\)\) \{(?P<apache>.*?)\}\s*else\s*\{(?P<server>.*?)\n\s*\}",
+            source,
+            re.DOTALL,
+        )
+        if license_branch is None:
+            error(f"{build}: Apache·Elastic 라이선스 분기 누락")
+        else:
+            apache_names = set(re.findall(r'"([^"]+)"', license_branch.group("names")))
+            expected_apache_names = {
+                "zlink-http-client", "zlink-http-client-kotlin",
+                "zlink-stream-connector", "zlink-framework-json-internal",
+            }
+            if apache_names != expected_apache_names:
+                error(f"{build}: Apache POM 대상 불일치: {sorted(apache_names)}")
+            if 'name.set("Apache-2.0")' not in license_branch.group("apache") or \
+                    'name.set("Elastic License 2.0")' not in license_branch.group("server") or \
+                    'url.set("https://www.elastic.co/licensing/elastic-license")' not in license_branch.group("server"):
+                error(f"{build}: POM 라이선스 name·url 값이 package 경계와 다름")
         script = "framework/languages/java/scripts/upload-central-bundle.sh"
         contains(script, "ZLINK_FRAMEWORK_VERSION", '"$java_root/VERSION"', "zlink-framework-java-$version-central-bundle.zip")
         expected_names = {
@@ -490,6 +535,15 @@ def validate_cpp():
         vcpkg_port(t["vcpkg_manifest"], t["portfile"], t["tag"])
         conan_source(t["conandata"], t["tag"], t["asset"])
         return
+    if target == "framework":
+        contains(t["conanfile"], 'license = "Elastic-2.0"')
+        manifest = json_file(t["vcpkg_manifest"])
+        if manifest.get("license") != "Elastic-2.0 AND Apache-2.0":
+            error(f"{t['vcpkg_manifest']}: license={manifest.get('license')!r}")
+        contains(
+            t["portfile"],
+            'vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE" "${SOURCE_PATH}/http-client/LICENSE")',
+        )
     vcpkg_port(t["vcpkg_manifest"], t["portfile"], t["tag"], t["asset"])
     contains(t["conanfile"], f'version = "{version}"')
     conan_source(t["conandata"], t["tag"], t["asset"])
@@ -899,9 +953,9 @@ check_package_metadata() {
             ;;
         framework)
             case "$RELEASE_LANGUAGE" in
-                node) check_metadata_item "$root" npm npm '@zlink-systems/* 8개 repository·homepage' ;;
-                dotnet) check_metadata_item "$root" nuget NuGet 'Zlink.* 9개 nupkg 메타데이터' ;;
-                java) check_metadata_item "$root" maven Maven 'systems.zlink 13개·Central bundle' ;;
+                node) check_metadata_item "$root" npm npm '@zlink-systems/* 9개 repository·homepage·license' ;;
+                dotnet) check_metadata_item "$root" nuget NuGet 'Zlink.* 10개 nupkg 메타데이터' ;;
+                java) check_metadata_item "$root" maven Maven 'systems.zlink 14개·Central bundle' ;;
                 cpp) check_metadata_item "$root" cpp 'Conan·vcpkg' 'zlink-framework recipe·port 버전과 SHA' ;;
             esac
             ;;
@@ -965,9 +1019,9 @@ print_deployment_targets() {
         framework)
             case "$RELEASE_LANGUAGE" in
                 cpp) printf '| 1 | framework-cpp/v%s | GitHub Release + ConanCenter·vcpkg PR |\n' "$RELEASE_VERSION" ;;
-                node) printf '| 1 | framework-node/v%s | npm (8개) |\n' "$RELEASE_VERSION" ;;
-                java) printf '| 1 | framework-java/v%s | Maven Central (13개) |\n' "$RELEASE_VERSION" ;;
-                dotnet) printf '| 1 | framework-dotnet/v%s | nuget.org (9개) |\n' "$RELEASE_VERSION" ;;
+                node) printf '| 1 | framework-node/v%s | npm (9개) |\n' "$RELEASE_VERSION" ;;
+                java) printf '| 1 | framework-java/v%s | Maven Central (14개) |\n' "$RELEASE_VERSION" ;;
+                dotnet) printf '| 1 | framework-dotnet/v%s | nuget.org (10개) |\n' "$RELEASE_VERSION" ;;
             esac
             ;;
     esac

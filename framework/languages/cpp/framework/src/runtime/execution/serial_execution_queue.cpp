@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/execution/serial_application_record.hpp"
@@ -1426,7 +1426,8 @@ serial_execution_queue_t::accept_application_locked (
     runtime::handler_entry_t initial;
     if (item.lane != serial_work_lane_t::application || !item.application_record)
         return {};
-    if (item.application_record->saved_work () || (preceding && preceding->admission.durable ()))
+    if (item.application_record->saved_work ()
+        || (preceding && (preceding->admission.durable () || !preceding->admission.ready ())))
         item.application_record->admission.take_over (&initial);
     return {std::move (initial), std::exchange (item.application_record->transferred, {})};
 }
@@ -1497,6 +1498,8 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
         record = next->application_record;
         if (!record || record->admission.ready ())
             return false;
+        if (!record->admission.durable ())
+            record->admission.take_over ();
         auto &owned =
           std::get<serial_application_admission_t::durable_t> (record->admission.reservation);
         if (std::holds_alternative<application_job_queue_t::waiter_t> (owned.supply))

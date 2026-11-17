@@ -209,8 +209,8 @@ subprojects {
                                 }
                             } else {
                                 license {
-                                    name.set("zlink License 1.0")
-                                    url.set("https://github.com/zlink-systems/zlink/blob/main/framework/LICENSE")
+                                    name.set("Elastic License 2.0")
+                                    url.set("https://www.elastic.co/licensing/elastic-license")
                                 }
                             }
                         }

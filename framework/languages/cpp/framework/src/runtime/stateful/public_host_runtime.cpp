@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/execution/task_result.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -80,7 +80,7 @@ struct local_completion_sink_t
       std::shared_ptr<task_completion_source_t<operation_completion_t>> source,
       std::shared_ptr<operation_completion_t> result,
       spot_request_completion_t completion,
-      std::function<void ()> incomplete) :
+      std::function<task_t<void> ()> incomplete) :
         source (std::move (source)),
         result (std::move (result)),
         completion (std::move (completion)),
@@ -105,23 +105,39 @@ struct local_completion_sink_t
         }
         if (terminal != foundation::operation_terminal_t::completed && terminal_message.empty ())
             terminal_message = "Local operation did not complete";
-        if (terminal != foundation::operation_terminal_t::completed && incomplete) {
-            try {
-                incomplete ();
-            }
-            catch (const std::exception &error) {
-                terminal_message += ": rollback failed: ";
-                terminal_message += error.what ();
-            }
-            catch (...) {
-                terminal_message += ": rollback failed with an unknown exception";
-            }
+        if (terminal != foundation::operation_terminal_t::completed && incomplete)
+            (void) finish_failure (std::move (*this), terminal, std::move (terminal_message),
+                                   completion_payload.exception ());
+        else
+            publish (terminal, terminal_message, completion_payload.exception ());
+    }
+
+    static task_t<void> finish_failure (local_completion_sink_t sink,
+                                        foundation::operation_terminal_t terminal,
+                                        std::string terminal_message,
+                                        std::exception_ptr failure)
+    {
+        try {
+            co_await sink.incomplete ();
         }
+        catch (const std::exception &error) {
+            terminal_message += ": rollback failed: ";
+            terminal_message += error.what ();
+        }
+        catch (...) {
+            terminal_message += ": rollback failed with an unknown exception";
+        }
+        sink.publish (terminal, terminal_message, failure);
+        co_return;
+    }
+
+    void publish (foundation::operation_terminal_t terminal,
+                  const std::string &terminal_message,
+                  std::exception_ptr failure)
+    {
         if (completion) {
             auto decoded =
-              !completion_payload
-                ? detail::result_access_t::failure<std::vector<zlink::message_t>> (
-                    completion_payload.exception ())
+              failure ? detail::result_access_t::failure<std::vector<zlink::message_t>> (failure)
               : terminal == foundation::operation_terminal_t::completed
                 ? result_t<std::vector<zlink::message_t>>::success (std::move (result->parts))
               : terminal == foundation::operation_terminal_t::shutdown
@@ -134,9 +150,8 @@ struct local_completion_sink_t
                     framework_error_kind_t::internal_failure, terminal_message);
             completion (terminal, std::move (decoded));
         } else {
-            auto decoded = !completion_payload
-                             ? detail::result_access_t::failure<operation_completion_t> (
-                                 completion_payload.exception ())
+            auto decoded = failure
+                             ? detail::result_access_t::failure<operation_completion_t> (failure)
                            : terminal == foundation::operation_terminal_t::completed
                              ? result_t<operation_completion_t>::success (std::move (*result))
                            : terminal == foundation::operation_terminal_t::shutdown
@@ -158,7 +173,7 @@ struct local_completion_sink_t
     std::shared_ptr<task_completion_source_t<operation_completion_t>> source;
     std::shared_ptr<operation_completion_t> result;
     spot_request_completion_t completion;
-    std::function<void ()> incomplete;
+    std::function<task_t<void> ()> incomplete;
     std::function<void (const result_t<operation_completion_t> &)> receiver;
 };
 
@@ -751,8 +766,7 @@ struct application_claim_batch_t
         if (stateful && (kind == owner_kind_t::actor || kind == owner_kind_t::spot))
             return;
         for (std::size_t index = 0; index < claim->claimed_messages; ++index)
-            entries[index].original.emplace (
-              mesh::service_mailbox_t::transfer_locked (*claim->records[index]));
+            entries[index].original.emplace (std::move (*claim->records[index]));
     }
 
     std::array<entry_t, dispatch_limits::receive_batch_messages> storage;
@@ -7601,7 +7615,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
         if (!application_dispatch_started) {
             for (;;) {
                 mesh::service_mailbox_application_t pending;
-                bool skip = false;
                 _local_dispatch_completion_lane.run_sync ([&] {
                     if (_local_application_dispatches.empty ())
                         return;
@@ -7612,12 +7625,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
                         return;
                     pending = std::move (_local_application_dispatches.front ());
                     _local_application_dispatches.pop_front ();
-                    if (uses_local_operation_registry (pending->record.kind))
-                        skip = !_transport->operation_pending (pending->record.operation_id);
                 });
                 if (!pending)
                     break;
-                if (skip)
+                // Accepted request payloads outlive their caller. Join admission
+                // controls still require their operation's terminal claim.
+                if (pending->record.kind == record_kind_t::spot_control
+                    && !_transport->operation_pending (pending->record.operation_id))
                     continue;
                 if (pending->record.kind == record_kind_t::spot_multicast
                     && pending->record.spot_route) {
@@ -8869,7 +8883,7 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
   const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation,
   std::chrono::milliseconds timeout,
   spot_request_completion_t completion,
-  std::function<void ()> incomplete,
+  std::function<task_t<void> ()> incomplete,
   mesh_request_surface_t request_surface)
 {
     const auto source = operation.completion;
@@ -8976,6 +8990,18 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
       result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
     std::exception_ptr failure;
     std::optional<std::chrono::steady_clock::time_point> operation_deadline;
+    struct incomplete_join_t
+    {
+        static task_t<void> run (std::shared_ptr<public_host_runtime_t> host,
+                                 stateful::membership_token_t membership,
+                                 std::function<task_t<void> ()> cleanup)
+        {
+            if (cleanup)
+                co_await cleanup ();
+            if (membership.value != 0)
+                (void) co_await host->_objects.abort_membership_move_async (membership);
+        }
+    };
     try {
         co_await _lifecycle_configuration_lane.run_task ([&] {
             if (!_started || _closing)
@@ -8984,17 +9010,8 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                 operation_deadline = register_local_completion (
                   operation, *reservation, timeout, {},
                   [host = shared_from_this (), membership,
-                   cleanup = local_request_wait_cleanup (waiter)] {
-                      if (cleanup)
-                          cleanup ();
-                      if (membership.value != 0) {
-                          const auto abort =
-                            [] (std::shared_ptr<public_host_runtime_t> owner,
-                                stateful::membership_token_t move) -> task_t<void> {
-                              (void) co_await owner->_objects.abort_membership_move_async (move);
-                          };
-                          (void) abort (host, membership);
-                      }
+                   cleanup = local_request_wait_cleanup (waiter)] () -> task_t<void> {
+                      return incomplete_join_t::run (host, membership, cleanup);
                   });
             }
             catch (const framework_exception_t &failure) {
@@ -9154,15 +9171,26 @@ bool public_host_runtime_t::complete_local_actor_join (
     return completed;
 }
 
-std::function<void ()> public_host_runtime_t::local_request_wait_cleanup (
+std::function<task_t<void> ()> public_host_runtime_t::local_request_wait_cleanup (
   const std::shared_ptr<application_job_queue_t::waiter_t> &waiter)
 {
     if (!waiter)
         return {};
-    std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-    return [weak, waiter] {
-        if (auto host = weak.lock ())
-            host->_local_dispatch_completion_lane.try_post ([waiter] { (void) waiter->cancel (); });
+    struct wait_cleanup_t
+    {
+        static task_t<void> run (std::weak_ptr<public_host_runtime_t> weak,
+                                 std::shared_ptr<application_job_queue_t::waiter_t> waiter)
+        {
+            const auto cancel = [waiter] { (void) waiter->cancel (); };
+            if (auto host = weak.lock ();
+                host && !host->_local_dispatch_completion_lane.is_on_lane ())
+                co_await host->_local_dispatch_completion_lane.run_task (cancel);
+            else
+                cancel ();
+        }
+    };
+    return [weak = weak_from_this (), waiter] () -> task_t<void> {
+        return wait_cleanup_t::run (weak, waiter);
     };
 }
 
@@ -9534,7 +9562,9 @@ void public_host_runtime_t::admit_local_application (
     auto application = original.retain_mutable ();
     auto pending = waiter ? waiter : std::make_shared<application_job_queue_t::waiter_t> ();
     std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-    *pending = _options.mesh.application_jobs->wait_for_supply (
+    auto register_supply = waiter ? &application_job_queue_t::register_request_supply
+                                  : &application_job_queue_t::register_supply;
+    auto registration = (_options.mesh.application_jobs.get ()->*register_supply) (
       [weak, waiter = pending, application,
        admitted] (std::optional<application_job_queue_t::permit_t> reserved) mutable {
           auto waiting = std::move (waiter);
@@ -9555,7 +9585,6 @@ void public_host_runtime_t::admit_local_application (
           }
           application->application_permit = std::move (*reserved);
           auto publish = [weak, waiting, application, admitted] () mutable {
-              *waiting = {};
               auto host = weak.lock ();
               if (!host || !host->_transport->started ()) {
                   if (admitted)
@@ -9589,6 +9618,8 @@ void public_host_runtime_t::admit_local_application (
                                                            "application admission lane closed"));
       },
       application_job_queue_t::origin_t::local);
+    *pending = std::move (registration.waiter);
+    _options.mesh.application_jobs->deliver_immediate (registration, *pending);
 }
 
 task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_message (
@@ -9625,7 +9656,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
               source_binding_generation = bound_session_source->binding_generation;
               source_session_sequence = bound_session_source->session_sequence;
           }
-          auto waiter = _options.mesh.application_jobs
+          auto waiter = operation && _options.mesh.application_jobs
                           ? std::make_shared<application_job_queue_t::waiter_t> ()
                           : nullptr;
           auto enqueue =

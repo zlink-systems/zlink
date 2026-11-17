@@ -231,6 +231,7 @@ test('handoff captures a preparing packet before releasing its source FIFO witho
   }]);
   const initial = {
     releaseAfterInternalProcessing() { initialReleases += 1; },
+    get isReleased() { return initialReleases > 0; },
     reacquire(signal) {
       preparationSignal = signal;
       return new Promise((_resolve, reject) => {

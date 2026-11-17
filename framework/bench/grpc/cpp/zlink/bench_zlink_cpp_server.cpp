@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // `zlink-cpp` raw server: the ROUTER<->ROUTER echo and command endpoints.
 //
 // spec 1.3 / FB-001: both ZLink rows use ROUTER<->ROUTER, so this server

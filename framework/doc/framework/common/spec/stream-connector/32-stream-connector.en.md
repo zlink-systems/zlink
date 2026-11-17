@@ -598,6 +598,8 @@ state.
   later base delay is the smaller of the previous base delay times the
   backoff factor and the maximum delay. What is actually waited
   is **a value drawn between 50% and 100% of that base delay.**
+- **The first automatic attempt after a disconnect waits by the same rule.** It waits between 50% and
+  100% of the first base delay before connecting; it does not connect immediately after the disconnect.
 
     With a deterministic delay, every client that was attached comes
     back **at the same moment** once the server drops them. That moment
@@ -1026,7 +1028,7 @@ test name differs, the meaning must be the same.
 | **Option validation** | **Every option is checked before a connection is made; a value out of range is rejected as `ValidationFailed` and a mismatch between options as `ConfigurationError` (§6.3)** |
 | **Transport inference** | **An unspecified transport is settled by the endpoint scheme, and a specified one that conflicts with the scheme is `ConfigurationError` (§3.1)** |
 | **Error delivery** | **The receiver can tell which of §9's thirteen it is. A language's standard exception type is not used as is (§9.2)** |
-| **Reconnect delay** | **The wait between attempts falls between 50% and 100% of the base delay. When the attempts run out the state becomes `Disconnected` and disconnect handlers run (§6)** |
+| **Reconnect delay** | **The wait before the first attempt after a disconnect and between attempts falls between 50% and 100% of the base delay. When the attempts run out the state becomes `Disconnected` and disconnect handlers run (§6)** |
 | **Unregistration** | **Every registration — connector and handle push, error, disconnect, connection state, Actor bound and unbound — returns a value that unregisters, and an unregistered handler is not run by later dispatches (§7)** |
 | **Received count** | **`receivedCount(name)` counts what arrived, does not fall on consumption, and is independent of dispatch mode. It restarts at zero when the connection is established (§10)** |
 | **Wait surfaces** | **Both the named path and the payload-type path exist, the predicate and the return value carry messages, a failed condition is `ValidationFailed`, and an ended connection is `Disconnected` (§10.1)** |

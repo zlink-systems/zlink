@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include "runtime/foundation/operation_registry.hpp"
@@ -1026,7 +1026,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation,
       std::chrono::milliseconds timeout,
       spot_request_completion_t completion = {},
-      std::function<void ()> incomplete = {},
+      std::function<task_t<void> ()> incomplete = {},
       mesh_request_surface_t request_surface = mesh_request_surface_t::none);
     bool enqueue_completion (const pending_operation_t &operation,
                              receive_record_t record,
@@ -1452,7 +1452,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     admit_local_application (local_application_dispatch_t dispatch,
                              const std::shared_ptr<application_job_queue_t::waiter_t> &waiter = {},
                              std::shared_ptr<task_completion_source_t<void>> admitted = {});
-    std::function<void ()>
+    std::function<task_t<void> ()>
     local_request_wait_cleanup (const std::shared_ptr<application_job_queue_t::waiter_t> &waiter);
     task_t<void>
     enqueue_local_multicast (task_t<std::vector<stateful::object_ref_t>> target_snapshot,

@@ -43,6 +43,7 @@ MAPPED_PATHS = (
     (CPP_DIR, ""),
     ("framework/runtime", "runtime"),
     ("framework/LICENSE", "LICENSE"),
+    ("framework/languages/cpp/http-client/LICENSE", "http-client/LICENSE"),
     # The static archives are restricted to the zlink:: surface by Core's
     # tools (#2133); a checkout reads them in core/tools, the archive carries
     # the same three scripts next to CMakeLists.txt.
@@ -56,6 +57,7 @@ REQUIRED_FILES = (
     "runtime/protocol/generated/cpp/service_wire_pilot_codec.hpp",
     "tools/hide_static_archive_internals.sh",
     "LICENSE",
+    "http-client/LICENSE",
 )
 
 

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 // §10.8 spot-worker-offload-echo. Question: what a public CPU worker call adds to a local Spot echo (submission, the
