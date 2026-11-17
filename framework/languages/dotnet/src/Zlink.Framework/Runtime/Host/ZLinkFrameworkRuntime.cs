@@ -846,6 +846,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             await _standaloneActorRelocationRuntime
                 .DiscardLocationSpotAsync(spot)
                 .ConfigureAwait(false);
+            // Target abort rollback clears Committing; the first pass skips entries
+            // while that flag is set, so discard again after relocation cleanup.
             await _actorHandoffAdmissions
                 .DiscardLocationSpotAsync(spot.SpotId)
                 .ConfigureAwait(false);
