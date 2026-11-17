@@ -1743,6 +1743,14 @@ export class DefaultZLinkSpotManager {
     return this.activationLifecycle.admitActorPacketPrefix(activation, actorId, records);
   }
 
+  /** Transfers accepted source packets into the handoff before target ingress opens. */
+  captureSourceActorPacketPrefix(actor: ZLinkActor): void {
+    const spotId = actor.context.spotId;
+    if (spotId === undefined) return;
+    const activation = this.activations.resolve(actor.context.meshName, spotId);
+    activation?.serialExecutor.actorExecutors.get(actor.context.actorId)?.capturePacketPrefix();
+  }
+
   /** Resolves the current Actor FIFO owner for both Entry and User membership. */
   admitSourceActorPacketPrefix(
     actorId: string,

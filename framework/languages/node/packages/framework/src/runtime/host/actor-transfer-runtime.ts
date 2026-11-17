@@ -219,6 +219,7 @@ export class ZLinkActorTransferRuntime {
       actorId,
       requireSourceObjectGeneration(actorId, state)
     );
+    this.options.spotManager()?.captureSourceActorPacketPrefix(actor);
   }
 
   /** Relocation activation owns admission; handler terminals are observed independently. */
@@ -247,7 +248,7 @@ export class ZLinkActorTransferRuntime {
 
   async completeDeferredActorHandoff(
     actor: ZLinkActor,
-    target: ZLinkSpotRouteTarget,
+    _target: ZLinkSpotRouteTarget,
     _targetActorRef: ActorRef
   ): Promise<void> {
     const actorId = actor.context.actorId;
@@ -258,7 +259,7 @@ export class ZLinkActorTransferRuntime {
     }
     const admitted = this.options.actorHandoff.admitDeferredPrefix(
       actorId,
-      (drain) => manager.admitRoutedActorPacketPrefix(target.spotId, actorId, drain),
+      (drain) => manager.admitSourceActorPacketPrefix(actorId, drain),
       this.options.prepareApplicationJob
     );
     void this.observeHandoffReplay(admitted.terminal);
