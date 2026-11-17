@@ -1224,6 +1224,7 @@ class outage_control_t
         try {
             while (!_stopping.load ()) {
                 const auto [sequence, command] = next ();
+                _phase = command;
                 if (command.empty ())
                     return false;
                 if (command == "steady") {
@@ -1390,7 +1391,8 @@ class outage_control_t
                 ack (sequence, command);
             }
         } catch (const std::exception &error) {
-            _sink.append ("outage-error|" + std::string (error.what ()));
+            _sink.append ("outage-error|run=" + _run + "|seq=" + std::to_string (_sequence)
+                          + "|phase=" + _phase + "|error=" + std::string (error.what ()));
         }
         return false;
     }
@@ -1410,20 +1412,22 @@ class outage_control_t
     {
         std::uint64_t sequence = 0;
         std::string command;
-        wait ([&] {
+        while (!_stopping.load ()) {
             std::ifstream input (_prefix + ".command");
             std::string run, encoded_sequence;
-            if (!std::getline (input, run, '\t')
-                || !std::getline (input, encoded_sequence, '\t')
-                || !std::getline (input, command) || run != _run)
-                return false;
-            sequence = std::stoull (encoded_sequence);
-            if (sequence <= _sequence)
-                return false;
-            check (sequence == _sequence + 1, "outage command sequence skipped");
-            _sequence = sequence;
-            return true;
-        });
+            if (std::getline (input, run, '\t')
+                && std::getline (input, encoded_sequence, '\t')
+                && std::getline (input, command) && run == _run) {
+                sequence = std::stoull (encoded_sequence);
+                if (sequence > _sequence) {
+                    check (sequence == _sequence + 1, "outage command sequence skipped");
+                    _sequence = sequence;
+                    return {sequence, command};
+                }
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        }
+        command.clear ();
         return {sequence, command};
     }
 
@@ -1450,7 +1454,7 @@ class outage_control_t
     fw::actor_client_t &_actors;
     runtime::location_runtime_t &_location;
     std::atomic_bool &_stopping;
-    std::string _prefix, _run, _actor;
+    std::string _prefix, _run, _actor, _phase;
     std::uint64_t _sequence = 0, _instance = 0, _instances = 0;
     std::int64_t _recovered_lease = 0;
     fw::authority_snapshot_t _initial;

@@ -140,6 +140,22 @@ internal sealed class OutageLocationStore(
             await _commitRelease.Task.WaitAsync(cancellationToken);
         }
         var result = await inner.WriteAsync(request, cancellationToken);
+        if (_recovering && source)
+        {
+            // Temporary #4609 trail: which recovery writes reach the Store and how they end.
+            var keys = string.Join(",", request.Mutations.Select(mutation =>
+            {
+                var key = mutation switch
+                {
+                    ZLinkStoreMutation.Put put => put.Key,
+                    ZLinkStoreMutation.Delete delete => delete.Key,
+                    _ => default,
+                };
+                var name = key == _actorKey ? "actor" : key == _meshKey ? "descriptor" : key == _ownerKey ? "owner" : "other";
+                return $"{mutation.GetType().Name}:{name}";
+            }));
+            _events?.Append($"outage-write|result={result.GetType().Name}|mutations={keys}");
+        }
         if (result is not ZLinkStoreWriteResult.Applied) return result;
         if (_recovering && source)
         {
@@ -194,6 +210,7 @@ internal sealed class OutageLocationStore(
     }
 
     private IZLinkActorManager? _actors;
+    private TestHostEventSink? _events;
     private async Task<ActorRef> RequireSourceAsync(CancellationToken cancellationToken) =>
         await _actors!.FindAsync(options.ActorId ?? "cross-lang-user-spot-actor", cancellationToken)
             ?? throw new InvalidOperationException("Public Find lost the source owner before commit.");
@@ -202,6 +219,7 @@ internal sealed class OutageLocationStore(
     {
         var actorId = options.ActorId ?? "cross-lang-user-spot-actor";
         _actors = services.GetRequiredService<IZLinkActorManager>();
+        _events ??= services.GetRequiredService<TestHostEventSink>();
         var client = services.GetRequiredService<IZLinkActorClient>();
         var runtime = services.GetRequiredService<IZLinkSpotManager>();
         switch (command)

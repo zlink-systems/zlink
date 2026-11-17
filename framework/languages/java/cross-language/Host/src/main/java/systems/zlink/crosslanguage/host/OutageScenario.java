@@ -68,8 +68,7 @@ final class OutageScenario {
     }
 
     private String[] waitCommand(Path file, long previous) throws Exception {
-        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
-        while (System.nanoTime() < deadline) {
+        while (true) {
             if (Files.exists(file)) {
                 String[] fields = Files.readString(file).strip().split("\t", -1);
                 if (fields.length == 3 && runId.equals(fields[0])) {
@@ -80,7 +79,6 @@ final class OutageScenario {
             }
             Thread.sleep(10);
         }
-        throw new IllegalStateException("command not observed after sequence " + previous);
     }
 
     private void execute(String command) throws Exception {

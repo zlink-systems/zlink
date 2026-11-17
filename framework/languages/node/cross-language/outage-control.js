@@ -7,12 +7,12 @@ const { encodeAuthorityKey } = require('../packages/framework/dist/runtime/locat
 const { opaqueRecordPreimage, routingIdHexSegment } = require('../packages/framework/dist/runtime/locations/opaque-record-key');
 const { ServiceRelocationAuthorityPayloadCodec } = require('../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 
-async function until(observe, label) {
-  const deadline = Date.now() + 60_000;
+async function until(observe, label, timeoutMs = 60_000) {
+  const deadline = timeoutMs === null ? undefined : Date.now() + timeoutMs;
   for (;;) {
     const value = await observe();
     if (value) return value;
-    if (Date.now() >= deadline) throw new Error(`outage phase timed out: ${label}`);
+    if (deadline !== undefined && Date.now() >= deadline) throw new Error(`outage phase timed out: ${label}`);
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
@@ -95,6 +95,12 @@ class OutageStore {
       }
     }
     const result = await this.delegate.write(request, signal);
+    if (this.recovering) {
+      // Temporary #4609 trail: which recovery writes reach the Store and how they end.
+      const keys = request.mutations.map(item => `${item.kind}:${item.key.value === this.actorKey ? 'actor'
+        : item.key.value === this.descriptorKey ? 'descriptor' : 'other'}`).join(',');
+      this.emit(`outage-write|result=${result.kind}|mutations=${keys}`);
+    }
     if (result.kind === 'applied' && !this.target && this.newOwner && !this.recovering
       && request.mutations.some(item => item.key.value === this.actorKey)) {
       const authority = await this.observer.readAuthority(this.authorityKey);
@@ -149,7 +155,7 @@ class OutageStore {
         if (run !== this.args['outage-run-id'] || Number(seq) <= sequence) return undefined;
         assert.equal(Number(seq), sequence + 1, 'outage command sequence gap');
         return { seq: Number(seq), phase };
-      }, 'command');
+      }, 'command', null);
       await handle(command.phase);
       sequence = command.seq;
       this.emit(`outage-ack|run=${this.args['outage-run-id']}|seq=${sequence}|phase=${command.phase}`);
