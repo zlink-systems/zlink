@@ -487,37 +487,6 @@ internal static class ZLinkEnvelopeCodec
         return DecodeHeader(parts.GetSpan(0), validateFlow);
     }
 
-    internal static ulong MeasureApplicationPayloadBytes(IReadOnlyList<Message> parts)
-    {
-        var firstApplicationPart = 0;
-        if (parts.Count != 0 && IsEnvelopeHeader(parts[0]))
-            firstApplicationPart = 1;
-
-        var total = 0UL;
-        for (var index = firstApplicationPart; index < parts.Count; index++)
-        {
-            var size = (ulong)Math.Max(parts[index].Size, 0);
-            if (size > ulong.MaxValue - total)
-                return ulong.MaxValue;
-            total += size;
-        }
-        return total;
-    }
-
-    private static bool IsEnvelopeHeader(Message message)
-    {
-        var bytes = message.AsReadOnlySpan();
-        try
-        {
-            _ = DecodeHeader(bytes, validateFlow: true);
-            return true;
-        }
-        catch (ZLinkEnvelopeProtocolException)
-        {
-            return false;
-        }
-    }
-
     public static ZLinkEnvelopeProtocolException MissingHeader() =>
         new(InvalidProtocolHeader(), "ZLink envelope header is missing.");
 
