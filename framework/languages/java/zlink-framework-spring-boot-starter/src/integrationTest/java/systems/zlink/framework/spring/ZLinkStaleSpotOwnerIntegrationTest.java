@@ -26,6 +26,7 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.testsupport.ZLinkHostServing;
 import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.time.Duration;
