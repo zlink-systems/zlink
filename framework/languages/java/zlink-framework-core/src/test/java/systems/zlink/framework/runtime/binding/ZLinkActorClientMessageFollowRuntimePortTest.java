@@ -144,20 +144,7 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                             clientNode::spotNode,
                             routes,
                             new ZLinkJsonMessageSerializer(),
-                            Duration.ofSeconds(2),
-                            (ignoredBackend, ignoredKey) ->
-                                    (submission, cleanup) -> {
-                                        try {
-                                            return submission.get()
-                                                    ? CompletableFuture.completedFuture(null)
-                                                    : CompletableFuture.failedFuture(
-                                                            new IllegalStateException(
-                                                                    "Actor runtime port rejected"
-                                                                            + " the send"));
-                                        } finally {
-                                            cleanup.run();
-                                        }
-                                    });
+                            Duration.ofSeconds(2));
 
             client.sendToActor(ACTOR_ID, new PrimeRoute())
                     .submit()
