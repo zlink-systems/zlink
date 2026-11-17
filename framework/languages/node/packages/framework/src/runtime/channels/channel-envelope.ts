@@ -672,7 +672,7 @@ function encodeChannelHeaderBytes(
   header.topic = topic;
   header.metadata = sortedMetadata;
   if (sortedMetadata.length !== 0) {
-    const metadataBytes = protobufSize({ metadata: sortedMetadata });
+    const metadataBytes = protobufMetadataSize(sortedMetadata);
     if (metadataBytes > SERVICE_WIRE_METADATA_BYTES) {
       throw new ZLinkConfigurationException(
         `Channel application metadata exceeds the ${SERVICE_WIRE_METADATA_BYTES}-byte limit.`
@@ -704,13 +704,29 @@ const OUTBOUND_CHANNEL_HEADER: Record<string, unknown> = {
   metadata: EMPTY_PROTOBUF_METADATA
 };
 
-function protobufSize(value: unknown): number {
-  CHANNEL_HEADER_WRITER.reset();
-  try {
-    return CHANNEL_HEADER_CODEC.encode(value, CHANNEL_HEADER_WRITER).len;
-  } finally {
-    CHANNEL_HEADER_WRITER.reset();
+function protobufMetadataSize(entries: readonly { key: string; value: string }[]): number {
+  // Count field 13 and each nested string field with their wire tags and length prefixes.
+  let size = 0;
+  for (const entry of entries) {
+    const keyBytes = Buffer.byteLength(entry.key, 'utf8');
+    const valueBytes = Buffer.byteLength(entry.value, 'utf8');
+    const bodyBytes =
+      1 +
+      protobufVarintSize(keyBytes) +
+      keyBytes +
+      (valueBytes === 0 ? 0 : 1 + protobufVarintSize(valueBytes) + valueBytes);
+    size += 1 + protobufVarintSize(bodyBytes) + bodyBytes;
   }
+  return size;
+}
+
+function protobufVarintSize(value: number): number {
+  let size = 1;
+  while (value >= 0x80) {
+    value = Math.floor(value / 0x80);
+    size++;
+  }
+  return size;
 }
 
 function encodeFlowOrigin(origin: ZLinkFlowOrigin): number {
@@ -820,7 +836,7 @@ function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannel
   }
   const raw = value as Record<string, unknown>;
   const kind = requireChannelMessageKind(raw.kind);
-  const contentType = requireString(raw.contentType, 'contentType');
+  const contentType = requireDecodedString(raw.contentType, 'contentType');
   const flowId = flowEnabled ? optionalFlowId(raw.flowId) : undefined;
   const flowOrigin = flowEnabled ? optionalFlowOrigin(raw.flowOrigin) : undefined;
   if ((flowId === undefined) !== (flowOrigin === undefined)) {
@@ -831,18 +847,20 @@ function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannel
   const correlationId =
     raw.correlationId === undefined
       ? null
-      : requireNullableString(raw.correlationId, 'correlationId');
-  validateCorrelationForKind(kind, correlationId);
-  const channelName = requireString(raw.channelName, 'channelName');
-  const messageName = requireString(raw.messageName, 'messageName');
+      : requireDecodedNullableString(raw.correlationId, 'correlationId');
+  if (correlationId !== null) validateCorrelationValue(correlationId);
+  const channelName = requireDecodedString(raw.channelName, 'channelName');
+  const messageName = requireDecodedString(raw.messageName, 'messageName');
   const deadline =
-    raw.deadline === undefined ? null : requireNullableString(raw.deadline, 'deadline');
-  const topic = raw.topic === undefined ? null : requireNullableString(raw.topic, 'topic');
+    raw.deadline === undefined ? null : requireDecodedNullableString(raw.deadline, 'deadline');
+  const topic = raw.topic === undefined ? null : requireDecodedNullableString(raw.topic, 'topic');
   const errorCode =
-    raw.errorCode === undefined ? null : requireNullableString(raw.errorCode, 'errorCode');
+    raw.errorCode === undefined ? null : requireDecodedNullableString(raw.errorCode, 'errorCode');
   const errorMessage =
-    raw.errorMessage === undefined ? null : requireNullableString(raw.errorMessage, 'errorMessage');
-  const source = raw.source == null ? undefined : requireString(raw.source, 'source');
+    raw.errorMessage === undefined
+      ? null
+      : requireDecodedNullableString(raw.errorMessage, 'errorMessage');
+  const source = raw.source == null ? undefined : requireDecodedString(raw.source, 'source');
   const metadataEntries = raw.metadata;
   if (!Array.isArray(metadataEntries)) {
     throw new ZLinkConfigurationException('Channel application metadata must be repeated entries.');
@@ -855,8 +873,13 @@ function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannel
     for (const entry of metadataEntries) {
       if (!isRecord(entry))
         throw new ZLinkConfigurationException('Channel metadata entry is invalid.');
-      const key = requireString(entry.key, 'metadata.key');
-      const entryValue = requireString(entry.value, `metadata.${key}`);
+      const key = requireDecodedString(entry.key, 'metadata.key');
+      const entryValue = requireDecodedString(entry.value, `metadata.${key}`);
+      if (key.length === 0) {
+        throw new ZLinkConfigurationException(
+          'Channel application metadata key must not be empty.'
+        );
+      }
       if (Object.prototype.hasOwnProperty.call(metadata, key)) {
         throw new ZLinkConfigurationException(
           'Channel application metadata contains a duplicate key.'
@@ -864,8 +887,10 @@ function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannel
       }
       metadata[key] = entryValue;
     }
-    checkedMetadata = requireApplicationMetadata(metadata);
-    const encodedMetadataLength = protobufSize({ metadata: metadataEntries });
+    checkedMetadata = Object.freeze(metadata as Record<string, string>);
+    const encodedMetadataLength = protobufMetadataSize(
+      metadataEntries as { key: string; value: string }[]
+    );
     if (encodedMetadataLength > SERVICE_WIRE_METADATA_BYTES) {
       throw new ZLinkConfigurationException(
         `Channel application metadata exceeds the ${SERVICE_WIRE_METADATA_BYTES}-byte limit.`
@@ -1004,13 +1029,6 @@ function validateApplicationMetadata(
   return Object.freeze(metadata as Record<string, string>);
 }
 
-function requireApplicationMetadata(value: unknown): Readonly<Record<string, string>> {
-  if (!isRecord(value)) {
-    throw new ZLinkConfigurationException('Channel application metadata must be repeated entries.');
-  }
-  return validateApplicationMetadata(value);
-}
-
 function optionalFlowId(value: unknown): string | undefined {
   return value === undefined || value === null ? undefined : requireFlowId(value);
 }
@@ -1020,7 +1038,7 @@ function optionalFlowOrigin(value: unknown): ZLinkFlowOrigin | undefined {
 }
 
 function requireFlowId(value: unknown): string {
-  const flowId = requireString(value, 'flowId');
+  const flowId = requireDecodedString(value, 'flowId');
   if (!CHANNEL_FLOW_TEXT.test(flowId)) {
     throw new ZLinkConfigurationException('Channel envelope flowId must be a lowercase UUIDv7.');
   }
@@ -1066,9 +1084,19 @@ function requireString(value: unknown, fieldName: string): string {
   return value;
 }
 
-function requireNullableString(value: unknown, fieldName: string): string | null {
+function requireDecodedString(value: unknown, fieldName: string): string {
+  if (typeof value !== 'string') {
+    throw new ZLinkConfigurationException(`Channel envelope ${fieldName} must be a string.`);
+  }
+  if (value.includes('\0')) {
+    throw new ZLinkConfigurationException(`Channel envelope ${fieldName} must not contain NUL.`);
+  }
+  return value;
+}
+
+function requireDecodedNullableString(value: unknown, fieldName: string): string | null {
   if (value === null) return null;
-  return requireString(value, fieldName);
+  return requireDecodedString(value, fieldName);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -390,7 +390,7 @@ protobuf 생성기로 만든다([wire protocol §1](06-wire-protocol.ko.md#1-sch
 field는 [application metadata](02-channel-messaging.ko.md#9-metadata와-관측)를 `MetadataEntry`(key, value)
 목록으로 담는다. Entry가 없으면 빈 metadata다. 송신은 key의 UTF-8 byte 오름차순으로 쓰고, 수신은 순서와
 관계없이 받는다. 문자·크기 상한·오류·reply 규칙은 channel messaging §9를 따르며, 그 절의 전체 크기는
-`metadata` entry들의 protobuf encoded 길이의 합이다. 업무 payload frame에는 metadata를 넣지 않는다.
+`metadata` entry 하나를 field 13으로 encoding한 길이(field tag와 length prefix 포함)를 모든 entry에 대해 더한 값이다. 업무 payload frame에는 metadata를 넣지 않는다.
 
 <a id="envelope-header-grammar"></a>
 **Header 문법.** Header frame을 `ChannelHeader`로 parse하지 못하면 protocol error이며, 문자열 field의 UTF-8 위반도 이

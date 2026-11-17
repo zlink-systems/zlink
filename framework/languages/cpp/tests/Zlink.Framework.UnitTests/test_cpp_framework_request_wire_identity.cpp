@@ -4,6 +4,7 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include <zlink/framework/detail/binary_text_codec.hpp>
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -96,6 +97,13 @@ TEST_P (RequestWireIdentity, ServiceAndRoutePreserveHeaderAndBody)
 }
 
 INSTANTIATE_TEST_SUITE_P (MainEncoderFixtures, RequestWireIdentity, testing::Range (0, 6));
+
+TEST (RequestWireIdentity, NodeRequestHeaderKeepsMainWireIdentity)
+{
+    EXPECT_EQ (
+      fw::detail::encode_hex (protocol::encode_node_request_header_message (0x123abc).bytes ()),
+      "5a4d0111000000000000123abc");
+}
 
 TEST (RequestWireIdentity, InvalidMetadataFailsBeforeServicePacking)
 {

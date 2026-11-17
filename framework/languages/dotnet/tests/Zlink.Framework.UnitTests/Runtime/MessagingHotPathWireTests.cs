@@ -483,7 +483,8 @@ public sealed class MessagingHotPathWireTests
         };
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         var decoded = ZLinkEnvelopeCodec.DecodeHeader(encoded);
-        Assert.Equal(header.Deadline, decoded.Deadline);
+        // Decode keeps the wire text; deadline format is not a decode rule (#4352).
+        Assert.Equal("2026-09-10T12:34:56.1234567+09:00", decoded.DeadlineText);
         Assert.Equal(header.CorrelationId, decoded.CorrelationId);
         Assert.Equal(header.FlowId, decoded.FlowId);
         Assert.Equal(header.Metadata, decoded.Metadata);

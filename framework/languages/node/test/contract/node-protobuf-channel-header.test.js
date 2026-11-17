@@ -57,23 +57,56 @@ function snakeHeader(value) {
   return result;
 }
 
+function tracingStates(vector) {
+  return vector.tracing ?? ['on', 'off'];
+}
+
+function headerForTracing(header, tracing) {
+  const expected = { ...header };
+  if (tracing !== 'on') {
+    delete expected.flow_id;
+    delete expected.flow_origin;
+  } else if (expected.flow_origin !== undefined) {
+    expected.flow_origin = {
+      1: 'Inbound',
+      2: 'Timer',
+      3: 'Application',
+      4: 'Lifecycle'
+    }[expected.flow_origin] ?? expected.flow_origin;
+  }
+  return expected;
+}
+
 test('generated ChannelHeader codec matches every shared golden vector', async t => {
   for (const vector of golden.valid) {
-    await t.test(vector.name, () => {
-      const bytes = encodeChannelHeader(camelHeader(vector.header));
-      assert.equal(bytes.toString('hex'), vector.hex);
-      assert.deepEqual(snakeHeader(decodeGeneratedHeader(Buffer.from(vector.hex, 'hex'))), vector.header);
+    await t.test(vector.name, async t => {
+      const bytes = Buffer.from(vector.hex, 'hex');
+      if (vector.encode !== false) {
+        assert.equal(encodeChannelHeader(camelHeader(vector.header)).toString('hex'), vector.hex);
+        assert.deepEqual(snakeHeader(decodeGeneratedHeader(bytes)), vector.header);
+      }
+      for (const tracing of tracingStates(vector)) {
+        await t.test(`tracing-${tracing}`, () => {
+          const expected = headerForTracing(vector.header, tracing);
+          const decoded = decodeChannelHeader(message(bytes), tracing === 'on');
+          assert.deepEqual(snakeHeader(decoded), expected);
+        });
+      }
     });
   }
 });
 
 test('ChannelHeader validator rejects every shared invalid vector as a protocol error', async t => {
   for (const vector of golden.reject) {
-    await t.test(vector.name, () => {
-      assert.throws(
-        () => decodeChannelHeader(message(Buffer.from(vector.hex, 'hex'))),
-        error => error?.kind === 8
-      );
+    await t.test(vector.name, async t => {
+      for (const tracing of tracingStates(vector)) {
+        await t.test(`tracing-${tracing}`, () => {
+          assert.throws(
+            () => decodeChannelHeader(message(Buffer.from(vector.hex, 'hex')), tracing === 'on'),
+            error => error?.kind === 8
+          );
+        });
+      }
     });
   }
 });

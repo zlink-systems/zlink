@@ -134,6 +134,32 @@ test('channel header decode uses the generated protobuf codec without JSON parsi
   assert.equal(parses, 0);
 });
 
+test('warm protobuf channel header encode and decode stay within measured allocation limits', async (t) => {
+  if (runAllocationTest(t)) return;
+  const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+  const payload = Buffer.from('payload');
+  const metadata = new Map([['tenant', 'north']]);
+  const encode = () => envelope.encodeChannelEnvelopeParts(
+    3, 'allocation', 'Header', payload, undefined, undefined, undefined, undefined, false, metadata
+  )[0];
+  const headerBytes = encode();
+  const message = ZLinkBufferMessage.fromOwned(Buffer.from(headerBytes));
+  t.after(() => message.close());
+  const decode = () => envelope.decodeChannelHeader([message], false);
+
+  const encodeAllocations = await trackedCodecAllocations(
+    '/runtime/channels/channel-envelope.js', encode
+  );
+  const decodeAllocations = await trackedCodecAllocations(
+    '/runtime/channels/channel-envelope.js', decode
+  );
+  // Warm Node 22 baseline: encode 8.053 objects/397.592 bytes per call;
+  // decode 5.117 objects/319.960 bytes. The caps retain a small measurement margin.
+  assertAllocationBudget(t, encodeAllocations, 8.1, 400);
+  assertAllocationBudget(t, decodeAllocations, 5.2, 330);
+  assert.deepEqual({ ...decode().metadata }, { tenant: 'north' });
+});
+
 test('correlation validation accepts the full ASCII contract within a near-zero allocation budget', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');

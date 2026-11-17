@@ -1524,7 +1524,7 @@ int main (int argc, char **argv)
         assert (decode_rejected);
     }
 
-    // Error headers retain their framework validation after protobuf decoding.
+    // The channel-header contract does not require or restrict errorCode on decode.
     const messaging::envelope_codec_t envelope_codec;
     const auto invalid_error_header = [&] (std::optional<std::string> error_code) {
         zlink::framework::channel::v1::ChannelHeader wire;
@@ -1539,13 +1539,9 @@ int main (int argc, char **argv)
         return envelope_codec.decode_header (zlink::message_t::from (wire.SerializeAsString ()));
     };
     const auto missing_error_code = invalid_error_header (std::nullopt);
-    assert (!missing_error_code
-            && missing_error_code.error_kind ()
-                 == zlink::framework::framework_error_kind_t::protocol_error);
+    assert (missing_error_code);
     const auto unknown_error_code = invalid_error_header ("invented_error");
-    assert (!unknown_error_code
-            && unknown_error_code.error_kind ()
-                 == zlink::framework::framework_error_kind_t::protocol_error);
+    assert (unknown_error_code);
     const protocol::spot_route_fence_t spot_fence{
       {'s', 'p', 'o', 't'}, 3, {'n', 'o', 'd', 'e'}, 5, 7, 8};
     const auto spot_request = protocol::decode_spot_message_header (

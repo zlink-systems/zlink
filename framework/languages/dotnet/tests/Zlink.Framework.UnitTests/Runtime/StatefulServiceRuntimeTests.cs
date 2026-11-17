@@ -1660,15 +1660,8 @@ public sealed partial class StatefulServiceRuntimeTests
             )
         );
         var body = Message.From(new byte[] { 31, 37 });
-        Assert.Equal(
-            2UL,
-            ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(new[] { header, body })
-        );
-        var queued = new ZLinkMeshQueuedRecord(
-            record,
-            new[] { header, body },
-            applicationPayloadBytes: 2
-        );
+        record.ApplicationPayloadBytes = (ulong)body.Size;
+        var queued = new ZLinkMeshQueuedRecord(record, new[] { header, body });
 
         try
         {

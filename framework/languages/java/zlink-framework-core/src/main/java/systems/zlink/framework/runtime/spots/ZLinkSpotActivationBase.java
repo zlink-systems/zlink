@@ -344,13 +344,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
 
     final CompletionStage<Void> dispatchSpotRouteHandler(
             ZLinkBackendReceived received, ParsedPacket packet, CompletableFuture<Void> admission) {
-        //  Shared envelope requests carry content type and application metadata in ChannelHeader.
         var requestHeader = packet.header();
-        String contentType = requestHeader.contentType();
-        Map<String, String> metadata = requestHeader.metadata();
         SpotPacketHandlerRegistration handler =
                 context.handlerCatalog().packetHandler(packet.packetName());
-        if (handler == null) {
+        if (requestHeader == null || handler == null) {
             if (received.requestSeq().isPresent()) {
                 host.replySpotRouteDispatchError(
                         received,
@@ -365,6 +362,9 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             closeRouteReceived(received);
             return CompletableFuture.completedFuture(null);
         }
+        // Shared envelope requests carry content type and application metadata in ChannelHeader.
+        String contentType = requestHeader.contentType();
+        Map<String, String> metadata = requestHeader.metadata();
         if (received.requestSeq().isPresent()) {
             if (!handler.request()) {
                 host.replySpotRouteDispatchError(
