@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // Source A: HTTP-triggered logical streams. The runner owns process isolation and settle.
 #include "../common/bench_async.hpp"
 #include "../common/bench_common.hpp"

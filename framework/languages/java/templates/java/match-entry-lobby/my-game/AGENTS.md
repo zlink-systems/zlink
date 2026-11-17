@@ -137,7 +137,7 @@ Keep type registration and per-instance callbacks in their defined lifecycle pha
 
 Reconnect with the same Actor ID and bind the new Session to continue using existing player state. Framework manages current placement, so do not add an application route cache or reset player state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/java/guide/server/33-backpressure/).
 
-Investigate Framework failures using actual replies, events, and lifecycle results. Internal APIs, reflection, raw frames, private codecs, extra pollers, fixed sleeps, transport retries, increased deadlines, and weakened assertions do not verify the failing public operation and must not be added as fixes. Write code comments in English and exclude execution and build artifacts in `.logs/`, `build/`, `.gradle/`, and `zlink.license` files from commits.
+Investigate Framework failures using actual replies, events, and lifecycle results. Internal APIs, reflection, raw frames, private codecs, extra pollers, fixed sleeps, transport retries, increased deadlines, and weakened assertions do not verify the failing public operation and must not be added as fixes. Write code comments in English and exclude execution and build artifacts in `.logs/`, `build/`, and `.gradle/` from commits.
 
 `Actions.reconnect` re-sends the `RoomView` to a reconnecting player after the identity check.
 
@@ -217,7 +217,7 @@ The body follows the issue template of the ZLink repository. Copy the following 
 
 Reduce the reproduction to the minimal code or commands that keep only the failing public call, not this whole project. Paste only the first failing log section and the step before it; attach the full log as a file when it is needed. State when startup failed before flow recording.
 
-> **Issues are public.** Remove license keys, tokens, internal host names, and personal data from logs and settings before filing.
+> **Issues are public.** Remove tokens, internal host names, and personal data from logs and settings before filing.
 
 ### Filing procedure
 

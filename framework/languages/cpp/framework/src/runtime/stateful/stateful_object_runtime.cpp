@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/execution/serial_application_record.hpp"

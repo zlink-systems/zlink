@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"

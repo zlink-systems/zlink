@@ -3,7 +3,7 @@
   "version": "0.32.0",
   "description": "Zlink C++ server framework, HTTP client and stream connector",
   "homepage": "https://github.com/zlink-systems/zlink",
-  "license": null,
+  "license": "Elastic-2.0 AND Apache-2.0",
   "supports": "!(osx & x64)",
   "dependencies": [
     "zlink",

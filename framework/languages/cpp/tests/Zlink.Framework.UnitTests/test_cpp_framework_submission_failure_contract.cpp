@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/exception_payload.hpp"
 
