@@ -20,7 +20,7 @@ public sealed partial class EntrySpotActorDispatchTests
     [InlineData(true)]
     public async Task InstanceRequestSuccessAllocationDoesNotDependOnErrorTracing(bool ready)
     {
-        async Task<long> Measure(ZLinkDiagnosticsLevel level)
+        async Task<(Action Call, Func<Task> Stop)> Prepare(ZLinkDiagnosticsLevel level)
         {
             var node = new SuccessfulInstanceNode();
             node.SpotRequestHandler = parts =>
@@ -34,7 +34,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     typeof(ProbeReply),
                     codecs: null
                 );
-            using var observer = new CapturingMessageFlowObserver();
+            var observer = new CapturingMessageFlowObserver();
             var (runtime, _) = await CreateStartedRuntimeAsync(
                 node,
                 messageFlowObserver: observer,
@@ -101,22 +101,49 @@ public sealed partial class EntrySpotActorDispatchTests
                         .GetResult();
                     Assert.Empty(reply);
                 }
-                var bytes = PerCallAllocation.MinWindow(Call, 1000, warmup: 200);
-                Console.WriteLine(
-                    $"instance-request success ready={ready} level={level} requests=1000 B/op={bytes / 1000.0}"
+                return (
+                    Call,
+                    async () =>
+                    {
+                        Assert.Empty(observer.Events.Where(flow => flow.Outcome == "failed"));
+                        ZLinkMessageParts.DisposeAll(parts);
+                        await runtime.StopAsync(CancellationToken.None);
+                        observer.Dispose();
+                    }
                 );
-                Assert.Empty(observer.Events.Where(flow => flow.Outcome == "failed"));
-                return bytes;
             }
-            finally
+            catch
             {
                 ZLinkMessageParts.DisposeAll(parts);
                 await runtime.StopAsync(CancellationToken.None);
+                observer.Dispose();
+                throw;
             }
         }
-        var baseline = await Measure(ZLinkDiagnosticsLevel.Off);
-        var errors = await Measure(ZLinkDiagnosticsLevel.Errors);
-        Assert.Equal(baseline, errors);
+        var baseline = await Prepare(ZLinkDiagnosticsLevel.Off);
+        var errors = await Prepare(ZLinkDiagnosticsLevel.Errors);
+        try
+        {
+            for (var index = 0; index < 200; index++)
+            {
+                baseline.Call();
+                errors.Call();
+            }
+            var (baselineBytes, errorsBytes) = PerCallAllocation.MinWindowPair(
+                _ => baseline.Call(),
+                _ => errors.Call(),
+                callsPerWindow: 1000
+            );
+            Console.WriteLine(
+                $"instance-request success ready={ready} Off={baselineBytes / 1000.0} Errors={errorsBytes / 1000.0} B/op"
+            );
+            Assert.Equal(baselineBytes, errorsBytes);
+        }
+        finally
+        {
+            await baseline.Stop();
+            await errors.Stop();
+        }
     }
 
     private sealed class SuccessfulInstanceNode : CapturingSpotNode, IZLinkBackendSpotNode
