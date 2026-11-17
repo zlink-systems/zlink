@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.springframework.beans.factory.ObjectProvider;
@@ -17,6 +18,11 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
+import org.slf4j.LoggerFactory;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.crosslanguage.host.SpotRouteContracts.TestHostSpotRouteFailRequest;
 import systems.zlink.crosslanguage.host.SpotRouteContracts.TestHostSpotRouteMissingRequest;
@@ -39,6 +45,8 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
+import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -50,6 +58,7 @@ import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
@@ -114,9 +123,78 @@ public final class Program {
         }
     }
 
+    private static boolean hasEventFile(HostArgs args) {
+        String eventFile = args.option("event-file", null);
+        return eventFile != null && !eventFile.isBlank();
+    }
+
     @Bean
     EventSink eventSink(HostArgs args) {
         return new EventSink(args.option("event-file", null));
+    }
+
+    @Bean(destroyMethod = "close")
+    AutoCloseable messageFlowFileListener(HostArgs args) {
+        String eventFile = args.option("event-file", null);
+        if (eventFile == null || eventFile.isBlank()) {
+            return () -> {};
+        }
+        return new MessageFlowFileListener(Path.of(eventFile + ".flow"));
+    }
+
+    private static final class MessageFlowFileListener implements AutoCloseable {
+        private final Logger logger;
+        private final FlowFileAppender appender;
+
+        private MessageFlowFileListener(Path path) {
+            LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+            logger = context.getLogger("systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer");
+            appender = new FlowFileAppender(path);
+            appender.setContext(context);
+            appender.setName("cross-language-message-flow-file");
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        @Override
+        public void close() {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    private static final class FlowFileAppender extends AppenderBase<ILoggingEvent> {
+        private final Path path;
+
+        private FlowFileAppender(Path path) {
+            this.path = path;
+            try {
+                Path parent = path.getParent();
+                if (parent != null) {
+                    Files.createDirectories(parent);
+                }
+                Files.writeString(path, "", StandardCharsets.UTF_8);
+            } catch (IOException error) {
+                throw new UncheckedIOException(error);
+            }
+        }
+
+        @Override
+        protected synchronized void append(ILoggingEvent event) {
+            String message = event.getFormattedMessage();
+            if (message == null || !message.startsWith("zlink flow:")) {
+                return;
+            }
+            try {
+                Files.writeString(
+                    path,
+                    message + System.lineSeparator(),
+                    StandardCharsets.UTF_8,
+                    java.nio.file.StandardOpenOption.APPEND);
+            } catch (IOException error) {
+                addError("Failed to write message-flow event", error);
+            }
+        }
     }
 
     @Bean
@@ -155,6 +233,9 @@ public final class Program {
             String mode = args.mode();
             if ("entry-spot-source".equals(mode) || "entry-spot-target".equals(mode)) {
                 String meshName = args.require("mesh-name");
+                if (hasEventFile(args)) {
+                    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+                }
                 String nodeRid = args.require("node-rid");
                 if (locationStore != null) {
                     options.addLocationStore(locationStore);
@@ -199,9 +280,6 @@ public final class Program {
                 // section 9) -- this host never selects the transport.
                 boolean target = "user-spot-target".equals(mode);
                 String meshName = args.require("mesh-name");
-                // Message-flow evidence lands in the host log (the framework
-                // traces through SLF4J); no <event-file>.flow is produced by
-                // the Java host, so no canonical-28 wire probe exists here.
                 options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 if (locationStore != null) {
                     options.addLocationStore(locationStore);
@@ -310,7 +388,8 @@ public final class Program {
         ObjectProvider<ZLinkActorClient> actorClientProvider,
         ObjectProvider<ZLinkRouteClient> routeClientProvider,
         ObjectProvider<ZLinkRouteMeshRuntime> meshRuntimeProvider,
-        ObjectProvider<ZLinkRouteMeshRuntimeOptions> runtimeOptionsProvider) {
+        ObjectProvider<ZLinkRouteMeshRuntimeOptions> runtimeOptionsProvider,
+        ZLinkFrameworkLifecycle lifecycle) {
         return applicationArguments -> {
             String mode = args.mode();
             if ("user-spot-source".equals(mode)) {
@@ -335,7 +414,7 @@ public final class Program {
                     actorClientProvider.getObject(),
                     routeClientProvider.getObject(),
                     meshRuntimeProvider.getObject(),
-                    runtimeOptionsProvider.getObject());
+                    runtimeOptionsProvider.getObject(), lifecycle);
             }
         };
     }
@@ -419,12 +498,14 @@ public final class Program {
         ZLinkActorClient actorClient,
         ZLinkRouteClient routes,
         ZLinkRouteMeshRuntime meshRuntime,
-        ZLinkRouteMeshRuntimeOptions runtimeOptions) {
+        ZLinkRouteMeshRuntimeOptions runtimeOptions,
+        ZLinkFrameworkLifecycle lifecycle) {
         String meshName = args.require("mesh-name");
         String spotId = args.require("spot-id");
         String actorId = args.option("actor-id", "cross-lang-user-spot-actor");
         String sourceNodeRid = args.option("peer-rid", null);
         try {
+            awaitServing(lifecycle);
             ZLinkSpotCreateResult created = spots
                 .getOrCreate(spotId, RelocationUserSpot.SPOT_TYPE)
                 .inMesh(meshName)
@@ -457,6 +538,46 @@ public final class Program {
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static void awaitServing(ZLinkFrameworkLifecycle runtime)
+            throws InterruptedException, ExecutionException {
+        var serving = new java.util.concurrent.CompletableFuture<Void>();
+        runtime.observe().subscribe(new Flow.Subscriber<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>() {
+            private Flow.Subscription subscription;
+
+            @Override
+            public void onSubscribe(Flow.Subscription value) {
+                subscription = value;
+                value.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> observed) {
+                var state = observed.status().state();
+                if (state == ZLinkFrameworkRuntimeState.SERVING) {
+                    serving.complete(null);
+                    subscription.cancel();
+                } else if (state == ZLinkFrameworkRuntimeState.ERROR
+                        || state == ZLinkFrameworkRuntimeState.STOPPED) {
+                    serving.completeExceptionally(
+                            new IllegalStateException("Framework runtime reached " + state + " before serving"));
+                    subscription.cancel();
+                }
+            }
+
+            @Override
+            public void onError(Throwable failure) {
+                serving.completeExceptionally(failure);
+            }
+
+            @Override
+            public void onComplete() {
+                serving.completeExceptionally(
+                        new IllegalStateException("Framework runtime observation ended before serving"));
+            }
+        });
+        serving.get();
     }
 
     private static void observeSourcePeer(
@@ -511,34 +632,31 @@ public final class Program {
             Thread.currentThread().interrupt();
             return;
         }
-        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(90).toNanos();
-        String lastFailure = "none";
-        while (System.nanoTime() < deadlineNanos) {
-            try {
-                UserSpotProbeRes reply = actorClient
-                    .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
-                    .timeout(Duration.ofSeconds(5))
-                    .submit(UserSpotProbeRes.class)
-                    .toCompletableFuture()
-                    .get(7, TimeUnit.SECONDS);
-                if (targetNodeRid.equals(reply.nodeRid())) {
-                    sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
-                        + "|targetRid=" + targetNodeRid
-                        + "|actor=" + reply.actorId()
-                        + "|stateVersion=" + reply.stateVersion());
-                    return;
-                }
-                lastFailure = "unexpected-owner:" + reply.nodeRid();
-            } catch (ExecutionException | TimeoutException error) {
-                lastFailure = describe(error);
-            } catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
+
+        String failure;
+        try {
+            UserSpotProbeRes reply = actorClient
+                .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
+                .timeout(Duration.ofSeconds(5))
+                .submit(UserSpotProbeRes.class)
+                .toCompletableFuture()
+                .get(7, TimeUnit.SECONDS);
+            if (targetNodeRid.equals(reply.nodeRid())) {
+                sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
+                    + "|targetRid=" + targetNodeRid
+                    + "|actor=" + reply.actorId()
+                    + "|stateVersion=" + reply.stateVersion());
                 return;
             }
-            sleepQuietly(500);
+            failure = "unexpected-owner:" + reply.nodeRid();
+        } catch (ExecutionException | TimeoutException error) {
+            failure = describe(error);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return;
         }
         sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid
-            + "|failure=" + lastFailure);
+            + "|failure=" + failure);
     }
 
     private static void startDaemon(String name, Runnable body) {

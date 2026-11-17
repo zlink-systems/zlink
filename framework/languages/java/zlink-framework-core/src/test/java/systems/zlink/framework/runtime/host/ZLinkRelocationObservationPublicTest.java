@@ -38,6 +38,92 @@ final class ZLinkRelocationObservationPublicTest {
     private static CompletableFuture<ZLinkActorJoinCompletion> joined;
     private static CompletableFuture<ZLinkSessionContext> connected;
     private static CompletableFuture<String> relayed;
+    private static CompletableFuture<Void> targetJoined;
+
+    @org.junit.jupiter.api.RepeatedTest(20)
+    void targetFirstRequestAfterJoinedUsesCommittedLocalActor() throws Exception {
+        joined = new CompletableFuture<>();
+        targetJoined = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        try (var source =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options("first-source", locations, relocations, null, false))) {
+            awaitReady(source);
+            source.actorManager()
+                    .create("first-player", "player")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(15, TimeUnit.SECONDS);
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            var targetOptions = options("first-target", locations, relocations, endpoint);
+            targetOptions
+                    .configureLocations()
+                    .setMessageFollowDuration(
+                            new systems.zlink.framework.locations.ZLinkLocationOptions()
+                                    .messageFollowDuration());
+            targetOptions
+                    .configureLocations()
+                    .setRouteCacheMaxAge(
+                            new systems.zlink.framework.locations.ZLinkLocationOptions()
+                                    .routeCacheMaxAge());
+            try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions);
+                    var ready =
+                            observe(
+                                    target.routeMeshRuntime().observe(MESH, 8),
+                                    s -> s.isReady() && s.readyPeerCount() > 0)) {
+                awaitReady(target);
+                ready.result.get(15, TimeUnit.SECONDS);
+                assertEquals(
+                        RoutingId.from("first-target"),
+                        target.spotManager()
+                                .getOrCreate("first-room", "room")
+                                .submit()
+                                .toCompletableFuture()
+                                .get(15, TimeUnit.SECONDS)
+                                .spot()
+                                .nodeRid());
+                assertEquals(
+                        RoutingId.from("first-source"),
+                        target.actorManager()
+                                .find("first-player")
+                                .toCompletableFuture()
+                                .get(15, TimeUnit.SECONDS)
+                                .orElseThrow()
+                                .nodeRid());
+                assertEquals(
+                        "scheduled",
+                        source.actorClient()
+                                .requestToActor("first-player", new Join("first-room"))
+                                .timeout(WAIT)
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(15, TimeUnit.SECONDS));
+                targetJoined.get(15, TimeUnit.SECONDS);
+                assertEquals(
+                        "first-target",
+                        target.actorClient()
+                                .requestToActor("first-player", new FirstRequest())
+                                .timeout(Duration.ofSeconds(5))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(7, TimeUnit.SECONDS));
+                assertInstanceOf(
+                        ZLinkActorJoinCompletion.Accepted.class, joined.get(15, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    public record FirstRequest() {}
+
+    public static final class FirstRequestHandler
+            implements ZLinkSpotActorRequestHandler<Room, Player, FirstRequest, String> {
+        @Override
+        public CompletionStage<String> handle(
+                Room room, Player actor, ZLinkMessageContext context, FirstRequest request) {
+            return CompletableFuture.completedFuture(room.context().nodeRid().toString());
+        }
+    }
 
     @Test
     void boundSessionRelaySurvivesActualUserSpotRelocation() throws Exception {
@@ -461,6 +547,15 @@ final class ZLinkRelocationObservationPublicTest {
             ZLinkInMemoryLocationStore locations,
             InMemoryRelocationStore relocations,
             String peer) {
+        return options(rid, locations, relocations, peer, true);
+    }
+
+    private static DefaultZLinkFrameworkOptions options(
+            String rid,
+            ZLinkInMemoryLocationStore locations,
+            InMemoryRelocationStore relocations,
+            String peer,
+            boolean hostRoom) {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
@@ -480,7 +575,7 @@ final class ZLinkRelocationObservationPublicTest {
                 Player.class,
                 PlayerFactory.class,
                 f -> f.preserveStateWith(PlayerState.class));
-        objects.addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
+        if (hostRoom) objects.addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
         return options;
     }
 
@@ -589,6 +684,9 @@ final class ZLinkRelocationObservationPublicTest {
     public record Room(ZLinkSpotContext context) implements ZLinkSpot<Player> {
         @Override
         public CompletionStage<Void> onJoinedActor(Player actor) {
+            if (targetJoined != null && "first-room".equals(context.spotId())) {
+                targetJoined.complete(null);
+            }
             return CompletableFuture.completedFuture(null);
         }
 
@@ -601,6 +699,7 @@ final class ZLinkRelocationObservationPublicTest {
         public void configure() {
             context.handlers().addHandler(LeaveHandler.class);
             context.handlers().addHandler(ProbeHandler.class);
+            context.handlers().addHandler(FirstRequestHandler.class);
         }
 
         @Override
