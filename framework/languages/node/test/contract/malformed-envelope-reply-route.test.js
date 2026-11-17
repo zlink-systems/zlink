@@ -68,8 +68,20 @@ function encodeFixtureHeader(id, header) {
     header.kind = 99;
   }
   if (id === 'content-type') header.contentType = '';
-  if (id.startsWith('metadata') || id === 'send-header-request' || id.startsWith('correlation-64') || id.startsWith('correlation-space') || id.startsWith('correlation-control')) {
-    header.metadata = [{ key: 'bad', value: 'first' }, { key: 'bad', value: 'last' }];
+  if (
+    id.startsWith('metadata') ||
+    id === 'send-metadata' ||
+    id === 'send-header-request' ||
+    id.startsWith('correlation-64') ||
+    id.startsWith('correlation-space') ||
+    id.startsWith('correlation-control') ||
+    id === 'correlation-null' ||
+    id === 'correlation-number'
+  ) {
+    header.metadata = [
+      { key: 'bad', value: 'first' },
+      { key: 'bad', value: 'last' }
+    ];
   }
   if (id === 'correlation-number') delete header.correlationId;
   return encodeChannelHeader(header);
