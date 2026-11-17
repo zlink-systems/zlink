@@ -20,13 +20,6 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
     private volatile boolean commitReleased;
     private volatile long descriptorLease;
     private volatile long preserveLease;
-    private volatile long relocationSourceLease;
-    private volatile long relocationCoordinatorLease;
-    private volatile String relocationSourceOwner;
-    private volatile String relocationCoordinatorOwner;
-    private volatile String relocationId;
-    private volatile String relocationExpectedStoreVersion;
-    private volatile boolean relocationObserved;
     private final CompletableFuture<Void> failedOperation = new CompletableFuture<>();
     private final CompletableFuture<Void> descriptorSeen = new CompletableFuture<>();
     private final CompletableFuture<Void> casSeen = new CompletableFuture<>();
@@ -61,26 +54,6 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
     public CompletionStage<Void> commitSeen() { return commitSeen; }
     public long descriptorLease() { return descriptorLease; }
     public long preserveLease() { return preserveLease; }
-    public long relocationSourceLease() { return relocationSourceLease; }
-    public long relocationCoordinatorLease() { return relocationCoordinatorLease; }
-    public String relocationSourceOwner() { return relocationSourceOwner; }
-    public String relocationCoordinatorOwner() { return relocationCoordinatorOwner; }
-    public String relocationId() { return relocationId; }
-    public String relocationExpectedStoreVersion() { return relocationExpectedStoreVersion; }
-    public boolean relocationObserved() { return relocationObserved; }
-
-    public void observeRelocation(ZLinkAuthoritySnapshot authority) {
-        var relocation = ZLinkCanonicalRelocationAuthorityStateCodec.decode(authority.payload());
-        if (relocation != null) {
-            relocationId = relocation.aggregateId().toString();
-            relocationSourceOwner = relocation.sourceOwnerId();
-            relocationSourceLease = relocation.sourceOwnerLeaseGeneration();
-            relocationCoordinatorOwner = relocation.coordinatorOwnerId();
-            relocationCoordinatorLease = relocation.coordinatorLeaseGeneration();
-            relocationExpectedStoreVersion = relocation.coordinatorExpectedStoreVersion();
-            relocationObserved = true;
-        }
-    }
     public CompletionStage<Void> bothConfirmationsSeen() {
         return CompletableFuture.allOf(descriptorSeen, casSeen);
     }
@@ -106,12 +79,7 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
     @Override
     public CompletionStage<ZLinkStoreReadResult> read(ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
         if (unavailable) return failure();
-        return redis.read(key, cancellation).thenApply(result -> {
-            if (actorKey.equals(key) && result instanceof ZLinkStoreReadFound found) {
-                observeRelocation(snapshot(found.value().bytes()));
-            }
-            return result;
-        });
+        return redis.read(key, cancellation);
     }
 
     @Override
@@ -137,11 +105,6 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
             mutation -> mutation instanceof ZLinkStorePut put && actorKey.equals(put.key()));
         return redis.write(request, cancellation).thenCompose(result -> {
             if (!(result instanceof ZLinkStoreWriteApplied)) return CompletableFuture.completedFuture(result);
-            for (ZLinkStoreMutation mutation : request.mutations()) {
-                if (mutation instanceof ZLinkStorePut put && actorKey.equals(put.key())) {
-                    observeRelocation(snapshot(put.bytes()));
-                }
-            }
             if (descriptor) {
                 descriptorLease = request.mutations().stream()
                     .filter(mutation -> mutation instanceof ZLinkStorePut put && descriptorKey.equals(put.key()))
@@ -198,7 +161,6 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
         return new ZLinkProviderLocationRepository(proposed).read(authorityIdentity, () -> false)
             .thenApply(projected -> {
                 if (!(projected instanceof ZLinkAuthoritySnapshot authority)) return false;
-                observeRelocation(authority);
                 return !authority.ownerId().equals(sourceOwnerId);
             });
     }

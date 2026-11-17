@@ -110,31 +110,6 @@ class outage_location_store_t final : public fw::location_store_t
         const bool descriptor = contains_put (request, descriptor_store_key);
         const bool authority = contains_put (request, authority_store_key);
         auto result = co_await inner->write (std::move (request));
-        if (!target && authority && expected_recovered_lease.load () != 0
-            && std::holds_alternative<fw::store_write_applied_t> (result)) {
-            const auto snapshot = co_await repository.read_authority_core (actor_key);
-            if (const auto *current = std::get_if<fw::authority_snapshot_t> (&snapshot)) {
-                runtime::actor_authority_detail::relocation_capture_identity_t identity;
-                const auto actor = runtime::decode_direct_actor_authority_payload (
-                  current->payload, &identity);
-                if (actor && actor->has_relocation_state
-                    && actor->relocation_phase
-                         == runtime::actor_authority_detail::captured_relocation_phase) {
-                    const auto expected = static_cast<std::uint64_t> (
-                      expected_recovered_lease.load ());
-                    if (identity.source_owner_lease_generation != expected
-                        || identity.coordinator_lease_generation != expected
-                        || identity.source_owner_id != expected_recovered_owner
-                        || identity.coordinator_owner_id != expected_recovered_owner
-                        || current->owner.owner_id != expected_recovered_owner
-                        || current->owner.lease_generation
-                             != expected_recovered_lease.load ())
-                        throw std::runtime_error (
-                          "relocation source/coordinator did not use the recovered lease");
-                    relocation_fence_observed.store (true);
-                }
-            }
-        }
         if (recovering.load () && std::holds_alternative<fw::store_write_applied_t> (result)) {
             if (descriptor && !descriptor_released.load ()) {
                 descriptor_held.store (true);
@@ -179,9 +154,6 @@ class outage_location_store_t final : public fw::location_store_t
     std::atomic_bool unavailable{false}, failure_observed{false}, recovering{false};
     std::atomic_bool descriptor_held{false}, cas_held{false}, staged{false};
     std::atomic_bool descriptor_delivered{false}, cas_delivered{false};
-    std::atomic<std::int64_t> expected_recovered_lease{0};
-    std::string expected_recovered_owner;
-    std::atomic_bool relocation_fence_observed{false};
     std::atomic_bool descriptor_released{false}, cas_released{false}, commit_released{false};
     fw::task_completion_source_t<void> descriptor_release, cas_release, commit_release;
     bool target;

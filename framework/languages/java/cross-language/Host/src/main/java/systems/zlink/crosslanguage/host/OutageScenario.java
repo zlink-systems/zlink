@@ -177,28 +177,7 @@ final class OutageScenario {
                 require(!first.nodeRid().equals(original.allocation().descriptor().rid().toString()),
                     "post-commit reply came from source");
                 require(first.nodeRid().equals(next.nodeRid()), "follow-up reply changed owner");
-                if (!target) {
-                    require(store.relocationObserved(), "PREPARE relocation source/coordinator fence was not observed");
-                    require(store.relocationSourceOwner().equals(original.ownerId())
-                            && store.relocationCoordinatorOwner().equals(original.ownerId())
-                            && store.relocationSourceLease() == newLease
-                            && store.relocationCoordinatorLease() == newLease,
-                        "PREPARE relocation fence mismatch: sourceOwner=" + store.relocationSourceOwner()
-                            + "|sourceLease=" + store.relocationSourceLease()
-                            + "|coordinatorOwner=" + store.relocationCoordinatorOwner()
-                            + "|coordinatorLease=" + store.relocationCoordinatorLease()
-                            + "|expectedOwner=" + original.ownerId() + "|expectedLease=" + newLease
-                            + "|relocationId=" + store.relocationId()
-                            + "|expectedStoreVersion=" + store.relocationExpectedStoreVersion());
-                    sink.append("outage-relocation-fence|run=" + runId
-                        + "|relocationId=" + store.relocationId()
-                        + "|sourceLease=" + store.relocationSourceLease()
-                        + "|coordinatorLease=" + store.relocationCoordinatorLease()
-                        + "|sourceOwner=" + store.relocationSourceOwner()
-                        + "|coordinatorOwner=" + store.relocationCoordinatorOwner()
-                        + "|expectedStoreVersion=" + store.relocationExpectedStoreVersion()
-                        + "|expectedLease=" + newLease);
-                }
+                // Recovered source/coordinator fence is observed only on .NET; the other sources record Preparing/Captured in authority after https://github.com/zlink-systems/zlink/issues/4718.
                 sink.append("outage-completed|nodeRid=" + next.nodeRid());
             }
             default -> throw new IllegalArgumentException("unknown outage command " + command);

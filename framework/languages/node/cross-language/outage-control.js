@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const { ZLinkLocationStoreRepository } = require('../packages/framework/dist/runtime/locations/location-store-repository');
 const { encodeAuthorityKey } = require('../packages/framework/dist/runtime/locations/authority-key-codec');
 const { opaqueRecordPreimage, routingIdHexSegment } = require('../packages/framework/dist/runtime/locations/opaque-record-key');
-const { ServiceRelocationAuthorityPayloadCodec } = require('../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 
 async function until(observe, label, timeoutMs = 60_000) {
   const deadline = timeoutMs === null ? undefined : Date.now() + timeoutMs;
@@ -100,19 +99,6 @@ class OutageStore {
       const keys = request.mutations.map(item => `${item.kind}:${item.key.value === this.actorKey ? 'actor'
         : item.key.value === this.descriptorKey ? 'descriptor' : 'other'}`).join(',');
       this.emit(`outage-write|result=${result.kind}|mutations=${keys}`);
-    }
-    if (result.kind === 'applied' && !this.target && this.newOwner && !this.recovering
-      && request.mutations.some(item => item.key.value === this.actorKey)) {
-      const authority = await this.observer.readAuthority(this.authorityKey);
-      const publication = new ServiceRelocationAuthorityPayloadCodec().read(authority.payload);
-      if (publication) {
-        assert.equal(publication.sourceOwnerId, this.newOwner.ownerId);
-        assert.equal(publication.coordinatorOwnerId, this.newOwner.ownerId);
-        assert.equal(publication.sourceOwnerLeaseGeneration, this.newOwner.leaseGeneration);
-        assert.equal(publication.coordinatorLeaseGeneration, this.newOwner.leaseGeneration);
-        this.relocationFenceObserved = true;
-        this.emit(`outage-fence|sourceLease=${publication.sourceOwnerLeaseGeneration}|coordinatorLease=${publication.coordinatorLeaseGeneration}`);
-      }
     }
     if (result.kind !== 'applied' || !this.recovering) return result;
     const lease = await this.observer.readOwnerLease(this.owner.ownerId);

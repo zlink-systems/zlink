@@ -1245,7 +1245,6 @@ class outage_control_t
                           .owner_lease_healthy;
                     });
                     _initial = g_outage_store->authority ();
-                    g_outage_store->expected_recovered_owner = _initial.owner.owner_id;
                     const auto owner = _location.current_owner_token ();
                     check (owner && owner->owner_id == _initial.owner.owner_id
                              && owner->lease_generation == _initial.owner.lease_generation,
@@ -1286,7 +1285,6 @@ class outage_control_t
                     });
                     _sink.append ("outage-recovered-lease|lease="
                                   + std::to_string (_recovered_lease));
-                    g_outage_store->expected_recovered_lease.store (_recovered_lease);
                 } else if (command == "release-descriptor") {
                     wait ([&] { return g_outage_store->descriptor_held.load (); });
                     outage_location_store_t::release (g_outage_store->descriptor_released,
@@ -1364,14 +1362,7 @@ class outage_control_t
                     outage_location_store_t::release (g_outage_store->commit_released,
                                                       g_outage_store->commit_release);
                 } else if (command == "completed") {
-                    if (!g_outage_store->target) {
-                        check (g_outage_store->relocation_fence_observed.load (),
-                               "no captured relocation source/coordinator fence was observed");
-                        _sink.append ("outage-relocation-fences|sourceLease="
-                                      + std::to_string (_recovered_lease)
-                                      + "|coordinatorLease="
-                                      + std::to_string (_recovered_lease));
-                    }
+                    // Recovered source/coordinator fence is observed only on .NET; the other sources record Preparing/Captured in authority after https://github.com/zlink-systems/zlink/issues/4718.
                     const auto reply = probe ("outage-target-response");
                     const auto owner = _manager.find (fw::actor_id_t (_actor)).result ().value ();
                     check (owner && reply && reply.value ().spot_id == require ("spot-id")
