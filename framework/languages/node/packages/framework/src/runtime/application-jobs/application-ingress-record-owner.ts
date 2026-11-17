@@ -109,13 +109,16 @@ export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
     return this.shared.acquirePermit(signal);
   }
 
+  get isReleased(): boolean {
+    return this.permit === undefined || this.permit.isReleased === true;
+  }
+
   get origin(): ApplicationJobOrigin {
     return this.shared.origin;
   }
 
   markApplicationQueued(): void {
-    // The owner classifies and marks the child atomically when it is created;
-    // downstream dispatch must not mutate queue accounting a second time.
+    // The shared record owner accounts each child when it acquires its permit.
   }
 
   detachForHandlerTurn(): void {

@@ -236,7 +236,8 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         CancellationToken cancellationToken,
         ZLinkStateLane destination,
         Action<ZLinkApplicationJobQueueLease> publish,
-        ZLinkApplicationJobOrigin origin
+        ZLinkApplicationJobOrigin origin,
+        CancellationToken lifetime
     )
     {
         ValueTask publication = default;
@@ -245,6 +246,7 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
                 cancellationToken,
                 granted =>
                 {
+                    granted.BindLifetime(lifetime);
                     // Only enqueue on the reservation turn. The consumer runs
                     // on the destination lane, in the order of the queue's grants.
                     publication = destination.RunAsync(
@@ -524,13 +526,34 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
     // outside it (spec 06 §5).
     private async Task ReleaseAsync(ZLinkApplicationJobQueueLease lease)
     {
-        var released = await _lane
+        var released = await (
+            _lane.IsOnLane
+                ? ReleaseAfterCurrentTurnAsync(lease)
+                : _lane.RunAsync(
+                    static state => state.Queue.ReleaseOnLane(state.Lease),
+                    (Queue: this, Lease: lease)
+                )
+        ).ConfigureAwait(false);
+        CompleteRelease(released);
+    }
+
+    private async ValueTask<ReleaseResult> ReleaseAfterCurrentTurnAsync(
+        ZLinkApplicationJobQueueLease lease
+    )
+    {
+        ReleaseResult released = default;
+        await _lane
             .RunAsync(
-                static state => state.Queue.ReleaseOnLane(state.Lease),
-                (Queue: this, Lease: lease)
+                (Func<ValueTask>)(
+                    () =>
+                    {
+                        released = ReleaseOnLane(lease);
+                        return ValueTask.CompletedTask;
+                    }
+                )
             )
             .ConfigureAwait(false);
-        CompleteRelease(released);
+        return released;
     }
 
     // The single return of a rotation's reserved permits that no claimed
@@ -1201,6 +1224,15 @@ internal sealed class ZLinkApplicationJobQueueLease : IDisposable
 
     internal bool IsReleased => Volatile.Read(ref _state) == (int)LeaseState.Released;
 
+    internal void BindLifetime(CancellationToken terminal)
+    {
+        // The operation cancels and disposes this lifetime at its terminal boundary.
+        terminal.UnsafeRegister(
+            static value => ((ZLinkApplicationJobQueueLease)value!).Dispose(),
+            this
+        );
+    }
+
     internal ValueTask ReleaseForHandlerStartAsync() => _owner.ReleaseForHandlerStartAsync(this);
 
     internal bool TryMarkQueued() =>
@@ -1352,7 +1384,7 @@ internal static class ZLinkApplicationJobQueueInvocation
     {
         var scope = Current.Value;
         return scope is not null
-            && Volatile.Read(ref scope.Lease) is { IsReleased: false }
+            && Volatile.Read(ref scope.Lease) is not null
             && Volatile.Read(ref scope.OwnerReservationTransferred) == 0;
     }
 
@@ -1360,7 +1392,7 @@ internal static class ZLinkApplicationJobQueueInvocation
     {
         var scope = Current.Value;
         return scope is not null
-            && Volatile.Read(ref scope.Lease) is { IsReleased: false }
+            && Volatile.Read(ref scope.Lease) is not null
             && Interlocked.CompareExchange(ref scope.OwnerReservationTransferred, 1, 0) == 0;
     }
 
@@ -1405,6 +1437,8 @@ internal static class ZLinkApplicationJobQueueInvocation
 
         internal async ValueTask ReacquireAsync(CancellationToken cancellationToken)
         {
+            var previous = Interlocked.Exchange(ref Lease, null);
+            previous?.Dispose();
             var acquired = await Owner
                 .AcquireAsync(cancellationToken, Origin)
                 .ConfigureAwait(false);

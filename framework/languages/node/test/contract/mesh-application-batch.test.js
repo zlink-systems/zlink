@@ -146,14 +146,17 @@ test('raw MeshNode keeps pre-admitted batch depth within the fixed permit limit'
   const releaseHandlers = deferred();
   const complete = deferred();
   const received = [];
-  const acquire = fixture.queue.acquire.bind(fixture.queue);
+  const acquire = fixture.queue.acquireOrResume.bind(fixture.queue);
   let acquired = 0;
   let pump;
-  fixture.queue.acquire = async signal => {
-    const permit = await acquire(signal);
+  const observeGrant = permit => {
     acquired += 1;
     if (acquired === 3) thirdPermit.resolve();
     return permit;
+  };
+  fixture.queue.acquireOrResume = (resume, reject, signal, origin) => {
+    const permit = acquire(value => resume(observeGrant(value)), reject, signal, origin);
+    return permit === undefined ? undefined : observeGrant(permit);
   };
   try {
     pump = new backend.ZLinkMeshDispatchPump(fixture.node, {

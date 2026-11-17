@@ -155,6 +155,10 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
     return this.owner.acquire(signal, this.origin);
   }
 
+  get isReleased(): boolean {
+    return this.state === 'released' || this.state === 'idle';
+  }
+
   releaseStorage(): void {
     if (this.storage === undefined || this.state === 'idle') return;
     if (this.state !== 'released')
@@ -410,27 +414,29 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     const count = this.tryReserveCount(requested);
     if (count !== undefined) return count;
 
-    new Promise<number>((resolve, reject) => {
-      const waiter: CapacityWaiter = {
-        origin,
-        requested,
-        resolve,
-        reject,
-        signal,
-        abort: () => this.cancel(waiter),
-        startedAtMs: this.nowMs(),
-        metricsEpoch: this.metricsEpoch,
-        active: true
-      };
-      this.waiters.push(waiter);
-      this.capacityWaitCount += 1n;
-      const warningCount = this.updateLocalWaiters(origin, 1);
-      signal?.addEventListener('abort', waiter.abort, { once: true });
-      this.drainWaiters();
-      if (warningCount !== undefined) this.logLocalBacklog(warningCount);
-    })
-      .then(resume)
-      .catch(reject);
+    const waiter: CapacityWaiter = {
+      origin,
+      requested,
+      resolve: (count) => {
+        try {
+          resume(count);
+        } catch (error) {
+          reject(error);
+        }
+      },
+      reject,
+      signal,
+      abort: () => this.cancel(waiter),
+      startedAtMs: this.nowMs(),
+      metricsEpoch: this.metricsEpoch,
+      active: true
+    };
+    this.waiters.push(waiter);
+    this.capacityWaitCount += 1n;
+    const warningCount = this.updateLocalWaiters(origin, 1);
+    signal?.addEventListener('abort', waiter.abort, { once: true });
+    this.drainWaiters();
+    if (warningCount !== undefined) this.logLocalBacklog(warningCount);
     return undefined;
   }
 

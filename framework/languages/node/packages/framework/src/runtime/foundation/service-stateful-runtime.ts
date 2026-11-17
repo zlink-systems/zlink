@@ -4987,13 +4987,8 @@ export class ServiceStatefulRuntime {
     if (targetNodeRid === this.nodeRid) {
       parts = copyRetainedServiceFrames(parts);
       const deadlineUnixMs = BigInt(Date.now() + Math.max(0, timeoutMs));
-      const capacityStop = new AbortController();
-      void pending.promise.then(
-        () => capacityStop.abort(),
-        () => capacityStop.abort()
-      );
       void (async () => {
-        const applicationJobOwner = await this.raw.reserveLocalIngress(capacityStop.signal);
+        const applicationJobOwner = await this.raw.reserveLocalIngress(pending.signal);
         try {
           if (!pending.isPending()) return;
           const localIngress: RawServiceIngressRecord = {

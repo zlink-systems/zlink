@@ -1,6 +1,7 @@
 export type ApplicationJobOrigin = 'local' | 'remote';
 
 export interface ApplicationJobPermitPort {
+  readonly isReleased?: boolean;
   /** Reacquires this record's host supply after durable FIFO ownership. */
   reacquire?(signal: AbortSignal): Promise<ApplicationJobPermitPort>;
   readonly origin: ApplicationJobOrigin;
