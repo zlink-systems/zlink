@@ -2086,64 +2086,64 @@ export class ServiceStatefulRuntime {
       ...(onBindingReplaced === undefined ? {} : { onBindingReplaced })
     };
     if (actor.nodeRid === this.nodeRid) {
-      let installedDelivery: ServiceSessionDelivery | undefined;
-      try {
-        const previous = this.registry.binding(actor);
-        if (previous !== undefined && sameSessionIdentity(previous, localBinding)) {
-          const currentDelivery = this.sessionDeliveries.get(deliveryKey);
-          if (
-            currentDelivery !== undefined &&
-            sameSessionBinding(currentDelivery.binding, previous)
-          ) {
-            this.sessionDeliveries.set(deliveryKey, {
-              ...delivery,
-              binding: previous
-            });
-          } else {
-            this.sessionDeliveries.set(deliveryKey, { ...delivery, binding: previous });
-          }
-          pending.reply({
-            terminalResult: RequestResult.Ok,
-            failureCode: 0
-          });
-          return pending;
-        }
-        const binding = this.registry.installSessionBinding(localBinding);
-        installedDelivery = { ...delivery, binding };
-        this.sessionDeliveries.set(deliveryKey, installedDelivery);
-        pending.reply({
-          terminalResult: RequestResult.Ok,
-          failureCode: 0,
-          kindData: undefined
-        });
-        if (previous !== undefined && previous !== binding) {
-          if (previousDelivery !== undefined) {
-            this.retiredSessionDeliveries.set(sessionDeliveryKey(previous), previousDelivery);
-          }
-          this.sendBoundSessionReplacement(
-            previous,
-            actorAuthorityFromRoute(
-              this.tryActorFence(actor) ?? {
-                actor,
-                targetNodeGeneration: this.nodeGeneration,
-                authorityOwnerGeneration:
-                  this.registry.actor(actor.actorId)?.authorityOwnerGeneration ?? actor.generation,
-                ownerLeaseGeneration: this.nodeGeneration
+      void (async () => {
+        const applicationJobOwner = await this.raw.reserveLocalIngress();
+        try {
+          const route =
+            actorAuthority === undefined ? this.actorFence(actor) : { actor, ...actorAuthority };
+          const accepted = this.acceptSessionBinding(
+            {
+              command: M6bServiceWireCommand.boundSessionBind,
+              flags: 0,
+              sourceRoutingId: this.nodeRid,
+              sourceNodeGeneration: this.nodeGeneration,
+              parts: [],
+              applicationJobOwner
+            },
+            localBinding,
+            route,
+            (terminalResult, failureCode, binding, tail) => {
+              if (terminalResult === RequestResult.Ok && binding !== undefined) {
+                const current = this.sessionDeliveries.get(deliveryKey);
+                if (current !== undefined && !sameSessionBinding(current.binding, binding)) {
+                  this.retiredSessionDeliveries.set(sessionDeliveryKey(current.binding), current);
+                }
+                this.sessionDeliveries.set(deliveryKey, { ...delivery, binding });
               }
-            )
+              pending.reply({
+                terminalResult,
+                failureCode,
+                ...(binding === undefined
+                  ? {}
+                  : {
+                      streamBinding: {
+                        bindingGeneration: binding.bindingGeneration,
+                        authorityOwnerGeneration: route.authorityOwnerGeneration
+                      }
+                    }),
+                ...(tail?.kind === 'streamBindRejected'
+                  ? { failureMessage: tail.rejectionMessage }
+                  : {})
+              });
+            }
           );
+          if (!accepted) {
+            pending.reply(
+              failure(
+                createInternalFrameworkException(
+                  ZLinkFrameworkInternalErrorKind.SpotMoving,
+                  `Actor '${actor.actorId}' no longer accepts session bindings.`
+                )
+              )
+            );
+          }
+        } finally {
+          applicationJobOwner.close();
         }
-      } catch (error) {
-        if (
-          installedDelivery !== undefined &&
-          this.sessionDeliveries.get(deliveryKey) === installedDelivery
-        ) {
-          this.sessionDeliveries.delete(deliveryKey);
-        }
-        pending.reply(failure(error));
-      }
+      })().catch((error: unknown) => pending.reply(failure(error)));
       return pending;
     }
+
     let bindingActorFence: ServiceActorRouteFence;
     let header: Buffer;
     try {
@@ -3939,40 +3939,18 @@ export class ServiceStatefulRuntime {
           sessionOwner.ownerId,
           sessionOwner.leaseGeneration
         );
-        let completedBinding = binding;
-        const accepted = this.enqueueActorBindingControl(
+        const accepted = this.acceptSessionBinding(
           ingress,
           binding,
           record.actor,
-          (terminalResult, failureCode) => {
-            let replacedBinding: ServiceSessionBinding | undefined;
-            if (terminalResult === RequestResult.Ok) {
-              // This callback runs inside the Actor binding control turn,
-              // before the Host copies the accepted Actor-to-session projection.
-              // Publish the authority-owned registry view in that same turn
-              // before making the terminal reply observable.
-              const turnCurrent = this.registry.binding(actor.ref);
-              try {
-                completedBinding = this.registry.installSessionBinding(binding);
-                if (turnCurrent !== completedBinding) replacedBinding = turnCurrent;
-              } catch (error) {
-                const result = failure(error);
-                this.replyWire(
-                  ingress,
-                  record.correlation,
-                  result.terminalResult,
-                  result.failureCode
-                );
-                return false;
-              }
-            }
+          (terminalResult, failureCode, completedBinding) => {
             this.replyWire(
               ingress,
               record.correlation,
               terminalResult,
               failureCode,
               undefined,
-              terminalResult === RequestResult.Ok
+              terminalResult === RequestResult.Ok && completedBinding !== undefined
                 ? {
                     kind: 'streamBind',
                     bindingGeneration: completedBinding.bindingGeneration,
@@ -3980,22 +3958,7 @@ export class ServiceStatefulRuntime {
                   }
                 : undefined
             );
-            if (
-              terminalResult === RequestResult.Ok &&
-              replacedBinding !== undefined &&
-              !sameSessionBinding(replacedBinding, completedBinding)
-            ) {
-              this.sendBoundSessionReplacement(
-                replacedBinding,
-                actorAuthorityFromRoute({
-                  ...record.actor,
-                  ownerLeaseGeneration: record.actor.ownerLeaseGeneration
-                })
-              );
-            }
-            return true;
-          },
-          () => completedBinding
+          }
         );
         if (!accepted) {
           const result = failure(
@@ -4014,6 +3977,53 @@ export class ServiceStatefulRuntime {
       this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
     }
     return 'infrastructure';
+  }
+
+  private acceptSessionBinding(
+    ingress: RawServiceIngressRecord,
+    binding: ServiceSessionBinding,
+    actorRoute: ServiceActorRouteFence,
+    reply: (
+      terminalResult: number,
+      failureCode: number,
+      binding?: ServiceSessionBinding,
+      tail?: ServiceStatefulReplyTail
+    ) => void
+  ): boolean {
+    let completedBinding = binding;
+    return this.enqueueActorBindingControl(
+      ingress,
+      binding,
+      actorRoute,
+      (terminalResult, failureCode, _payload, tail) => {
+        let replacedBinding: ServiceSessionBinding | undefined;
+        if (terminalResult === RequestResult.Ok) {
+          const current = this.registry.binding(binding.actor);
+          try {
+            completedBinding = this.registry.installSessionBinding(binding);
+            if (current !== completedBinding) replacedBinding = current;
+          } catch (error) {
+            const result = failure(error);
+            reply(result.terminalResult, result.failureCode);
+            return false;
+          }
+        }
+        reply(
+          terminalResult,
+          failureCode,
+          terminalResult === RequestResult.Ok ? completedBinding : undefined,
+          tail
+        );
+        if (
+          replacedBinding !== undefined &&
+          !sameSessionBinding(replacedBinding, completedBinding)
+        ) {
+          this.sendBoundSessionReplacement(replacedBinding, actorAuthorityFromRoute(actorRoute));
+        }
+        return true;
+      },
+      () => completedBinding
+    );
   }
 
   private async handleBoundSessionClose(
@@ -6181,14 +6191,6 @@ function sameSessionBinding(left: ServiceSessionBinding, right: ServiceSessionBi
     routingIdsEqual(left.sessionRid, right.sessionRid) &&
     sameSessionOwnerIdentity(left, right) &&
     left.bindingGeneration === right.bindingGeneration
-  );
-}
-
-function sameSessionIdentity(left: ServiceSessionBinding, right: ServiceSessionBinding): boolean {
-  return (
-    sameActorRef(left.actor, right.actor) &&
-    routingIdsEqual(left.sessionRid, right.sessionRid) &&
-    sameSessionOwnerIdentity(left, right)
   );
 }
 

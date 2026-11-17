@@ -6958,6 +6958,10 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     });
     sessionService.start();
     const bindOperation = sessionService.bindActor('session-a', actor, 2_000);
+    const bindControl = await drainOne(backend, ReadyDomain.Infrastructure);
+    assert.equal(bindControl.kind, ReceiveKind.ActorBinding);
+    assert.equal(bindControl.reply(Buffer.alloc(0)), SubmitResult.Ok);
+    closeParts(bindControl);
     const bindCompletion = await drainOne(backend, ReadyDomain.Infrastructure);
     assert.deepEqual(bindCompletion.operationId, bindOperation);
     assert.equal(bindCompletion.terminalResult, RequestResult.Ok);
@@ -8643,6 +8647,18 @@ for (const remote of [false, true]) {
       observePeerConnectionIntentRemoved: () => () => {},
       setServiceIngress(handler: typeof ingress) {
         ingress = handler;
+      },
+      mailbox: {
+        tryEnqueue(record: {
+          stateful: { reply(terminal: number, code: number): boolean };
+          applicationJob: { close(): void };
+        }) {
+          queueMicrotask(() => {
+            record.stateful.reply(RequestResult.Ok, 0);
+            record.applicationJob.close();
+          });
+          return true;
+        }
       },
       reserveLocalIngress: async () => testIngressJobOwner(),
       replyService(record: RawServiceIngressRecord, parts: readonly Buffer[]) {

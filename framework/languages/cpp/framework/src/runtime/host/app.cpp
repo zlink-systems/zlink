@@ -1249,6 +1249,14 @@ apply_bound_session_bind_async (
         return ::zlink::framework::result_t<bind_result_t>::success (
           bind_result_t{runtime::stateful::stateful_error_t::none, std::move (replacement)});
     };
+    const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
+    const bool duplicate = current && current->session_rid && current->node_generation != 0
+                           && current->binding_generation != 0
+                           && (current->node_rid != incoming_route.node_rid
+                               || current->node_generation != incoming_route.node_generation
+                               || *current->session_rid != *incoming_route.session_rid);
+    if (!duplicate)
+        co_return replace_binding ();
     const bool callback_absent = co_await spot_state->lane.run_task ([spot_state, actor] {
         auto actor_type = std::string (actor_ref_access_t::actor_type (actor));
         if (actor_type.empty ()) {
@@ -1304,9 +1312,7 @@ apply_bound_session_bind_async (
     struct accept_session_binding_t
     {
         static task_t<::zlink::framework::result_t<bool>>
-        run (std::decay_t<decltype (actor_gateway_runtime)> actor_gateway_runtime,
-             std::decay_t<decltype (actor)> actor,
-             std::decay_t<decltype (incoming_route)> incoming_route,
+        run (actor_session_binding_identity_t current_identity,
              std::decay_t<decltype (actor_session_binding_identity_t{
                node_rid_t::from_string (session_owner.to_string ()), session_owner_generation,
                bind.binding.generation})> incoming_identity,
@@ -1317,36 +1323,21 @@ apply_bound_session_bind_async (
              actor_t *actor_instance,
              std::stop_token cancellation)
         {
-            const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
-            const bool duplicate = current && current->session_rid && current->node_generation != 0
-                                   && current->binding_generation != 0
-                                   && (current->node_rid != incoming_route.node_rid
-                                       || current->node_generation != incoming_route.node_generation
-                                       || *current->session_rid != *incoming_route.session_rid);
-            if (duplicate) {
-                const actor_session_binding_identity_t current_identity{
-                  node_rid_t::from_string (current->node_rid.to_string ()),
-                  current->node_generation, current->binding_generation};
-                start_callback_timeout ();
-                const auto rejection = co_await actor_instance->on_duplicate_bind (
-                  current_identity, incoming_identity, cancellation);
-                std::uint8_t pending = 0;
-                if (!race->decision.compare_exchange_strong (pending, 1))
-                    co_return ::zlink::framework::result_t<bool>::success (false);
-                if (rejection && !rejection->empty ()) {
-                    completion->complete (
-                      ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
-                        runtime::stateful::stateful_error_t::conflict, std::nullopt,
-                        static_cast<std::uint32_t> (
-                          runtime::protocol::request_terminal_result::rejected),
-                        static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
-                        runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
-                    co_return ::zlink::framework::result_t<bool>::success (false);
-                }
-            } else {
-                std::uint8_t pending = 0;
-                if (!race->decision.compare_exchange_strong (pending, 1))
-                    co_return ::zlink::framework::result_t<bool>::success (false);
+            start_callback_timeout ();
+            const auto rejection = co_await actor_instance->on_duplicate_bind (
+              current_identity, incoming_identity, cancellation);
+            std::uint8_t pending = 0;
+            if (!race->decision.compare_exchange_strong (pending, 1))
+                co_return ::zlink::framework::result_t<bool>::success (false);
+            if (rejection && !rejection->empty ()) {
+                completion->complete (
+                  ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
+                    runtime::stateful::stateful_error_t::conflict, std::nullopt,
+                    static_cast<std::uint32_t> (
+                      runtime::protocol::request_terminal_result::rejected),
+                    static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                    runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
+                co_return ::zlink::framework::result_t<bool>::success (false);
             }
             if (cancellation.stop_requested ())
                 co_return ::zlink::framework::result_t<bool>::success (false);
@@ -1363,7 +1354,10 @@ apply_bound_session_bind_async (
     };
     auto turn = spot_runtime.run_actor_turn (
       actor,
-      [actor_gateway_runtime, actor, incoming_route, replace_binding = std::move (replace_binding),
+      [current_identity =
+         actor_session_binding_identity_t{node_rid_t::from_string (current->node_rid.to_string ()),
+                                          current->node_generation, current->binding_generation},
+       replace_binding = std::move (replace_binding),
        incoming_identity =
          actor_session_binding_identity_t{node_rid_t::from_string (session_owner.to_string ()),
                                           session_owner_generation, bind.binding.generation},
@@ -1371,10 +1365,9 @@ apply_bound_session_bind_async (
         actor_t &actor_instance,
         std::stop_token cancellation) mutable -> task_t<::zlink::framework::result_t<bool>> {
           // run_actor_turn owns the Actor instance until this task completes.
-          return accept_session_binding_t::run (actor_gateway_runtime, actor, incoming_route,
-                                                incoming_identity, std::move (replace_binding),
-                                                race, completion, start_callback_timeout,
-                                                &actor_instance, cancellation);
+          return accept_session_binding_t::run (
+            current_identity, incoming_identity, std::move (replace_binding), race, completion,
+            start_callback_timeout, &actor_instance, cancellation);
       },
       race->cancellation.get_token ());
     observe_task_completion (
