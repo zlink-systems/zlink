@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "../subscriber_server/fanout_receipts.hpp"
 #include <perf/server/fanout_support.hpp>
 #include <perf/send_send_correlation.hpp>

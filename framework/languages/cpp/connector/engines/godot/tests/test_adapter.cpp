@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include <zlink_godot_stream_connector.hpp>
 #include <zlink/Contracts/Sockets/stream_socket.hpp>

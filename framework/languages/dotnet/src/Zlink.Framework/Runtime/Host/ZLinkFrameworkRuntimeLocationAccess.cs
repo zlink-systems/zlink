@@ -207,45 +207,112 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Framework runtime is not started."
             );
-        if (state.FindSpotNodeByRoutingId(selected.Rid) is { } localTarget)
+        try
         {
-            var operationId = source.Node.AllocateOperationId();
-            var local = await localTarget
-                .ActivateInstanceSpotLocalAsync(
+            if (state.FindSpotNodeByRoutingId(selected.Rid) is { } localTarget)
+            {
+                var operationId = source.Node.AllocateOperationId();
+                var local = await localTarget
+                    .ActivateInstanceSpotLocalAsync(
+                        target,
+                        source.Node.RoutingId,
+                        sourceStatus.LifecycleGeneration,
+                        operationId,
+                        sourceSpotId,
+                        parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray(),
+                        request,
+                        deadlineUnixMs,
+                        metadata.IsEmpty ? null : metadata,
+                        cancellationToken,
+                        requestAdmission: requestAdmission
+                    )
+                    .ConfigureAwait(false);
+                if (local.Result != RequestResult.Ok)
+                    throw ZLinkRequestFailureMapper.CreateCompletionException(
+                        local.Result,
+                        (int)local.FailureCode,
+                        "Local Instance Spot activation"
+                    );
+                return ZLinkRawRouterServicePort.CreateMessages(local.ReplyParts);
+            }
+            return await source
+                .Node.ActivateInstanceSpotAsync(
                     target,
-                    source.Node.RoutingId,
-                    sourceStatus.LifecycleGeneration,
-                    operationId,
                     sourceSpotId,
-                    parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray(),
+                    parts,
                     request,
                     deadlineUnixMs,
-                    metadata.IsEmpty ? null : metadata,
+                    timeout,
+                    metadata,
                     cancellationToken,
                     requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
-            if (local.Result != RequestResult.Ok)
-                throw ZLinkRequestFailureMapper.CreateCompletionException(
-                    local.Result,
-                    (int)local.FailureCode,
-                    "Local Instance Spot activation"
-                );
-            return ZLinkRawRouterServicePort.CreateMessages(local.ReplyParts);
         }
-        return await source
-            .Node.ActivateInstanceSpotAsync(
-                target,
-                sourceSpotId,
-                parts,
+        catch (Exception failure)
+        {
+            var failurePacketName = Flow.DispatchErrorsEnabled
+                ? TryReadEnvelopeHeaderForTrace(parts)?.MessageName
+                : null;
+            ReportInstanceSpotFailure(
+                address.MeshName,
+                selected.Rid,
+                address.SpotId,
+                address.InstanceSpotType,
                 request,
-                deadlineUnixMs,
-                timeout,
-                metadata,
-                cancellationToken,
-                requestAdmission: requestAdmission
+                failurePacketName,
+                failure,
+                requestAdmission
+            );
+            throw;
+        }
+    }
+
+    internal void ReportInstanceSpotFailure(
+        string meshName,
+        RoutingId targetRid,
+        string spotId,
+        string? stableType,
+        bool request,
+        string? packetName,
+        Exception failure,
+        ZLinkRequestAdmission? requestAdmission = null
+    )
+    {
+        if (!Flow.DispatchErrorsEnabled)
+            return;
+        // An existing admission belongs to the caller. Without one, only a
+        // typed submit failure establishes that the target never accepted it.
+        if (
+            request
+            && (
+                requestAdmission is not null
+                    ? requestAdmission.IsAdmitted
+                    : failure is not ZlinkSubmitException
+                        && failure.InnerException is not ZlinkSubmitException
             )
-            .ConfigureAwait(false);
+        )
+            return;
+        if (
+            request
+            && failure is ZLinkFrameworkException frameworkFailure
+            && ZLinkSpotHandleRequestExecution.IsInstanceAuthorityRefusal(frameworkFailure)
+        )
+            return;
+        Flow.TraceDispatchError(
+            new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.InstanceSpot,
+                request ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+                ZLinkDispatchErrorReporter.ReasonFrom(failure),
+                request ? ZLinkDispatchErrorAction.FailCaller : ZLinkDispatchErrorAction.Drop,
+                packetName,
+                SpotId: spotId,
+                MeshName: meshName,
+                TargetRid: targetRid.ToString(),
+                InstanceSpotType: stableType,
+                Exception: failure
+            )
+        );
     }
 
     private static bool IsEligibleInstanceCandidate(

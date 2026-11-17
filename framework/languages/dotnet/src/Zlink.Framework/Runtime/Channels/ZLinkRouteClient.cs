@@ -559,10 +559,23 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
                 ZLinkFrameworkErrorKind.NotFound
             );
         }
-        catch (ZLinkFrameworkException error)
-            when (ZLinkSpotHandleRequestExecution.IsStaleRoute(error))
+        catch (Exception error)
         {
-            await target.InvalidateRouteAsync().ConfigureAwait(false);
+            if (instanceIntent)
+                runtime.ReportInstanceSpotFailure(
+                    snapshot.RouterChannelId,
+                    snapshot.NodeRid,
+                    snapshot.SpotId,
+                    null,
+                    false,
+                    header.MessageName,
+                    error
+                );
+            if (
+                error is ZLinkFrameworkException frameworkError
+                && ZLinkSpotHandleRequestExecution.IsStaleRoute(frameworkError)
+            )
+                await target.InvalidateRouteAsync().ConfigureAwait(false);
             throw;
         }
     }
@@ -662,31 +675,52 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                     request,
                     runtime.Registration.Codecs
                 );
-                var reply = await runtime
-                    .RequestToSpotViaRouterChannelAsync(
-                        snapshot.RouterChannelId,
-                        snapshot.NodeRid,
-                        snapshot.SpotId,
-                        (ulong)snapshot.Generation,
-                        snapshot.NodeGeneration,
-                        snapshot.AuthorityOwnerGeneration,
-                        snapshot.OwnerLeaseGeneration,
-                        parts,
-                        timeout,
-                        cancellationToken,
-                        ZLinkCallMetadata.Encode(_metadata),
-                        ZLinkServiceWireCodec.CreateInstanceReadyRoute(snapshot, instanceIntent),
-                        requestAdmission: requestAdmission
-                    )
-                    .ConfigureAwait(false);
-                return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-                    reply,
-                    "SPOT route request reply is empty.",
-                    "SPOT route request failed for '{0}'.",
-                    runtime.Registration.Codecs,
-                    runtime.Flow.CaptureEnabled,
-                    packetName
-                );
+                try
+                {
+                    var reply = await runtime
+                        .RequestToSpotViaRouterChannelAsync(
+                            snapshot.RouterChannelId,
+                            snapshot.NodeRid,
+                            snapshot.SpotId,
+                            (ulong)snapshot.Generation,
+                            snapshot.NodeGeneration,
+                            snapshot.AuthorityOwnerGeneration,
+                            snapshot.OwnerLeaseGeneration,
+                            parts,
+                            timeout,
+                            cancellationToken,
+                            ZLinkCallMetadata.Encode(_metadata),
+                            ZLinkServiceWireCodec.CreateInstanceReadyRoute(
+                                snapshot,
+                                instanceIntent
+                            ),
+                            requestAdmission: requestAdmission
+                        )
+                        .ConfigureAwait(false);
+                    return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
+                        reply,
+                        "SPOT route request reply is empty.",
+                        "SPOT route request failed for '{0}'.",
+                        runtime.Registration.Codecs,
+                        runtime.Flow.CaptureEnabled,
+                        packetName
+                    );
+                }
+                catch (Exception failure)
+                {
+                    if (instanceIntent)
+                        runtime.ReportInstanceSpotFailure(
+                            snapshot.RouterChannelId,
+                            snapshot.NodeRid,
+                            snapshot.SpotId,
+                            null,
+                            true,
+                            packetName,
+                            failure,
+                            requestAdmission
+                        );
+                    throw;
+                }
             },
             cancellationToken
         );

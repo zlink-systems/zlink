@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // Runs framework/runtime/conformance/spot-close-v1.json against an in-process
 // app with a Location Store (Spot address messaging §7, §9; gate §7).
 
