@@ -111,11 +111,13 @@ export function currentApplicationJobOrigin(): ApplicationJobOrigin {
 
 /** Re-enters the captured permit scope when a serial executor runs later. */
 export function bindApplicationJobPermit<TResult, TArgument>(
-  callback: (argument?: TArgument) => Promise<TResult> | TResult
+  callback: (argument?: TArgument) => Promise<TResult> | TResult,
+  current?: () => ApplicationJobPermitPort | undefined
 ): (argument?: TArgument) => Promise<TResult> | TResult {
-  const scope = applicationJobPermitScope.getStore();
+  const scope = current === undefined ? applicationJobPermitScope.getStore() : current();
   if (scope === undefined) return callback;
-  return (argument?: TArgument) => applicationJobPermitScope.run(scope, callback, argument);
+  return (argument?: TArgument) =>
+    applicationJobPermitScope.run(current === undefined ? scope : current(), callback, argument);
 }
 
 /**

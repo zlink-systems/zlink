@@ -938,7 +938,9 @@ raw_stateful_dispatch_t::claim_turn (const object_ref_t &owner,
     auto frozen = pending->second.frozen;
     auto accepted_owner = std::exchange (turn.accepted_owner, {});
     auto &transport = pending->second.transport;
-    if (transport.application_permit && *transport.application_permit) {
+    if (transport.application_permit
+        && (*transport.application_permit
+            || transport.application_permit->needs_reacquisition ())) {
         if (!accepted_owner)
             accepted_owner = std::make_shared<runtime::serial_application_record_t> ();
         accepted_owner->admission.retain_initial (
