@@ -21,6 +21,45 @@ public final class ZLinkLocationStoreOutageTest {
     private static final Duration MARGIN = Duration.ofSeconds(5);
 
     @Test
+    void discardedLocalCompletionKeepsItsOwnerAcrossRepeatedCallsAndStop() {
+        try (var f = new Fixture(false, true)) {
+            var pending = new CompletableFuture<Void>();
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var execution =
+                    f.runtime.executionAsync(
+                            () -> null,
+                            () -> true,
+                            ignored -> CompletableFuture.completedFuture(null),
+                            () -> null,
+                            () -> {
+                                calls.incrementAndGet();
+                                return pending;
+                            });
+            var discarded = execution.discardAsync();
+            assertSame(discarded, execution.discardAsync());
+            assertEquals(1, calls.get());
+            assertFalse(discarded.toCompletableFuture().isDone());
+            f.runtime.stop().toCompletableFuture().join();
+            assertSame(discarded, execution.discardAsync());
+            var failure = new IllegalStateException("local disposal failed");
+            pending.completeExceptionally(failure);
+            assertSame(
+                    failure,
+                    assertThrows(
+                                    CompletionException.class,
+                                    () -> discarded.toCompletableFuture().join())
+                            .getCause());
+        }
+        try (var f = new Fixture(false, true)) {
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var execution = f.runtime.execution(() -> true, calls::incrementAndGet);
+            f.runtime.stop().toCompletableFuture().join();
+            execution.discardAsync().toCompletableFuture().join();
+            assertEquals(0, calls.get(), "host shutdown owns cleanup after stop");
+        }
+    }
+
+    @Test
     void optionIsFalseByDefaultAndRuntimeCapturesItBeforeStartup() {
         var options = new ZLinkLocationOptions();
         assertFalse(options.storeOutageRetention());

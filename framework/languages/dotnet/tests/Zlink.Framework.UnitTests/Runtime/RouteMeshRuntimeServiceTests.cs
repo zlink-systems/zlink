@@ -7,8 +7,246 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class RouteMeshRuntimeServiceTests
+public sealed class RouteMeshRuntimeServiceTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+#if DEBUG
+    [Fact]
+    public async Task LifecycleChecksDoNotReadFullStatus()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        var runtime = fixture.FrameworkRuntime;
+        var node = runtime.GetMeshNodeRuntime(RuntimeFixture.MeshName).Node;
+        var generation = node.MeshStatus().LifecycleGeneration;
+        var sessionRid = RoutingId.From("lifecycle-session");
+        await using var socket = System.Reflection.DispatchProxy.Create<
+            Zlink.Framework.Runtime.Backend.Contracts.IZLinkBackendStreamSocket,
+            LifecycleStreamSocket
+        >();
+        var stream = new ZLinkManagedStream(
+            socket,
+            sessionRid,
+            runtime.Registration.Codecs,
+            "inproc"
+        );
+        var context = new ZLinkSessionContext(
+            runtime,
+            stream,
+            null!,
+            static () => ValueTask.CompletedTask,
+            static _ => ValueTask.CompletedTask
+        );
+        const string actorId = "lifecycle-check";
+        const string bindingToken = "lifecycle-binding";
+        var actor = new ZLinkSessionActor(context, actorId, sessionRid, bindingToken);
+        var route = ZLinkSessionBindingRoute.Create(
+            new ActorRef(actorId, 1, RuntimeFixture.MeshName, node.RoutingId),
+            RuntimeFixture.MeshName,
+            generation,
+            1,
+            1
+        );
+        runtime.BindSessionActor(
+            actorId,
+            context,
+            bindingToken,
+            actor,
+            1,
+            route,
+            generation,
+            node.RoutingId,
+            "fixture-owner",
+            1
+        );
+        var entries = 0;
+        ZLinkStateLane.WorkObserver.Value = (stage, _) =>
+        {
+            if (
+                stage == "lane-entry"
+                && new StackTrace()
+                    .GetFrames()
+                    .Any(frame =>
+                        frame.GetMethod()?.DeclaringType == typeof(ZLinkManagedMeshNode)
+                        && frame.GetMethod()?.Name == nameof(ZLinkManagedMeshNode.Status)
+                    )
+            )
+                Interlocked.Increment(ref entries);
+        };
+        try
+        {
+            Assert.Equal(generation, node.LifecycleGeneration);
+            using var payload = Message.From("{}"u8.ToArray());
+            var header = new Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamHeader(
+                Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind.Request,
+                Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec.Json,
+                Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamHeaderFlags.HasRequestSeq,
+                new Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamRequestSeq(1),
+                "LifecycleProbe",
+                Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata.Empty
+            );
+            var localError = await Record.ExceptionAsync(async () =>
+                await context.ActorCoordinator.RelayToActorAsync(
+                    actor,
+                    header,
+                    payload,
+                    static (_, _, _) => ValueTask.CompletedTask,
+                    CancellationToken.None
+                )
+            );
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.NotFound,
+                Assert.IsType<ZLinkFrameworkException>(localError).Kind
+            );
+            var error = await Record.ExceptionAsync(async () =>
+                await runtime.DispatchRemoteActorFrameAsync(
+                    actorId,
+                    1,
+                    node.RoutingId,
+                    generation ^ 1UL << 63,
+                    1,
+                    1,
+                    default,
+                    default,
+                    0,
+                    default,
+                    0,
+                    default,
+                    null,
+                    [],
+                    default,
+                    0,
+                    0,
+                    0,
+                    null,
+                    0,
+                    [],
+                    [],
+                    CancellationToken.None
+                )
+            );
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.Unavailable,
+                Assert.IsType<ZLinkFrameworkException>(error).Kind
+            );
+        }
+        finally
+        {
+            ZLinkStateLane.WorkObserver.Value = null;
+            runtime.UnbindSessionActor(actorId, context, bindingToken);
+        }
+        output.WriteLine($"lifecycle full Status reads: {entries}");
+        Assert.Equal(0, entries);
+    }
+
+    private class LifecycleStreamSocket : System.Reflection.DispatchProxy
+    {
+        protected override object? Invoke(System.Reflection.MethodInfo? method, object?[]? args)
+        {
+            if (method?.Name == "SendAsync")
+            {
+                ((Message)args![1]!).Dispose();
+                return Task.CompletedTask;
+            }
+            if (method?.Name == "DisposeAsync")
+                return ValueTask.CompletedTask;
+            throw new NotSupportedException(method?.Name);
+        }
+    }
+#endif
+
+    [Fact]
+    public async Task HostStateChangeReusesUnchangedPeerAndChannelGraph()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            registerServerChannel: true
+        );
+        await fixture.PublishDescriptorAsync(
+            RoutingId.From("graph-peer"),
+            ZLinkMeshNodeObjectRole.Client
+        );
+        var initial = await WaitForStatusAsync(fixture.Runtime, status => status.Peers.Count == 1);
+        Assert.NotEmpty(initial.Peers);
+        Assert.NotEmpty(initial.Channels);
+        Assert.Same(initial, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Relocating);
+        var changed = fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
+        Assert.NotSame(initial, changed);
+        Assert.Same(initial.Peers, changed.Peers);
+        Assert.Same(initial.Channels, changed.Channels);
+        Assert.Equal(initial.Sequence + 1, changed.Sequence);
+        Assert.Same(changed, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
+    }
+
+    [Fact]
+    public async Task PeerReplacementWithUnchangedCountPublishesNewStatus()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Client);
+        var firstRid = RoutingId.From("z-status-peer");
+        var secondRid = RoutingId.From("a-status-peer");
+        await fixture.PublishDescriptorAsync(firstRid, ZLinkMeshNodeObjectRole.Client);
+        await fixture.PublishDescriptorAsync(secondRid, ZLinkMeshNodeObjectRole.Client);
+        var initial = await WaitForStatusAsync(fixture.Runtime, status => status.Peers.Count == 2);
+        Assert.Same(initial, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
+
+        await fixture.RemoveDescriptorAsync(firstRid);
+        var replacementRid = RoutingId.From("m-status-peer");
+        await fixture.PublishDescriptorAsync(replacementRid, ZLinkMeshNodeObjectRole.Client);
+        var changed = await WaitForStatusAsync(
+            fixture.Runtime,
+            status =>
+                status.Peers.Count == 2 && status.Peers.Any(peer => peer.NodeRid == replacementRid)
+        );
+        Assert.NotSame(initial, changed);
+        Assert.True(changed.Sequence > initial.Sequence);
+        Assert.DoesNotContain(changed.Peers, peer => peer.NodeRid == firstRid);
+        Assert.Contains(changed.Peers, peer => peer.NodeRid == secondRid);
+        Assert.Same(initial.Channels, changed.Channels);
+        Assert.Same(changed, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
+    }
+
+    [Fact]
+    public async Task UnchangedStatusQueriesReuseGraphWithBoundedAllocation()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        for (var index = 0; index < 100; index++)
+            fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
+        var initial = fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
+        var entries = 0;
+#if DEBUG
+        Zlink.Framework.Runtime.Execution.ZLinkStateLane.WorkObserver.Value = (stage, _) =>
+        {
+            if (stage == "lane-entry")
+                entries++;
+        };
+#endif
+        var allocated = GC.GetAllocatedBytesForCurrentThread();
+        var reused = 0;
+        try
+        {
+            for (var index = 0; index < 10_000; index++)
+                if (ReferenceEquals(initial, fixture.Runtime.GetStatus(RuntimeFixture.MeshName)))
+                    reused++;
+        }
+        finally
+        {
+            allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+#if DEBUG
+            Zlink.Framework.Runtime.Execution.ZLinkStateLane.WorkObserver.Value = null;
+#endif
+        }
+        output.WriteLine(
+            $"status queries: 10000; reused: {reused}; allocated bytes: {allocated}; lane entries: {entries}"
+        );
+        Assert.Equal(10_000, reused);
+        Assert.True(
+            allocated < 20_000_000,
+            $"status allocated bytes: {allocated}; lane entries: {entries}"
+        );
+#if DEBUG
+        Assert.True(entries <= 60_000, $"status lane entries: {entries}");
+#endif
+    }
+
 #if DEBUG
     [Fact]
     public async Task Public_ready_RequestToNode_uses_two_turns_and_no_intent_observer()

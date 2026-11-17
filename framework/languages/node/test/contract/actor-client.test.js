@@ -8,7 +8,6 @@ const {
 const { Message, RequestResult } = require('@zlink-systems/zlink');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const { createHook } = require('node:async_hooks');
-const { waitActorReply } = require('../../packages/framework/dist/runtime/actors/actor-request-deadline');
 
 class ActorNotify { constructor(value) { this.value = value; } }
 class ActorAsk { constructor(value) { this.value = value; } }
@@ -64,11 +63,11 @@ function createResolver(resolve = ({ actorId }) => actorLocation(actorId)) {
   };
 }
 
-function createStoreResolver(authority, remainingLeaseMs) {
+function createStoreResolver(authority, remainingLeaseMs, onRead = () => {}) {
   const unusedStore = {};
   return new framework.ZLinkStoreLocationResolvers({
     stores: {
-      authorityStore: { async readAuthority() { return authority; } },
+      authorityStore: { async readAuthority(key) { onRead(key); return typeof authority === 'function' ? authority() : authority; } },
       locationStore: unusedStore,
       peerStore: unusedStore,
       spotStore: unusedStore,
@@ -1670,3 +1669,97 @@ for (const kind of ['send', 'request']) {
     assert.deepEqual(allocated.map(message => counts.get(message) ?? 0), [1, 1]);
   });
 }
+
+for (const outcome of ['missing Actor', 'changed owner', 'application NotFound']) {
+  for (const newer of [false, true]) {
+    test(`Actor direct preserves ${outcome} and invalidates only its used route (${newer ? 'newer' : 'same'} cache)`, async () => {
+      const { encodeAuthorityKey } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+      const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+      const { internalFrameworkWireReply } = require('../../packages/framework/dist/runtime/framework-errors-internal');
+      let authority = {
+        kind: 'snapshot', objectGeneration: 1n, authorityOwnerGeneration: 4n,
+        ownerId: 'owner-a', ownerLeaseGeneration: 3n, storeVersion: { value: 'v1' },
+        allocation: { objectKind: 'actor', state: 'active', stableType: 'Player',
+          descriptor: { meshName: 'play-mesh', rid: 'node-a' }, descriptorLifecycleGeneration: 7n },
+        payload: Buffer.alloc(0)
+      };
+      let reads = 0;
+      const resolver = createStoreResolver(() => authority, 60_000, key => {
+        reads++;
+        assert.deepEqual(key, encodeAuthorityKey('actor', 'actor-1'));
+      });
+      let complete, started;
+      const submitted = new Promise(resolve => { started = resolve; });
+      let attempts = 0;
+      const client = createActorClient({
+        nodeProvider: () => ({ requestToActor() { attempts++; return operationId; } }),
+        completionTableProvider: () => ({
+          submit(start, _signal, operation, receiver) {
+            start();
+            complete = () => {
+              const failure = outcome === 'missing Actor'
+                ? framework.ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+                : framework.ZLinkFrameworkInternalErrorKind.ActorLocationStale;
+              const terminal = outcome === 'application NotFound'
+                ? { terminalResult: RequestResult.Ok, failureCode: 0 }
+                : internalFrameworkWireReply(failure);
+              const parts = outcome === 'application NotFound' ? [Message.from(Buffer.from(framework.encodeStreamFrame({
+                kind: framework.ZLinkStreamMessageKind.Error, codec: framework.ZLinkStreamCodec.Json,
+                flags: framework.ZLinkStreamHeaderFlags.None, name: '', metadata: new Map()
+              }, Buffer.from(JSON.stringify({ code: 'not_found', message: 'application result' })))))] : [];
+              receiver.operationCompleted(operation.id, {
+                terminalResult: terminal.terminalResult, failureErrno: terminal.failureCode, parts
+              }, undefined);
+            };
+            started();
+          }
+        }),
+        locationResolver: () => resolver
+      });
+      const pending = client.requestToActor('actor-1', new ActorAsk('ping')).submit();
+      const terminal = assert.rejects(pending, error => {
+        if (outcome === 'application NotFound') {
+          assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.NotFound);
+          assert.equal(framework.internalFrameworkErrorKind(error), undefined);
+          assert.equal(error.message, 'application result');
+        } else {
+          assert.equal(framework.internalFrameworkErrorKind(error), outcome === 'missing Actor'
+            ? framework.ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+            : framework.ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+        }
+        return true;
+      });
+      await submitted;
+      if (newer) {
+        authority = { ...authority, ownerId: 'owner-b', ownerLeaseGeneration: 5n,
+          authorityOwnerGeneration: 6n, storeVersion: { value: 'v2' },
+          allocation: { ...authority.allocation, descriptor: { meshName: 'play-mesh', rid: 'node-b' },
+            descriptorLifecycleGeneration: 9n } };
+        resolver.observeActorAuthorityVersion('actor-1', 'v2');
+        assert.equal((await resolver.resolveDirectActorRoute('actor-1')).route.actorRef.nodeRid, 'node-b');
+      }
+      complete();
+      await terminal;
+      assert.equal(reads, newer ? 2 : 1, 'a failed operation must not query or resubmit');
+      assert.equal(attempts, 1);
+      assert.deepEqual(resolver[inspectRuntime]().directActorRouteKeys,
+        newer || outcome === 'application NotFound' ? ['actor-1'] : []);
+    });
+  }
+}
+
+test('Actor send target refusal invalidates its route and preserves NotFound without a second submission', async () => {
+  const resolver = createResolver();
+  const fences = [];
+  resolver.invalidateActorRouteIfMatches = fence => { fences.push(fence); return true; };
+  let submits = 0;
+  const client = createActorClient({
+    locationResolver: () => resolver,
+    nodeProvider: () => ({ sendToActor() { submits++; return SubmitResult.NotFound; } })
+  });
+  await assert.rejects(client.sendToActor('actor-1', new ActorNotify('ping')).submit(), error =>
+    framework.internalFrameworkErrorKind(error) === framework.ZLinkFrameworkInternalErrorKind.ActorRouteNotFound);
+  assert.equal(submits, 1);
+  assert.deepEqual(fences, [{ actorId: 'actor-1', objectGeneration: 1n, targetNodeRid: 'node-a',
+    targetNodeGeneration: 7n, authorityOwnerGeneration: 4n, ownerLeaseGeneration: 3n }]);
+});

@@ -1,0 +1,27 @@
+name: Start test Redis
+description: >-
+  Starts redis:7 on a Docker-chosen loopback port and exports ZLINK_REDIS_TEST_ENDPOINT
+  (host:port) and ZLINK_TEST_REDIS_CONTAINER. With the endpoint set, Redis-backed tests in
+  every language fail instead of skipping when Redis is unreachable (#4542). The caller
+  removes the container with `docker rm -f "$ZLINK_TEST_REDIS_CONTAINER"` under `if: always()`.
+
+runs:
+  using: composite
+  steps:
+    - name: Start Redis
+      shell: bash
+      run: |
+        set -euo pipefail
+        name="zlink-test-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${RANDOM}"
+        docker run -d --rm --name "${name}" -p 127.0.0.1::6379 redis:7
+        echo "ZLINK_TEST_REDIS_CONTAINER=${name}" >> "${GITHUB_ENV}"
+        port="$(docker port "${name}" 6379/tcp | head -1 | sed 's/.*://')"
+        for _ in $(seq 1 30); do
+          if [ "$(docker exec "${name}" redis-cli ping 2>/dev/null)" = "PONG" ]; then
+            echo "ZLINK_REDIS_TEST_ENDPOINT=127.0.0.1:${port}" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "Redis container ${name} did not answer PING within 30 seconds" >&2
+        exit 1

@@ -12,7 +12,6 @@ import type {
 import { detachedMeshDispatchScope, runZLinkExecutionArea } from '../execution';
 import {
   ReadyDomain,
-  ReceiveKind,
   type Claim,
   type ReadyBatch,
   type ReadyRecord,
@@ -182,8 +181,7 @@ export class ZLinkMeshDispatchPump {
    * synchronous dispatch. Returns `false` when preparation rejects the record,
    * shutdown starts, or dispatch throws (already reported), `true` when dispatch
    * returns synchronously, or the pending preparation/handler completion,
-   * which the draining turn awaits itself before
-   * {@link finishRecord}.
+   * retained by the terminal observer through {@link finishRecord}.
    */
   private dispatchRecord(
     owner: ReadyRecord,
@@ -397,7 +395,7 @@ export class ZLinkMeshDispatchPump {
     this.draining += 1;
   }
 
-  /** Each worker owns claim continuations for its entire lifetime. */
+  /** Each worker reuses claim state; record terminals retain only their own record. */
   private async runApplicationWorker(): Promise<void> {
     const readyBatch = this.node.createReadyBatch(1);
     const receiveBatch = this.node.createReceiveBatch(
@@ -527,7 +525,7 @@ export class ZLinkMeshDispatchPump {
     const records = state.records!;
     const owner = state.owner!;
     while (state.index < records.length && !this.disposed) {
-      const record = records[state.index++]!;
+      const record = records[state.index]!;
       const permit = record.applicationJobPermit ?? state.claimPermit;
       if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
         throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
@@ -539,28 +537,27 @@ export class ZLinkMeshDispatchPump {
         // Only reservations not transferred to a record remain claim-owned.
         if (permit === state.claimPermit) state.claimPermit = undefined;
       }
+      state.index += 1;
       const dispatched = this.dispatchRecord(owner, record, permit);
       if (dispatched === false) {
-        if (isNodeOrChannelRecord(record)) this.releaseRecord(record);
+        if (state.domain !== ReadyDomain.Infrastructure) this.releaseRecord(record);
         continue;
       }
       let terminal: Promise<void>;
       if (dispatched === true) {
         const finished = this.finishRecord(record, permit);
         if (finished === undefined) {
-          if (isNodeOrChannelRecord(record)) this.releaseRecord(record);
+          if (state.domain !== ReadyDomain.Infrastructure) this.releaseRecord(record);
           continue;
         }
         terminal = finished;
       } else {
         terminal = this.continuePendingClaim(dispatched, record, permit);
       }
-      if (isNodeOrChannelRecord(record)) {
-        // Return the receive claim for the next batch; the existing terminal observer owns record lifetime.
-        this.observeRecordTerminal(terminal, record);
-        continue;
-      }
-      return terminal.then(state.dispatchRecords);
+      // Infrastructure records remain claim-owned until the complete claim finishes.
+      if (state.domain === ReadyDomain.Infrastructure) return terminal.then(state.dispatchRecords);
+      // Application terminals retain their record independently of reusable worker state.
+      this.observeRecordTerminal(terminal, record);
     }
     return undefined;
   }
@@ -603,8 +600,8 @@ export class ZLinkMeshDispatchPump {
         if (records !== undefined) {
           for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
             const record = records[recordIndex]!;
-            // Started Node and Channel records are cleaned up at their own terminals.
-            if (recordIndex < state.index && isNodeOrChannelRecord(record)) continue;
+            // Started application records are cleaned up at their own terminals.
+            if (recordIndex < state.index && state.domain !== ReadyDomain.Infrastructure) continue;
             this.releaseRecord(record);
           }
         }
@@ -692,13 +689,4 @@ function yieldToEventLoop(): Promise<void> {
 
 function yieldToTimers(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-function isNodeOrChannelRecord(record: ReceiveRecord): boolean {
-  return (
-    record.kind === ReceiveKind.NodeSend ||
-    record.kind === ReceiveKind.NodeRequest ||
-    record.kind === ReceiveKind.ChannelSend ||
-    record.kind === ReceiveKind.ChannelRequest
-  );
 }

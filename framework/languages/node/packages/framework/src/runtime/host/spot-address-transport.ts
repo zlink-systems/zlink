@@ -466,7 +466,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
         const error = missingInstanceRequestFailure(
           completion.terminalResult,
-          completion.failureErrno
+          completion.failureErrno,
+          completion.cause
         );
         this.reportInstanceRequestError(
           spotId,
@@ -729,11 +730,12 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
 
 function missingInstanceRequestFailure(
   result: number,
-  nativeErrno: number
+  failureCode: number,
+  cause?: unknown
 ): ZLinkFrameworkException {
-  const canonical = isCanonicalWireReplyTerminal(result, nativeErrno);
+  const canonical = isCanonicalWireReplyTerminal(result, failureCode);
   const wireKind = canonical
-    ? internalFrameworkErrorKindFromWireReply(result, nativeErrno)
+    ? internalFrameworkErrorKindFromWireReply(result, failureCode)
     : undefined;
   const kind = !canonical
     ? ZLinkFrameworkInternalErrorKind.RequestProtocolError
@@ -752,7 +754,8 @@ function missingInstanceRequestFailure(
               : (wireKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed);
   return createInternalFrameworkException(
     kind,
-    `Instance Spot request failed with result ${result} and errno ${nativeErrno}.`
+    `Instance Spot request failed with result ${result} and service-wire failure code ${failureCode}.`,
+    cause
   );
 }
 

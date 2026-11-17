@@ -175,15 +175,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask<bool> CloseCurrentSpotAsync(
+    internal ValueTask<bool> CloseCurrentSpotAsync(
         ZLinkSpotActivation activation,
         CancellationToken cancellationToken
     )
     {
-        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
-        return await _spots
-            .CloseFromContextAsync(GetOrStartState(), activation, cancellationToken)
-            .ConfigureAwait(false);
+        return _spots.CloseFromContextAsync(GetOrStartState(), activation, cancellationToken);
     }
 
     private static string RequireSpotType(string value)
@@ -264,6 +261,27 @@ internal sealed partial class ZLinkFrameworkRuntime
         GetOrStartState().SpotNodes.TryGetValue(meshName, out var nodeRuntime)
             ? nodeRuntime
             : throw new ZLinkConfigurationException($"RouteMesh '{meshName}' is not registered.");
+
+    internal ZLinkRelocationReplyCompletion CompleteRelocationReply(
+        ZLinkSpotNodeRuntime physicalSource,
+        ZLinkServiceWireCodec.ReplyRelayRecord relay,
+        IReadOnlyList<Message> payload
+    )
+    {
+        if (physicalSource.LocalSessionOwner is not { } source)
+            return default;
+        foreach (var node in GetOrStartState().SpotNodes.Values)
+        {
+            var completion = node.Node.RequestOperations.TryCompleteRelocationReply(
+                relay,
+                payload,
+                source
+            );
+            if (completion.State != ZLinkRelocationReplyCompletionState.NotFound)
+                return completion;
+        }
+        return default;
+    }
 
     internal ValueTask<ZLinkSpotNodeRuntime> GetMeshNodeRuntimeAsync(string meshName)
     {

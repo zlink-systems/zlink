@@ -349,6 +349,8 @@ class stateful_object_runtime_t
                             std::optional<authority_snapshot_t> snapshot,
                             runtime::serial_execution_queue_t::ready_confirmation_t writer,
                             std::chrono::steady_clock::time_point at);
+    task_t<std::vector<std::pair<authority_key_t, authority_snapshot_t>>>
+    discard_location_execution (runtime::serial_execution_queue_t::execution_admission_t lost);
     static task_t<void> recover_location_execution (
       std::shared_ptr<stateful_object_runtime_t> self,
       std::function<task_t<runtime::serial_execution_queue_t::execution_operation_t> (
@@ -415,7 +417,8 @@ class stateful_object_runtime_t
     retained_relocation_source (object_ref_t owner) const;
 
     task_t<std::pair<stateful_error_t, membership_token_t>>
-    begin_membership_move_async (const object_ref_t &actor, const object_ref_t &target_spot);
+    begin_membership_move_async (const object_ref_t &actor,
+                                 std::optional<object_ref_t> target_spot);
     task_t<std::pair<stateful_error_t, membership_token_t>>
     begin_remote_membership_move_async (const object_ref_t &actor, object_ref_t target_spot);
     task_t<std::pair<stateful_error_t, object_ref_t>>

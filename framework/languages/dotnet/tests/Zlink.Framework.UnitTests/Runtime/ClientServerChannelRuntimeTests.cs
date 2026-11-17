@@ -18,6 +18,66 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task ClientServer_hello_and_admission_reply_close_wrappers()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ClientServer_hello_and_admission_reply_close_wrappers)
+            )
+        )
+            return;
+        using var probe = new MessageFinalizerProbe();
+        await using var server = CreateServer(0);
+        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        var clients = new List<ServiceProvider>();
+        try
+        {
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            var endpoint = (
+                await GetServerBundle(state, "work").ClientServerServer!.ReadAsync()
+            ).AdvertisedEndpoint;
+            var count = await probe.CountAsync(async () =>
+            {
+                for (var index = 0; index < 8; index++)
+                {
+                    var client = CreateClient(endpoint);
+                    clients.Add(client);
+                    var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+                    await clientRuntime.StartAsync(CancellationToken.None);
+                    var transport = clientRuntime.GetClientServerClientRuntime("work");
+                    await WaitUntilAsync(
+                        transport,
+                        () => transport.ReadyCount == 1,
+                        TimeSpan.FromSeconds(10)
+                    );
+                    Assert.Equal(1, transport.ReadyCount);
+                }
+            });
+            output.WriteLine($"hello and admission reply finalizers={count}");
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            foreach (var client in clients)
+            {
+                try
+                {
+                    await client
+                        .GetRequiredService<ZLinkFrameworkRuntime>()
+                        .StopAsync(CancellationToken.None);
+                }
+                finally
+                {
+                    await client.DisposeAsync();
+                }
+            }
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(false, false, true)]

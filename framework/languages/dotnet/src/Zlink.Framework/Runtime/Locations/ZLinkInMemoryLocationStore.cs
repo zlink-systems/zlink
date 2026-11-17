@@ -27,6 +27,8 @@ internal sealed record ZLinkOwnerLease(
 /// </summary>
 internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
 {
+    public Func<ZLinkAuthorityKey, string?, ValueTask>? AuthorityObservedAsync { get; set; }
+
     private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _time;
     private readonly TimeSpan _ownerLeaseFencingMargin;

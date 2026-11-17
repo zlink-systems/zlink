@@ -418,12 +418,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requests = requests;
   }
 
-  start(): void {
+  start(serviceState: 'preparing' | 'serving' = 'serving'): void {
     if (this.runtime !== undefined) return;
     if (this.closed) throw new Error('MeshNode is closed.');
     if (this.bindEndpoint === undefined)
       throw new Error('MeshNode bind endpoint is not configured.');
-    const descriptor = this.createDescriptor();
+    const descriptor = { ...this.createDescriptor(), state: serviceState };
     const runtime = new RawServiceMeshRuntime({
       requests: this.requests,
       onPendingOperationsChanged: this.onPendingOperationsChanged,
@@ -522,6 +522,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   async publishDraining(): Promise<void> {
     for (const name of this.channels.keys()) this.channels.set(name, 0);
     await this.requireRuntime().updateLocalDescriptor({ state: 'draining' });
+  }
+
+  async markServiceReady(): Promise<void> {
+    const runtime = this.requireRuntime();
+    if (runtime.topology.localDescriptor().state === 'serving') return;
+    await runtime.updateLocalDescriptor({ state: 'serving' });
   }
 
   async close(): Promise<void> {
@@ -750,28 +756,32 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       : nodeSendResult(submitted);
   }
 
-  async sendInfrastructureControl(
+  sendInfrastructureControl(
     targetRid: unknown,
     record: Uint8Array | readonly Uint8Array[]
   ): Promise<SubmitResultValue> {
-    return (await this.requireRuntime().sendService(
-      String(targetRid),
-      (Array.isArray(record) ? record : [record]).map((value) => Buffer.from(value))
-    ))
-      ? SubmitResult.Ok
-      : SubmitResult.NotConnected;
+    return this.sendInfrastructureControlFrames(
+      targetRid,
+      Array.isArray(record) ? record : [record]
+    );
   }
 
   async sendInfrastructureControlFrames(
     targetRid: unknown,
     frames: readonly Uint8Array[]
   ): Promise<SubmitResultValue> {
-    return (await this.requireRuntime().sendService(
-      String(targetRid),
-      frames.map((frame) => Buffer.from(frame))
-    ))
-      ? SubmitResult.Ok
-      : SubmitResult.NotConnected;
+    const runtime = this.requireRuntime();
+    const sourceRoutingId = runtime.topology.localDescriptor().nodeRoutingId;
+    const parts = frames.map((frame) => Buffer.from(frame));
+    const accepted = routingIdsEqual(String(targetRid), sourceRoutingId)
+      ? runtime.mailbox.tryEnqueue({
+          owner: `node:${sourceRoutingId}`,
+          domain: 'infrastructure',
+          parts,
+          sourceRoutingId
+        })
+      : await runtime.sendService(String(targetRid), parts);
+    return accepted ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
   async requestInfrastructureControlFrames(
@@ -1937,19 +1947,21 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       unknown,
       unknown
     > = {
-      operationCompleted: (_operationId, value) =>
+      operationCompleted: (_operationId, value) => {
+        entry.deferCompletion();
         queueMicrotask(() =>
           this.deliverCompletion(id, kind, value as ServiceStatefulResult, completion)
-        ),
-      operationFailed: (_operationId, error) =>
+        );
+      },
+      operationFailed: (_operationId, error) => {
+        entry.deferCompletion();
         queueMicrotask(() =>
           this.deliverCompletion(id, kind, requestFailureResult(error), completion)
-        )
+        );
+      }
     };
-    if (completion === undefined) {
-      entry.setObserver(receiver);
-      submit();
-    } else submit(receiver);
+    entry.setObserver(receiver);
+    submit(receiver);
     return this.requestSubmission(id, entry);
   }
 
@@ -2565,6 +2577,7 @@ function completionRecord(
     kindData: 'kindData' in result ? (result.kindData ?? null) : null,
     terminalResult: result.terminalResult,
     failureErrno: result.failureCode,
+    ...('cause' in result && result.cause !== undefined ? { cause: result.cause } : {}),
     ...('failureMessage' in result && result.failureMessage !== undefined
       ? { failureMessage: result.failureMessage }
       : {}),
@@ -2939,7 +2952,8 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
   }
   return {
     terminalResult: RequestResult.InternalError,
-    failureCode: ServiceWireFrameworkErrorCode.requestFailed
+    failureCode: ServiceWireFrameworkErrorCode.requestFailed,
+    cause: failure
   };
 }
 

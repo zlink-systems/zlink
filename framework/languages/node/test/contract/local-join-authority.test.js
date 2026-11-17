@@ -1358,3 +1358,44 @@ for (const change of [
     }
   });
 }
+
+for (const outcome of ['stored', 'same-version conflict', 'new-version conflict']) {
+  const stored = outcome === 'stored';
+  const changed = stored || outcome === 'new-version conflict';
+  test(`membership authority observation updates the Actor route cache after ${outcome}`, async () => {
+    const f = authorityFixture();
+    const { ZLinkStoreLocationResolvers } = require('../../packages/framework/dist/runtime/locations/resolvers');
+    const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+    let current = f.snapshot;
+    const store = {
+      async readAuthority(key) { assert.deepEqual(key, encodeAuthorityKey('actor', 'player')); return current; },
+      async compareExchangeAuthority(_key, version, mutation) {
+        assert.equal(version.value, 'v1');
+        if (outcome === 'same-version conflict') return { kind: 'conflict', current };
+        current = { ...current, payload: mutation.payload, storeVersion: { value: 'v2' } };
+        return stored ? { ...current, kind: 'stored' } : { kind: 'conflict', current };
+      }
+    };
+    const resolver = new ZLinkStoreLocationResolvers({
+      stores: { authorityStore: store },
+      leaseTracker: { async remainingOwnerTokenLeaseMs() { return 60_000; } }
+    });
+    await resolver.resolveDirectActorRoute('player');
+    const observed = [];
+    const claims = new ZLinkActorLocationClaims({ currentOwnerToken: f.owner }, {}, 'play', store,
+      (actorId, version) => { observed.push(version); resolver.observeActorAuthorityVersion(actorId, version); });
+    const commit = () => claims.commitMembership('Player', f.actor, 5n, 'table', 11n, framework.ZLinkSpotKind.User, 7n);
+    if (stored) await commit();
+    else await assert.rejects(commit, /conflict/);
+    assert.deepEqual(observed, ['v1', changed ? 'v2' : 'v1']);
+    assert.deepEqual(resolver[inspectRuntime]().directActorRouteKeys, changed ? [] : ['player']);
+    const route = (await resolver.resolveDirectActorRoute('player')).route;
+    assert.equal(route.spotId, changed ? 'table' : undefined);
+    if (stored) {
+      claims.confirmAuthority('player', current);
+      assert.deepEqual(resolver[inspectRuntime]().directActorRouteKeys, ['player'], 'the same confirmed version stays cached');
+      claims.confirmAuthority('player', f.snapshot, 'unmatched-version');
+      assert.deepEqual(resolver[inspectRuntime]().directActorRouteKeys, ['player'], 'an old confirmation cannot remove the current route');
+    }
+  });
+}

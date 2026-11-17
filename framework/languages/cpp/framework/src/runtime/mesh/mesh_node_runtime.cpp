@@ -756,12 +756,15 @@ task_t<void> mesh_node_runtime_t::start (
     });
     const auto metric_provider = node_options.mesh.metric_provider;
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
+    if (_operation_owner_resolver)
+        node->transport ().set_operation_owner_resolver (_operation_owner_resolver);
     if (spot_state->location_lifecycle) {
         co_await spot_state->location_lifecycle->execution_runtime ().on_execution_discard (
-          [weak = std::weak_ptr (spot_state)] (auto allowed) {
+          [weak = std::weak_ptr (spot_state)] (auto allowed) -> task_t<void> {
               if (auto state = weak.lock ())
-                  spot_node_runtime_t (state).request_location_execution_discard (
+                  return spot_node_runtime_t (state).request_location_execution_discard (
                     std::move (allowed));
+              return task_t<void> (result_t<void>::success ());
           },
           [weak = std::weak_ptr (spot_state),
            owner = spot_state->location_lifecycle->execution_runtime ().owner_id ()] (
@@ -893,7 +896,10 @@ task_t<void> mesh_node_runtime_t::start (
                                      std::move (relocation_resume));
     // Retain partial startup in the lifecycle owner before any further await;
     // coroutine-frame destruction must not close a live completion owner.
-    _node = node;
+    {
+        std::lock_guard lock (_peer_callback_gate->mutex);
+        _node = node;
+    }
     co_await runtime::external_lifecycle_turn_t{};
     node->start ();
     if (_instance_spot_materializer)
@@ -1723,6 +1729,24 @@ std::optional<location_owner_token_t> mesh_node_runtime_t::session_route_owner (
     return _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
 }
 
+void mesh_node_runtime_t::configure_operation_owner_resolver (
+  runtime::mesh::raw_mesh_node_owner_t::operation_owner_resolver_t resolver)
+{
+    if (_node)
+        throw configuration_error (
+          "Request operation owners must be configured before MeshNode start");
+    _operation_owner_resolver = std::move (resolver);
+}
+
+std::optional<runtime::mesh::raw_mesh_node_owner_t::operation_owner_t>
+mesh_node_runtime_t::local_operation_owner (runtime::foundation::call_id_t operation,
+                                            std::uint64_t reply_route_id) const
+{
+    std::lock_guard lock (_peer_callback_gate->mutex);
+    return _node ? _node->transport ().local_operation_owner (operation, reply_route_id)
+                 : std::nullopt;
+}
+
 void mesh_node_runtime_t::configure_stateful_dispatch (
   stateful_dispatch_configuration_t configuration, runtime::live_location_reader_t *sources)
 {
@@ -1929,7 +1953,11 @@ void mesh_node_runtime_t::stop ()
     _node->close ();
     spot_runtime.detach_native_node ();
     spot_runtime.release_native_handles ();
-    _node.reset ();
+    std::shared_ptr<host::public_host_runtime_t> retired_node;
+    {
+        std::lock_guard lock (_peer_callback_gate->mutex);
+        retired_node = std::move (_node);
+    }
 }
 
 void mesh_node_runtime_t::configure_peer_reconcile (
@@ -2481,7 +2509,8 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
   actor_ref_t actor,
-  const runtime::spot_address_t &target,
+  spot_id_t target_spot,
+  std::shared_ptr<runtime::spot_address_resolver_t> resolver,
   const zlink::message_t &request,
   std::chrono::milliseconds timeout,
   std::optional<zlink::routing_id_t> bound_session_node_rid,
@@ -2491,6 +2520,25 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
 {
     spot_node_runtime_t spot_runtime (_state->spot_state);
     const auto completion_source_spot = spot_runtime.actor_spot (actor);
+    auto located = co_await resolver->resolve_spot_address ({}, target_spot);
+    if (!located || located->object_generation == 0) {
+        const auto reserved = spot_runtime.reserved_actor_transfer_id (actor);
+        const auto operation = spot_runtime.actor_join_operation_id (
+          reserved ? *reserved : spot_runtime.next_actor_transfer_id ());
+        const auto failure = result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::not_found, "target Spot location was not found");
+        const auto delivered = co_await deliver_actor_join (
+          actor, completion_source_spot, operation.first, operation.second, failure);
+        if (!delivered)
+            co_return detail::propagate_failure<actor_join_reply_t> (
+              delivered, "Actor Join resolution failure callback failed");
+        co_return failure;
+    }
+    const auto &target = *located;
+    if (target.owner.lease_generation > 0)
+        observe_spot_authority (target.node_rid, target.spot_id, target.object_generation,
+                                target.node_generation, target.authority_owner_generation,
+                                static_cast<std::uint64_t> (target.owner.lease_generation));
     const auto local_routing_id = co_await routing_id_async ();
     const bool remote =
       local_routing_id && local_routing_id->to_hex () != target.node_rid.to_hex ();
@@ -4122,6 +4170,18 @@ catch (...) {
     return detail::current_exception_result<result_t<runtime::messaging::message_parts_t>> ();
 }
 
+}
+
+task_t<void> mesh_node_runtime_t::register_actor_request (
+  host::pending_operation_t &operation,
+  std::chrono::milliseconds timeout,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
+{
+    if (!_node)
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "Actor request source has not started");
+    co_await _node->register_actor_request (operation, timeout);
+    observe_request_failure (operation, admitted, "Actor request");
 }
 
 void mesh_node_runtime_t::prepare_actor_request_reply (

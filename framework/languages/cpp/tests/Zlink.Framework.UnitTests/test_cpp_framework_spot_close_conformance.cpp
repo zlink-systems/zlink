@@ -31,6 +31,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -1115,6 +1116,9 @@ class close_fault_store_t final : public zf::location_store_t
     {
     }
 
+    std::atomic_bool capture_ready{false};
+    std::atomic_bool replay_ready{false};
+    std::map<std::string, zf::store_read_result_t> ready_reads;
     std::atomic_bool fail_closing_commit_once{false};
     std::atomic_bool fail_authority_release_once{false};
     // The next Closing commit stays pending until release_held_commit.
@@ -1177,7 +1181,25 @@ class close_fault_store_t final : public zf::location_store_t
                 return pending;
             }
         }
-        return _inner->read (std::move (key));
+        {
+            std::lock_guard lock (_held_mutex);
+            if (replay_ready) {
+                const auto found = ready_reads.find (key.value);
+                if (found != ready_reads.end ())
+                    return zf::task_t<zf::store_read_result_t>{
+                      zf::result_t<zf::store_read_result_t>::success (found->second)};
+            }
+        }
+        auto result = _inner->read (key);
+        if (capture_ready && is_watched (key)) {
+            auto value = result.result ();
+            if (!value)
+                throw std::runtime_error ("Ready snapshot read failed");
+            std::lock_guard lock (_held_mutex);
+            ready_reads.insert_or_assign (key.value, value.value ());
+            return zf::task_t<zf::store_read_result_t>{std::move (value)};
+        }
+        return result;
     }
 
     zf::task_t<zf::store_write_result_t> write (zf::store_write_request_t request) override
@@ -2179,6 +2201,74 @@ class scenario_client_t final : public zf::hosted_service_t
             actual["closeResult"] = close_result (closed);
             return;
         }
+        if (act == "deferredJoinFailureContract") {
+            const auto target = given.at ("target").get<std::string> ();
+            const bool warm = given.at ("warmRoute").get<bool> ();
+            store.capture_ready = true;
+            if (authority_state (services, spot_id) != "Ready")
+                throw std::runtime_error ("Ready authority was not observed");
+            store.capture_ready = false;
+            const auto join_id = target == "missing" ? "missing-" + spot_id : spot_id;
+            if (warm) {
+                const auto probe = direct_request (join_id, services, 1);
+                if (target == "missing") {
+                    if (probe || probe.error_kind () != zf::framework_error_kind_t::not_found)
+                        throw std::runtime_error ("Missing warm-up must be NotFound");
+                } else if (!probe)
+                    throw std::runtime_error ("Ready warm-up failed");
+            }
+            auto &actors = services.get_required<zf::actor_manager_t> ();
+            auto created =
+              actors.get_or_create (zf::actor_id_t ("closing-admission-member"), "member")
+                .timeout (3s)
+                .async ()
+                .result ();
+            if (!created || !std::holds_alternative<zf::actor_create_created_t> (created.value ()))
+                throw std::runtime_error ("Actor was not created");
+            auto joined = current ().closing_join_completed.get_future ();
+            auto entered = current ().closing_entered.get_future ();
+            auto closing =
+              std::async (std::launch::async, [&] { return manager_close (services, *ref); });
+            const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+                store.replay_ready = false;
+                current ().closing_released.complete (zf::result_t<void>::success ());
+            });
+            if (entered.wait_for (3s) != std::future_status::ready)
+                throw std::runtime_error ("OnClosing did not start");
+            if (target != "closing") {
+                current ().closing_released.complete (zf::result_t<void>::success ());
+                const auto closed = closing.get ();
+                if (!closed || !closed.value ())
+                    throw std::runtime_error ("Close did not complete");
+                store.replay_ready = target == "absent";
+            } else {
+                actual["authorityDuringClose"] = authority_state (services, spot_id);
+            }
+            const auto existing =
+              actors.get_or_create (zf::actor_id_t ("closing-admission-member"), "member")
+                .timeout (3s)
+                .async ()
+                .result ();
+            if (!existing
+                || !std::holds_alternative<zf::actor_create_existing_t> (existing.value ()))
+                throw std::runtime_error ("Actor GetOrCreate did not return Existing");
+            join_member (services, join_id, "closing-admission-member");
+            if (joined.wait_for (3s) != std::future_status::ready)
+                throw std::runtime_error ("Join completion did not arrive");
+            const auto completion = joined.get ();
+            const auto failed = std::get_if<zf::actor_join_failed_t> (&completion);
+            actual["joinResult"] = failed ? error_name (failed->error_kind) : "notFailed";
+            if (failed)
+                EXPECT_TRUE (failed->operation_id_high != 0 || failed->operation_id_low != 0);
+            store.replay_ready = false;
+            if (target == "closing") {
+                current ().closing_released.complete (zf::result_t<void>::success ());
+                const auto closed = closing.get ();
+                if (!closed || !closed.value ())
+                    throw std::runtime_error ("Close did not complete");
+            }
+            return;
+        }
         if (act == "existingThenClosingAdmission") {
             auto &manager = services.get_required<zf::spot_manager_t> ();
             const auto existing = manager.get_or_create (zf::spot_id_t (spot_id), "room")
@@ -2703,7 +2793,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, OtherGenerationCloseDuringClosingIsInv
         {"onClosingCalls", 1}}}});
 }
 
-TEST (ZLinkFrameworkSpotCloseConformance, RemoteJoinQueuedBehindCloseReturnsNotFound)
+TEST (ZLinkFrameworkSpotCloseConformance, RemoteJoinQueuedBehindCloseReturnsUnavailable)
 {
     run_and_check (nlohmann::json{{"name", "remote-join-queued-behind-close"},
                                   {"given", {{"authority", "Ready"}, {"remote", true}}},
@@ -2713,7 +2803,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, RemoteJoinQueuedBehindCloseReturnsNotF
                                     {"joinPendingBeforeRelease", true},
                                     {"closeResult", true},
                                     {"removedBeforeJoin", true},
-                                    {"joinResult", "NotFound"},
+                                    {"joinResult", "Unavailable"},
                                     {"joinsAdmitted", 0}}}});
 }
 
@@ -3216,3 +3306,18 @@ TEST (LocalCallbackCause, ActorJoinPreservesEmptyApplicationException)
 }
 
 } // namespace
+
+TEST (ZLinkFrameworkSpotCloseConformance, DeferredJoinFailureContract)
+{
+    std::ifstream input (ZLINK_SPOT_CLOSE_CONFORMANCE_PATH);
+    const auto fixture = nlohmann::json::parse (input);
+    for (const auto &row : fixture.at ("joinFailureCases"))
+        run_and_check (nlohmann::json{{"name", row.at ("name")},
+                                      {"given",
+                                       {{"authority", "Ready"},
+                                        {"onClosing", "blocks"},
+                                        {"target", row.at ("target")},
+                                        {"warmRoute", row.at ("warmRoute")}}},
+                                      {"act", "deferredJoinFailureContract"},
+                                      {"expect", {{"joinResult", row.at ("errorKind")}}}});
+}

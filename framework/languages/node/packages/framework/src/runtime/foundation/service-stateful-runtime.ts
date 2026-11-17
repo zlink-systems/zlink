@@ -169,6 +169,7 @@ interface ServiceSpotMessageFollowState {
 export interface ServiceStatefulResult {
   readonly terminalResult: number;
   readonly failureCode: number;
+  readonly cause?: unknown;
   readonly failureMessage?: string;
   readonly payload?: ServiceApplicationPayload;
   readonly kindData?: ReceiveKindData;
@@ -5561,6 +5562,12 @@ export class ServiceStatefulRuntime {
         `Actor '${fence.actor.actorId}' has no current Ready authority.`
       );
     }
+    if (
+      actor.ref.generation === fence.actor.generation &&
+      actor.authorityOwnerGeneration !== fence.authorityOwnerGeneration
+    ) {
+      throw new ServiceStaleGenerationError('actor', fence.actor.actorId);
+    }
     return actor;
   }
 
@@ -6158,7 +6165,10 @@ function failure(error: unknown): ServiceStatefulResult {
   if (error instanceof ZLinkFrameworkException) {
     return internalFrameworkWireReply(error);
   }
-  return internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.RequestFailed);
+  return {
+    ...internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.RequestFailed),
+    cause: error
+  };
 }
 
 function actorKey(actor: Pick<ServiceActorRef, 'actorId' | 'generation'>): string {

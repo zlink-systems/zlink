@@ -1,7 +1,9 @@
 package MyGame;
 
+import org.jspecify.annotations.Nullable;
+
 public record PartyView(
         String partyId,
         java.util.List<String> members,
         RunPhase phase,
-        String runId) {}
+        @Nullable String runId) {}

@@ -14,11 +14,15 @@ import type { DefaultZLinkBoundSession } from '../streams/session-context';
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import type { ZLinkStoreLocationResolvers } from '../locations';
 import type { ZLinkAuthorityStore } from '../locations/internal-store-contracts';
-import { ZLinkRemoteBoundSessionRelay } from './remote-bound-session-relay';
+import {
+  ZLinkRemoteBoundSessionRelay,
+  type ZLinkRemoteBoundSessionRelayOptions
+} from './remote-bound-session-relay';
 import { ZLinkActorPacketRelay } from './actor-packet-relay';
 import { ZLinkRemoteActorJoinReceiver } from './remote-actor-join-receiver';
 
 export interface ZLinkBoundSessionRelayOptions {
+  readonly currentOwner: ZLinkRemoteBoundSessionRelayOptions['currentOwner'];
   readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly requestTimeoutMs?: number;
   readonly sessionRelocationSealTimeoutMs: number;
@@ -63,6 +67,7 @@ export class ZLinkBoundSessionRelay {
       actorErrorSender: (...args) => this.boundSessions.sendActorError(...args)
     });
     this.boundSessions = new ZLinkRemoteBoundSessionRelay({
+      currentOwner: options.currentOwner,
       requestTimeoutMs: options.requestTimeoutMs,
       sessionRelocationSealTimeoutMs: options.sessionRelocationSealTimeoutMs,
       routeTransport: options.routeTransport,

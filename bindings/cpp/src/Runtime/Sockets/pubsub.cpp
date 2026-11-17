@@ -3,6 +3,7 @@
 #include <zlink/Contracts/Sockets/pubsub_socket_contracts.hpp>
 #include <Runtime/Sockets/detail.hpp>
 #include <Runtime/Sockets/socket_access.hpp>
+#include <Runtime/Native/socket_handle.hpp>
 #include <Runtime/Messaging/operation_state.hpp>
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
@@ -59,6 +60,10 @@ publish_operation_t xpub_socket_t::publish (const std::string &topic_id_)
 
 int xpub_socket_t::receive_subscription_event (subscription_event_t &out_, recv_flags_t flags_)
 {
+    recv_result_t result;
+    detail::socket_call_t call (detail::socket_access_t::native_owner (*this), result);
+    if (result != recv_result_t::ok)
+        return static_cast<int> (result);
     subscription_event_t event;
     std::vector<char> topic_buffer (256);
     size_t topic_size = topic_buffer.size ();
@@ -67,7 +72,7 @@ int xpub_socket_t::receive_subscription_event (subscription_event_t &out_, recv_
     zlink_recv_result_t rc = static_cast<zlink_recv_result_t> (206);
 
     while (true) {
-        rc = zlink_xpub_recv (detail::native_handle (*this), &source_rid, &subscribed,
+        rc = zlink_xpub_recv (call.handle (), &source_rid, &subscribed,
                               topic_buffer.data (), topic_buffer.size (), &topic_size,
                               static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
         if (rc == 0)

@@ -44,7 +44,7 @@ import {
   encodeActorBoundFrame,
   encodeActorUnboundFrame,
   encodeSessionClosingFrame,
-  encodeStreamControlFrame,
+  streamControlFrame,
   ZLinkStreamCloseReasonCode
 } from './protocol';
 import type { ZLinkActorSessionAuthorityFence } from './actor-session-binding-registry';
@@ -161,7 +161,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   async writeControl(name: string): Promise<void> {
-    const control = NativeMessage.from(encodeStreamControlFrame(name));
+    const control = streamControlFrame(name);
     try {
       await this.socket.submit(this.backendRoutingId(), control);
     } finally {

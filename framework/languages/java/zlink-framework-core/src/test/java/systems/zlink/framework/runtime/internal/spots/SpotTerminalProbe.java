@@ -23,6 +23,10 @@ public final class SpotTerminalProbe
     private final boolean missing;
     public int resolves;
     public int invalidations;
+
+    /** Completes after the resolver invalidation runs, so tests observe it. */
+    public final CompletableFuture<Void> invalidated = new CompletableFuture<>();
+
     public int activations;
     public int coordinatorCalls;
     public int submissions;
@@ -46,6 +50,7 @@ public final class SpotTerminalProbe
     @Override
     public void invalidate(String spotId) {
         invalidations++;
+        invalidated.complete(null);
     }
 
     @Override

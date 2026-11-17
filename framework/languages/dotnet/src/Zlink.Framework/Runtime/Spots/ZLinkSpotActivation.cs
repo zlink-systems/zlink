@@ -40,6 +40,7 @@ internal abstract partial class ZLinkSpotActivation
     private readonly ZLinkSpotId _spotId;
     internal readonly ZLinkStateLane _lane = new();
     private readonly SemaphoreSlim _membershipPublicationGate = new(1, 1);
+    private Task _membershipPublication = Task.CompletedTask;
     private ZLinkSpotActorHandlerRegistry? _actorHandlers;
     private bool _configurationOpen = true;
     private int _nativeDispatchAttached;

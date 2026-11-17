@@ -105,70 +105,86 @@ final class TopicPlane {
     SubscriptionEvent subscriptionEvent(ReceiveFlag flags) {
         Objects.requireNonNull(flags, "flags");
         socket.ensureOpen();
-        socket.prepareRecvLikeOperation();
-        RecvScratch scratch = socket.recvScratch();
-        resetSubscriptionScratch(scratch);
-        int rc = Native.subscriptionEvent(socket.handle(), scratch,
-            flags.getValue());
-        if (rc != RecvResult.OK.value())
-            throw new ZlinkRecvException(RecvResult.fromValue(rc), Native.errno());
-        return subscriptionEventFromNative(scratch);
+        socket.socketCore().reserveNativeCall();
+        try {
+            socket.prepareRecvLikeOperation();
+            RecvScratch scratch = socket.recvScratch();
+            resetSubscriptionScratch(scratch);
+            int rc = Native.subscriptionEvent(socket.handle(), scratch,
+                flags.getValue());
+            if (rc != RecvResult.OK.value())
+                throw new ZlinkRecvException(RecvResult.fromValue(rc), Native.errno());
+            return subscriptionEventFromNative(scratch);
+        } finally {
+            socket.socketCore().releaseNativeCall();
+        }
     }
 
     Optional<SubscriptionEvent> trySubscriptionEvent() {
         socket.ensureOpen();
-        socket.prepareRecvLikeOperation();
-        RecvScratch scratch = socket.recvScratch();
-        resetSubscriptionScratch(scratch);
-        int rc = Native.subscriptionEvent(socket.handle(), scratch,
-            ReceiveFlag.DONTWAIT.getValue());
-        if (rc == 0) {
-            return Optional.of(subscriptionEventFromNative(scratch));
+        socket.socketCore().reserveNativeCall();
+        try {
+            socket.prepareRecvLikeOperation();
+            RecvScratch scratch = socket.recvScratch();
+            resetSubscriptionScratch(scratch);
+            int rc = Native.subscriptionEvent(socket.handle(), scratch,
+                ReceiveFlag.DONTWAIT.getValue());
+            if (rc == 0) {
+                return Optional.of(subscriptionEventFromNative(scratch));
+            }
+            int errno = Native.errno();
+            RecvResult result = RecvResult.fromValue(rc);
+            if (result == RecvResult.NO_DATA) {
+                return Optional.empty();
+            }
+            throw new ZlinkRecvException(result, errno);
+        } finally {
+            socket.socketCore().releaseNativeCall();
         }
-        int errno = Native.errno();
-        RecvResult result = RecvResult.fromValue(rc);
-        if (result == RecvResult.NO_DATA) {
-            return Optional.empty();
-        }
-        throw new ZlinkRecvException(result, errno);
     }
 
     private TopicMessage subscribeInternal(ReceiveFlag flags,
                                            boolean allowNoData) {
         socket.ensureOpen();
-        socket.prepareRecvLikeOperation();
-        RecvScratch scratch = socket.recvScratch();
-        int rc = Native.subscribe(socket.handle(), scratch, flags.getValue());
-        if (rc == RecvResult.OK.value()) {
-            Message[] parts =
-                InternalAccess.messageFromOwnedMessageVector(
-                    scratch.partsOut.get(ValueLayout.ADDRESS, 0),
-                    scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
-            boolean adopted = false;
-            try {
-                RoutingId routingId = NativeRoutingIds.readOut(
-                    scratch.sourceRidOut);
-                int topicLength =
-                    NativeSocketRuntime.normalizeTopicLength(
-                        scratch.topicOut,
-                        scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
-                TopicMessage result = ContractAccess.topicMessage(
-                    routingId, decodeReceivedTopicString(
-                        scratch.topicOut, topicLength), parts);
-                adopted = true;
-                return result;
-            } finally {
-                if (!adopted) {
-                    Message.closeAll(parts);
+
+        socket.socketCore().reserveNativeCall();
+        try {
+            socket.prepareRecvLikeOperation();
+            RecvScratch scratch = socket.recvScratch();
+            int rc = Native.subscribe(socket.handle(), scratch, flags.getValue());
+            if (rc == RecvResult.OK.value()) {
+                Message[] parts =
+                    InternalAccess.messageFromOwnedMessageVector(
+                        scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                        scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
+                boolean adopted = false;
+                try {
+                    RoutingId routingId = NativeRoutingIds.readOut(
+                        scratch.sourceRidOut);
+                    int topicLength =
+                        NativeSocketRuntime.normalizeTopicLength(
+                            scratch.topicOut,
+                            scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
+                    TopicMessage result = ContractAccess.topicMessage(
+                        routingId, decodeReceivedTopicString(
+                            scratch.topicOut, topicLength), parts);
+                    adopted = true;
+                    return result;
+                } finally {
+                    if (!adopted) {
+                        Message.closeAll(parts);
+                    }
                 }
             }
+            int errno = Native.errno();
+            RecvResult result = RecvResult.fromValue(rc);
+            if (allowNoData && result == RecvResult.NO_DATA) {
+                return null;
+            }
+            throw new ZlinkRecvException(result, errno);
+        } finally {
+            socket.socketCore().releaseNativeCall();
         }
-        int errno = Native.errno();
-        RecvResult result = RecvResult.fromValue(rc);
-        if (allowNoData && result == RecvResult.NO_DATA) {
-            return null;
-        }
-        throw new ZlinkRecvException(result, errno);
     }
 
     // Non-allocating subscribe hot path for the DONT_WAIT single-part case
@@ -176,55 +192,61 @@ final class TopicPlane {
     // general allocating reader to preserve exact semantics.
     private boolean subscribeIntoFastNoWait(TopicMessage result) {
         socket.ensureOpen();
-        socket.prepareRecvLikeOperation();
-        ContractAccess.TopicMessageAccess access = topicMessageAccess;
-        if (access == null) {
-            // HOT PATH: TopicMessage has registered its contract bridge before
-            // a caller can supply it here. Cache that bridge per socket so the
-            // single-part receive path does not perform two volatile bridge
-            // lookups for every delivered frame.
-            access = ContractAccess.topicMessageAccessForRuntime();
-            topicMessageAccess = access;
-        }
-        RecvScratch scratch = socket.recvScratch();
-        int rc = Native.subscribe(socket.handle(), scratch,
-            ReceiveFlag.DONTWAIT.getValue());
-        int errno = rc == RecvResult.OK.value() ? 0 : Native.errno();
-        if (rc == RecvResult.OK.value()) {
-            Message[] parts =
-                InternalAccess.messageFromOwnedMessageVector(
-                    scratch.partsOut.get(ValueLayout.ADDRESS, 0),
-                    scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
-            boolean adopted = false;
-            try {
-                RoutingId routingId = NativeRoutingIds.readOut(
-                    scratch.sourceRidOut);
-                int topicLength = NativeSocketRuntime.normalizeTopicLength(
-                    scratch.topicOut,
-                    scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
-                String topicId = decodeReceivedTopicString(
-                    scratch.topicOut, topicLength);
-                if (parts.length == 1) {
-                    access.adoptSingle(result, routingId, topicId,
-                        parts[0]);
-                } else {
-                    TopicMessage fresh = ContractAccess.topicMessage(
-                        routingId, topicId, parts);
-                    ContractAccess.topicMessageAdoptFrom(result, fresh);
-                }
-                adopted = true;
-                return true;
-            } finally {
-                if (!adopted) {
-                    Message.closeAll(parts);
+
+        socket.socketCore().reserveNativeCall();
+        try {
+            socket.prepareRecvLikeOperation();
+            ContractAccess.TopicMessageAccess access = topicMessageAccess;
+            if (access == null) {
+                // HOT PATH: TopicMessage has registered its contract bridge before
+                // a caller can supply it here. Cache that bridge per socket so the
+                // single-part receive path does not perform two volatile bridge
+                // lookups for every delivered frame.
+                access = ContractAccess.topicMessageAccessForRuntime();
+                topicMessageAccess = access;
+            }
+            RecvScratch scratch = socket.recvScratch();
+            int rc = Native.subscribe(socket.handle(), scratch,
+                ReceiveFlag.DONTWAIT.getValue());
+            int errno = rc == RecvResult.OK.value() ? 0 : Native.errno();
+            if (rc == RecvResult.OK.value()) {
+                Message[] parts =
+                    InternalAccess.messageFromOwnedMessageVector(
+                        scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                        scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
+                boolean adopted = false;
+                try {
+                    RoutingId routingId = NativeRoutingIds.readOut(
+                        scratch.sourceRidOut);
+                    int topicLength = NativeSocketRuntime.normalizeTopicLength(
+                        scratch.topicOut,
+                        scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
+                    String topicId = decodeReceivedTopicString(
+                        scratch.topicOut, topicLength);
+                    if (parts.length == 1) {
+                        access.adoptSingle(result, routingId, topicId,
+                            parts[0]);
+                    } else {
+                        TopicMessage fresh = ContractAccess.topicMessage(
+                            routingId, topicId, parts);
+                        ContractAccess.topicMessageAdoptFrom(result, fresh);
+                    }
+                    adopted = true;
+                    return true;
+                } finally {
+                    if (!adopted) {
+                        Message.closeAll(parts);
+                    }
                 }
             }
+            RecvResult failure = RecvResult.fromValue(rc);
+            if (failure == RecvResult.NO_DATA) {
+                return false;
+            }
+            throw new ZlinkRecvException(failure, errno);
+        } finally {
+            socket.socketCore().releaseNativeCall();
         }
-        RecvResult failure = RecvResult.fromValue(rc);
-        if (failure == RecvResult.NO_DATA) {
-            return false;
-        }
-        throw new ZlinkRecvException(failure, errno);
     }
 
     private static String decodeTopicString(MemorySegment topicOut,

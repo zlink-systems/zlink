@@ -6,6 +6,16 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal static class ZLinkStreamControlFrames
 {
+    public static void SendProtocolError(ZLinkManagedStream stream)
+    {
+        ZLinkStreamFrameWriter.Write(
+            stream,
+            ZlinkStreamSessionClosingCodec.CreateHeader(),
+            ZlinkStreamSessionClosingCodec.EncodeProtocolError().AsMemory(),
+            "Could not submit the protocol-error session-closing control packet."
+        );
+    }
+
     public static void SendHeartbeatPing(ZLinkManagedStream stream)
     {
         var ping = new ZlinkStreamHeader(

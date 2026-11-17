@@ -4,7 +4,6 @@ const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('../../../packages/framework/dist');
 const nestjs = require('../../../packages/nestjs/dist');
-const { RoutingId } = require('@zlink-systems/zlink');
 const { fixedRidHostClock, finishFixedRidHostStartup } = require('../../helpers/fixed-rid-host-clock');
 
 const mode = process.argv[2] ?? 'normal';
@@ -68,9 +67,7 @@ async function main() {
   await runtime.spotNodeRuntime.ensureEntryActivation('shutdown-test');
   await app.get(nestjs.ZLINK_SPOT_MANAGER).create('user').inMesh('shutdown-test').submit();
   // Isolate host teardown from remote Instance placement and admission.
-  await runtime.spotManager.materializeInstance(
-    'shutdown-test', 'instance', RoutingId.from('shutdown-instance')
-  );
+  await runtime.spotManager.materializeInstance('shutdown-test', 'instance', 'shutdown-instance');
   assert.deepEqual(initialized.sort(), ['EntrySpot', 'InstanceSpot', 'UserSpot']);
   let contextDisposes = 0;
   const disposeContext = runtime.context.dispose.bind(runtime.context);

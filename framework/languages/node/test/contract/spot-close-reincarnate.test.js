@@ -402,7 +402,8 @@ test('Instance intent request after the release decision is refused before admis
   for (const part of [...parts, ...replies.flat()]) part.close();
 });
 
-for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, readyIntent } of [
+for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, readyIntent, successorClose } of [
+  ...closeFixture.successorCloseCases.map((scenario) => ({ initializationFails: false, queuedBeforeClose: false, successorClose: scenario })),
   { initializationFails: false, queuedBeforeClose: false },
   { initializationFails: true, queuedBeforeClose: false },
   { initializationFails: false, queuedBeforeClose: true },
@@ -414,7 +415,7 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
   { initializationFails: false, queuedBeforeClose: true, readyIntent: true },
   { initializationFails: false, queuedBeforeClose: false, readyIntent: true, send: true }
 ]) {
-  test(`Close retains ${readyIntent ? 'Ready intent' : 'Missing-original'} ${send ? 'send' : 'request'} until initialization (${initializationFails ? 'failure' : readyCommitFails ? 'ready-commit-failure' : queuedBeforeClose ? 'queued-before-close' : 'success'})`, async () => {
+  test(successorClose?.name ?? `Close retains ${readyIntent ? 'Ready intent' : 'Missing-original'} ${send ? 'send' : 'request'} until initialization (${initializationFails ? 'failure' : readyCommitFails ? 'ready-commit-failure' : queuedBeforeClose ? 'queued-before-close' : 'success'})`, async () => {
     const fixture = await authorityFixture();
     const ready = await commitFixture(fixture);
     const entered = deferred();
@@ -430,7 +431,7 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
     const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
     const { runWithApplicationJobPermit } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
     const jobs = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({}, () => 1n));
-    const permits = await Promise.all([jobs.acquire(undefined, 'remote'), jobs.acquire(undefined, 'remote'), ...(queuedBeforeClose ? [jobs.acquire(undefined, 'remote')] : [])]);
+    const permits = await Promise.all([jobs.acquire(undefined, 'remote'), jobs.acquire(undefined, 'remote'), ...(queuedBeforeClose || successorClose ? [jobs.acquire(undefined, 'remote')] : [])]);
     const beforeHandler = permits.map(() => 0);
     const scopePermits = permits.map((permit, index) => ({
       get origin() { return permit.origin; },
@@ -442,10 +443,13 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
     }));
     const events = [];
     const generations = [];
+    const initializedGenerations = [];
+    let successorClosing;
     let closingCalls = 0;
     let targetGeneration = ready.objectGeneration;
     class Room {
       async onInitialize() {
+        initializedGenerations.push(BigInt(this.context.objectGeneration));
         events.push(`initialize:${this.context.objectGeneration}`);
         if (initializationFails && BigInt(this.context.objectGeneration) !== ready.objectGeneration) {
           throw new Error('new incarnation restore failed');
@@ -467,6 +471,7 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
         assert.equal(jobs.snapshot().permitsInUse < BigInt(permits.length), true);
         generations.push(BigInt(spot.context.objectGeneration));
         events.push(`handler:${request.id}`);
+        if (successorClose && request.id === 1) successorClosing = spot.context.close();
         return { id: request.id, generation: spot.context.objectGeneration };
       }
     }
@@ -569,9 +574,13 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
     const intent = queued ?? receive(1, true);
     const noIntent = receive(2, false);
     await arrived.promise;
-    finish.resolve();
     let second;
     let lateNoIntent;
+    if (successorClose) {
+      second = receive(3, true);
+      await secondArrived.promise;
+    }
+    finish.resolve();
     if (queuedBeforeClose) {
       await initializing.promise;
       second = receive(3, true);
@@ -579,9 +588,10 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
       finishInitializing.resolve();
     }
     await Promise.all([previous, closeOutcome, intent.dispatch, noIntent.dispatch, second?.dispatch]);
+    if (successorClose) await successorClosing;
     const expected = branchExpectation(initializationFails ? 'reincarnate-initialization-fails' : 'reincarnate-pending-intent');
     const noIntentExpected = branchExpectation('closing-message-without-intent');
-    assert.equal(closingCalls, 1);
+    assert.equal(closingCalls, successorClose ? 2 : 1);
     assert.equal(intent.replies.length, send ? 0 : expected.messageTerminalCount);
     if (readyIntent && !send) {
       assert.doesNotThrow(() => protocol.decodeChannelReply(intent.replies[0]),
@@ -597,10 +607,16 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
       assert.equal(timerCallbacks.size, 0);
       assert.equal(timerClears >= 1, true);
     } else {
-      assert.deepEqual(generations, queuedBeforeClose ? [targetGeneration, targetGeneration] : [targetGeneration]);
+      if (successorClose) {
+        assert.deepEqual(generations.map((generation) => initializedGenerations.indexOf(generation) + 1),
+          successorClose.expect.handlerIncarnations);
+        assert.deepEqual([await closing, await successorClosing], successorClose.expect.closeResults);
+      } else {
+        assert.deepEqual(generations, queuedBeforeClose ? [targetGeneration, targetGeneration] : [targetGeneration]);
+      }
       if (second !== undefined) assert.equal(second.replies.length, 1);
       assert.notEqual(targetGeneration, ready.objectGeneration);
-      assert.equal(events.indexOf(`initialize:${targetGeneration}`) < events.indexOf('handler:1'), true);
+      assert.equal(events.indexOf(`initialize:${generations[0]}`) < events.indexOf('handler:1'), true);
       assert.equal((await fixture.store.readAuthority(fixture.key)).objectGeneration, targetGeneration);
       if (readyIntent && !queuedBeforeClose && !send) {
         const permit = await jobs.acquire(undefined, 'remote');
@@ -620,7 +636,7 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
         branchExpectation('release-without-pending-intent').factoryCalls);
     }
     assert.equal(jobs.snapshot().permitsInUse, 0n);
-    assert.equal(releasedClaims, queuedBeforeClose || lateNoIntent !== undefined ? 3 : 2);
+    assert.equal(releasedClaims, queuedBeforeClose || successorClose || lateNoIntent !== undefined ? 3 : 2);
     for (const part of [...intent.parts, ...noIntent.parts, ...intent.replies.flat(), ...noIntent.replies.flat(),
       ...(second?.parts ?? []), ...(second?.replies.flat() ?? []),
       ...(lateNoIntent?.parts ?? []), ...(lateNoIntent?.replies.flat() ?? [])]) part.close();
