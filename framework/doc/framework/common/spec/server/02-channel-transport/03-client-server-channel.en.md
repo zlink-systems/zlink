@@ -440,8 +440,8 @@ in `framework/runtime/protocol/channel-header-v1.proto`. Each runtime's header c
 The header's `metadata` field carries [application metadata](02-channel-messaging.en.md#9-metadata-and-observation)
 as a list of `MetadataEntry` (key, value). No entries means empty metadata. A sender writes entries in ascending
 UTF-8 byte order of the key, and a receiver accepts any order. Character, size-limit, error, and reply rules follow
-channel messaging §9; the total size in that section is the sum of the protobuf encoded lengths of the `metadata`
-entries. The business payload frame carries no metadata.
+channel messaging §9; the total size in that section is the sum, over all `metadata`
+entries, of each entry's length when encoded as field 13, including the field tag and length prefix. The business payload frame carries no metadata.
 
 <a id="envelope-header-grammar"></a>
 **Header grammar.** A header frame that does not parse as a `ChannelHeader` is a protocol error, and an invalid
