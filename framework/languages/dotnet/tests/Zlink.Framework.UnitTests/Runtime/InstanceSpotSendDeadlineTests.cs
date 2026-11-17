@@ -16,16 +16,154 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InstanceRequestSuccessAllocationDoesNotDependOnErrorTracing(bool ready)
+    {
+        async Task<long> Measure(ZLinkDiagnosticsLevel level)
+        {
+            var node = new SuccessfulInstanceNode();
+            node.SpotRequestHandler = parts =>
+                ZLinkEnvelopeCodec.EncodeParts(
+                    ZLinkEnvelopeCodec.DecodeHeader(parts) with
+                    {
+                        Kind = ZLinkMessageKind.Response,
+                        MessageName = string.Empty,
+                    },
+                    new ProbeReply("reply"),
+                    typeof(ProbeReply),
+                    codecs: null
+                );
+            using var observer = new CapturingMessageFlowObserver();
+            var (runtime, _) = await CreateStartedRuntimeAsync(
+                node,
+                messageFlowObserver: observer,
+                messageFlowMode: level,
+                includeActorFactory: false,
+                includeInstanceSpotRoute: true,
+                relocationStore: new InMemoryRelocationStore(),
+                meshResolverWrapper: inner => new AllocationMeshResolver(
+                    new ColdTypeResolver(inner, 1, 100)
+                )
+            );
+            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "entry", "Probe"),
+                new ProbeRouteMessage("probe"),
+                runtime.Registration.Codecs
+            );
+            try
+            {
+                var handle = new ZLinkResolvedSpotHandle(
+                    new ZLinkSpotHandleSnapshot(
+                        "entry",
+                        RoutingId.From("spot-node"),
+                        "allocation",
+                        1,
+                        ZLinkSpotKind.Instance,
+                        1,
+                        1,
+                        1,
+                        "owner",
+                        "version"
+                    ),
+                    1,
+                    _ => throw new InvalidOperationException("Unexpected refresh")
+                );
+                void Call()
+                {
+                    if (ready)
+                    {
+                        var readyReply = new ZLinkRouteSpotRequestCall<ProbeRouteMessage>(
+                            runtime,
+                            handle,
+                            new ProbeRouteMessage("probe"),
+                            instanceIntent: true
+                        )
+                            .ExecuteAfterTerminatorAsync<ProbeReply>(
+                                ZLinkNestedRequestTerminator.Async,
+                                CancellationToken.None
+                            )
+                            .GetAwaiter()
+                            .GetResult();
+                        Assert.Equal("reply", readyReply.Value);
+                        return;
+                    }
+                    var reply = runtime
+                        .ActivateInstanceSpotAsync(
+                            new InstanceSpotIntentAddress("entry", "remote", "allocation"),
+                            parts,
+                            true,
+                            TimeSpan.FromSeconds(5),
+                            default,
+                            CancellationToken.None
+                        )
+                        .GetAwaiter()
+                        .GetResult();
+                    Assert.Empty(reply);
+                }
+                var bytes = PerCallAllocation.MinWindow(Call, 1000, warmup: 200);
+                Console.WriteLine(
+                    $"instance-request success ready={ready} level={level} requests=1000 B/op={bytes / 1000.0}"
+                );
+                Assert.Empty(observer.Events.Where(flow => flow.Outcome == "failed"));
+                return bytes;
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+                await runtime.StopAsync(CancellationToken.None);
+            }
+        }
+        var baseline = await Measure(ZLinkDiagnosticsLevel.Off);
+        var errors = await Measure(ZLinkDiagnosticsLevel.Errors);
+        Assert.Equal(baseline, errors);
+    }
+
+    private sealed class SuccessfulInstanceNode : CapturingSpotNode, IZLinkBackendSpotNode
+    {
+        public ValueTask<IReadOnlyList<Message>> ActivateInstanceSpotAsync(
+            InstanceSpotActivationTarget target,
+            string sourceSpotId,
+            IReadOnlyList<Message> parts,
+            bool request,
+            ulong deadlineUnixMs,
+            TimeSpan timeout,
+            ReadOnlyMemory<byte> metadata,
+            CancellationToken cancellationToken,
+            ZLinkRequestAdmission? requestAdmission = null
+        ) => ValueTask.FromResult<IReadOnlyList<Message>>(Array.Empty<Message>());
+    }
+
+    private sealed class AllocationMeshResolver(IZLinkMeshNodeLocationResolver inner)
+        : IZLinkMeshNodeLocationResolver
+    {
+        private IReadOnlyList<ZLinkMeshNodeDescriptor>? _rows;
+
+        public async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
+            string meshName,
+            CancellationToken cancellationToken = default
+        ) => _rows ??= await inner.ListLiveMeshNodesAsync(meshName, cancellationToken);
+    }
+
+    [Theory]
     [InlineData(false, ZLinkDiagnosticsLevel.Off, ZlinkSubmitException.ErrorCode.NotConnected)]
     [InlineData(true, ZLinkDiagnosticsLevel.Off, ZlinkSubmitException.ErrorCode.NotConnected)]
     [InlineData(false, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotConnected)]
     [InlineData(true, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotConnected)]
     [InlineData(false, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotFound)]
     [InlineData(true, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotFound)]
+    [InlineData(
+        true,
+        ZLinkDiagnosticsLevel.Errors,
+        ZlinkSubmitException.ErrorCode.NotConnected,
+        true
+    )]
+    [InlineData(true, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotFound, true)]
     public async Task ColdInstanceNotReadyFailureRetainsSelectedTargetOnce(
         bool request,
         ZLinkDiagnosticsLevel level,
-        ZlinkSubmitException.ErrorCode submitCode
+        ZlinkSubmitException.ErrorCode submitCode,
+        bool direct = false
     )
     {
         var node = new NotReadyInstanceNode(submitCode);
@@ -44,6 +182,18 @@ public sealed partial class EntrySpotActorDispatchTests
             var client = new ZLinkSpotClient(runtime);
             await Assert.ThrowsAnyAsync<Exception>(async () =>
             {
+                if (direct)
+                {
+                    await runtime.ActivateInstanceSpotAsync(
+                        new InstanceSpotIntentAddress("entry", "remote", "not-ready"),
+                        Array.Empty<Message>(),
+                        true,
+                        TimeSpan.FromSeconds(5),
+                        default,
+                        CancellationToken.None
+                    );
+                    return;
+                }
                 if (request)
                     await client
                         .RequestToSpot("not-ready", new ProbeRouteMessage("probe"))

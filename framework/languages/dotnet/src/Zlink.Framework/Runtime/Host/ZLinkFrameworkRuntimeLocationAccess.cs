@@ -207,11 +207,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Framework runtime is not started."
             );
-        if (request && requestAdmission is null && Flow.DispatchErrorsEnabled)
-            requestAdmission = new ZLinkRequestAdmission();
-        var failurePacketName = Flow.DispatchErrorsEnabled
-            ? TryReadEnvelopeHeaderForTrace(parts)?.MessageName
-            : null;
         try
         {
             if (state.FindSpotNodeByRoutingId(selected.Rid) is { } localTarget)
@@ -256,6 +251,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         catch (Exception failure)
         {
+            var failurePacketName = Flow.DispatchErrorsEnabled
+                ? TryReadEnvelopeHeaderForTrace(parts)?.MessageName
+                : null;
             ReportInstanceSpotFailure(
                 address.MeshName,
                 selected.Rid,
@@ -281,7 +279,19 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        if (!Flow.DispatchErrorsEnabled || (request && requestAdmission?.IsAdmitted == true))
+        if (!Flow.DispatchErrorsEnabled)
+            return;
+        // An existing admission belongs to the caller. Without one, only a
+        // typed submit failure establishes that the target never accepted it.
+        if (
+            request
+            && (
+                requestAdmission is not null
+                    ? requestAdmission.IsAdmitted
+                    : failure is not ZlinkSubmitException
+                        && failure.InnerException is not ZlinkSubmitException
+            )
+        )
             return;
         if (
             request
