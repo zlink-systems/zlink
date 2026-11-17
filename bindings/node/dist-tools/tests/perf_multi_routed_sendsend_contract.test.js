@@ -584,6 +584,8 @@ test('received routed send terminates its WRITABLE wait when the route owner clo
         dealer.setRoutingId(zlink.RoutingId.from(Buffer.from('waiting-client')));
         router.bind(endpoint);
         await waitForConnectionReady(dealer, () => dealer.connect(endpoint));
+        // Keep the PollCompletion registration: removing it makes this routed send fail
+        // with SubmitError instead of reaching the WRITABLE wait (checked 2026-11-17).
         poller.add(router, [zlink.PollEventFlag.PollCompletion], 0);
         await dealer.send().message(Buffer.alloc(64, 0x61)).message(Buffer.alloc(0)).submit().admitted;
         assert.equal(router.recv(received), true);
