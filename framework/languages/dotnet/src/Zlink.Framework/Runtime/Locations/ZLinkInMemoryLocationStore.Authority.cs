@@ -789,18 +789,39 @@ internal sealed partial class ZLinkInMemoryLocationStore
         );
     }
 
+    public ValueTask<bool> CleanupDiscardedAuthorityAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot discarded,
+        ZLinkLocationOwnerToken owner,
+        CancellationToken cancellationToken = default
+    ) =>
+        ZLinkAuthorityCleanup.CleanupDiscardedAsync(
+            this,
+            (snapshot, ct) =>
+                _lane.RunAsync(() =>
+                    _authorities.TryGetValue(key.Value, out var current)
+                    && current.StoreVersion == snapshot.StoreVersion
+                    && TryReleaseEndedReservation(key, current, _time.GetUtcNow(), discarded: true)
+                ),
+            key,
+            discarded,
+            owner,
+            cancellationToken
+        );
+
     private bool TryReleaseEndedReservation(
         ZLinkAuthorityKey key,
         ZLinkAuthoritySnapshot current,
         DateTimeOffset now,
         ZLinkAuthorityKey? creationKey = null,
-        byte? creationRelocationPolicy = null
+        byte? creationRelocationPolicy = null,
+        bool discarded = false
     )
     {
         if (
             (
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
-                    ? creationKey is null
+                    ? creationKey is null && !discarded
                     : current.ReservedCreation is null
             ) || IsAuthorityInPreparedAggregate(key)
         )
@@ -819,7 +840,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             if (ownerLive)
                 return false;
-            if (creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
+            if (
+                !discarded
+                && creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy
+            )
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     current.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
@@ -836,52 +860,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
         )
             return false;
         List<KeyValuePair<string, ZLinkAuthoritySnapshot>> members = [];
-        string? endedUserSpotId = null;
-        if (active)
-        {
-            if (current.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot)
-            {
-                if (
-                    !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                        current.Payload.Span,
-                        out var spot
-                    )
-                    || spot.State != ZLinkUserSpotAuthorityState.Ready
-                )
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        "User Spot is not steady Ready."
-                    );
-                endedUserSpotId = spot.SpotId;
-            }
-            else if (
-                current.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
-                && (
-                    !ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                        current.Payload.Span,
-                        out var spot
-                    )
-                    || spot.State != ZLinkInstanceSpotAuthorityState.Ready
-                    || spot.ActivationRecovery is not null
-                )
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "Instance Spot is not steady Ready."
-                );
-            else if (
-                current.Allocation.ObjectKind == ZLinkPlacementObjectKind.Actor
-                && !ZLinkActorAuthorityPayloadCodec.IsSteadyReady(current.Payload.Span)
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "Actor is not steady Ready.",
-                    ZLinkRetryAdvice.RetryAfterStateChange
-                );
-        }
+        var endedUserSpotId = active ? ZLinkAuthorityCleanup.RequireSteadyReady(current) : null;
         if (active && !ownerLive)
             _ownerLeaseReleaseWait.Observe(key.Value, owner);
-        if (endedUserSpotId is not null)
+        if (endedUserSpotId is not null && !discarded)
             members = EndedUserSpotMembers(key, current, endedUserSpotId, now);
         if (active)
         {

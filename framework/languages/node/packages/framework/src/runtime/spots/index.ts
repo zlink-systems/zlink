@@ -505,9 +505,14 @@ export class DefaultZLinkSpotManager {
           activation.serialExecutor.discardPendingApplication(error);
           activation.discardLocalMembers((actor) => lifecycle.discardSteadyExecution(actor));
           this.activations.finishClose(activation.meshName, activation.spotId);
-          this.options.detachedTaskRunner.runDetached('Discard Spot execution', () =>
-            this.activationLifecycle.discard(activation)
-          );
+          activation.serial.closeAdmission();
+          const disposal = activation.serial.whenIdle().then(async () => {
+            // An already submitted Join can commit while the discard closes admission.
+            activation.discardLocalMembers((actor) => lifecycle.discardSteadyExecution(actor));
+            await this.activationLifecycle.discard(activation);
+          });
+          this.options.detachedTaskRunner.runDetached('Discard Spot execution', () => disposal);
+          return disposal;
         });
         const published = this.activations.register(activation);
         this.scheduleIdleSweep();
@@ -1542,6 +1547,8 @@ export class DefaultZLinkSpotManager {
   async publishUserSpot(meshName: string, spotId: RoutingId): Promise<void> {
     this.options.admission?.requireRequest('Spot Ready confirmation', meshName);
     const published = this.activations.publish(meshName, spotId);
+    if (published !== undefined)
+      this.options.locationLifecycle?.bindSpotExecution(meshName, spotId, published.spot);
     await published?.serialExecutor.finishPreparation();
   }
 
@@ -2464,11 +2471,14 @@ export class DefaultZLinkSpotManager {
     let accepted = false;
     let committedAdmissionReplay = isRemoteCommit && admissionRecord?.state === 'committed';
     const actorJoinIsCurrent = (): boolean =>
+      (activation === undefined || this.activations.resolve(meshName, spotId!) === activation) &&
       (record.deadlineUnixMs === undefined || record.deadlineUnixMs > BigInt(Date.now())) &&
       (record.isPending?.() ?? true);
     const abandonStaleAdmission = (): void => {
       if (isRemoteAdmission && transferRequest !== undefined) {
         this.formalRemoteActorAdmissions.abort(transferRequest.transferId);
+      } else if (control.canonicalActorJoin !== undefined) {
+        this.formalRemoteActorAdmissions.abort(control.canonicalActorJoin.handoffId);
       }
     };
     try {
@@ -2556,6 +2566,10 @@ export class DefaultZLinkSpotManager {
             } finally {
               encodedReply?.close();
             }
+          }
+          if (!actorJoinIsCurrent()) {
+            abandonStaleAdmission();
+            return;
           }
           this.formalRemoteActorAdmissions.complete(
             control.canonicalActorJoin.handoffId,

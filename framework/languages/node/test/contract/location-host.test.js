@@ -181,7 +181,9 @@ test('framework runtime host uses the explicit location store for Actor lifecycl
   const spotOptions = runtime.createSpotManagerOptions();
 
   assert.equal(typeof actorOptions.locationLifecycle, 'object');
-  assert.equal(spotOptions.locationLifecycle, undefined);
+  // Spot discards share the Actor lifecycle for §5.1 authority cleanup
+  // (01-location-runtime.ko.md:864-909); the same object means no second lease owner.
+  assert.equal(spotOptions.locationLifecycle, actorOptions.locationLifecycle);
   assert.equal(typeof spotOptions.spotRouteResolver?.resolve, 'function');
 });
 
@@ -528,7 +530,9 @@ test('framework runtime host starts location runtime and injects lifecycle into 
   const preStartSpotOptions = runtime.createSpotManagerOptions();
   const ownerId = runtime[inspectRuntime]().ownerId;
   assert.equal(typeof preStartActorOptions.locationLifecycle, 'object');
-  assert.equal(preStartSpotOptions.locationLifecycle, undefined);
+  // Spot discards share the Actor lifecycle for §5.1 authority cleanup
+  // (01-location-runtime.ko.md:864-909); the same object means no second lease owner.
+  assert.equal(preStartSpotOptions.locationLifecycle, preStartActorOptions.locationLifecycle);
   assert.equal((await store.readOwnerLease(ownerId)).kind, 'missing');
 
   await runtime.start();
@@ -539,7 +543,7 @@ test('framework runtime host starts location runtime and injects lifecycle into 
   const actorOptions = runtime.createActorManagerOptions();
   const spotOptions = runtime.createSpotManagerOptions();
   assert.equal(actorOptions.locationLifecycle, preStartActorOptions.locationLifecycle);
-  assert.equal(spotOptions.locationLifecycle, undefined);
+  assert.equal(spotOptions.locationLifecycle, actorOptions.locationLifecycle);
   assert.equal(String(spotOptions.nodeRidProvider('play')), 'node-a');
   assert.equal(typeof spotOptions.nodeGenerationProvider('play'), 'bigint');
   assert.equal(typeof spotOptions.spotRouteResolver?.resolve, 'function');
@@ -2444,7 +2448,7 @@ test('degraded host rejects factory and restore confirmation until owner lease r
       scenario.spotManager.getOrCreateWithAuthority(
         'play',
         LeaseOwnedSpot,
-        rid('restore-before-lease'),
+        'restore-before-lease',
         undefined,
         {
           objectKind: 'user_spot',
@@ -2462,7 +2466,7 @@ test('degraded host rejects factory and restore confirmation until owner lease r
     const restored = await scenario.spotManager.getOrCreateWithAuthority(
       'play',
       LeaseOwnedSpot,
-      rid('restore-after-lease'),
+      'restore-after-lease',
       undefined,
       {
         objectKind: 'user_spot',

@@ -1660,8 +1660,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             {
                 //  Location runtime §10: an unpublished stage is never
                 //  discarded because time passed; only its authority
-                //  settlement discards it (WatchUnverifiedTargetOnceAsync,
-                //  CutoverTargetAsync, AbortTargetAsync). Retention bounds
+                //  settlement or terminal target Spot discard ends it
+                //  (WatchUnverifiedTargetOnceAsync, CutoverTargetAsync,
+                //  DiscardLocationSpotAsync, AbortTargetAsync). Retention bounds
                 //  only completed aborts.
                 var removed = await pair
                     .Value.RunAsync(() =>
@@ -2406,7 +2407,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 targetAuthority,
                 frames,
                 effectiveTargetAuthorityOwnerGeneration,
-                targetActivation,
+                targetActivation ?? actorState.Activation,
                 remoteJoinRequest,
                 remoteJoinRecovery,
                 created,
@@ -2535,7 +2536,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 stage.Participant.ObjectGeneration,
                 actorRef.Generation
             );
-        if (stage.TargetActivation is { } activation && stage.ActorState.Actor is { } actor)
+        if (
+            stage.RemoteJoinRequest is null
+            && stage.TargetActivation is { } activation
+            && stage.ActorState.Actor is { } actor
+        )
             activation.PublishRelocatedPerActorMember(actor, stage.ActorState);
         stage.PublishAuthority(publication);
     }
@@ -3178,6 +3183,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             return false;
         if (
             !fenceSettled
+            && stage.TargetActivation is not { IsDisposed: true }
             && Volatile.Read(ref _targetAttemptAdmissionSealed) == 0
             && !runtime.DrainAdmission.IsSealedForShutdown
         )
@@ -3185,6 +3191,37 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         if (stage.TryBeginSettledCleanup(() => slot.TryRemoveStage(stage)) is { } previousPhase)
             _ = RegisterTargetAbortLocked(key, slot, stage, previousPhase);
         return true;
+    }
+
+    internal async ValueTask DiscardLocationSpotAsync(ZLinkSpotActivation spot)
+    {
+        foreach (var pair in _targetAttempts.ToArray())
+        {
+            if (!TryAcquireTargetAttempt(pair.Key, pair.Value, out var lease))
+                continue;
+            Task? terminal;
+            using (lease)
+            {
+                terminal = await lease
+                    .Slot.RunAsync(() =>
+                    {
+                        if (
+                            lease.Slot.Stage is { } stage
+                            && ReferenceEquals(stage.TargetActivation, spot)
+                        )
+                            EndUnverifiedTarget(pair.Key, lease.Slot, fenceSettled: false);
+                        return
+                            lease.Slot.Abort is { } abort
+                            && ReferenceEquals(abort.Stage.TargetActivation, spot)
+                            ? abort.Terminal
+                            : null;
+                    })
+                    .ConfigureAwait(false);
+                CloseTargetAttemptIfEmpty(pair.Key, lease.Slot);
+            }
+            if (terminal is not null)
+                await terminal.ConfigureAwait(false);
+        }
     }
 
     internal async ValueTask SealAndDrainTargetAttemptsAsync(CancellationToken cancellationToken)

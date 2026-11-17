@@ -155,6 +155,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             _locationRuntime.CaptureExecutions = SnapshotLocationExecutions;
             _locationRuntime.ExecutionsDiscarded += DiscardLocationExecutions;
+            _locationRuntime.DiscardExecutionsAsync = DiscardTrackedLocationExecutionsAsync;
+            _locationRuntime.DiscardExecutionFailed = error =>
+                ErrorSink.ReportRuntimeTaskException("location-discard", error);
             _locationRuntime.ExecutionResumed += ResumeLocationExecution;
         }
         _actors = components.Actors;
@@ -791,18 +794,62 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 actor.FenceRuntimeGeneration();
             else if (execution is ZLinkSpotActivation spot)
                 spot.FenceLocationExecution();
-        _ = _locationLifecycle?.TryRunBackgroundAsync(_ =>
-            DiscardLocationExecutionsAsync(executions)
-        );
     }
 
     internal ValueTask DiscardLocationExecutionAsync(object execution) =>
-        execution is ZLinkActorRuntimeState actor
+        _locationRuntime is { } locations
+            ? locations.DiscardExecutionsAndWaitAsync(new HashSet<object> { execution })
+        : execution is ZLinkActorRuntimeState actor
             ? _actorSessionManager.DiscardLocationExecutionAsync(actor)
-            : DiscardLocationExecutionsAsync(new HashSet<object> { execution });
+        : DiscardLocationExecutionsAsync(new HashSet<object> { execution });
+
+    private async ValueTask DiscardTrackedLocationExecutionsAsync(IReadOnlySet<object> executions)
+    {
+        if (_locationLifecycle is not { } lifecycle)
+        {
+            await DiscardLocationExecutionsAsync(executions).ConfigureAwait(false);
+            return;
+        }
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var started = await lifecycle
+            .TryRunBackgroundAsync(async _ =>
+            {
+                try
+                {
+                    await DiscardLocationExecutionsAsync(executions).ConfigureAwait(false);
+                    completion.TrySetResult();
+                }
+                catch (Exception error)
+                {
+                    completion.TrySetException(error);
+                    throw;
+                }
+            })
+            .ConfigureAwait(false);
+        if (!started)
+        {
+            await DiscardLocationExecutionsAsync(executions).ConfigureAwait(false);
+            return;
+        }
+        await completion.Task.ConfigureAwait(false);
+    }
 
     private async ValueTask DiscardLocationExecutionsAsync(IReadOnlySet<object> executions)
     {
+        foreach (var spot in executions.OfType<ZLinkSpotActivation>())
+        {
+            await _actorHandoffAdmissions
+                .DiscardLocationSpotAsync(spot.SpotId)
+                .ConfigureAwait(false);
+            await _standaloneActorRelocationRuntime
+                .DiscardLocationSpotAsync(spot)
+                .ConfigureAwait(false);
+            await _actorHandoffAdmissions
+                .DiscardLocationSpotAsync(spot.SpotId)
+                .ConfigureAwait(false);
+        }
         var discarded = new HashSet<object>(executions);
         foreach (
             var member in await _actorSessionManager.SnapshotStatesAsync().ConfigureAwait(false)
@@ -816,15 +863,24 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         var completions = new List<Task>();
         foreach (var spot in discarded.OfType<ZLinkSpotActivation>())
         {
-            var members = actors.Where(actor => ReferenceEquals(actor.Activation, spot)).ToArray();
-            ValueTask DiscardMembers() =>
-                new(
-                    Task.WhenAll(
+            async ValueTask DiscardMembers()
+            {
+                var members = (
+                    await _actorSessionManager.SnapshotStatesAsync().ConfigureAwait(false)
+                )
+                    .Where(actor => ReferenceEquals(actor.Activation, spot))
+                    .ToArray();
+                if (_locationRuntime is { } locations)
+                    await locations
+                        .CaptureDiscardedMembersAsync(spot, members.Cast<object>().ToHashSet())
+                        .ConfigureAwait(false);
+                await Task.WhenAll(
                         members.Select(member =>
                             _actorSessionManager.DiscardLocationExecutionAsync(member).AsTask()
                         )
                     )
-                );
+                    .ConfigureAwait(false);
+            }
             var node = _state?.SpotNodes.GetValueOrDefault(
                 ZLinkSpotNodeName.FromBoundary(spot.SpotNodeName, nameof(spot.SpotNodeName))
             );
