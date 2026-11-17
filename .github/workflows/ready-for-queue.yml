@@ -67,6 +67,7 @@ jobs:
                 ;;
               framework/languages/cpp/*) cpp=true ;;
               framework/languages/dotnet/*) dotnet=true ;;
+              framework/doc/contract-inventory/jvm-api-snapshots/java.api.sha256) java=true ;;
               framework/languages/java/*) java=true ;;
               framework/languages/node/*) node=true ;;
             esac

@@ -230,7 +230,7 @@ test('output cleanup dry-run expands workspace paths and rejects parent paths', 
 
 //  The aggregate samples/run_samples.{sh,ps1} are gone (#405, e106104ffe); the gate now
 //  spawns one per-sample runner per invocation. Which samples it walks is pinned in
-//  sample-regression.test.js; what is Windows-specific, and therefore lives here, is that
+//  samples-source-contract.test.js; what is Windows-specific, and therefore lives here, is that
 //  every invocation picks the PowerShell runner and never reaches for bash or a .sh file.
 test('sample npm gate selects the PowerShell runner on Windows', () => {
   const result = runNode('run-samples-gate.js', ['--dry-run'], {
