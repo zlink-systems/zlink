@@ -69,7 +69,9 @@ sha256_file() {
 }
 
 if ((update_lock)); then
+  # A fresh runner has no cache directory yet; mktemp below needs it.
   output_dir="${HOME}/.cache/zlink"
+  mkdir -p "$output_dir"
 else
   mkdir -p "$output_arg"
   output_dir="$(normalize_path "$output_arg")"
