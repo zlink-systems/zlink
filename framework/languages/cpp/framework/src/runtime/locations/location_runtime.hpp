@@ -466,7 +466,7 @@ class location_runtime_t
     {
         // The cleanup continuation may outlive this Runtime. Its existing owner
         // stop and lane serialize registration before the repository drain.
-        return [lane = _lane, operations = _descriptor_publications, lease = _owner_lease,
+        return [lane = _lane, operations = _repository_operations, lease = _owner_lease,
                 now = _lease_now, owner = std::atomic_load (&_heartbeat_state), store = _store] (
                  authority_key_t key, authority_snapshot_t fence, task_t<void> settled) {
             return lane->run_task (
@@ -586,7 +586,7 @@ class location_runtime_t
           *_lease_now, cancellation, deadline);
         auto submissions = co_await _lane->run_task ([this] {
             auto tasks = std::make_shared<std::vector<task_t<void>>> ();
-            for (const auto &pending : *_descriptor_publications)
+            for (const auto &pending : *_repository_operations)
                 tasks->push_back (pending->submitted.task ());
             return tasks;
         });
@@ -743,7 +743,7 @@ class location_runtime_t
     {
         const bool started = _started.exchange (false);
         stop_heartbeat (started);
-        infrastructure_result ([this] { return drain_descriptor_publications (); }).value ();
+        infrastructure_result ([this] { return drain_repository_operations (); }).value ();
         if (started)
             static_cast<void> (cleanup_owner ());
     }
@@ -827,7 +827,7 @@ class location_runtime_t
         std::stop_callback owner_stopped (owner_cancellation, cancel);
         try {
             co_await lane->run_task ([this, operation] {
-                register_repository_operation (_descriptor_publications, operation);
+                register_repository_operation (_repository_operations, operation);
             });
         }
         catch (...) {
@@ -1120,7 +1120,7 @@ class location_runtime_t
               observed_at, cutoff, lease.last_successful_lease->token, owner);
             for (const auto &request : *_execution_discard_requests)
                 episode->discard_requests.push_back ([lane = _lane,
-                                                      operations = _descriptor_publications, owner,
+                                                      operations = _repository_operations, owner,
                                                       discard = request.discard] (auto policy) {
                     auto submit = [operations, owner, discard,
                                    policy = std::move (policy)] () mutable {
@@ -1306,7 +1306,7 @@ class location_runtime_t
               }
               auto operation = std::make_shared<repository_operation_t> ();
               auto retained = std::make_shared<task_t<T>> (start ());
-              register_repository_operation (runtime->_descriptor_publications, operation);
+              register_repository_operation (runtime->_repository_operations, operation);
               detail::observe_task_terminal (
                 *retained, [operation, retained, completion] (const result_t<T> &result) {
                     completion->complete (result);
@@ -1616,7 +1616,7 @@ class location_runtime_t
         }
         runtime->wake_owner_lease_observers ();
         co_await lease_lane (attempt, [runtime, token] {
-            for (const auto &operation : *runtime->_descriptor_publications) {
+            for (const auto &operation : *runtime->_repository_operations) {
                 if (const auto failure = operation->failure ())
                     runtime->_last_error = *failure;
                 operation->progress (token);
@@ -2104,11 +2104,11 @@ class location_runtime_t
         }
     }
 
-    task_t<void> drain_descriptor_publications () const
+    task_t<void> drain_repository_operations () const
     {
         for (;;) {
             auto operations = co_await _lane->run_task (
-              [this] { return std::exchange (*_descriptor_publications, {}); });
+              [this] { return std::exchange (*_repository_operations, {}); });
             if (operations.empty ())
                 co_return;
             for (const auto &operation : operations)
@@ -2151,7 +2151,7 @@ class location_runtime_t
       std::make_shared<std::shared_ptr<const owner_lease_snapshot_t>> (
         std::make_shared<const owner_lease_snapshot_t> ())};
     mutable std::optional<std::string> _last_error;
-    std::shared_ptr<std::vector<std::shared_ptr<repository_operation_t>>> _descriptor_publications =
+    std::shared_ptr<std::vector<std::shared_ptr<repository_operation_t>>> _repository_operations =
       std::make_shared<std::vector<std::shared_ptr<repository_operation_t>>> ();
 
     // Owner subscriptions contain no retained object inventory or Ready evidence.
