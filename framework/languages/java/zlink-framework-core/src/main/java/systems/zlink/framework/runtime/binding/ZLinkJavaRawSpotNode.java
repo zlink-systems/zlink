@@ -2835,9 +2835,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 command,
                                 reply,
                                 applied);
-        return command.active()
-                ? remoteSessionBindingOwner.bind(this, command.actor().actor(), transition)
-                : remoteSessionBindingOwner.apply(this, command.actor().actor(), transition);
+        return remoteSessionBindingOwner.apply(this, command.actor().actor(), transition);
     }
 
     private CompletionStage<Boolean> acceptRemoteStreamBindingOnOwner(
@@ -2888,6 +2886,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     bindReply(command.correlation(), unavailable[0], unavailable[1], null, ""));
             return CompletableFuture.completedFuture(false);
         }
+        return applied.acceptBinding(
+                sessionBindingIdentity(candidate),
+                command.sessionRid(),
+                accepted -> decideRemoteStreamBinding(route, candidate, command, reply, accepted));
+    }
+
+    private CompletionStage<Boolean> decideRemoteStreamBinding(
+            ZLinkServiceM6BWireCodec.ActorRouteFence route,
+            ActorSessionBinding candidate,
+            ZLinkServiceM6BWireCodec.BoundSessionBind command,
+            Consumer<ZLinkServiceM6BWireCodec.BoundSessionBindReply> reply,
+            RemoteSessionBindingTransition applied) {
         var result = new CompletableFuture<Boolean>();
         var decided = new AtomicBoolean();
         var cancellation = new AtomicBoolean();

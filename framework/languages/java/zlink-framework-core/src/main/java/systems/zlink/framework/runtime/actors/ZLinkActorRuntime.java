@@ -2869,16 +2869,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return inOwnerTurn(() -> transition.apply(remoteSessionBindingTransition(node, actorRef)));
     }
 
-    public CompletionStage<Boolean> acceptSessionBindingAsync(
-            ZLinkInternalSpotNode node,
-            ZLinkBackendActorRef actorRef,
-            Function<ZLinkInternalSpotNode.RemoteSessionBindingTransition, CompletionStage<Boolean>>
-                    transition) {
-        return enqueueActorLifecycleTurn(
-                actorRef.actorId(),
-                () -> transition.apply(remoteSessionBindingTransition(node, actorRef)));
-    }
-
     public CompletionStage<Boolean> applyRemoteSessionBindingAsync(
             ZLinkInternalSpotNode node,
             ZLinkBackendActorRef actorRef,
@@ -2922,6 +2912,20 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     private ZLinkInternalSpotNode.RemoteSessionBindingTransition remoteSessionBindingTransition(
             ZLinkInternalSpotNode node, ZLinkBackendActorRef actorRef) {
+        return remoteSessionBindingTransition(
+                node,
+                actorRef,
+                (started, cancellation) -> CompletableFuture.completedFuture(Optional.empty()));
+    }
+
+    private ZLinkInternalSpotNode.RemoteSessionBindingTransition remoteSessionBindingTransition(
+            ZLinkInternalSpotNode node,
+            ZLinkBackendActorRef actorRef,
+            java.util.function.BiFunction<
+                            Runnable,
+                            ZLinkActorCallbackCancellation,
+                            CompletionStage<Optional<String>>>
+                    callback) {
         return new ZLinkInternalSpotNode.RemoteSessionBindingTransition() {
             @Override
             public CompletionStage<Boolean> commit(Supplier<CompletionStage<Boolean>> transition) {
@@ -2952,11 +2956,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             }
 
             @Override
-            public CompletionStage<Optional<String>> decideDuplicateBind(
+            public CompletionStage<Boolean> acceptBinding(
                     ZLinkSessionBindingIdentity incoming,
                     RoutingId incomingSessionRid,
-                    Runnable callbackStarted,
-                    ZLinkActorCallbackCancellation cancellation) {
+                    Function<
+                                    ZLinkInternalSpotNode.RemoteSessionBindingTransition,
+                                    CompletionStage<Boolean>>
+                            transition) {
                 ZLinkActor actor = actorRegistry.actor(actorRef.actorId());
                 if (actor == null) {
                     return CompletableFuture.failedFuture(
@@ -2992,7 +2998,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         }
                     }
                     if (callbackAbsent) {
-                        return CompletableFuture.completedFuture(Optional.empty());
+                        return transition.apply(this);
                     }
                 } catch (NoSuchMethodException failure) {
                     return CompletableFuture.failedFuture(failure);
@@ -3000,18 +3006,39 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 Optional<ZLinkInternalSpotNode.BoundSessionRoute> currentRoute =
                         node.boundSessionRoute(actorRef);
                 if (currentRoute.isEmpty()) {
-                    return CompletableFuture.completedFuture(Optional.empty());
+                    return transition.apply(this);
                 }
                 ZLinkInternalSpotNode.BoundSessionRoute current = currentRoute.orElseThrow();
                 if (current.isSamePhysicalSession(incoming, incomingSessionRid)) {
-                    return CompletableFuture.completedFuture(Optional.empty());
+                    return transition.apply(this);
                 }
-                callbackStarted.run();
-                return invokeActorLifecycle(
-                        actor,
+                return enqueueActorLifecycleTurn(
+                        actorRef.actorId(),
                         () ->
-                                actor.onDuplicateBind(
-                                        current.sessionBindingIdentity(), incoming, cancellation));
+                                transition.apply(
+                                        remoteSessionBindingTransition(
+                                                node,
+                                                actorRef,
+                                                (started, cancellation) -> {
+                                                    started.run();
+                                                    return invokeActorLifecycle(
+                                                            actor,
+                                                            () ->
+                                                                    actor.onDuplicateBind(
+                                                                            current
+                                                                                    .sessionBindingIdentity(),
+                                                                            incoming,
+                                                                            cancellation));
+                                                })));
+            }
+
+            @Override
+            public CompletionStage<Optional<String>> decideDuplicateBind(
+                    ZLinkSessionBindingIdentity incoming,
+                    RoutingId incomingSessionRid,
+                    Runnable callbackStarted,
+                    ZLinkActorCallbackCancellation cancellation) {
+                return callback.apply(callbackStarted, cancellation);
             }
         };
     }

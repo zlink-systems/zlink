@@ -3425,6 +3425,18 @@ export class ZLinkFrameworkRuntimeHost
       return;
     }
 
+    const current = state.boundSession;
+    const actor = state.actor;
+    const duplicateCallback =
+      current !== undefined && !samePhysicalSession(current, incomingTarget)
+        ? actor?.onDuplicateBind
+        : undefined;
+    if (duplicateCallback === undefined || actor === undefined || current === undefined) {
+      state.installBoundSessionBinding(incomingTarget);
+      replyBindingSuccess();
+      return;
+    }
+
     let callbackStarted!: () => void;
     const started = new Promise<void>((resolve) => {
       callbackStarted = resolve;
@@ -3439,17 +3451,6 @@ export class ZLinkFrameworkRuntimeHost
       state.actor?.context.spotId,
       state.actorId,
       async () => {
-        const current = state.boundSession;
-        const actor = state.actor;
-        const duplicateCallback =
-          current !== undefined && !samePhysicalSession(current, incomingTarget)
-            ? actor?.onDuplicateBind
-            : undefined;
-        if (duplicateCallback === undefined || actor === undefined || current === undefined) {
-          state.installBoundSessionBinding(incomingTarget);
-          replyBindingSuccess();
-          return;
-        }
         callbackStarted();
         const decision = await duplicateCallback.call(
           actor,

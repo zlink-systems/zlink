@@ -175,3 +175,120 @@ for (const scenario of cases) {
     assert.equal(replacements, scenario.replacementCount);
   });
 }
+
+for (const scenario of ['none', 'first', 'same', 'different']) {
+  test(`Actor binding gate admission: ${scenario}`, async () => {
+    const {
+      ZLinkSerialExecutionQueue
+    } = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
+    const {
+      SubmitResult
+    } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+    const queue = new ZLinkSerialExecutionQueue(async (record) => {
+      record.resolve(await record.operation());
+    });
+    let release;
+    let entered;
+    const started = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    const handler = queue.submit(() => {
+      entered();
+      return held;
+    });
+    await started;
+    let callbacks = 0;
+    let replies = 0;
+    const actor = { actorId: 'actor-a', nodeRid: 'node-a', generation: 1n };
+    const incoming = {
+      sessionNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      sessionRid: 'session-a',
+      sessionOwnerId: 'owner',
+      sessionOwnerLeaseGeneration: 1n,
+      bindingGeneration: 5n
+    };
+    const current =
+      scenario === 'first'
+        ? undefined
+        : {
+            ...incoming,
+            sessionRid: scenario === 'same' ? 'session-a' : 'session-old'
+          };
+    const state = {
+      nativeActorRef: actor,
+      actorId: 'actor-a',
+      meshName: 'mesh-a',
+      locationGeneration: 3n,
+      isMoving: false,
+      boundSession: current,
+      actor: {
+        context: {},
+        ...(scenario === 'none'
+          ? {}
+          : {
+              async onDuplicateBind() {
+                callbacks++;
+              }
+            })
+      },
+      installBoundSessionBinding(binding) {
+        this.boundSession = binding;
+      }
+    };
+    const host = {
+      actorManager: { getState: () => state },
+      spotNodeRuntime: {
+        meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 2n }) })
+      },
+      boundSessionRelay: { boundSessions: { resolveRemoteBoundSessionTarget: () => incoming } },
+      spotManager: {
+        executeActorTurn: (_mesh, _spot, _actor, operation) =>
+          queue.submit(operation, { lane: 'lifecycle' })
+      },
+      options: { registration: { sessionReplacementCallbackTimeoutMs: 30000 } }
+    };
+    const binding = framework.ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding.call(
+      host,
+      'mesh-a',
+      {
+        kindData: {
+          kind: 'actorBinding',
+          transition: 'active',
+          actor,
+          actorNodeGeneration: 2n,
+          authorityOwnerGeneration: 3n,
+          ...incoming
+        },
+        reply() {
+          replies++;
+          return SubmitResult.Ok;
+        },
+        replyFailure() {
+          assert.fail('valid binding was rejected');
+        }
+      }
+    );
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(callbacks, 0);
+      if (scenario === 'different') {
+        assert.equal(replies, 0);
+        assert.equal(state.boundSession, current);
+      } else {
+        assert.equal(replies, 1);
+        assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
+      }
+    } finally {
+      release();
+      await handler;
+      await binding;
+    }
+    assert.equal(callbacks, scenario === 'different' ? 1 : 0);
+    assert.equal(replies, 1);
+    assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
+  });
+}
