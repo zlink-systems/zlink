@@ -3,10 +3,73 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const zlink = require('@zlink-systems/zlink');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsClient, releaseSenderWorker, spawnSenderWorker, waitForMonitorConnectionReady, waitForPostReadySettle, waitForWorkerStatus, workerBindEndpoint, workerBoundEndpoint, } = require('../perf/single/perf_single_common');
+const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsClient, releaseSenderWorker, spawnSenderWorker, waitForMonitorConnectionReady, waitForPostReadySettle, workerBindEndpoint, workerBoundEndpoint, } = require('../perf/single/perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf/perf_stop_token');
-test('WSS PUB worker survives blocking flow control and delivers its wire stop', async () => {
+function waitForWorkerEvent(worker, expectedType, signal) {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+        const cleanup = () => {
+            worker.off('message', onMessage);
+            worker.off('error', onError);
+            worker.off('exit', onExit);
+            signal.removeEventListener('abort', onAbort);
+        };
+        const onError = (error) => {
+            cleanup();
+            reject(error);
+        };
+        const onMessage = (message) => {
+            if (message.type === 'error') {
+                onError(new Error(message.message));
+            }
+            else if (message.type === expectedType) {
+                cleanup();
+                resolve();
+            }
+        };
+        const onExit = (code) => onError(new Error(`sender worker exited with code ${code} before ${expectedType}`));
+        const onAbort = () => onError(signal.reason);
+        worker.on('message', onMessage);
+        worker.once('error', onError);
+        worker.once('exit', onExit);
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+}
+test('worker event wait observes readiness, errors, exit and cancellation', async () => {
+    for (const outcome of ['bound', 'reported-error', 'error', 'exit', 'abort']) {
+        const worker = new EventEmitter();
+        const controller = new AbortController();
+        const waiting = waitForWorkerEvent(worker, 'bound', controller.signal);
+        worker.emit('message', { type: 'connected' });
+        if (outcome === 'bound') {
+            worker.emit('message', { type: 'bound' });
+            await waiting;
+        }
+        else {
+            const failure = new Error('startup failed');
+            if (outcome === 'reported-error') {
+                worker.emit('message', { type: 'error', message: failure.message });
+            }
+            else if (outcome === 'error') {
+                worker.emit('error', failure);
+            }
+            else if (outcome === 'exit') {
+                worker.emit('exit', 0);
+            }
+            else {
+                controller.abort(failure);
+            }
+            await assert.rejects(waiting, outcome === 'exit'
+                ? /exited with code 0 before bound/ : /startup failed/);
+        }
+        assert.equal(worker.listenerCount('message'), 0);
+        assert.equal(worker.listenerCount('error'), 0);
+        assert.equal(worker.listenerCount('exit'), 0);
+    }
+});
+test('WSS PUB worker survives blocking flow control and delivers its wire stop', { timeout: 120_000 }, async (t) => {
     const endpoint = await benchmarkEndpoint('wss', `node-single-pubsub-contract-${process.pid}-${Date.now()}`);
     const ctx = zlink.createContext();
     applyContextPolicy(ctx);
@@ -38,10 +101,10 @@ test('WSS PUB worker survives blocking flow control and delivers its wire stop',
                 noDrop: true,
             },
         });
-        waitForWorkerStatus(worker, 1, 2_000);
+        await waitForWorkerEvent(worker, 'bound', t.signal);
         sub.connect(workerBoundEndpoint(worker, endpoint));
         waitForMonitorConnectionReady(monitor, 2_000);
-        waitForWorkerStatus(worker, 2, 2_000);
+        await waitForWorkerEvent(worker, 'connected', t.signal);
         waitForPostReadySettle(1_000);
         releaseSenderWorker(worker);
         // Hold the subscriber briefly so PUB/NODROP reaches its tiny HWM and the
@@ -82,7 +145,7 @@ test('WSS PUB worker survives blocking flow control and delivers its wire stop',
         }
         assert.equal(sawPayload, true);
         assert.equal(sawStop, true);
-        waitForWorkerStatus(worker, 4, 5_000);
+        await waitForWorkerEvent(worker, 'done', t.signal);
     }
     finally {
         await closeSenderWorker(worker);
@@ -91,7 +154,7 @@ test('WSS PUB worker survives blocking flow control and delivers its wire stop',
         ctx.close();
     }
 });
-test('single REQREP worker starts with complete data and echoes two parts', async () => {
+test('single REQREP worker starts with complete data and echoes two parts', { timeout: 120_000 }, async (t) => {
     const serverRoutingId = zlink.RoutingId.from(Buffer.from('SERVER'));
     for (const routedClient of [false, true]) {
         const endpoint = await benchmarkEndpoint('tcp', `node-single-reqrep-contract-${routedClient ? 'router' : 'dealer'}-${process.pid}`);
@@ -119,7 +182,7 @@ test('single REQREP worker starts with complete data and echoes two parts', asyn
                 runId: 1,
                 options: { recvTimeoutMs: 100 },
             });
-            waitForWorkerStatus(worker, 1, 2_000);
+            await waitForWorkerEvent(worker, 'bound', t.signal);
             client.connect(workerBoundEndpoint(worker, endpoint));
             waitForMonitorConnectionReady(monitor, 2_000);
             releaseSenderWorker(worker);
@@ -142,7 +205,7 @@ test('single REQREP worker starts with complete data and echoes two parts', asyn
             }
             const stop = routedClient ? client.send(serverRoutingId) : client.send();
             stop.message(STOP_TOKEN_BYTES).submit_sync();
-            waitForWorkerStatus(worker, 4, 2_000);
+            await waitForWorkerEvent(worker, 'done', t.signal);
         }
         finally {
             await closeSenderWorker(worker);
