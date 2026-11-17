@@ -117,6 +117,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     internal bool IsPreparing =>
         _preparation is not null || Volatile.Read(ref _relocationBarrier)?.QueueSeal is not null;
 
+    internal bool IsCurrentLifecycleTurn => _queue.IsCurrentLifecycleTurn;
+
     internal bool IsTargetPreparing => Volatile.Read(ref _relocationBarrier)?.QueueSeal is not null;
 
     internal ValueTask ExecuteTargetPreparationAsync(

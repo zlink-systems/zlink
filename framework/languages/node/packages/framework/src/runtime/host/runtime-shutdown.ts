@@ -1,3 +1,4 @@
+import { traceShutdownStep } from '../diagnostics';
 import type { ZLinkBackendContext } from '../backend';
 import type { ZLinkChannelRuntimeManager } from '../channels';
 import type { ZLinkFrameworkExecutionState } from '../execution';
@@ -52,25 +53,51 @@ export async function rollbackRuntimeStart(parts: ZLinkRuntimeStartRollbackParts
 export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<void> {
   const state = parts.state;
   const errors: unknown[] = [];
-  await runShutdownStep(errors, () =>
-    awaitWithAbort(
-      Promise.resolve(parts.serviceRelocation?.drainActorJoinSources?.()),
-      parts.shutdownSignal
+  await runShutdownStep(
+    errors,
+    () =>
+      awaitWithAbort(
+        Promise.resolve(parts.serviceRelocation?.drainActorJoinSources?.()),
+        parts.shutdownSignal
+      ),
+    'accepted_work.actor_join_sources'
+  );
+  await runShutdownStep(errors, () => parts.streamRuntime?.dispose(), 'transport_cleanup.streams');
+  await runShutdownStep(
+    errors,
+    () => parts.spotNodeRuntime?.dispose(parts.shutdownSignal, parts.cleanupDeadline),
+    'transport_cleanup.spot_nodes'
+  );
+  await runShutdownStep(
+    errors,
+    () => parts.channelRuntime?.dispose(),
+    'transport_cleanup.channels'
+  );
+  await runShutdownStep(
+    errors,
+    () => awaitWithAbort(Promise.resolve(parts.serviceRelocation?.dispose()), parts.shutdownSignal),
+    'owner_cleanup.service_relocation'
+  );
+  await runShutdownStep(
+    errors,
+    () => parts.locationSnapshot.lifecycle?.dispose(),
+    'owner_cleanup.location_lifecycle'
+  );
+  await runShutdownStep(
+    errors,
+    () => parts.locationSnapshot.runtime?.stop(parts.shutdownSignal),
+    'owner_cleanup.location_runtime'
+  );
+  await traceShutdownStep('transport_cleanup.listener_tasks', () =>
+    Promise.allSettled(
+      state.listenerTasks.map((task) =>
+        traceShutdownStep('transport_cleanup.listener_task', () => task)
+      )
     )
   );
-  await runShutdownStep(errors, () => parts.streamRuntime?.dispose());
-  await runShutdownStep(errors, () =>
-    parts.spotNodeRuntime?.dispose(parts.shutdownSignal, parts.cleanupDeadline)
-  );
-  await runShutdownStep(errors, () => parts.channelRuntime?.dispose());
-  await runShutdownStep(errors, () =>
-    awaitWithAbort(Promise.resolve(parts.serviceRelocation?.dispose()), parts.shutdownSignal)
-  );
-  await runShutdownStep(errors, () => parts.locationSnapshot.lifecycle?.dispose());
-  await runShutdownStep(errors, () => parts.locationSnapshot.runtime?.stop(parts.shutdownSignal));
-  await Promise.allSettled(state.listenerTasks);
-  if (errors.every(isShutdownAbort)) await runShutdownStep(errors, () => state.dispose());
-  await disposeOwnedStores(parts.ownedStores, errors);
+  if (errors.every(isShutdownAbort))
+    await runShutdownStep(errors, () => state.dispose(), 'transport_cleanup.execution_state');
+  await disposeOwnedStores(parts.ownedStores, errors, 'owner_cleanup.store');
   const failures = errors.filter((error) => !isShutdownAbort(error));
   for (const failure of failures) {
     state.errorSink.reportRuntimeTaskException('framework shutdown', failure);
@@ -83,19 +110,22 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
 
 async function disposeOwnedStores(
   stores: ReadonlyMap<ZLinkRuntimeOwnedStore, RuntimeDisposal> | undefined,
-  errors: unknown[]
+  errors: unknown[],
+  stage?: string
 ): Promise<void> {
   for (const [store, disposal] of stores ?? []) {
-    await runShutdownStep(errors, () => disposal.run(async () => store.dispose?.()));
+    await runShutdownStep(errors, () => disposal.run(async () => store.dispose?.()), stage);
   }
 }
 
 async function runShutdownStep(
   errors: unknown[],
-  step: () => Promise<unknown> | unknown
+  step: () => Promise<unknown> | unknown,
+  stage?: string
 ): Promise<void> {
   try {
-    await step();
+    if (stage === undefined) await step();
+    else await traceShutdownStep(stage, step);
   } catch (error) {
     errors.push(error);
   }

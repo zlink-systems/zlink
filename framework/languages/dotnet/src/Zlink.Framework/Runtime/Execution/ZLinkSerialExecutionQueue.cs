@@ -1614,6 +1614,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
+    internal bool IsCurrentLifecycleTurn =>
+        ZLinkSerialTurn.Current?.LifecycleOwner is { } owner
+        && ReferenceEquals(_activeLifecycle, owner);
+
     internal bool IsInsideSharedGate =>
         _sharedOwner is null
         || ZLinkSerialTurn.Current is { } turn

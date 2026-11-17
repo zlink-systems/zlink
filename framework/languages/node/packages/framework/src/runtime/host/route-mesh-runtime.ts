@@ -18,7 +18,7 @@ import type { ZLinkActivationAdmission } from '../activation-admission';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkBackendMeshNode } from '../backend';
 import type { ZLinkSpotNodeOptions } from '../configuration';
-import { isRelocationDebugEnabled } from '../diagnostics';
+import { isRelocationDebugEnabled, traceShutdownStep } from '../diagnostics';
 import {
   RuntimeEventQueue,
   ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
@@ -567,16 +567,38 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         this.transition(meshName, state, ZLinkTopologyState.Stopping);
       }
       await Promise.all(
-        entries.map(([meshName]) => this.options.publishDraining(meshName, signal))
+        entries.map(([meshName]) =>
+          traceShutdownStep(
+            'host.publish_mesh_draining',
+            () => this.options.publishDraining(meshName, signal),
+            meshName
+          )
+        )
       );
-      await this.options.publishHostDraining(signal);
+      await traceShutdownStep('host.publish_host_draining', () =>
+        this.options.publishHostDraining(signal)
+      );
       await Promise.all(
-        entries.map(([meshName]) => this.options.admission.awaitZero(meshName, signal))
+        entries.map(([meshName]) =>
+          traceShutdownStep(
+            'accepted_work.await_zero',
+            () => this.options.admission.awaitZero(meshName, signal),
+            meshName
+          )
+        )
       );
       await Promise.all(
-        entries.map(([meshName]) => this.options.shutdownResources?.(meshName, signal))
+        entries.map(([meshName]) =>
+          traceShutdownStep(
+            'host.mesh_shutdown',
+            () => this.options.shutdownResources?.(meshName, signal),
+            meshName
+          )
+        )
       );
-      await this.options.cleanupHostResources(signal);
+      await traceShutdownStep('host.cleanup_resources', () =>
+        this.options.cleanupHostResources(signal)
+      );
       result = { kind: 'drained' };
       for (const [meshName, state] of entries) {
         this.transition(meshName, state, ZLinkTopologyState.Stopped);
@@ -591,7 +613,11 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
             : classified;
       await Promise.all(
         entries.map(([meshName]) =>
-          this.options.forceStopResources(meshName, reason, signal).catch(() => undefined)
+          traceShutdownStep(
+            'host.force_stop_resources',
+            () => this.options.forceStopResources(meshName, reason, signal),
+            meshName
+          ).catch(() => undefined)
         )
       );
       result = { kind: 'forceStopped', reason, error };
