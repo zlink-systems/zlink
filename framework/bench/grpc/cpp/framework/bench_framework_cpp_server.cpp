@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // Target B: public RouteMesh protobuf and default typed JSON echo/count handlers.
 #include "bench_metric_reader.hpp"
 #include "bench_stats_server.hpp"

@@ -10,7 +10,7 @@
 | 계층 | 디렉토리 | 라이선스 | 정본 텍스트 |
 |------|----------|----------|--------------|
 | 엔진 | `core/`, `bindings/`(언어별 네이티브 바인딩) | MPL-2.0 | [`/LICENSE`](../../LICENSE) |
-| 서버 Framework runtime | `framework/`의 서버 runtime과 zlink License 1.0을 명시한 package | zlink License 1.0 | [영문 정본](../../framework/LICENSE) · [한국어 번역](../../framework/LICENSE.ko.md) |
+| 서버 Framework runtime | `framework/`의 서버 runtime과 그 package | Elastic License 2.0 | [영문 정본](../../framework/LICENSE) · [한국어 번역](../../framework/LICENSE.ko.md) |
 | client connector와 복사 사용 예제 | 언어별 connector, connector 의존 C++ 공용 helper header와 connector·Framework runtime이 함께 쓰는 Node `stream-wire` codec, `samples/`, `tutorial/`, `quickstart/`의 예제 코드 | Apache-2.0 | 생태계별 표기 위치는 §6 참고, 전문은 [`framework/languages/cpp/http-client/LICENSE`](../../framework/languages/cpp/http-client/LICENSE) |
 | http-client | 전 언어(dotnet/java/kotlin/node/cpp)의 `framework/` 아래 언어별 `http-client` 패키지 | Apache-2.0 | 생태계별 표기 위치는 §6 참고, 전문은 [`framework/languages/cpp/http-client/LICENSE`](../../framework/languages/cpp/http-client/LICENSE)에도 |
 
@@ -30,7 +30,7 @@ LGPLv3+static-linking exception에서 MPL-2.0으로 재라이선싱을 **완료�
 
 MPL-2.0은 **파일 단위의 약한 카피레프트**다. MPL이 적용된 파일은 MPL-2.0으로
 유지돼야 하지만, 다른 라이선스의 코드와 묶어서 "더 큰 작업물(Larger Work)"로
-배포하는 건 명시적으로 허용한다 — 이 조항 덕분에 서버 Framework runtime(zlink License 1.0)이
+배포하는 건 명시적으로 허용한다 — 이 조항 덕분에 서버 Framework runtime(Elastic License 2.0)이
 `core`/`bindings`(MPL-2.0)를 링크해도 전체 결합물이 MPL-2.0이 될 필요가
 없다.
 
@@ -38,15 +38,11 @@ MPL-2.0은 **파일 단위의 약한 카피레프트**다. MPL이 적용된 파�
 MPL-2.0에 남는다: 독자적인 제품·SaaS 표면이 없는 인프라라서, 최대한
 퍼미시브하게 두는 게 전략적 비용 없이 채택만 극대화한다.
 
-## 3. 서버 Framework runtime이 zlink License 1.0을 따르는 조건
+## 3. 서버 Framework runtime은 Elastic License 2.0을 따른다
 
-서버 Framework runtime과 zlink License 1.0을 명시한 package는 이 라이선스를 따릅니다. 정본은
-[`framework/LICENSE`](../../framework/LICENSE)입니다.
-
-라이선스 3.4절에 따라 1.0.0 전 버전은 머신 수와 관계없이 무료입니다.
-1.0.0부터는 서버 한 대를 무료로 사용할 수 있고, 추가 머신마다 유료
-라이선스가 필요합니다. 이미 출시한 0.30.0 이하 릴리스는 FSL-1.1-ALv2를
-유지합니다.
+서버 Framework runtime과 그 package는 Elastic License 2.0(SPDX `Elastic-2.0`)을 따릅니다. 정본은
+[`framework/LICENSE`](../../framework/LICENSE)이고 [한국어 번역](../../framework/LICENSE.ko.md)은 참고용입니다.
+라이선스 키와 머신 수 제한은 없습니다. 이전 릴리스는 각 릴리스에 고지된 라이선스를 따릅니다.
 
 ## 4. client connector와 예제가 Apache-2.0을 따르는 이유
 
@@ -60,7 +56,7 @@ package metadata와 동봉 license는 Apache-2.0을 사용하며, 서버 Framewo
 라이선스는 바뀌지 않는다.
 
 `framework/languages/cpp/common/include/`의 header 여덟 개도 connector가 사용하므로 Apache-2.0을
-따른다. 서버 Framework runtime과 connector 외부 테스트 소스는 zlink License 1.0을 유지한다.
+따른다. 서버 Framework runtime과 connector 외부 테스트 소스는 Elastic License 2.0을 따른다.
 
 ## 5. `http-client`가 Apache-2.0을 따르는 이유
 
@@ -80,10 +76,10 @@ libzmq를 fork한 `core`와 달리, `http-client` 자체의 래퍼 코드에는 
 
 ## 6. 생태계별 실제 표기 위치
 
-| 생태계 | 서버 Framework (zlink License 1.0) | client connector와 예제 (Apache-2.0) | `http-client` (Apache-2.0) |
+| 생태계 | 서버 Framework (Elastic License 2.0) | client connector와 예제 (Apache-2.0) | `http-client` (Apache-2.0) |
 |--------|----------------------------------|--------------------------------------|------------------------------|
 | dotnet | `Directory.Build.targets`가 packable `.nupkg`에 `framework/LICENSE`를 포함한다 | connector `.csproj`가 Apache-2.0을 선언하고 전문을 `LICENSE`로 포함한다 | `Zlink.HttpClient.csproj`가 Apache-2.0을 선언한다 |
-| java/kotlin | 루트 `build.gradle.kts`의 Maven `pom.licenses` 블록이 zlink License 1.0과 `framework/LICENSE` URL을 지정한다 | 같은 블록이 `zlink-stream-connector`와 `zlink-framework-json-internal`을 Apache-2.0으로 선언한다. JSON 내부 package는 JAR에 Apache 전문을 포함한다 | 같은 블록이 `zlink-http-client`와 `zlink-http-client-kotlin`을 Apache-2.0으로 선언한다 |
-| node | server package는 `"license": "SEE LICENSE IN LICENSE"`와 package-root `LICENSE`를 사용한다 | `stream-connector`가 Apache-2.0을 선언하고 전문을 포함한다. `stream-wire`도 Apache-2.0과 전문을 포함하며 서버 Framework package와 공유된다 | `http-client/package.json`이 Apache-2.0과 Apache 전문을 포함한다 |
-| cpp | framework package는 zlink License 1.0을 사용한다. server-only source headers는 `LicenseRef-zlink-License-1.0`을 사용한다 | Conan/vcpkg metadata는 Apache-2.0을 선언한다. CMake는 `cpp/http-client/LICENSE`를 설치하며 production connector, `common/include/` header 여덟 개와 sample headers는 Apache-2.0을 사용한다 | `framework/languages/cpp/http-client/LICENSE`에 Apache 전문과 source SPDX가 있다 |
+| java/kotlin | 루트 `build.gradle.kts`의 Maven `pom.licenses` 블록이 Elastic License 2.0과 정본 URL을 지정한다 | 같은 블록이 `zlink-stream-connector`와 `zlink-framework-json-internal`을 Apache-2.0으로 선언한다. JSON 내부 package는 JAR에 Apache 전문을 포함한다 | 같은 블록이 `zlink-http-client`와 `zlink-http-client-kotlin`을 Apache-2.0으로 선언한다 |
+| node | server package는 `"license": "Elastic-2.0"`과 package-root `LICENSE`를 사용한다 | `stream-connector`가 Apache-2.0을 선언하고 전문을 포함한다. `stream-wire`도 Apache-2.0과 전문을 포함하며 서버 Framework package와 공유된다 | `http-client/package.json`이 Apache-2.0과 Apache 전문을 포함한다 |
+| cpp | Conan recipe는 `Elastic-2.0`을 선언한다. HTTP client·connector를 함께 담는 vcpkg port는 `Elastic-2.0 AND Apache-2.0`을 선언하고 두 전문을 설치한다. server-only source headers는 `Elastic-2.0`을 사용한다 | source headers가 Apache-2.0을 선언한다. CMake는 `cpp/http-client/LICENSE`를 설치하며 production connector, `common/include/` header 여덟 개와 sample headers는 Apache-2.0을 사용한다 | `framework/languages/cpp/http-client/LICENSE`에 Apache 전문과 source SPDX가 있다 |
 | Unity | — | `package.json`이 Apache `LICENSE.md`를 지정하고 package-root 파일에 전문을 포함한다 | — |

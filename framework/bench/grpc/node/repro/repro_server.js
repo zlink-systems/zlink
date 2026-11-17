@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Elastic-2.0
 'use strict';
 // Minimal ROUTER echo server. Uses bindings/node directly; shares no code with
 // the with-grpc harness. Two receive modes so that the harness's own

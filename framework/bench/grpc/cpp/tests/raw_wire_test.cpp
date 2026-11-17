@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "../common/bench_common.hpp"
 #include "../common/binding_wire.hpp"
 #include "bench.pb.h"

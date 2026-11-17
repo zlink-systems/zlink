@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "native_call_counter.hpp"
 #include <zlink.h>
 #if defined(_WIN32) || defined(__APPLE__)

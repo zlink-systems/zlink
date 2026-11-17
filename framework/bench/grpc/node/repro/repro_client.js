@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Elastic-2.0
 'use strict';
 // Minimal ROUTER->ROUTER request client at a fixed outstanding-request window.
 // Uses bindings/node directly; shares no code with the with-grpc harness.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Elastic-2.0
 #ifndef ZLINK_C_BENCH_RAW_WIRE_HPP
 #define ZLINK_C_BENCH_RAW_WIRE_HPP
 

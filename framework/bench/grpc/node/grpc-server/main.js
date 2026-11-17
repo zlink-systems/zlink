@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Elastic-2.0
 'use strict';
 
 // `grpc-<lang>` server, node row. spec section 8.1: @grpc/grpc-js with
