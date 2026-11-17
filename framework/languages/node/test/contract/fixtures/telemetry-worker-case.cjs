@@ -96,7 +96,8 @@ async function stopHost(telemetryLease) {
   }
   if (mode === 'throwing-preload' || mode === 'worker-start-failure' || mode === 'worker-exit') {
     let published = false;
-    owner.ready.then(() => { published = true; });
+    let readyFailure;
+    owner.ready.then(() => { published = true; }, (error) => { readyFailure = error; });
     if (mode !== 'worker-start-failure') {
       const exited = new Promise(resolve => owner.worker.once('exit', resolve));
       if (mode === 'worker-exit') {
@@ -111,6 +112,8 @@ async function stopHost(telemetryLease) {
     assert.ok(owner.failure instanceof Error);
     assert.equal(Atomics.load(owner.counters, Counter.WorkerFailures), 1n);
     assert.equal(published, mode === 'worker-exit', 'failed bootstrap never publishes successful readiness');
+    assert.equal(readyFailure, mode === 'worker-exit' ? undefined : owner.failure,
+      'failed bootstrap rejects readiness with the worker failure');
     assert.equal(Atomics.load(owner.state, State.Pending), 0);
     assert.doesNotThrow(() => submit(tracer, 'after-worker-failure'));
     assertNoRecordAllocation(tracer);
