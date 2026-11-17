@@ -587,7 +587,7 @@ test('routed async multipart boundary preserves inline and overflow part storage
   }
 });
 
-test('received routed send preserves stale-route ownership across immediate or waiting failure', async () => {
+test('received routed send preserves its parts when a stale route fails immediately', async () => {
   const context = zlink.createContext();
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
@@ -625,38 +625,20 @@ test('received routed send preserves stale-route ownership across immediate or w
     assert.deepEqual(router.routesSnapshot(), []);
 
     const sourceParts = received.parts.slice();
-    let submission = null;
     let immediateError: unknown;
     try {
-      submission = received.send().message(sourceParts[0]).message(sourceParts[1]).submit();
+      received.send().message(sourceParts[0]).message(sourceParts[1]).submit();
     } catch (error) {
       immediateError = error;
     }
-    if (submission !== null) {
-      // A stale physical pipe may first report BACKPRESSURED. The binding has
-      // already snapshotted the record, so closing its sender terminates the
-      // WRITABLE wait without retaining the caller's Message wrappers.
-      assert.equal(submission.result, zlink.SubmitResult.Backpressured);
-      assert.equal(sourceParts[0].size(), 0);
-      assert.equal(sourceParts[1].size(), 0);
-      router.close();
-      await assert.rejects(
-        submission.admitted,
-        (error: unknown) =>
-          error instanceof zlink.SubmitError &&
-          (error as { result: number }).result === zlink.SubmitResult.Terminated
-      );
-    } else {
-      // If Core has already retired the route, target selection fails before
-      // snapshot/acceptance and Received keeps its parts for close or refill.
-      assert.ok(immediateError instanceof zlink.SubmitError);
-      assert.ok(
-        (immediateError as { result: number }).result === zlink.SubmitResult.NotConnected ||
-          (immediateError as { result: number }).result === zlink.SubmitResult.NotFound
-      );
-      assert.equal(sourceParts[0].size(), 64);
-      assert.equal(sourceParts[1].size(), 0);
-    }
+    // PollRoute confirmed Core retired the route before target selection.
+    assert.ok(immediateError instanceof zlink.SubmitError);
+    assert.ok(
+      (immediateError as { result: number }).result === zlink.SubmitResult.NotConnected ||
+        (immediateError as { result: number }).result === zlink.SubmitResult.NotFound
+    );
+    assert.equal(sourceParts[0].size(), 64);
+    assert.equal(sourceParts[1].size(), 0);
   } finally {
     received.close();
     dealer.close();
@@ -664,5 +646,74 @@ test('received routed send preserves stale-route ownership across immediate or w
     poller.close();
     router.close();
     context.close();
+  }
+});
+
+test('received routed send terminates its WRITABLE wait when the route owner closes', async () => {
+  const context = zlink.createContext();
+  context.options.autoHwmEnabled = false;
+  const router = zlink.createRouterSocket(context);
+  const dealer = zlink.createDealerSocket(context);
+  const poller = zlink.createPoller();
+  const received = new zlink.Received();
+  const pendingSends: Promise<void>[] = [];
+
+  try {
+    const endpoint = await benchmarkEndpoint('tcp', `routed-sendsend-wait-${process.pid}`, {
+      suite: 'multi'
+    });
+    router.options.linger = 0;
+    router.options.mandatory = true;
+    router.options.sendHwm = 1n;
+    dealer.options.linger = 0;
+    dealer.options.recvHwm = 1n;
+    dealer.setRoutingId(zlink.RoutingId.from(Buffer.from('waiting-client')));
+    router.bind(endpoint);
+    await waitForConnectionReady(dealer, () => dealer.connect(endpoint));
+    poller.add(router, [zlink.PollEventFlag.PollCompletion], 0);
+
+    await dealer.send().message(Buffer.alloc(64, 0x61)).message(Buffer.alloc(0)).submit().admitted;
+    assert.equal(router.recv(received), true);
+    assert.ok(received.routingId);
+    assert.equal(router.routesSnapshot().length, 1);
+
+    let waiting: ReturnType<ReturnType<typeof router.send>['submit']> | undefined;
+    let waitingParts: ReturnType<typeof received.parts.slice> = [];
+    for (let index = 0; index < 512; index += 1) {
+      const parts = index === 0
+        ? received.parts.slice()
+        : [
+          zlink.Message.from(Buffer.alloc(64, index)),
+          zlink.Message.from(Buffer.alloc(0)),
+        ];
+      const submission = received.send().message(parts[0]).message(parts[1]).submit();
+      if (submission.result === zlink.SubmitResult.Backpressured) {
+        waiting = submission;
+        waitingParts = parts;
+        break;
+      }
+      assert.equal(submission.result, zlink.SubmitResult.Ok);
+      pendingSends.push(submission.admitted);
+    }
+    assert.ok(waiting, 'small routed-send HWM must leave a WRITABLE wait');
+    assert.equal(waiting.result, zlink.SubmitResult.Backpressured);
+    assert.equal(waitingParts[0].size(), 0);
+    pendingSends.push(waiting.admitted);
+
+    router.close();
+    let termination: unknown;
+    await assert.rejects(waiting.admitted, (error: unknown) => {
+      termination = error;
+      return true;
+    });
+    assert.ok(termination instanceof zlink.SubmitError);
+    assert.equal((termination as { result: number }).result, zlink.SubmitResult.Terminated);
+  } finally {
+    received.close();
+    poller.close();
+    dealer.close();
+    router.close();
+    context.close();
+    await Promise.allSettled(pendingSends);
   }
 });
