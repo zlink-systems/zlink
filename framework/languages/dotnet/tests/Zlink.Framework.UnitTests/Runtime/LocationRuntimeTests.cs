@@ -716,7 +716,9 @@ public sealed partial class LocationRuntimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task StoreOutageRecovery_ExpiredLeaseBeforeReclaim_RetainsAndPreserves(bool providerStore)
+    public async Task StoreOutageRecovery_ExpiredLeaseBeforeReclaim_RetainsAndPreserves(
+        bool providerStore
+    )
     {
         var time = new ControllableTimeProvider();
         IZLinkLocationRepository store = providerStore
@@ -741,7 +743,10 @@ public sealed partial class LocationRuntimeTests
                 .Server();
             server.AddSpotFactory<OutageExecutionSpot>(
                 "outage-execution",
-                factory => factory.ExecutionMode(ZLinkUserSpotExecutionMode.PerActor).RecreateOnRelocation()
+                factory =>
+                    factory
+                        .ExecutionMode(ZLinkUserSpotExecutionMode.PerActor)
+                        .RecreateOnRelocation()
             );
             server.AddEntrySpot<OutageExecutionEntry>();
             server.AddActorFactory<OutageExecutionActor, OutageExecutionActorFactory>(
@@ -763,11 +768,17 @@ public sealed partial class LocationRuntimeTests
         Task<bool>? recovery = null;
         try
         {
-            await servicesProvider.GetRequiredService<IZLinkSpotManager>()
-                .GetOrCreate("steady", "outage-execution").InMesh("outage-execution").Async();
+            await servicesProvider
+                .GetRequiredService<IZLinkSpotManager>()
+                .GetOrCreate("steady", "outage-execution")
+                .InMesh("outage-execution")
+                .Async();
             var spot = Assert.Single(runtime.GetSpotNodeRuntime("outage-execution").Spots);
-            await servicesProvider.GetRequiredService<IZLinkActorManager>()
-                .Create("steady-actor", "outage-actor").InMesh("outage-execution").Async();
+            await servicesProvider
+                .GetRequiredService<IZLinkActorManager>()
+                .Create("steady-actor", "outage-actor")
+                .InMesh("outage-execution")
+                .Async();
             Assert.True(runtime.TryGetActorState("steady-actor", out var actor));
             var actorInstance = actor.Actor;
             var spotInstance = spot.Spot;
@@ -780,8 +791,11 @@ public sealed partial class LocationRuntimeTests
             };
             var authorities = new List<ZLinkAuthoritySnapshot>();
             foreach (var key in keys)
-                authorities.Add(Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                    await store.ReadAuthorityAsync(key)).Snapshot);
+                authorities.Add(
+                    Assert
+                        .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(key))
+                        .Snapshot
+                );
             var discarded = 0;
             locations.ExecutionsDiscarded += _ => discarded++;
             flaky.OriginalLease = originalOwner.LeaseGeneration;
@@ -791,7 +805,9 @@ public sealed partial class LocationRuntimeTests
             var episode = locations.GetHealthSnapshot().StoreOutage!;
             await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             flaky.Fail = false;
-            time.Advance(TimeSpan.FromSeconds(31) - time.GetElapsedTime(episode.LeaseOperationStartedAt));
+            time.Advance(
+                TimeSpan.FromSeconds(31) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+            );
             var claims = flaky.Claims;
             Assert.False(await locations.RenewOwnerLeaseOnceAsync());
             Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
@@ -804,10 +820,14 @@ public sealed partial class LocationRuntimeTests
             Assert.Same(actorInstance, actor.Actor);
             Assert.Same(spotInstance, spot.Spot);
             Assert.Equal(episode.ObservedAt, locations.GetHealthSnapshot().StoreOutage!.ObservedAt);
-            Assert.Equal(episode.LeaseOperationStartedAt,
-                locations.GetHealthSnapshot().StoreOutage!.LeaseOperationStartedAt);
+            Assert.Equal(
+                episode.LeaseOperationStartedAt,
+                locations.GetHealthSnapshot().StoreOutage!.LeaseOperationStartedAt
+            );
             Assert.Equal(episode.Lifetime, locations.GetHealthSnapshot().StoreOutage!.Lifetime);
-            time.Advance(TimeSpan.FromSeconds(35) - time.GetElapsedTime(episode.LeaseOperationStartedAt));
+            time.Advance(
+                TimeSpan.FromSeconds(35) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+            );
             flaky.HoldRecoveryCas = true;
             flaky.HoldRecoveryDescriptor = true;
             recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
@@ -815,19 +835,27 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, spot.ExecutionStatus);
             var calls = 0;
-            var pending = actor.ExecuteDispatchAsync(_ =>
-            {
-                Interlocked.Increment(ref calls);
-                return ValueTask.CompletedTask;
-            }, CancellationToken.None).AsTask();
+            var pending = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref calls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
             await actor._dispatchMailbox._queue.RunLifecycleAsync(
-                _ => ValueTask.CompletedTask, CancellationToken.None);
+                _ => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
             Assert.False(pending.IsCompleted);
             Assert.Equal(0, calls);
             flaky.ReleaseRecoveryCas.TrySetResult();
             await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(pending.IsCompleted);
-            Assert.False(locations.IsOwnerAdmissionOpen);
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, spot.ExecutionStatus);
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
             Assert.True(await recovery.WaitAsync(TimeSpan.FromSeconds(5)));
             await pending.WaitAsync(TimeSpan.FromSeconds(5));
@@ -840,11 +868,20 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(2, flaky.ReplacementWrites);
             for (var index = 0; index < keys.Length; index++)
             {
-                var current = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                    await store.ReadAuthorityAsync(keys[index])).Snapshot;
+                var current = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await store.ReadAuthorityAsync(keys[index])
+                    )
+                    .Snapshot;
                 Assert.Equal(authorities[index].ObjectGeneration, current.ObjectGeneration);
-                Assert.Equal(authorities[index].AuthorityOwnerGeneration, current.AuthorityOwnerGeneration);
-                Assert.NotEqual(authorities[index].OwnerLeaseGeneration, current.OwnerLeaseGeneration);
+                Assert.Equal(
+                    authorities[index].AuthorityOwnerGeneration,
+                    current.AuthorityOwnerGeneration
+                );
+                Assert.NotEqual(
+                    authorities[index].OwnerLeaseGeneration,
+                    current.OwnerLeaseGeneration
+                );
             }
             Assert.Equal(ZLinkObjectExecutionStatus.Allowed, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.Allowed, spot.ExecutionStatus);
@@ -891,7 +928,10 @@ public sealed partial class LocationRuntimeTests
                 .Server();
             server.AddSpotFactory<OutageExecutionSpot>(
                 "outage-execution",
-                factory => factory.ExecutionMode(ZLinkUserSpotExecutionMode.PerActor).RecreateOnRelocation()
+                factory =>
+                    factory
+                        .ExecutionMode(ZLinkUserSpotExecutionMode.PerActor)
+                        .RecreateOnRelocation()
             );
             server.AddEntrySpot<OutageExecutionEntry>();
             server.AddActorFactory<OutageExecutionActor, OutageExecutionActorFactory>(
@@ -913,11 +953,17 @@ public sealed partial class LocationRuntimeTests
         Task<bool>? recovery = null;
         try
         {
-            await servicesProvider.GetRequiredService<IZLinkSpotManager>()
-                .GetOrCreate("steady", "outage-execution").InMesh("outage-execution").Async();
+            await servicesProvider
+                .GetRequiredService<IZLinkSpotManager>()
+                .GetOrCreate("steady", "outage-execution")
+                .InMesh("outage-execution")
+                .Async();
             var spot = Assert.Single(runtime.GetSpotNodeRuntime("outage-execution").Spots);
-            await servicesProvider.GetRequiredService<IZLinkActorManager>()
-                .Create("steady-actor", "outage-actor").InMesh("outage-execution").Async();
+            await servicesProvider
+                .GetRequiredService<IZLinkActorManager>()
+                .Create("steady-actor", "outage-actor")
+                .InMesh("outage-execution")
+                .Async();
             Assert.True(runtime.TryGetActorState("steady-actor", out var actor));
             var actorInstance = actor.Actor;
             var spotInstance = spot.Spot;
@@ -932,7 +978,9 @@ public sealed partial class LocationRuntimeTests
             var episode = locations.GetHealthSnapshot().StoreOutage!;
             await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             flaky.Fail = false;
-            time.Advance(TimeSpan.FromSeconds(31) - time.GetElapsedTime(episode.LeaseOperationStartedAt));
+            time.Advance(
+                TimeSpan.FromSeconds(31) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+            );
             var claims = flaky.Claims;
             Assert.False(await locations.RenewOwnerLeaseOnceAsync());
             Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
@@ -945,25 +993,43 @@ public sealed partial class LocationRuntimeTests
             Assert.Same(actorInstance, actor.Actor);
             Assert.Same(spotInstance, spot.Spot);
             Assert.Equal(episode.ObservedAt, locations.GetHealthSnapshot().StoreOutage!.ObservedAt);
-            Assert.Equal(episode.LeaseOperationStartedAt,
-                locations.GetHealthSnapshot().StoreOutage!.LeaseOperationStartedAt);
+            Assert.Equal(
+                episode.LeaseOperationStartedAt,
+                locations.GetHealthSnapshot().StoreOutage!.LeaseOperationStartedAt
+            );
             Assert.Equal(episode.Lifetime, locations.GetHealthSnapshot().StoreOutage!.Lifetime);
-            time.Advance(TimeSpan.FromSeconds(35) - time.GetElapsedTime(episode.LeaseOperationStartedAt));
+            time.Advance(
+                TimeSpan.FromSeconds(35) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+            );
             flaky.HoldRecoveryCas = true;
             flaky.HoldRecoveryDescriptor = true;
             recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
             await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var submitted = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (Volatile.Read(ref flaky.ReplacementWrites) != 2)
+                await Task.Delay(1, submitted.Token);
+
             var calls = 0;
-            var pending = actor.ExecuteDispatchAsync(_ =>
-            {
-                calls++;
-                return ValueTask.CompletedTask;
-            }, CancellationToken.None).AsTask();
+            var pending = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        calls++;
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
             await actor._dispatchMailbox._queue.RunLifecycleAsync(
-                _ => ValueTask.CompletedTask, CancellationToken.None);
+                _ => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
             Assert.False(pending.IsCompleted);
-            time.Advance(episode.Lifetime - time.GetElapsedTime(episode.LeaseOperationStartedAt)
-                - TimeSpan.FromTicks(1));
+            time.Advance(
+                episode.Lifetime
+                    - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                    - TimeSpan.FromTicks(1)
+            );
             Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
             Assert.Equal(0, discarded);
             Assert.False(pending.IsCompleted);
@@ -972,7 +1038,8 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                pending.WaitAsync(TimeSpan.FromSeconds(5)));
+                pending.WaitAsync(TimeSpan.FromSeconds(5))
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
             flaky.ReleaseRecoveryCas.TrySetResult();
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
@@ -1888,17 +1955,44 @@ public sealed partial class LocationRuntimeTests
                 if (scenario == 2)
                 {
                     flaky.RejectRecoveryDescriptor = true;
-                    time.Advance(options.OwnerLeaseTtl);
+                    time.Advance(
+                        TimeSpan.FromSeconds(31)
+                            - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                    );
+                    flaky.Fail = false;
+                    Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+                    Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+                    Assert.Equal(0, continued);
+                    Assert.All(pending, item => Assert.False(item.IsCompleted));
+                    Assert.NotEqual(
+                        ZLinkObjectExecutionStatus.OwnershipLost,
+                        actor.ExecutionStatus
+                    );
+                    Assert.NotEqual(
+                        ZLinkObjectExecutionStatus.OwnershipLost,
+                        spot.ExecutionStatus
+                    );
+                    time.Advance(
+                        TimeSpan.FromSeconds(35)
+                            - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                    );
+                    await locations.RenewOwnerLeaseOnceAsync();
+                    await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.NotNull(flaky.RecoveryDescriptor);
                 }
-                if (scenario == 3)
+                else if (scenario == 3)
                 {
+                    time.Advance(options.OwnerLeaseTtl);
                     await store.ReleaseOwnerLeaseAsync(owner);
                     Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
                         await store.ClaimOwnerLeaseAsync(owner.OwnerId, options.OwnerLeaseTtl)
                     );
                 }
-                flaky.Fail = false;
-                await locations.RenewOwnerLeaseOnceAsync();
+                if (scenario != 2)
+                {
+                    flaky.Fail = false;
+                    await locations.RenewOwnerLeaseOnceAsync();
+                }
             }
             reply.TrySetResult();
             await Task.WhenAll(runningTasks);
