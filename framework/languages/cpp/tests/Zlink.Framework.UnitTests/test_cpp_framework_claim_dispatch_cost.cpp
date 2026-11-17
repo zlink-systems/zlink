@@ -295,10 +295,8 @@ void verify_original_transfer (host::public_host_runtime_t &target)
     enqueue (mailbox);
     std::optional<mesh::service_mailbox_record_t> first;
     auto claim = mailbox.try_claim_owner (
-      domain, owner, 2, runtime::dispatch_limits::receive_batch_bytes, [&] (const auto &claim) {
-          first.emplace (std::move (*claim->records.front ()));
-          claim->records.front ()->application.reset ();
-      });
+      domain, owner, 2, runtime::dispatch_limits::receive_batch_bytes,
+      [&] (const auto &claim) { first.emplace (std::move (*claim->records.front ())); });
     require (claim && claim->claimed_messages == 1, "transfer fixture claim failed");
     require (first && !claim->records[0]->application && !mailbox.take ({claim, 0}),
              "local original remained present after transfer");
