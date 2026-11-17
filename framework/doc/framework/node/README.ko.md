@@ -69,4 +69,4 @@ API만 설명한다.
 | `documentation-regression.test.js › node README does not link removed legacy guide chapters` | 삭제한 이전 guide 링크를 다시 추가하지 않는다. |
 | `documentation-regression.test.js › node documentation relative markdown links resolve` | 문서 간 상대 링크가 깨지지 않는다. |
 | `documentation-regression.test.js › node interface specification documents the current execution-turn APIs` | 실행 turn API가 정식 interface spec과 맞는지 확인한다. |
-| `sample-regression.test.js › node samples define required files and use only common sample documents` | 샘플 구현이 공통 sample 문서만 참조하고 삭제한 언어별 sample README를 다시 만들지 않는지 확인한다. |
+| `samples-source-contract.test.js › node samples define required runners and keep scenario contracts in common documents` | 샘플 구현이 공통 sample 문서만 참조하고 삭제한 언어별 sample README를 다시 만들지 않는지 확인한다. |
