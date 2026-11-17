@@ -290,6 +290,12 @@ internal enum ZLinkHandleAvailability
 
 internal static class ZLinkSpotHandleRequestExecution
 {
+    internal static bool IsInstanceAuthorityRefusal(ZLinkFrameworkException error) =>
+        error.FrameworkFailureCode
+            is (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
+                or (int)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                or (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale;
+
     internal static async ValueTask<T> ExecuteAsync<T>(
         ZLinkResolvedSpotHandle handle,
         Func<ZLinkSpotHandleSnapshot, ValueTask<T>> operation,
