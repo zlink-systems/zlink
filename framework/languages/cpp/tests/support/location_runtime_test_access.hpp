@@ -149,8 +149,7 @@ struct location_runtime_test_access_t
         return runtime._lane
           ->run_checked ([&] {
               return std::count_if (
-                runtime._descriptor_publications->begin (),
-                runtime._descriptor_publications->end (),
+                runtime._repository_operations->begin (), runtime._repository_operations->end (),
                 [] (const auto &pending) { return !pending->drained.task ().await_ready (); });
           })
           .get ();
@@ -166,7 +165,7 @@ struct location_runtime_test_access_t
                 advance ();
             const bool settled = runtime._lane->run_sync ([&] {
                 bool found = false;
-                for (const auto &operation : *runtime._descriptor_publications) {
+                for (const auto &operation : *runtime._repository_operations) {
                     const auto cleanup =
                       std::dynamic_pointer_cast<location_runtime_t::discarded_authority_t> (
                         operation);
