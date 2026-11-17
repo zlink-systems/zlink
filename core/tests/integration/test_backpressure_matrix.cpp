@@ -378,12 +378,6 @@ static void prime_raw_case (raw_case_t *raw_, raw_pattern_t pattern_)
     msleep (50);
 }
 
-static void publish_part_blocking (void *subject_)
-{
-    zlink_msg_t part = make_payload_part ();
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_publish (subject_, kTopic, &part, 1, 0));
-}
-
 static size_t measure_send_window_raw (void *sender_,
                                        const zlink_routing_id_t *target_rid_,
                                        size_t attempt_limit_,
@@ -699,6 +693,20 @@ static void setup_pubsub_case (
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (out_->sub, kTopic));
     TEST_ASSERT_TRUE (wait_ready_count (&out_->pub_monitor, 1, kTimeoutMs));
     TEST_ASSERT_TRUE (wait_ready_count (&out_->sub_monitor, 1, kTimeoutMs));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (out_->pub, ZLINK_OPT_RCVTIMEO, &kTimeoutMs, sizeof (kTimeoutMs)));
+    const zlink_routing_id_t *source_rid = NULL;
+    int subscribed = 0;
+    char topic[sizeof (kTopic)];
+    size_t topic_len = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+                          zlink_xpub_recv (out_->pub, &source_rid, &subscribed, topic,
+                                           sizeof (topic), &topic_len,
+                                           static_cast<zlink_recv_flags_t> (0)));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_INT (1, subscribed);
+    TEST_ASSERT_EQUAL_UINT (strlen (kTopic), topic_len);
+    TEST_ASSERT_EQUAL_MEMORY (kTopic, topic, topic_len);
 }
 
 
@@ -777,8 +785,11 @@ static void verify_raw_pressure_entry_and_resume ()
                                       &drain);
             start_drain (&drain);
 
-            TEST_ASSERT_TRUE (wait_drain_done (&drain, kTimeoutMs));
+            const bool drained = wait_drain_done (&drain, kTimeoutMs);
             drain_thread.join ();
+            if (!drained || drain.received != queued || drain.error_code != 0)
+                close_raw_case (&raw);
+            TEST_ASSERT_TRUE (drained);
             TEST_ASSERT_EQUAL_UINT (queued, drain.received);
             TEST_ASSERT_EQUAL_INT (0, drain.error_code);
 
@@ -842,21 +853,23 @@ static void verify_pubsub_matrix ()
         if (is_tls_transport (transport))
             continue;
 
-        std::vector<size_t> counts;
-        for (size_t i = 0; i < sizeof (kHwmBuckets) / sizeof (kHwmBuckets[0]); ++i) {
-            pubsub_case_t pubsub;
-            const uint64_t hwm_bytes =
-              static_cast<uint64_t> (kHwmBuckets[i])
-              * (kPayloadSize + sizeof (zlink_msg_t));
-            setup_pubsub_case (transport, hwm_bytes, kLargeHwm, &pubsub);
-            counts.push_back (measure_send_window_pubsub (
-              pubsub.pub, static_cast<size_t> (kHwmBuckets[i]) + 1, NULL));
-            close_pubsub_case (&pubsub);
-        }
-
         char label[128];
-        snprintf (label, sizeof (label), "PUBSUB %s sndhwm progress", transport);
-        assert_progress_monotonic (counts, label);
+        {
+            std::vector<size_t> counts;
+            for (size_t i = 0; i < sizeof (kHwmBuckets) / sizeof (kHwmBuckets[0]); ++i) {
+                pubsub_case_t pubsub;
+                const uint64_t hwm_bytes =
+                  static_cast<uint64_t> (kHwmBuckets[i])
+                  * (kPayloadSize + sizeof (zlink_msg_t));
+                setup_pubsub_case (transport, hwm_bytes, kLargeHwm, &pubsub);
+                counts.push_back (measure_send_window_pubsub (
+                  pubsub.pub, static_cast<size_t> (kHwmBuckets[i]) + 1, NULL));
+                close_pubsub_case (&pubsub);
+            }
+
+            snprintf (label, sizeof (label), "PUBSUB %s sndhwm progress", transport);
+            assert_progress_monotonic (counts, label);
+        }
 
         pubsub_case_t entry_case;
         setup_pubsub_case (transport, kSmallHwm, kSmallHwm, &entry_case);
@@ -866,18 +879,24 @@ static void verify_pubsub_matrix ()
         TEST_ASSERT_TRUE_MESSAGE (backpressured, transport);
         TEST_ASSERT_TRUE (queued > 0);
 
+        set_send_timeout (entry_case.pub, kTimeoutMs);
+        zlink_msg_t part = make_payload_part ();
         drain_gate_t drain;
         std::thread drain_thread (drain_subscription_receiver, entry_case.sub, queued + 1, &drain);
         start_drain (&drain);
-        set_send_timeout (entry_case.pub, kTimeoutMs);
-        publish_part_blocking (entry_case.pub);
-        set_send_timeout (entry_case.pub, 0);
+        const int publish_rc = zlink_publish (entry_case.pub, kTopic, &part, 1, 0);
+        const int publish_errno = errno;
+        if (publish_rc != 0)
+            zlink_msg_close (&part);
 
-        TEST_ASSERT_TRUE (wait_drain_done (&drain, kTimeoutMs));
+        const bool drained = wait_drain_done (&drain, kTimeoutMs);
         drain_thread.join ();
+        close_pubsub_case (&entry_case);
+        errno = publish_errno;
+        TEST_ASSERT_SUCCESS_ERRNO (publish_rc);
+        TEST_ASSERT_TRUE (drained);
         TEST_ASSERT_EQUAL_UINT (queued + 1, drain.received);
         TEST_ASSERT_EQUAL_INT (0, drain.error_code);
-        close_pubsub_case (&entry_case);
 
         pubsub_case_t low_rcv;
         setup_pubsub_case (transport, kLargeHwm, kSmallHwm, &low_rcv);
