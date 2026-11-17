@@ -782,6 +782,94 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_EQ (1, ready_requests.load ());
 }
 
+TEST (ZLinkFrameworkInstanceSpotActivation, NotReadyTargetFailureRetainsSelectedRidOnce)
+{
+    namespace fw = zlink::framework;
+    using namespace std::chrono_literals;
+    for (const auto level :
+         {fw::message_flow_log_mode_t::off, fw::message_flow_log_mode_t::errors}) {
+        auto app = fw::app_t::create ();
+        auto &options = app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = 10ms;
+        options.configure_locations ().owner_lease_fencing_margin = 1ms;
+        options.configure_locations ().polling_interval = 10ms;
+        auto events =
+          std::make_shared<fw::test::telemetry_observations_t<fw::message_flow_event_t>> ();
+        auto &dispatch = options.configure_dispatch ();
+        dispatch.message_flow (level);
+        fw::detail::dispatch_options_access_t::set_observer_for_tests (
+          dispatch, [events] (const auto &event) {
+              if (event.surface == fw::dispatch_error_surface_t::instance_spot
+                  && event.result == fw::message_flow_result_t::failed)
+                  events->record (event);
+          });
+        options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
+        options.add_relocation_store (
+          std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+        options.add_route_mesh ("not-ready-flow")
+          .set_object_role (fw::object_role_t::client)
+          .set_routing_id (zlink::routing_id_t::from ("flow-source"))
+          .listen ("tcp://127.0.0.1:0");
+        std::thread host ([&] { EXPECT_EQ (0, app.run (0, nullptr)); });
+        auto cleanup =
+          std::unique_ptr<fw::app_t, std::function<void (fw::app_t *)>> (&app, [&] (auto *) {
+              app.stop ();
+              host.join ();
+          });
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        while (!app.is_ready () && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        ASSERT_TRUE (app.is_ready ());
+        auto resolver = std::make_shared<resolver_t> ();
+        fw::runtime::spot_address_t route;
+        route.mesh_name = "not-ready-flow";
+        route.node_rid = zlink::routing_id_t::from ("dead-target");
+        route.node_generation = 7;
+        route.spot_id = "not-ready-room";
+        route.spot_generation = route.object_generation = route.authority_owner_generation = 1;
+        route.owner.owner_id = "dead-owner";
+        route.owner.lease_generation = 1;
+        route.store_version = "1";
+        resolver->addresses.emplace (route.spot_id, route);
+        fw::detail::channel_runtime_t::from (app.advanced ().zlink ().message_bus ())
+          .bind_spot_address_resolver (resolver);
+        auto provider = app.advanced ().services ().build_provider ();
+        auto &client = provider.get_required<fw::route_client_t> ();
+        const auto send = client.send_to_spot (route.spot_id, traced_event_t{1})
+                            .instance_spot ("Room")
+                            .in_mesh (route.mesh_name)
+                            .async ()
+                            .result ();
+        EXPECT_FALSE (send);
+        // Restore the same stale authority for the independent request.
+        resolver->addresses.insert_or_assign (route.spot_id, route);
+        const auto request = client.request_to_spot (route.spot_id, traced_request_t{1})
+                               .instance_spot ("Room")
+                               .in_mesh (route.mesh_name)
+                               .timeout (100ms)
+                               .async<traced_reply_t> ()
+                               .result ();
+        EXPECT_FALSE (request);
+        if (level != fw::message_flow_log_mode_t::off) {
+            std::unique_lock lock (events->mutex);
+            ASSERT_TRUE (
+              events->changed.wait_for (lock, 2s, [&] { return events->events.size () >= 2; }));
+        }
+        fw::test::acknowledge_delivery ();
+        const auto failed = events->snapshot ();
+        if (level == fw::message_flow_log_mode_t::off) {
+            EXPECT_TRUE (failed.empty ());
+        } else {
+            ASSERT_EQ (2u, failed.size ());
+            for (const auto &event : failed) {
+                EXPECT_EQ ("dead-target", event.target_rid);
+                EXPECT_EQ (fw::message_flow_reason_t::stale_target, event.reason);
+                EXPECT_TRUE (event.exception);
+            }
+        }
+    }
+}
+
 TEST (ZLinkFrameworkInstanceSpotActivation, StoreReadFailureHasUnavailablePublicKind)
 {
     namespace fw = zlink::framework;

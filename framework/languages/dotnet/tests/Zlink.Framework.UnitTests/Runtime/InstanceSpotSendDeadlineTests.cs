@@ -15,6 +15,92 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Theory]
+    [InlineData(false, ZLinkDiagnosticsLevel.Off, ZlinkSubmitException.ErrorCode.NotConnected)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Off, ZlinkSubmitException.ErrorCode.NotConnected)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotConnected)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotConnected)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotFound)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Errors, ZlinkSubmitException.ErrorCode.NotFound)]
+    public async Task ColdInstanceNotReadyFailureRetainsSelectedTargetOnce(
+        bool request,
+        ZLinkDiagnosticsLevel level,
+        ZlinkSubmitException.ErrorCode submitCode
+    )
+    {
+        var node = new NotReadyInstanceNode(submitCode);
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowObserver: observer,
+            messageFlowMode: level,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            relocationStore: new InMemoryRelocationStore(),
+            meshResolverWrapper: inner => new ColdTypeResolver(inner, 1, 100)
+        );
+        try
+        {
+            var client = new ZLinkSpotClient(runtime);
+            await Assert.ThrowsAnyAsync<Exception>(async () =>
+            {
+                if (request)
+                    await client
+                        .RequestToSpot("not-ready", new ProbeRouteMessage("probe"))
+                        .InstanceSpot("remote")
+                        .InMesh("entry")
+                        .Async<ProbeReply>();
+                else
+                    await client
+                        .SendToSpot("not-ready", new ProbeRouteMessage("probe"))
+                        .InstanceSpot("remote")
+                        .InMesh("entry")
+                        .Async();
+            });
+            Assert.Equal(1, node.Submissions);
+            var failures = observer.Events.Where(flow =>
+                flow.SpotId == "not-ready" && flow.Outcome == "failed"
+            );
+            if (level == ZLinkDiagnosticsLevel.Off)
+                Assert.Empty(failures);
+            else
+            {
+                var failure = Assert.Single(failures);
+                Assert.Equal("remote-instance-node", failure.TargetRid);
+                Assert.Equal("stale_target", failure.Reason);
+                Assert.Equal(nameof(ZlinkSubmitException), failure.ErrorType);
+                Assert.False(string.IsNullOrEmpty(failure.ErrorMessage));
+            }
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class NotReadyInstanceNode(ZlinkSubmitException.ErrorCode code)
+        : CapturingSpotNode,
+            IZLinkBackendSpotNode
+    {
+        public int Submissions;
+
+        public ValueTask<IReadOnlyList<Message>> ActivateInstanceSpotAsync(
+            InstanceSpotActivationTarget target,
+            string sourceSpotId,
+            IReadOnlyList<Message> parts,
+            bool request,
+            ulong deadlineUnixMs,
+            TimeSpan timeout,
+            ReadOnlyMemory<byte> metadata,
+            CancellationToken cancellationToken,
+            ZLinkRequestAdmission? requestAdmission = null
+        )
+        {
+            Submissions++;
+            return ValueTask.FromException<IReadOnlyList<Message>>(new ZlinkSubmitException(code));
+        }
+    }
+
     [Fact]
     public async Task InfrastructureRequest_DoesNotAdmitUserRequestWaitingForAuthority()
     {

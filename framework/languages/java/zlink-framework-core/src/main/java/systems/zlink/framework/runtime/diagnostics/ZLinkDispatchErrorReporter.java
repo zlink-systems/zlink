@@ -202,6 +202,21 @@ public final class ZLinkDispatchErrorReporter {
     }
 
     public static ZLinkDispatchErrorReason reasonFrom(Throwable error, int failureCode) {
+        Throwable submission =
+                error instanceof systems.zlink.contracts.errors.ZlinkSubmitException
+                        ? error
+                        : error == null ? null : error.getCause();
+        if (submission instanceof systems.zlink.contracts.errors.ZlinkSubmitException submit) {
+            switch (submit.getResult()) {
+                case NOT_CONNECTED, NOT_FOUND -> {
+                    return ZLinkDispatchErrorReason.STALE_TARGET;
+                }
+                case BACKPRESSURED -> {
+                    return ZLinkDispatchErrorReason.BACKPRESSURE;
+                }
+                default -> {}
+            }
+        }
         if (failureCode
                         == systems.zlink.framework.runtime.protocol.ServiceWireConstants
                                 .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED
