@@ -42,24 +42,6 @@ function within(promise, timeoutMs = 5_000) {
         promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
     });
 }
-async function waitForMonitorEvent(monitor, expectedEvent, timeoutMs = 5_000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        try {
-            const event = monitor.recv(zlink.RecvFlags.DontWait);
-            if (event?.event === expectedEvent)
-                return;
-        }
-        catch (error) {
-            if (!(error instanceof zlink.RecvError
-                && error.result === zlink.RecvResult.NoData)) {
-                throw error;
-            }
-        }
-        await nextTurn();
-    }
-    throw new Error(`monitor event ${expectedEvent} timed out after ${timeoutMs}ms`);
-}
 function advanceReceived(received, mode) {
     if (mode === 'reuse') {
         return received;
@@ -530,36 +512,39 @@ test('received routed send preserves stale-route ownership across immediate or w
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
-    const disconnected = router.monitorOpen([zlink.MonitorEventType.Disconnected]);
+    const poller = zlink.createPoller();
+    const events = zlink.createPollEvents(1);
     const received = new zlink.Received();
     try {
-        const endpoint = await benchmarkEndpoint('tcp', `routed-sendsend-stale-${process.pid}`, { suite: 'multi' });
+        const endpoint = await benchmarkEndpoint('tcp', `routed-sendsend-stale-${process.pid}`, {
+            suite: 'multi'
+        });
         router.options.linger = 0;
         dealer.options.linger = 0;
         router.bind(endpoint);
         dealer.setRoutingId(zlink.RoutingId.from(Buffer.from('stale-client')));
         await waitForConnectionReady(dealer, () => dealer.connect(endpoint));
-        await dealer.send()
-            .message(Buffer.alloc(64, 0x61))
-            .message(Buffer.alloc(0))
-            .submit().admitted;
+        await dealer.send().message(Buffer.alloc(64, 0x61)).message(Buffer.alloc(0)).submit().admitted;
         const receiveDeadline = Date.now() + 5_000;
-        while (!router.recv(received, zlink.RecvFlags.DontWait)
-            && Date.now() < receiveDeadline) {
+        while (!router.recv(received, zlink.RecvFlags.DontWait) && Date.now() < receiveDeadline) {
             await nextTurn();
         }
         assert.ok(received.routingId);
         assert.equal(received.parts.length, 2);
+        poller.add(router, [zlink.PollEventFlag.PollRoute], 0);
         dealer.close();
-        await waitForMonitorEvent(disconnected, zlink.MonitorEventType.Disconnected);
+        // A transport disconnect can precede selected-route removal.
+        // Wait for Core's route snapshot before testing stale-route ownership.
+        const routeDeadline = Date.now() + 5_000;
+        while (router.routesSnapshot().length !== 0 && Date.now() < routeDeadline) {
+            poller.wait(events, Math.max(0, routeDeadline - Date.now()));
+        }
+        assert.deepEqual(router.routesSnapshot(), []);
         const sourceParts = received.parts.slice();
         let submission = null;
         let immediateError;
         try {
-            submission = received.send()
-                .message(sourceParts[0])
-                .message(sourceParts[1])
-                .submit();
+            submission = received.send().message(sourceParts[0]).message(sourceParts[1]).submit();
         }
         catch (error) {
             immediateError = error;
@@ -572,23 +557,24 @@ test('received routed send preserves stale-route ownership across immediate or w
             assert.equal(sourceParts[0].size(), 0);
             assert.equal(sourceParts[1].size(), 0);
             router.close();
-            await assert.rejects(submission.admitted, (error) => error instanceof zlink.SubmitError
-                && error.result === zlink.SubmitResult.Terminated);
+            await assert.rejects(submission.admitted, (error) => error instanceof zlink.SubmitError &&
+                error.result === zlink.SubmitResult.Terminated);
         }
         else {
             // If Core has already retired the route, target selection fails before
             // snapshot/acceptance and Received keeps its parts for close or refill.
             assert.ok(immediateError instanceof zlink.SubmitError);
-            assert.ok(immediateError.result === zlink.SubmitResult.NotConnected
-                || immediateError.result === zlink.SubmitResult.NotFound);
+            assert.ok(immediateError.result === zlink.SubmitResult.NotConnected ||
+                immediateError.result === zlink.SubmitResult.NotFound);
             assert.equal(sourceParts[0].size(), 64);
             assert.equal(sourceParts[1].size(), 0);
         }
     }
     finally {
         received.close();
-        disconnected.close();
         dealer.close();
+        events.close();
+        poller.close();
         router.close();
         context.close();
     }
