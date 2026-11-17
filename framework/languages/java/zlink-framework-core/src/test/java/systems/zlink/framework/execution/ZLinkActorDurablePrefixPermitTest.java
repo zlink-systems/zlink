@@ -801,6 +801,75 @@ final class ZLinkActorDurablePrefixPermitTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void cancelledOrdinaryResultReacquiresAdmissionBeforeItsAcceptedOperationRuns(
+            boolean deadline) {
+        var executor = new ManualExecutor();
+        var serial =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.actorDelivery());
+        var calls = new ArrayList<String>();
+        var running = new CompletableFuture<Void>();
+        serial.enqueue(() -> running, null);
+        executor.drain();
+        try (var jobs =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null))) {
+            var permit =
+                    jobs.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            CompletableFuture<Void> terminal;
+            try (var scope = ZLinkApplicationJobContext.enter(permit)) {
+                terminal =
+                        serial.enqueueRelocatable(
+                                        new byte[] {1},
+                                        () -> {
+                                            ZLinkApplicationJobContext
+                                                    .beforeFirstApplicationInstruction();
+                                            calls.add("head");
+                                            return CompletableFuture.completedFuture(null);
+                                        },
+                                        () -> {},
+                                        null)
+                                .toCompletableFuture();
+            } finally {
+                permit.abandonReservation();
+            }
+            var observed = terminal.handle((value, failure) -> jobs.snapshot());
+            assertTrue(
+                    deadline
+                            ? terminal.completeExceptionally(
+                                    new java.util.concurrent.TimeoutException())
+                            : terminal.cancel(false));
+            assertEquals(0, observed.join().permitsInUse());
+            assertEquals(0, observed.join().capacityWaiters());
+            assertEquals(0, jobs.snapshot().permitsInUse());
+            var occupied =
+                    jobs.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            try {
+                running.complete(null);
+                executor.drain();
+                assertEquals(List.of(), calls);
+                assertEquals(1, jobs.snapshot().capacityWaiters());
+            } finally {
+                occupied.close();
+                executor.drain();
+            }
+            assertEquals(List.of("head"), calls);
+            assertEquals(0, jobs.snapshot().permitsInUse());
+            assertEquals(0, jobs.snapshot().capacityWaiters());
+        } finally {
+            running.complete(null);
+            executor.drain();
+            serial.close();
+        }
+    }
+
     @org.junit.jupiter.api.RepeatedTest(20)
     void cancelledOrdinaryResultKeepsItsAcceptedOperationAndFollowingRecordRunnable() {
         var executor = new ManualExecutor();
@@ -861,6 +930,141 @@ final class ZLinkActorDurablePrefixPermitTest {
                 quiescent.join();
                 serial.close();
             }
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void callerTerminalKeepsSharedActorClaimUntilAcceptedOperationFinishes(boolean deadline) {
+        var executor = new ManualExecutor();
+        var spot =
+                new ZLinkSerialExecutionQueue(
+                        executor, ZLinkExecutionLanePolicy.spotReturningGate());
+        var gate = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+        var actor =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.actorDelivery());
+        actor.bindSharedSpotGate(gate);
+        var running = new CompletableFuture<Void>();
+        var physical = new CompletableFuture<Void>();
+        actor.enqueue(() -> running, null);
+        executor.drain();
+        var calls = new ArrayList<String>();
+        try (var jobs =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null))) {
+            CompletableFuture<Void> tail = null;
+            for (String name : List.of("head", "tail")) {
+                var permit =
+                        jobs.acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                                .toCompletableFuture()
+                                .join();
+                CompletableFuture<Void> result;
+                try (var scope = ZLinkApplicationJobContext.enter(permit)) {
+                    result =
+                            actor.enqueueRelocatable(
+                                            new byte[] {1},
+                                            () -> {
+                                                ZLinkApplicationJobContext
+                                                        .beforeFirstApplicationInstruction();
+                                                calls.add(name);
+                                                return name.equals("head")
+                                                        ? physical
+                                                        : CompletableFuture.completedFuture(null);
+                                            },
+                                            () -> {},
+                                            null)
+                                    .toCompletableFuture();
+                } finally {
+                    permit.abandonReservation();
+                }
+                if (name.equals("head")) {
+                    assertTrue(
+                            deadline
+                                    ? result.completeExceptionally(
+                                            new java.util.concurrent.TimeoutException())
+                                    : result.cancel(false));
+                } else tail = result;
+            }
+            running.complete(null);
+            executor.drain();
+            assertEquals(List.of("head"), calls);
+            assertFalse(tail.isDone());
+            physical.complete(null);
+            executor.drain();
+            tail.join();
+            assertEquals(List.of("head", "tail"), calls);
+            assertEquals(0, jobs.snapshot().permitsInUse());
+            assertEquals(0, jobs.snapshot().capacityWaiters());
+        } finally {
+            running.complete(null);
+            physical.complete(null);
+            executor.drain();
+            actor.close();
+            spot.close();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void callerTerminalTransfersFollowingReservationToTheSameFifo(boolean deadline) {
+        var executor = new ManualExecutor();
+        var serial =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.actorDelivery());
+        var running = new CompletableFuture<Void>();
+        serial.enqueue(() -> running, null);
+        executor.drain();
+        var calls = new ArrayList<String>();
+        try (var jobs =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null))) {
+            CompletableFuture<Void> head = null;
+            CompletableFuture<Void> tail = null;
+            for (String name : List.of("head", "tail")) {
+                var permit =
+                        jobs.acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                                .toCompletableFuture()
+                                .join();
+                CompletableFuture<Void> terminal;
+                try (var scope = ZLinkApplicationJobContext.enter(permit)) {
+                    terminal =
+                            serial.enqueueRelocatable(
+                                            new byte[] {1},
+                                            () -> {
+                                                ZLinkApplicationJobContext
+                                                        .beforeFirstApplicationInstruction();
+                                                calls.add(name);
+                                                return CompletableFuture.completedFuture(null);
+                                            },
+                                            () -> {},
+                                            null)
+                                    .toCompletableFuture();
+                } finally {
+                    permit.abandonReservation();
+                }
+                if (head == null) {
+                    head = terminal;
+                    assertTrue(
+                            deadline
+                                    ? head.completeExceptionally(
+                                            new java.util.concurrent.TimeoutException())
+                                    : head.cancel(false));
+                } else tail = terminal;
+                assertEquals(0, jobs.snapshot().permitsInUse());
+            }
+            running.complete(null);
+            executor.drain();
+            tail.join();
+            assertEquals(List.of("head", "tail"), calls);
+            assertEquals(0, jobs.snapshot().permitsInUse());
+            assertEquals(0, jobs.snapshot().capacityWaiters());
+        } finally {
+            running.complete(null);
+            executor.drain();
+            serial.close();
         }
     }
 

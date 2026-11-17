@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ZLinkExecutionPolicy } from '../admission';
+import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
+import {
+  currentApplicationJobPermit,
+  bindApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 import { macrotaskBoundary } from '../abort';
 import {
   diagnosticWorkName,
@@ -63,7 +68,8 @@ type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & 
   readonly executionOwner?: object;
   readonly operationEnvelope: boolean;
   readonly mailbox?: ZLinkSerialExecutionQueue;
-  readonly preparation?: ZLinkSerialWorkPreparation;
+  preparation?: ZLinkSerialWorkPreparation;
+  applicationAdmission?: ApplicationJobPermitPort;
   preparationState: 'idle' | 'pending' | 'canceling' | 'ready' | 'failed';
   preparationController?: AbortController;
   preparationError?: unknown;
@@ -188,7 +194,15 @@ export class ZLinkSerialExecutionQueue {
     context?: unknown,
     packetAdmission?: () => Promise<T> | T
   ): Promise<T> {
-    return this.admit(operation, options, context, undefined, false, packetAdmission);
+    return this.admit(
+      operation,
+      options,
+      context,
+      undefined,
+      false,
+      packetAdmission,
+      currentApplicationJobPermit()
+    );
   }
 
   /** Holds lifecycle FIFO through an operation result while its application turns can run. */
@@ -224,12 +238,6 @@ export class ZLinkSerialExecutionQueue {
       record.fail(error);
     }
     if (!this.hasPendingWork) this.resolveIdleWaiters();
-  }
-
-  get hasPendingDurableApplication(): boolean {
-    // Every application record accepted behind durable work inherits durable
-    // ownership, so the tail answers this without scanning the FIFO.
-    return this.application.records.at(-1)?.preparation !== undefined;
   }
 
   get hasPendingWork(): boolean {
@@ -268,7 +276,8 @@ export class ZLinkSerialExecutionQueue {
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation,
     operationEnvelope = false,
-    packetAdmission?: () => Promise<T> | T
+    packetAdmission?: () => Promise<T> | T,
+    applicationAdmission?: ApplicationJobPermitPort
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options?.lane ?? 'application';
@@ -307,6 +316,7 @@ export class ZLinkSerialExecutionQueue {
       context,
       packetAdmission,
       preparation,
+      applicationAdmission,
       preparationState: preparation === undefined ? 'ready' : 'idle',
       resolve: resolveResult,
       reject: rejectResult,
@@ -317,6 +327,9 @@ export class ZLinkSerialExecutionQueue {
       }
     };
     const previousLength = target.records.length;
+    const preceding = target.records.at(-1);
+    if (applicationAdmission !== undefined)
+      record.operation = bindApplicationJobPermit(operation, () => record.applicationAdmission);
     try {
       record.acceptedSequence = this.nextAcceptedSequence;
       target.records.push(record as SerialWorkRecord<unknown>);
@@ -327,6 +340,12 @@ export class ZLinkSerialExecutionQueue {
       release();
       throw error;
     }
+    if (
+      applicationAdmission !== undefined &&
+      lane === 'application' &&
+      (preceding?.preparation !== undefined || preceding?.applicationAdmission?.isReleased === true)
+    )
+      applicationAdmission.releaseAfterInternalProcessing();
     options?.onAdmitted?.();
     options?.onWithdrawable?.(() => {
       const index = target.records.indexOf(record as SerialWorkRecord<unknown>);
@@ -505,6 +524,25 @@ export class ZLinkSerialExecutionQueue {
   }
 
   private prepareSelected(record: SerialWorkRecord<unknown>): boolean {
+    const initial = record.applicationAdmission;
+    if (initial?.isReleased === true && record.preparation === undefined) {
+      let prepared: ApplicationJobPermitPort | undefined;
+      record.preparation = {
+        prepare: async (signal) => {
+          if (initial.reacquire === undefined)
+            throw new Error('Accepted ingress requires its host permit source.');
+          prepared = await initial.reacquire(signal);
+          record.applicationAdmission = prepared;
+          if (signal.aborted) {
+            prepared.releaseAfterInternalProcessing();
+            throw signal.reason;
+          }
+          prepared.markApplicationQueued();
+        },
+        cancel: () => prepared?.releaseAfterInternalProcessing()
+      };
+      record.preparationState = 'idle';
+    }
     if (
       record.lane === 'lifecycle' &&
       this.application.records.length > 0 &&

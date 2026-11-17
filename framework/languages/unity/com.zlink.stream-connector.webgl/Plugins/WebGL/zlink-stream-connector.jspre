@@ -3109,6 +3109,12 @@ var ZlinkStreamConnectorBundle = (() => {
       return this.closeReasonValue;
     }
     async connect(signal) {
+      return await this.beginConnect(signal, false);
+    }
+    async reconnect() {
+      return await this.beginConnect(void 0, true);
+    }
+    async beginConnect(signal, automaticReconnect) {
       var _a;
       throwIfAborted(signal);
       await ((_a = this.disconnectTask) == null ? void 0 : _a.catch(() => void 0));
@@ -3121,7 +3127,7 @@ var ZlinkStreamConnectorBundle = (() => {
       if (this.connectTask !== void 0) {
         return await this.connectTask;
       }
-      this.connectTask = this.connectOnce(signal).finally(() => {
+      this.connectTask = this.connectOnce(signal, automaticReconnect).finally(() => {
         this.connectTask = void 0;
       });
       return await this.connectTask;
@@ -3132,14 +3138,18 @@ var ZlinkStreamConnectorBundle = (() => {
      * the lifecycle owns; close aborts it, and the caller's signal is forwarded
      * to it.
      */
-    async connectOnce(signal) {
+    async connectOnce(signal, automaticReconnect) {
       const attempts = new AbortController();
       const forwardAbort = () => attempts.abort();
       signal == null ? void 0 : signal.addEventListener("abort", forwardAbort, { once: true });
       this.connectAbort = attempts;
-      this.setState("connecting" /* Connecting */, void 0, signal);
+      this.setState(
+        automaticReconnect ? "reconnecting" /* Reconnecting */ : "connecting" /* Connecting */,
+        void 0,
+        signal
+      );
       try {
-        const connection = await this.connectWithReconnect(attempts.signal);
+        const connection = await this.connectWithReconnect(attempts.signal, automaticReconnect);
         if (this.closeRequested) {
           await this.closeTransport(connection, void 0, signal);
           throw connectorError(
@@ -3260,7 +3270,7 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       return result.available;
     }
-    async connectWithReconnect(signal) {
+    async connectWithReconnect(signal, automaticReconnect) {
       let attempt = 0;
       let delayMs = Math.min(
         this.options.reconnect.initialDelayMs,
@@ -3270,6 +3280,13 @@ var ZlinkStreamConnectorBundle = (() => {
       const maxAttempts = this.options.reconnect.enabled ? this.options.reconnect.maxAttempts : 1;
       const unlimited = maxAttempts === null;
       while (unlimited || attempt < maxAttempts) {
+        if (automaticReconnect || attempt > 0) {
+          await delay(randomizedDelay(delayMs), signal);
+          delayMs = Math.min(
+            this.options.reconnect.maxDelayMs,
+            Math.ceil(delayMs * this.options.reconnect.backoffFactor)
+          );
+        }
         attempt += 1;
         try {
           return await this.options.transportFactory.connect(this.options, signal);
@@ -3279,11 +3296,6 @@ var ZlinkStreamConnectorBundle = (() => {
             break;
           }
           this.setState("reconnecting" /* Reconnecting */, lastError, signal);
-          await delay(randomizedDelay(delayMs), signal);
-          delayMs = Math.min(
-            this.options.reconnect.maxDelayMs,
-            Math.ceil(delayMs * this.options.reconnect.backoffFactor)
-          );
         }
       }
       throw new ZlinkStreamException(
@@ -3510,7 +3522,7 @@ var ZlinkStreamConnectorBundle = (() => {
     announceDisconnect() {
       if (this.shouldReconnect()) {
         queueMicrotask(() => {
-          void this.connect().catch(() => void 0);
+          void this.reconnect().catch(() => void 0);
         });
       }
     }

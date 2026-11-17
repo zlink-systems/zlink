@@ -414,6 +414,13 @@ same Spot ID, a late reply from the previous activation is not delivered to the 
 The resubmission boundary after target connection closure or timeout is defined by
 [§5](#5-backpressure-and-error-classification).
 
+Before the Framework publishes a cancellation, deadline, or failure result to the caller, it finishes
+releasing the local admission the request held (application job permit and capacity wait) and
+invalidating any stale route. When the caller observes the result, this cleanup is already reflected.
+A request that the target queue already accepted but whose handler has not started still runs regardless of
+the caller's cancellation or deadline. Right before it runs, it reacquires local admission at its existing
+FIFO position. This matches the rule that a remote handler's work is not rolled back.
+
 ## 10. Operation Identity and Where Completion Happens (Implementation)
 
 The final typed result delivery structure follows [§9](#9-request-completion--the-completion-race-and-timeout-budget).

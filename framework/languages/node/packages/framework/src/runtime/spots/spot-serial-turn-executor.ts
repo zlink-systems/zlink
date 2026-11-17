@@ -186,10 +186,9 @@ export class ZLinkSpotSerialTurnExecutor {
       if (admission?.signal?.aborted === true) {
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
-      const boundOperation = bindApplicationJobPermit(operation);
       const submitted = hasApplicationJobPermit()
-        ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
-        : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
+        ? this.scheduler.submitPreAdmitted(operation, workOptions, barrierClaim)
+        : this.scheduler.submit(bindApplicationJobPermit(operation), workOptions, barrierClaim);
       void submitted.catch((error) => {
         barrierClaim?.release();
         onError(error);
@@ -347,24 +346,28 @@ export class ZLinkSpotSerialTurnExecutor {
     workOptions: ZLinkSerialWorkOptions | undefined,
     barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>
   ): Promise<T> {
-    const boundOperation = bindApplicationJobPermit(operation);
     if (barrierClaim instanceof Promise) {
       const context: Partial<ZLinkExecutionBarrierClaim> = {};
-      return this.scheduler.admitDurablePrefix(boundOperation, workOptions, context, {
-        prepare: async (signal) => {
-          const claim = await barrierClaim;
-          if (signal.aborted) {
-            claim.release();
-            throw signal.reason;
-          }
-          Object.defineProperties(context, Object.getOwnPropertyDescriptors(claim));
-        },
-        cancel: () => {}
-      });
+      return this.scheduler.admitDurablePrefix(
+        bindApplicationJobPermit(operation),
+        workOptions,
+        context,
+        {
+          prepare: async (signal) => {
+            const claim = await barrierClaim;
+            if (signal.aborted) {
+              claim.release();
+              throw signal.reason;
+            }
+            Object.defineProperties(context, Object.getOwnPropertyDescriptors(claim));
+          },
+          cancel: () => {}
+        }
+      );
     }
     return hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
-      : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
+      ? this.scheduler.submitPreAdmitted(operation, workOptions, barrierClaim)
+      : this.scheduler.submit(bindApplicationJobPermit(operation), workOptions, barrierClaim);
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
