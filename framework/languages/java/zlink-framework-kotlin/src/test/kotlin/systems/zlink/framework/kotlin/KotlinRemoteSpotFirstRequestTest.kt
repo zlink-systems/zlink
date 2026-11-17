@@ -21,6 +21,7 @@ import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotCreateState
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
+import systems.zlink.framework.testsupport.ZLinkHostServing
 
 class KotlinRemoteSpotFirstRequestTest {
     @Test
@@ -31,11 +32,13 @@ class KotlinRemoteSpotFirstRequestTest {
             val owner = lifecycle(locations, "kotlin-owner", true)
             try {
                 owner.start()
+                ZLinkHostServing.await(owner.runtimeBean())
                 val created =
                     owner.spotManager().kotlin().getOrCreate(SPOT, TYPE).inMesh(MESH).await()
                 val requester = lifecycle(locations, "kotlin-requester", false)
                 try {
                     requester.start()
+                    ZLinkHostServing.await(requester.runtimeBean())
                     val existing =
                         requester
                             .spotManager()
@@ -74,6 +77,9 @@ class KotlinRemoteSpotFirstRequestTest {
         server: Boolean,
     ): ZLinkFrameworkLifecycle {
         val options = DefaultZLinkFrameworkOptions()
+        // This case checks the first remote request, not the fixed-RID release wait (MeshNode
+        // §3.3).
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1))
         options.addLocationStore(locations)
         val mesh =
             options.addRouteMesh(MESH).setRoutingId(RoutingId.from(rid)).listen("tcp://127.0.0.1:0")
