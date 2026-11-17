@@ -157,6 +157,10 @@ jobs:
             bash scripts/local-package/java/build-wsl.sh \
               --core-prefix "${core_prefix}"
 
+      - name: Verify the packaged Java public contract and API snapshot
+        if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
+        run: bash framework/languages/java/scripts/verify_packaged_contract.sh java
+
       - name: Fetch Core and build the checkout Java binding package on Windows
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'win-')) }}
         shell: pwsh
