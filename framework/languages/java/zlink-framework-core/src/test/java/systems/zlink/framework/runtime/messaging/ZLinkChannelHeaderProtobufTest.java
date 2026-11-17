@@ -180,16 +180,24 @@ final class ZLinkChannelHeaderProtobufTest {
             ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(wire), false);
         }
 
+        // A loaded machine can measure before the JIT finishes; slower code only allocates more,
+        // so the lowest of several rounds is the warm cost.
         long threadId = Thread.currentThread().threadId();
-        long beforeEncode = bean.getThreadAllocatedBytes(threadId);
         int checksum = 0;
-        for (int i = 0; i < 1_000; i++)
-            checksum += ZLinkChannelEnvelope.encodeHeaderBytes(header).length;
-        long encodeBytes = bean.getThreadAllocatedBytes(threadId) - beforeEncode;
-        long beforeDecode = bean.getThreadAllocatedBytes(threadId);
-        for (int i = 0; i < 1_000; i++)
-            checksum += ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(wire), false).kind();
-        long decodeBytes = bean.getThreadAllocatedBytes(threadId) - beforeDecode;
+        long encodeBytes = Long.MAX_VALUE;
+        long decodeBytes = Long.MAX_VALUE;
+        for (int round = 0; round < 5; round++) {
+            long beforeEncode = bean.getThreadAllocatedBytes(threadId);
+            for (int i = 0; i < 1_000; i++)
+                checksum += ZLinkChannelEnvelope.encodeHeaderBytes(header).length;
+            encodeBytes =
+                    Math.min(encodeBytes, bean.getThreadAllocatedBytes(threadId) - beforeEncode);
+            long beforeDecode = bean.getThreadAllocatedBytes(threadId);
+            for (int i = 0; i < 1_000; i++)
+                checksum += ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(wire), false).kind();
+            decodeBytes =
+                    Math.min(decodeBytes, bean.getThreadAllocatedBytes(threadId) - beforeDecode);
+        }
 
         assertTrue(checksum > 0);
         assertTrue(encodeBytes <= 700_000, "encode allocated " + encodeBytes + " bytes");
