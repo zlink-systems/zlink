@@ -769,20 +769,11 @@ internal static class ZLinkEnvelopeCodec
                 "ZLink envelope message kind is invalid."
             );
 
-        if (header.CorrelationId is { } correlationId)
-        {
-            if (correlationId.Length is 0 or > MaximumCorrelationIdBytes)
-                throw new ZLinkEnvelopeProtocolException(
-                    header,
-                    "ZLink envelope correlation id has an invalid length."
-                );
-            foreach (var character in correlationId)
-                if (!char.IsAscii(character))
-                    throw new ZLinkEnvelopeProtocolException(
-                        header,
-                        "ZLink envelope correlation id must be ASCII."
-                    );
-        }
+        if (header.CorrelationId is not null && !CanCorrelateReply(header))
+            throw new ZLinkEnvelopeProtocolException(
+                header,
+                "ZLink envelope correlation id must be 1..64 ASCII characters."
+            );
 
         var hasFlowId = flowId is not null;
         var hasFlowOrigin = flowOrigin is not null;
