@@ -307,7 +307,8 @@ export class ZLinkSerialExecutionQueue {
       lane,
       lifecycleOwner:
         options?.lifecycleOwner ??
-        (currentLifecycleOperation.getStore() === this.activeLifecycle
+        (this.activeLifecycle !== undefined &&
+        currentLifecycleOperation.getStore() === this.activeLifecycle
           ? this.activeLifecycle
           : undefined),
       operation,
@@ -482,7 +483,12 @@ export class ZLinkSerialExecutionQueue {
             record.operation();
           } else if (record.operationEnvelope) {
             try {
-              const outcome = currentLifecycleOperation.run(record, record.operation);
+              // Only lifecycle work and turns inherited from it carry the lifecycle owner.
+              const owner = record.lane === 'lifecycle' ? record : record.lifecycleOwner;
+              const outcome =
+                owner === undefined
+                  ? record.operation()
+                  : currentLifecycleOperation.run(owner, record.operation);
               void Promise.resolve(outcome).then(
                 (value) => {
                   record.resolve(value);
