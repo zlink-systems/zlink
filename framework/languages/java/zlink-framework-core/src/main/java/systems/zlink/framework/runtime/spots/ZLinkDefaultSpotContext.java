@@ -14,6 +14,7 @@ import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -658,7 +659,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     @Override
     public CompletionStage<Boolean> close() {
         rejectAfterRelocationReady("close");
-        serials.spotQueue.ensureSpotCloseCallAllowed();
+        ZLinkSpotCloseCallAccess.ensureAllowed(serials.spotQueue);
         return host.closeSpot(this);
     }
 

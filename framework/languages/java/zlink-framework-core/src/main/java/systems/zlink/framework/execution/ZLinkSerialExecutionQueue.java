@@ -4,6 +4,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
@@ -40,6 +41,10 @@ import java.util.function.Supplier;
  * control admission; this queue only orders accepted work.
  */
 public final class ZLinkSerialExecutionQueue {
+    static {
+        ZLinkSpotCloseCallAccess.registerAccess(queue -> queue.ensureSpotCloseCallAllowed());
+    }
+
     private static final VarHandle OUTSTANDING;
     private static final VarHandle YIELD_ADMITTED;
 
@@ -1073,7 +1078,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /** Enforces execution gate §6 before a public Spot Close submits work. */
-    public void ensureSpotCloseCallAllowed() {
+    void ensureSpotCloseCallAllowed() {
         SerialTurn turn = currentTurn();
         if (isCurrent() && turn != null && isLifecycleTurn(turn.entry())) {
             throw ZLinkFrameworkErrorOrigin.framework(
