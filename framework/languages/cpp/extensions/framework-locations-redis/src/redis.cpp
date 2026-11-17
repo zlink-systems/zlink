@@ -320,7 +320,7 @@ class location_store_backend_t final : public location_store_t
             throw std::invalid_argument ("location scan limit must be 1..1000");
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
         return _worker.submit<store_scan_result_t> ([this, request = std::move (request)] {
-            const auto now = std::chrono::system_clock::now ();
+            auto now = std::chrono::system_clock::time_point{};
             const auto steady_now = std::chrono::steady_clock::now ();
             for (auto item = _scan_snapshots.begin (); item != _scan_snapshots.end ();) {
                 if (item->second.expires_at <= steady_now)
@@ -368,9 +368,10 @@ class location_store_backend_t final : public location_store_t
                                          std::string (scan_script), scan_keys.begin (),
                                          scan_keys.end (), scan_args.begin (), scan_args.end ())
                                        .get ();
-                if (scanned.size () % 2 != 0)
+                if (scanned.empty () || (scanned.size () - 1) % 2 != 0)
                     throw sw::redis::Error ("invalid opaque location scan result");
-                for (std::size_t index = 0; index + 1 < scanned.size (); index += 2) {
+                now = from_unix_ms (std::stoll (scanned[0]));
+                for (std::size_t index = 1; index + 1 < scanned.size (); index += 2) {
                     const auto &original_key = scanned[index];
                     const auto decoded = detail::decode_opaque_value (scanned[index + 1]);
                     if (decoded.original_key != original_key)
@@ -394,6 +395,8 @@ class location_store_backend_t final : public location_store_t
             const auto snapshot = _scan_snapshots.find (snapshot_id);
             if (snapshot == _scan_snapshots.end () || offset > snapshot->second.items.size ())
                 return store_scan_result_t{store_scan_expired_t {}};
+            if (request.cursor)
+                now = snapshot->second.items.front ().value.store_now;
             store_scan_page_t page;
             page.store_now = now;
             auto end = offset;
@@ -433,9 +436,12 @@ class location_store_backend_t final : public location_store_t
     static constexpr std::string_view scan_script = R"(
 -- Valid UTF-8 suffixes sort below 0xff, including an empty suffix.
 local utf8PrefixUpperBoundByte = 255
+local time = redis.call('TIME')
+local nowMs = tonumber(time[1]) * 1000
+  + math.floor(tonumber(time[2]) / 1000)
 local originals = redis.call('ZRANGEBYLEX', KEYS[1],
   '[' .. ARGV[1], '[' .. ARGV[1] .. string.char(utf8PrefixUpperBoundByte))
-local out = {}
+local out = {tostring(nowMs)}
 for index = 1, #originals do
   local originalKey = originals[index]
   local mapped = redis.call('HGET', KEYS[2], originalKey)
