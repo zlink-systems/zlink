@@ -139,7 +139,8 @@ function installCanonicalWireProbe(app, meshName) {
   serviceTransport.requestService = function requestServiceWithCanonicalProbe(
     targetNodeRid,
     parts,
-    timeoutMs
+    timeoutMs,
+    ...requestOptions
   ) {
     if (parts[0]?.[3] === ACTOR_JOIN_WIRE_COMMAND) {
       try {
@@ -166,7 +167,7 @@ function installCanonicalWireProbe(app, meshName) {
     if (parts[0]?.[3] === 25) {
       appendEvent(`stateful-25-wire|target=${targetNodeRid}|bytes=${parts[0].length}`);
     }
-    return originalRequestService.call(this, targetNodeRid, parts, timeoutMs);
+    return originalRequestService.call(this, targetNodeRid, parts, timeoutMs, ...requestOptions);
   };
 
   if (args['force-private-join'] === '1') {

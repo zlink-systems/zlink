@@ -7,15 +7,11 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.*;
@@ -36,6 +32,7 @@ final class OutageScenario {
     private int creations;
     private long newLease;
     private CompletionStage<UserSpotJoinRes> join;
+    private Object stagedTargetAttempt;
 
     OutageScenario(HostArgs args, EventSink sink, CrossLanguageOutageStore store,
             ZLinkActorManager actors, ZLinkActorClient client, ZLinkFrameworkRuntime runtime) {
@@ -192,6 +189,8 @@ final class OutageScenario {
                 if (join != null) require(await(join).accepted(), "public Join was rejected");
                 UserSpotProbeRes first = probe("committed");
                 UserSpotProbeRes next = probe("follow-up");
+                if (target) require(stagedTargetAttempt != null && (boolean) observe(stagedTargetAttempt, "committed"),
+                    "target attempt was not committed after NewOwner commit");
                 require(!first.nodeRid().equals(original.allocation().descriptor().rid().toString()),
                     "post-commit reply came from source");
                 require(first.nodeRid().equals(next.nodeRid()), "follow-up reply changed owner");
@@ -214,14 +213,48 @@ final class OutageScenario {
     }
 
     private boolean stagedFenceAbsent(long objectGeneration) throws Exception {
-        var actorsMethod = ZLinkFrameworkRuntime.class.getDeclaredMethod("actors");
-        actorsMethod.setAccessible(true);
-        ZLinkActorRuntime actorRuntime = (ZLinkActorRuntime) actorsMethod.invoke(runtime);
-        var nodeField = ZLinkActorRuntime.class.getDeclaredField("spotNode");
-        nodeField.setAccessible(true);
-        ZLinkInternalSpotNode node = (ZLinkInternalSpotNode) nodeField.get(actorRuntime);
-        var actor = new ZLinkBackendActorRef(RoutingId.from(args.require("node-rid")), actorId, objectGeneration);
-        return node.actorAuthorityOwnerGeneration(actor) == 0 && node.actorAuthorityOwnerLeaseGeneration(actor) == 0;
+        var decode = ZLinkCanonicalRelocationAuthorityStateCodec.class.getDeclaredMethod("decodeStrict", byte[].class);
+        decode.setAccessible(true);
+        Object relocation = decode.invoke(null, authority().payload());
+        require(relocation != null, "staged source relocation state is missing");
+        Object id = observe(relocation, "aggregateId");
+        long attemptGeneration = (long) observe(relocation, "targetAttemptGeneration");
+        Object retire = field(runtime, "spotRetire");
+        Object matched = null;
+        for (Object machine : (Iterable<?>) field(retire, "stateMachines")) {
+            var snapshot = machine.getClass().getDeclaredMethod("inStateLane", java.util.function.Supplier.class);
+            snapshot.setAccessible(true);
+            var targetsField = machine.getClass().getDeclaredField("targets");
+            targetsField.setAccessible(true);
+            java.util.Map<?, ?> targets = (java.util.Map<?, ?>) targetsField.get(machine);
+            java.util.function.Supplier<java.util.Map<?, ?>> copy = () -> java.util.Map.copyOf(targets);
+            for (Object candidate : ((java.util.Map<?, ?>) snapshot.invoke(machine, copy)).values()) {
+                Object prepare = observe(candidate, "prepare");
+                if (!id.equals(observe(prepare, "id"))
+                        || attemptGeneration != (long) observe(prepare, "targetAttemptGeneration")) continue;
+                Object participant = observe(prepare, "object");
+                require(actorId.equals(observe(participant, "objectId"))
+                        && objectGeneration == (long) observe(participant, "objectGeneration"),
+                    "staged target actor incarnation differs");
+                require(matched == null, "multiple matching target attempts");
+                matched = candidate;
+            }
+        }
+        require(matched != null, "matching staged target attempt is missing");
+        stagedTargetAttempt = matched;
+        return !(boolean) observe(stagedTargetAttempt, "committed");
+    }
+
+    private static Object field(Object owner, String name) throws Exception {
+        var field = owner.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(owner);
+    }
+
+    private static Object observe(Object owner, String name) throws Exception {
+        var method = owner.getClass().getDeclaredMethod(name);
+        method.setAccessible(true);
+        return method.invoke(owner);
     }
 
     private <T> T await(CompletionStage<T> stage) throws Exception {
