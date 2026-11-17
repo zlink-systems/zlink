@@ -164,12 +164,12 @@ public final class Program {
         return options -> {
             if (args.option("outage-control-prefix", null) != null) {
                 var locations = options.configureLocations();
-                locations.setStoreOutageRetention(true);
-                locations.setOwnerLeaseTtl(Duration.ofSeconds(30));
-                locations.setOwnerLeaseRenewInterval(Duration.ofSeconds(5));
-                locations.setOwnerLeaseFencingMargin(Duration.ofSeconds(5));
-                locations.setOwnerLeaseRenewTimeout(Duration.ofSeconds(3));
-                locations.setStoreFailureGrace(Duration.ofSeconds(30));
+                locations.setStoreOutageRetention(OutageLeaseProfile.retention());
+                locations.setOwnerLeaseTtl(OutageLeaseProfile.duration("ttlMs"));
+                locations.setOwnerLeaseRenewInterval(OutageLeaseProfile.duration("renewIntervalMs"));
+                locations.setOwnerLeaseFencingMargin(OutageLeaseProfile.duration("fencingMarginMs"));
+                locations.setOwnerLeaseRenewTimeout(OutageLeaseProfile.duration("renewTimeoutMs"));
+                locations.setStoreFailureGrace(OutageLeaseProfile.duration("storeFailureGraceMs"));
             }
             String mode = args.mode();
             if ("entry-spot-source".equals(mode) || "entry-spot-target".equals(mode)) {

@@ -1217,6 +1217,7 @@ class outage_control_t
         _stopping (stopping), _prefix (option ("outage-control-prefix")),
         _run (option ("outage-run-id")), _actor (require ("actor-id"))
     {
+        g_outage_store->events = [&sink] (const std::string &line) { sink.append (line); };
     }
 
     bool run (bool before_join)
@@ -1265,6 +1266,10 @@ class outage_control_t
                 } else if (command == "outage") {
                     g_outage_store->unavailable.store (true);
                     wait ([&] { return g_outage_store->failure_observed.load (); });
+                    wait ([&] {
+                        return _location.observation_status_task ().result ().value ().store_outage_cutoff.has_value ();
+                    });
+                    g_outage_store->set_cutoff (*_location.observation_status_task ().result ().value ().store_outage_cutoff);
                 } else if (command == "expired") {
                     wait ([&] {
                         const auto lease = g_outage_store->repository
@@ -1283,6 +1288,7 @@ class outage_control_t
                         _recovered_lease = found->token.lease_generation;
                         return true;
                     });
+                    g_outage_store->timing_event ("new-claim", outage_location_store_t::now_nanos ());
                     _sink.append ("outage-recovered-lease|lease="
                                   + std::to_string (_recovered_lease));
                 } else if (command == "release-descriptor") {
@@ -1308,6 +1314,10 @@ class outage_control_t
                            "partial recovery executed an application handler");
                     _sink.append ("outage-partial|kind=ShuttingDown|handlerCalls=0");
                 } else if (command == "resumed") {
+                    g_outage_store->check_timing ();
+                    check (g_outage_store->cas_submitted_nanos.load () != 0
+                             && g_outage_store->descriptor_delivered.load () && g_outage_store->cas_delivered.load (),
+                           "Preserve confirmations missing");
                     wait ([&] {
                         const auto status = _location.observation_status_task ().result ().value ();
                         return status.owner_lease_healthy && !status.store_outage_observed_at;
@@ -1393,6 +1403,7 @@ class outage_control_t
     {
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (60);
         while (!observed ()) {
+            g_outage_store->check_timing ();
             check (!_stopping.load (), "outage controller is stopping");
             check (std::chrono::steady_clock::now () < deadline, "outage observation timed out");
             std::this_thread::sleep_for (std::chrono::milliseconds (10));
@@ -1404,6 +1415,7 @@ class outage_control_t
         std::uint64_t sequence = 0;
         std::string command;
         while (!_stopping.load ()) {
+            g_outage_store->check_timing ();
             std::ifstream input (_prefix + ".command");
             std::string run, encoded_sequence;
             if (std::getline (input, run, '\t')
@@ -1816,7 +1828,15 @@ void configure_user_spot_stores (fw::zlink_framework_options_t &options, bool ta
           location, require ("actor-id"), require ("mesh-name"), require ("node-rid"),
           target);
         options.add_location_store (g_outage_store);
-        options.configure_locations ().store_outage_retention = true;
+        auto &locations = options.configure_locations ();
+        const auto &profile = g_outage_store->profile;
+        locations.owner_lease_fencing_margin = profile.duration ("fencingMarginMs");
+        locations.owner_lease_renew_interval = profile.duration ("renewIntervalMs");
+        locations.owner_lease_ttl = profile.duration ("ttlMs");
+        locations.owner_lease_renew_timeout = profile.duration ("renewTimeoutMs");
+        locations.store_failure_grace = profile.duration ("storeFailureGraceMs");
+        locations.store_outage_retention = true;
+        fw::detail::validate_location_options (locations);
     } else {
         options.add_location_store (location);
     }

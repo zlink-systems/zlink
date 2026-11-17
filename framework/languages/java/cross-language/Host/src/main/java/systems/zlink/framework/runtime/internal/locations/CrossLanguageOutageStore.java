@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.internal.locations;
 
 import java.lang.reflect.Method;
+import java.util.function.Consumer;
+import systems.zlink.crosslanguage.host.OutageLeaseProfile;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
@@ -10,6 +12,42 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 /** Test-only fault injection at the opaque Store boundary; Redis owns all data. */
 public final class CrossLanguageOutageStore implements ZLinkLocationStore {
+    private Consumer<String> events = ignored -> {};
+    private volatile long cutoffNanos;
+    private volatile String timingFailure;
+    private volatile long casSubmittedNanos, descriptorConfirmedNanos, casConfirmedNanos;
+    public void timing(Consumer<String> events, long t0, long cutoff) {
+        this.events = events;
+        cutoffNanos = cutoff;
+        event("t0", t0);
+        event("cutoff", cutoff);
+    }
+    private void event(String stage, long nanos) {
+        events.accept("outage-timing|event=" + stage + "|monotonicMs=" + (nanos / 1_000_000.0));
+    }
+    public void newClaim() { event("new-claim", System.nanoTime()); }
+    public void checkTiming() {
+        if (timingFailure != null) throw new IllegalStateException(timingFailure);
+        if (recovering && (descriptorConfirmedNanos == 0 || casConfirmedNanos == 0)
+                && System.nanoTime() >= cutoffNanos)
+            throw new IllegalStateException("deadline-exceeded|confirmation wait reached cutoff");
+    }
+    private void confirm(boolean descriptor) {
+        if (descriptor ? descriptorConfirmedNanos != 0 : casConfirmedNanos != 0) return;
+        long now = System.nanoTime();
+        event(descriptor ? "descriptor-confirmed" : "cas-confirmed", now);
+        if (now >= cutoffNanos) {
+            timingFailure = "deadline-exceeded|" + (descriptor ? "descriptor" : "cas") + " confirmation reached cutoff";
+            throw new IllegalStateException(timingFailure);
+        }
+        if (descriptor) descriptorConfirmedNanos = now;
+        else casConfirmedNanos = now;
+    }
+    public void assertConfirmed() {
+        if (timingFailure != null) throw new IllegalStateException(timingFailure);
+        if (casSubmittedNanos == 0 || descriptorConfirmedNanos == 0 || casConfirmedNanos == 0)
+            throw new IllegalStateException("Preserve confirmations missing");
+    }
     private final ZLinkLocationStore redis;
     private final ZLinkStoreKey descriptorKey;
     private final ZLinkStoreKey actorKey;
@@ -91,7 +129,14 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
     @Override
     public CompletionStage<ZLinkStoreWriteResult> write(
             ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+        long receivedNanos = System.nanoTime();
         if (unavailable) return failure();
+        if (recovering && (descriptorConfirmedNanos == 0 || casConfirmedNanos == 0)
+                && request.mutations().stream().anyMatch(
+                mutation -> mutation instanceof ZLinkStoreDelete delete && actorKey.equals(delete.key()))) {
+            timingFailure = "discarded|actor authority Delete during recovery";
+            return CompletableFuture.failedFuture(new IllegalStateException(timingFailure));
+        }
         if (target && !commitReleased && sourceOwnerId != null) {
             return projectsNewOwner(request).thenCompose(moves -> {
                 if (!moves) return redis.write(request, cancellation);
@@ -99,10 +144,18 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
                 return commitRelease.thenCompose(ignored -> redis.write(request, cancellation));
             });
         }
-        boolean descriptor = recovering && request.mutations().stream().anyMatch(
+        boolean descriptor = recovering && descriptorConfirmedNanos == 0 && request.mutations().stream().anyMatch(
             mutation -> mutation instanceof ZLinkStorePut put && descriptorKey.equals(put.key()));
-        boolean cas = recovering && request.mutations().stream().anyMatch(
+        boolean cas = recovering && casConfirmedNanos == 0 && request.mutations().stream().anyMatch(
             mutation -> mutation instanceof ZLinkStorePut put && actorKey.equals(put.key()));
+        if (cas) {
+            casSubmittedNanos = receivedNanos;
+            event("cas-submit", casSubmittedNanos);
+            if (casSubmittedNanos + OutageLeaseProfile.duration("renewTimeoutMs").toNanos() > cutoffNanos) {
+                timingFailure = "deadline-exceeded|CAS submission plus renew timeout exceeds cutoff";
+                return CompletableFuture.failedFuture(new IllegalStateException(timingFailure));
+            }
+        }
         return redis.write(request, cancellation).thenCompose(result -> {
             if (!(result instanceof ZLinkStoreWriteApplied)) return CompletableFuture.completedFuture(result);
             if (descriptor) {
@@ -111,7 +164,7 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
                     .map(mutation -> ZLinkProviderDescriptorRepository.decodeMeshNodeRecord(((ZLinkStorePut) mutation).bytes()))
                     .findFirst().orElseThrow().leaseGeneration();
                 descriptorSeen.complete(null);
-                return descriptorRelease.thenApply(ignored -> result);
+                return descriptorRelease.thenApply(ignored -> { confirm(true); return result; });
             }
             if (cas) {
                 preserveLease = request.mutations().stream()
@@ -119,7 +172,7 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
                     .map(mutation -> snapshot(((ZLinkStorePut) mutation).bytes()))
                     .findFirst().orElseThrow().ownerLeaseGeneration();
                 casSeen.complete(null);
-                return casRelease.thenApply(ignored -> result);
+                return casRelease.thenApply(ignored -> { confirm(false); return result; });
             }
             return CompletableFuture.completedFuture(result);
         });

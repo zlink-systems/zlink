@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Systems.Zlink;
@@ -37,6 +39,41 @@ internal sealed class OutageLocationStore(
     internal readonly TaskCompletionSource SourceCreated = Signal();
     internal readonly TaskCompletionSource Relocate = Signal();
     internal readonly TaskCompletionSource JoinCompleted = Signal();
+    private static readonly Lazy<Dictionary<string, string>> Profile = new(() =>
+        File.ReadLines(Environment.GetEnvironmentVariable("ZLINK_OUTAGE_LEASE_PROFILE")
+            ?? throw new InvalidOperationException("ZLINK_OUTAGE_LEASE_PROFILE is required for outage tests."))
+            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
+            .Select(line => line.Split('=', 2))
+            .ToDictionary(fields => fields[0].Trim(), fields => fields[1].Trim()));
+    private static double ProfileMs(string key) => double.Parse(Profile.Value[key], CultureInfo.InvariantCulture);
+    private static double MonotonicMs() => Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency;
+    private readonly ConcurrentDictionary<ZLinkStoreKey, double> _successfulWriteStarts = new();
+    private readonly object _writeObservation = new();
+    private readonly HashSet<Task> _pendingWrites = [];
+    private readonly TaskCompletionSource _recoveryFailure = Signal();
+    private double _cutoffMs;
+    private double _descriptorConfirmedMs;
+    private double _casConfirmedMs;
+    private void Timing(string step, double timestamp) =>
+        _events?.Append($"outage-timing|event={step}|monotonicMs={timestamp.ToString("R", CultureInfo.InvariantCulture)}");
+    private Exception FailRecovery(string message)
+    {
+        var error = new InvalidOperationException(message);
+        _recoveryFailure.TrySetException(error);
+        return error;
+    }
+    private void RequireBeforeCutoff(double timestamp, string step)
+    {
+        if (timestamp >= _cutoffMs)
+            throw FailRecovery($"deadline-exceeded|event={step}|monotonicMs={timestamp:R}|cutoffMs={_cutoffMs:R}");
+    }
+    private async Task WaitForRecoveryAsync(Task task, CancellationToken cancellationToken)
+    {
+        var remainingMs = _cutoffMs - MonotonicMs();
+        if (remainingMs <= 0) throw FailRecovery($"deadline-exceeded|event=confirmation-wait|cutoffMs={_cutoffMs:R}");
+        try { await task.WaitAsync(TimeSpan.FromMilliseconds(remainingMs), cancellationToken); }
+        catch (TimeoutException) { throw FailRecovery($"deadline-exceeded|event=confirmation-wait|cutoffMs={_cutoffMs:R}"); }
+    }
     private volatile bool _outage;
     private volatile bool _recovering;
     private ZLinkStoreKey _actorKey;
@@ -93,12 +130,12 @@ internal sealed class OutageLocationStore(
     internal static void ConfigureProfile(Zlink.Framework.Contracts.Locations.ZLinkLocationOptions location, TestHostOptions options)
     {
         if (options.OutageControlPrefix is null) return;
-        location.OwnerLeaseTtl = TimeSpan.FromSeconds(30);
-        location.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(5);
-        location.OwnerLeaseFencingMargin = TimeSpan.FromSeconds(5);
-        location.OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(3);
-        location.StoreFailureGrace = TimeSpan.FromSeconds(30);
-        location.StoreOutageRetention = true;
+        location.OwnerLeaseTtl = TimeSpan.FromMilliseconds(ProfileMs("ttlMs"));
+        location.OwnerLeaseRenewInterval = TimeSpan.FromMilliseconds(ProfileMs("renewIntervalMs"));
+        location.OwnerLeaseFencingMargin = TimeSpan.FromMilliseconds(ProfileMs("fencingMarginMs"));
+        location.OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(ProfileMs("renewTimeoutMs"));
+        location.StoreFailureGrace = TimeSpan.FromMilliseconds(ProfileMs("storeFailureGraceMs"));
+        location.StoreOutageRetention = bool.Parse(Profile.Value["storeOutageRetention"]);
     }
 
     public ValueTask<ZLinkStoreReadResult> ReadAsync(ZLinkStoreKey key, CancellationToken cancellationToken = default)
@@ -124,8 +161,20 @@ internal sealed class OutageLocationStore(
         ZLinkStoreWriteRequest request, CancellationToken cancellationToken = default
     )
     {
+        var startedMs = MonotonicMs();
         FailIfOutage();
         var actor = request.Mutations.OfType<ZLinkStoreMutation.Put>().SingleOrDefault(put => put.Key == _actorKey);
+        if (_recovering && source)
+        {
+            if (request.Mutations.OfType<ZLinkStoreMutation.Delete>().Any(delete => delete.Key == _actorKey))
+                throw FailRecovery("discarded|actor-authority-delete");
+            if (actor is not null && _casConfirmedMs == 0)
+            {
+                Timing("cas-submit", startedMs);
+                if (startedMs + ProfileMs("renewTimeoutMs") > _cutoffMs)
+                    throw FailRecovery($"deadline-exceeded|event=cas-submit|monotonicMs={startedMs:R}|cutoffMs={_cutoffMs:R}");
+            }
+        }
         if (!source && actor is not null && !_commitRelease.Task.IsCompleted)
         {
             var before = await inner.ReadAsync(_actorKey, cancellationToken);
@@ -139,23 +188,7 @@ internal sealed class OutageLocationStore(
             _commitHeld.TrySetResult();
             await _commitRelease.Task.WaitAsync(cancellationToken);
         }
-        var result = await inner.WriteAsync(request, cancellationToken);
-        if (_recovering && source)
-        {
-            // Temporary #4609 trail: which recovery writes reach the Store and how they end.
-            var keys = string.Join(",", request.Mutations.Select(mutation =>
-            {
-                var key = mutation switch
-                {
-                    ZLinkStoreMutation.Put put => put.Key,
-                    ZLinkStoreMutation.Delete delete => delete.Key,
-                    _ => default,
-                };
-                var name = key == _actorKey ? "actor" : key == _meshKey ? "descriptor" : key == _ownerKey ? "owner" : "other";
-                return $"{mutation.GetType().Name}:{name}";
-            }));
-            _events?.Append($"outage-write|result={result.GetType().Name}|mutations={keys}");
-        }
+        var result = await WriteObservedAsync(request, startedMs, cancellationToken);
         if (result is not ZLinkStoreWriteResult.Applied) return result;
         if (_recovering && source)
         {
@@ -163,23 +196,27 @@ internal sealed class OutageLocationStore(
             if (owner is not null)
             {
                 var lease = Property<long>(Call("DecodeOwner", owner.Bytes), "LeaseGeneration");
-                if (lease != _oldLease)
+                if (lease != _oldLease && _newLease == 0)
                 {
                     _newLease = lease;
+                    Timing("new-claim", MonotonicMs());
                     _claimed.TrySetResult();
                 }
             }
             var descriptor = request.Mutations.OfType<ZLinkStoreMutation.Put>().SingleOrDefault(put => put.Key == _meshKey);
-            if (descriptor is not null)
+            if (descriptor is not null && _descriptorConfirmedMs == 0)
             {
                 var descriptorType = Repository.Assembly.GetType("Zlink.Framework.Runtime.Locations.ZLinkMeshNodeDescriptor", true)!;
                 var record = Repository.GetMethod("DecodeDescriptor", Static)!.MakeGenericMethod(descriptorType).Invoke(null, [descriptor.Bytes])!;
                 Require(Property<long>(Property(record, "Descriptor"), "LeaseGeneration") == _newLease, "Recovery descriptor did not use the recovered lease.");
                 Require(Property<string>(Property(record, "Descriptor"), "OwnerId") == Property<string>(_authorityBefore!, "OwnerId"), "Recovery descriptor changed owner identity.");
                 _descriptorHeld.TrySetResult();
-                await _descriptorRelease.Task.WaitAsync(cancellationToken);
+                await WaitForRecoveryAsync(_descriptorRelease.Task, cancellationToken);
+                _descriptorConfirmedMs = MonotonicMs();
+                Timing("descriptor-confirmed", _descriptorConfirmedMs);
+                RequireBeforeCutoff(_descriptorConfirmedMs, "descriptor-confirmed");
             }
-            if (actor is not null)
+            if (actor is not null && _casConfirmedMs == 0)
             {
                 var meta = Call("DecodeAuthorityMeta", actor.Bytes);
                 Require(_authorityBefore is not null, "Missing steady authority observation.");
@@ -189,7 +226,10 @@ internal sealed class OutageLocationStore(
                 Require(Property<long>(meta, "OwnerLeaseGeneration") == _newLease && _newLease != _oldLease, "Preserve did not use the recovered lease.");
                 _authorityRecovered = meta;
                 _casHeld.TrySetResult();
-                await _casRelease.Task.WaitAsync(cancellationToken);
+                await WaitForRecoveryAsync(_casRelease.Task, cancellationToken);
+                _casConfirmedMs = MonotonicMs();
+                Timing("cas-confirmed", _casConfirmedMs);
+                RequireBeforeCutoff(_casConfirmedMs, "cas-confirmed");
             }
         }
         if (source && !_recovering && _newLease != 0 && actor is not null)
@@ -209,6 +249,32 @@ internal sealed class OutageLocationStore(
         return result;
     }
 
+    private async Task<ZLinkStoreWriteResult> WriteObservedAsync(
+        ZLinkStoreWriteRequest request, double startedMs, CancellationToken cancellationToken)
+    {
+        var settled = Signal();
+        Task<ZLinkStoreWriteResult> write;
+        lock (_writeObservation)
+        {
+            FailIfOutage();
+            write = inner.WriteAsync(request, cancellationToken).AsTask();
+            _pendingWrites.Add(settled.Task);
+        }
+        try
+        {
+            var result = await write;
+            if (source && !_recovering && result is ZLinkStoreWriteResult.Applied)
+                foreach (var put in request.Mutations.OfType<ZLinkStoreMutation.Put>())
+                    _successfulWriteStarts.AddOrUpdate(put.Key, startedMs, (_, previous) => Math.Max(previous, startedMs));
+            return result;
+        }
+        finally
+        {
+            lock (_writeObservation) _pendingWrites.Remove(settled.Task);
+            settled.TrySetResult();
+        }
+    }
+
     private IZLinkActorManager? _actors;
     private TestHostEventSink? _events;
     private async Task<ActorRef> RequireSourceAsync(CancellationToken cancellationToken) =>
@@ -216,6 +282,12 @@ internal sealed class OutageLocationStore(
             ?? throw new InvalidOperationException("Public Find lost the source owner before commit.");
 
     internal async Task RunCommandAsync(string command, IServiceProvider services, CancellationToken cancellationToken)
+    {
+        var commandTask = RunCommandCoreAsync(command, services, cancellationToken);
+        await await Task.WhenAny(commandTask, _recoveryFailure.Task);
+    }
+
+    private async Task RunCommandCoreAsync(string command, IServiceProvider services, CancellationToken cancellationToken)
     {
         var actorId = options.ActorId ?? "cross-lang-user-spot-actor";
         _actors = services.GetRequiredService<IZLinkActorManager>();
@@ -243,8 +315,18 @@ internal sealed class OutageLocationStore(
                 return;
             case "outage":
                 Require(source, "Only the source may inject outage.");
-                _outage = true;
+                Task[] pending;
+                lock (_writeObservation)
+                {
+                    _outage = true;
+                    pending = _pendingWrites.ToArray();
+                }
                 await _failed.Task.WaitAsync(cancellationToken);
+                await Task.WhenAll(pending).WaitAsync(cancellationToken);
+                Require(_successfulWriteStarts.TryGetValue(_ownerKey, out var t0Ms), "No successful owner lease write was observed.");
+                _cutoffMs = t0Ms + ProfileMs("ttlMs") + 2 * ProfileMs("fencingMarginMs");
+                Timing("t0", t0Ms);
+                Timing("cutoff", _cutoffMs);
                 return;
             case "expired":
                 while (await inner.ReadAsync(_ownerKey, cancellationToken) is not ZLinkStoreReadResult.Missing)
@@ -253,19 +335,19 @@ internal sealed class OutageLocationStore(
             case "recover":
                 _recovering = true;
                 _outage = false;
-                await _claimed.Task.WaitAsync(cancellationToken);
+                await WaitForRecoveryAsync(_claimed.Task, cancellationToken);
                 services.GetRequiredService<TestHostEventSink>().Append($"outage-lease|old={_oldLease}|new={_newLease}");
                 return;
             case "release-descriptor":
-                await _descriptorHeld.Task.WaitAsync(cancellationToken);
+                await WaitForRecoveryAsync(_descriptorHeld.Task, cancellationToken);
                 _descriptorRelease.TrySetResult();
                 return;
             case "release-cas":
-                await _casHeld.Task.WaitAsync(cancellationToken);
+                await WaitForRecoveryAsync(_casHeld.Task, cancellationToken);
                 _casRelease.TrySetResult();
                 return;
             case "partial":
-                await Task.WhenAll(_descriptorHeld.Task, _casHeld.Task).WaitAsync(cancellationToken);
+                await WaitForRecoveryAsync(Task.WhenAll(_descriptorHeld.Task, _casHeld.Task), cancellationToken);
                 var before = OutageActorObservations.Count(actorId);
                 try
                 {
@@ -284,6 +366,9 @@ internal sealed class OutageLocationStore(
                 var current = await ProbeAsync(client, "resumed", cancellationToken);
                 Require(current.InstanceId == _identity!.InstanceId && current.CreationCount == _identity.CreationCount, "Recovery replaced the source instance.");
                 Require(_authorityRecovered is not null, "Recovery Preserve result was not observed.");
+                Require(_descriptorConfirmedMs > 0 && _casConfirmedMs > 0, "Both recovery confirmations must be observed.");
+                RequireBeforeCutoff(_descriptorConfirmedMs, "descriptor-confirmed");
+                RequireBeforeCutoff(_casConfirmedMs, "cas-confirmed");
                 _recovering = false;
                 services.GetRequiredService<TestHostEventSink>().Append($"outage-resumed|instance={current.InstanceId}|creations={current.CreationCount}");
                 return;
@@ -374,7 +459,10 @@ internal sealed class OutageCommandService(
             }
             catch (Exception error)
             {
-                services.GetRequiredService<TestHostEventSink>().Append($"outage-error|run={fields[0]}|seq={sequence}|phase={fields[2]}|error={error.GetType().Name}:{error.Message}");
+                var message = error.Message.StartsWith("deadline-exceeded|", StringComparison.Ordinal)
+                    || error.Message.StartsWith("discarded|", StringComparison.Ordinal)
+                    ? error.Message : $"{error.GetType().Name}:{error.Message}";
+                services.GetRequiredService<TestHostEventSink>().Append($"outage-error|run={fields[0]}|seq={sequence}|phase={fields[2]}|error={message}");
                 throw;
             }
             services.GetRequiredService<TestHostEventSink>().Append($"outage-ack|run={fields[0]}|seq={sequence}|phase={fields[2]}");

@@ -2,6 +2,34 @@
 #pragma once
 
 #include "runtime/locations/provider_location_repository.hpp"
+#include <cstdlib>
+#include <functional>
+#include <map>
+#include <fstream>
+
+struct outage_lease_profile_t
+{
+    std::map<std::string, std::string> values;
+    outage_lease_profile_t ()
+    {
+        const auto path = std::getenv ("ZLINK_OUTAGE_LEASE_PROFILE");
+        if (!path || !*path)
+            throw std::runtime_error ("ZLINK_OUTAGE_LEASE_PROFILE is required");
+        std::ifstream input (path);
+        if (!input) throw std::runtime_error ("cannot read outage lease profile");
+        std::string line;
+        while (std::getline (input, line)) {
+            if (!line.empty () && line.back () == '\r') line.pop_back ();
+            const auto equal = line.find ('=');
+            if (equal != std::string::npos && line.front () != '#')
+                values.emplace (line.substr (0, equal), line.substr (equal + 1));
+        }
+        if (values.at ("storeOutageRetention") != "true")
+            throw std::runtime_error ("outage profile requires StoreOutageRetention");
+    }
+    std::chrono::milliseconds duration (const std::string &key) const
+    { return std::chrono::milliseconds (std::stoll (values.at (key))); }
+};
 
 // Observation uses the repository's own key and record codecs. The overlay is
 // read-only: candidate writes never escape to Redis before their release.
@@ -58,6 +86,50 @@ class outage_observation_store_t final : public fw::location_store_t
 class outage_location_store_t final : public fw::location_store_t
 {
   public:
+    static std::int64_t now_nanos ()
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds> (
+          std::chrono::steady_clock::now ().time_since_epoch ()).count ();
+    }
+    void timing_event (const std::string &stage, std::int64_t nanos)
+    {
+        if (events) events ("outage-timing|event=" + stage + "|monotonicMs="
+                            + std::to_string (nanos / 1000000.0));
+    }
+    void set_cutoff (std::chrono::steady_clock::time_point cutoff)
+    {
+        cutoff_nanos.store (std::chrono::duration_cast<std::chrono::nanoseconds> (
+          cutoff.time_since_epoch ()).count ());
+        const auto lifetime = profile.duration ("ttlMs") + 2 * profile.duration ("fencingMarginMs");
+        timing_event ("t0", cutoff_nanos.load ()
+          - std::chrono::duration_cast<std::chrono::nanoseconds> (lifetime).count ());
+        timing_event ("cutoff", cutoff_nanos.load ());
+    }
+    void check_timing () const
+    {
+        if (failure.load () == 1)
+            throw std::runtime_error ("deadline-exceeded|Preserve submission or confirmation exceeded cutoff");
+        if (failure.load () == 2)
+            throw std::runtime_error ("discarded|actor authority Delete during recovery");
+        if (recovering.load () && (!descriptor_delivered.load () || !cas_delivered.load ())
+            && now_nanos () >= cutoff_nanos.load ())
+            throw std::runtime_error ("deadline-exceeded|confirmation wait reached cutoff");
+    }
+    void confirm (bool descriptor)
+    {
+        const auto now = now_nanos ();
+        timing_event (descriptor ? "descriptor-confirmed" : "cas-confirmed", now);
+        if (now >= cutoff_nanos.load ()) {
+            failure.store (1);
+            check_timing ();
+        }
+        if (descriptor) descriptor_delivered.store (true);
+        else cas_delivered.store (true);
+    }
+    std::function<void (const std::string &)> events;
+    outage_lease_profile_t profile;
+    std::atomic<std::int64_t> cutoff_nanos{0}, cas_submitted_nanos{0};
+    std::atomic<int> failure{0};
     explicit outage_location_store_t (std::shared_ptr<fw::location_store_t> inner,
                                        std::string actor_id,
                                        std::string mesh,
@@ -91,6 +163,7 @@ class outage_location_store_t final : public fw::location_store_t
 
     fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
     {
+        const auto submitted_at = now_nanos ();
         fail_if_outage ();
         if (target && !commit_released.load ()) {
             outage_observation_store_t overlay (inner.get (), &request);
@@ -107,8 +180,25 @@ class outage_location_store_t final : public fw::location_store_t
             }
         }
 
+        if (recovering.load () && (!descriptor_delivered.load () || !cas_delivered.load ())
+            && std::any_of (request.mutations.begin (), request.mutations.end (), [&] (const auto &mutation) {
+                const auto *removed = std::get_if<fw::store_delete_t> (&mutation);
+                return removed && removed->key.value == authority_store_key.value;
+            })) {
+            failure.store (2);
+            check_timing ();
+        }
         const bool descriptor = contains_put (request, descriptor_store_key);
         const bool authority = contains_put (request, authority_store_key);
+        if (recovering.load () && authority && !cas_delivered.load ()) {
+            cas_submitted_nanos.store (submitted_at);
+            timing_event ("cas-submit", submitted_at);
+            if (submitted_at + std::chrono::duration_cast<std::chrono::nanoseconds> (
+                  profile.duration ("renewTimeoutMs")).count () > cutoff_nanos.load ()) {
+                failure.store (1);
+                check_timing ();
+            }
+        }
         auto result = co_await inner->write (std::move (request));
         if (recovering.load () && std::holds_alternative<fw::store_write_applied_t> (result)) {
             if (descriptor && !descriptor_released.load ()) {
@@ -119,10 +209,8 @@ class outage_location_store_t final : public fw::location_store_t
                 cas_held.store (true);
                 co_await cas_release.task ();
             }
-            if (descriptor)
-                descriptor_delivered.store (true);
-            if (authority)
-                cas_delivered.store (true);
+            if (descriptor && !descriptor_delivered.load ()) confirm (true);
+            if (authority && !cas_delivered.load ()) confirm (false);
         }
         co_return result;
     }

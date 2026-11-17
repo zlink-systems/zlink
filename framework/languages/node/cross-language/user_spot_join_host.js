@@ -37,8 +37,8 @@ function locationStore(builder, keyPrefix, target) {
     keyPrefix: `${keyPrefix}:location`
   });
   if (!args['outage-control-prefix']) return store;
-  configureOutage(builder);
-  outageStore = new OutageStore(store, args, appendEvent, target);
+  const profile = configureOutage(builder);
+  outageStore = new OutageStore(store, args, appendEvent, target, profile);
   return outageStore;
 }
 
@@ -734,8 +734,9 @@ async function runOutageSource(app, actorManager, actorClient, actorId, targetSp
         break;
       }
       case 'outage':
-        outageStore.outage = true;
+        outageStore.beginOutage(runtime.locationOwner.currentRuntime);
         await until(() => outageStore.failed, 'actual Store failure');
+        await outageStore.captureOutage();
         break;
       case 'expired':
         await until(async () => (await outageStore.observer.readOwnerLease(outageStore.owner.ownerId)).kind === 'missing', 'old lease expiry');
@@ -763,6 +764,11 @@ async function runOutageSource(app, actorManager, actorClient, actorId, targetSp
         break;
       }
       case 'resumed': {
+        assert(outageStore.preserved, 'Preserve confirmation missing');
+        assert(outageStore.newOwner, 'new owner lease missing');
+        assert.notEqual(outageStore.newOwner.leaseGeneration, outageStore.owner.leaseGeneration);
+        assert(Number.isFinite(outageStore.descriptorConfirmed), 'descriptor confirmation missing');
+        assert(Number.isFinite(outageStore.casConfirmed), 'CAS confirmation missing');
         await until(() => runtime.locationOwner.currentRuntime.boundExecutionUsable, 'source execution gate resumed');
         const reply = await probe('outage-resumed');
         assert.equal(reply.instanceId, initial.instanceId);

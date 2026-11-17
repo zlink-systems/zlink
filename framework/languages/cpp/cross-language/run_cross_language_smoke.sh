@@ -22,6 +22,13 @@ case "$(uname -s 2>/dev/null || true)" in
   MINGW*|MSYS*|CYGWIN*) IS_WINDOWS_NATIVE=1 ;;
 esac
 
+# Every outage host reads the same lease profile, including installed launchers.
+ZLINK_OUTAGE_LEASE_PROFILE="${SCRIPT_DIR}/outage-lease-profile.properties"
+if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
+  ZLINK_OUTAGE_LEASE_PROFILE="$(cygpath -m "${ZLINK_OUTAGE_LEASE_PROFILE}")"
+fi
+export ZLINK_OUTAGE_LEASE_PROFILE
+
 resolve_executable() {
   local fallback="$1"
   local candidate extension resolved

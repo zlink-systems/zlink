@@ -63,12 +63,19 @@ final class OutageScenario {
                 if ("completed".equals(command[2])) return;
             }
         } catch (Exception failure) {
-            sink.append("outage-error|run=" + runId + "|seq=" + sequence + "|error=" + failure);
+            Throwable cause = failure;
+            while ((cause instanceof ExecutionException || cause instanceof java.util.concurrent.CompletionException)
+                    && cause.getCause() != null) cause = cause.getCause();
+            String message = cause.getMessage();
+            String detail = message != null && (message.startsWith("deadline-exceeded|")
+                || message.startsWith("discarded|")) ? message : cause.toString();
+            sink.append("outage-error|run=" + runId + "|seq=" + sequence + "|error=" + detail);
         }
     }
 
     private String[] waitCommand(Path file, long previous) throws Exception {
         while (true) {
+            store.checkTiming();
             if (Files.exists(file)) {
                 String[] fields = Files.readString(file).strip().split("\t", -1);
                 if (fields.length == 3 && runId.equals(fields[0])) {
@@ -102,6 +109,15 @@ final class OutageScenario {
                 require(!target, "outage belongs to source");
                 store.outage();
                 await(store.failedOperation());
+                var field = ZLinkFrameworkRuntime.class.getDeclaredField("locationRuntime");
+                field.setAccessible(true);
+                var location = (systems.zlink.framework.runtime.locations.ZLinkLocationRuntime) field.get(runtime);
+                waitUntil(() -> location.ownerLeaseSnapshot().outageCutoffNanos() != null,
+                    "outage snapshot was not recorded");
+                var snapshot = location.ownerLeaseSnapshot();
+                require(snapshot.lastSuccessfulRequestStartedNanos() != null, "last successful lease request missing");
+                store.timing(sink::append, snapshot.outageCutoffNanos() - OutageLeaseProfile.lifetimeNanos(),
+                    snapshot.outageCutoffNanos());
             }
             case "expired" -> {
                 require(original != null, "steady observation missing");
@@ -125,6 +141,7 @@ final class OutageScenario {
                         return false;
                     } catch (Exception failure) { throw new IllegalStateException(failure); }
                 }, "new owner lease was not claimed");
+                store.newClaim();
                 sink.append("outage-recovered-lease|old=" + original.ownerLeaseGeneration() + "|new=" + newLease);
             }
             case "release-descriptor" -> await(store.releaseDescriptor());
@@ -146,6 +163,7 @@ final class OutageScenario {
                 sink.append("outage-partial|kind=ShuttingDown|handlerExecutions=0");
             }
             case "resumed" -> {
+                store.assertConfirmed();
                 probe("resumed");
                 require(instance == RelocationActor.observed(actorId), "source actor instance changed");
                 require(creations == RelocationActor.creations(actorId), "source actor was recreated");
@@ -206,13 +224,22 @@ final class OutageScenario {
         return node.actorAuthorityOwnerGeneration(actor) == 0 && node.actorAuthorityOwnerLeaseGeneration(actor) == 0;
     }
 
-    private static <T> T await(CompletionStage<T> stage) throws Exception {
-        return stage.toCompletableFuture().get(60, TimeUnit.SECONDS);
+    private <T> T await(CompletionStage<T> stage) throws Exception {
+        var future = stage.toCompletableFuture();
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        while (true) {
+            store.checkTiming();
+            try { return future.get(10, TimeUnit.MILLISECONDS); }
+            catch (java.util.concurrent.TimeoutException pending) {
+                require(System.nanoTime() < deadline, "outage observation timed out");
+            }
+        }
     }
 
-    private static void waitUntil(BooleanSupplier observed, String failure) throws Exception {
+    private void waitUntil(BooleanSupplier observed, String failure) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
         while (!observed.getAsBoolean()) {
+            store.checkTiming();
             if (System.nanoTime() >= deadline) throw new IllegalStateException(failure);
             Thread.sleep(10);
         }
