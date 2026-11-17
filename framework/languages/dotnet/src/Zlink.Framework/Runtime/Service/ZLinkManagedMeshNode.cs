@@ -10270,7 +10270,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ),
                     out var hello
                 )
-                    ? hello.HelloDescriptor?.DescriptorRevision ?? 0
+                    ? AdmissionDescriptor(hello).DescriptorRevision
                     : 0
             );
             RetireHelloSubmissions(peer.PhysicalRoutingId, peer.RouteGeneration);
@@ -13458,26 +13458,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (response is null || _socket is null)
             return;
         var hello = RunInboundOperationState(() =>
-            _controlSends
-                .GetValueOrDefault(
-                    new ControlSendKey(
-                        peer.PhysicalRoutingId,
-                        peer.RouteGeneration,
-                        ServiceWireConstants.Command.Hello
-                    )
-                )
-                ?.HelloDescriptor
+            AdmissionDescriptor(
+                AdmissionExchangeUnderLock(peer.PhysicalRoutingId, peer.RouteGeneration)
+            )
         );
         // Crossed HELLOs describe the same admission exchange. A newer local
         // descriptor is published by the existing UPDATE path after ADMIT.
-        var descriptor = hello is { } snapshot
-            ? ZLinkServiceWireCodec.EncodeRouteAdmission(
-                ServiceWireConstants.Command.Admit,
-                snapshot
-            )
-            : EncodeLocalAdmission(ServiceWireConstants.Command.Admit);
+        var descriptor = ZLinkServiceWireCodec.EncodeRouteAdmission(
+            ServiceWireConstants.Command.Admit,
+            hello
+        );
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} command={ServiceWireConstants.Command.Admit} endpoint={_advertisedEndpoint} lifecycle={_lifecycleGeneration} revision={hello?.DescriptorRevision ?? _descriptorRevision}"
+            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} command={ServiceWireConstants.Command.Admit} endpoint={_advertisedEndpoint} lifecycle={_lifecycleGeneration} revision={hello.DescriptorRevision}"
         );
         _ = TrySendExactControlAsync(response, descriptor, _stop?.Token ?? CancellationToken.None);
     }
@@ -13489,11 +13481,58 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var target = peer.PhysicalRoutingId;
         if (target.IsEmpty)
             return;
+        if (
+            command == ServiceWireConstants.Command.Update
+            && RunInboundOperationState(() =>
+                _controlSends.ContainsKey(
+                    new ControlSendKey(
+                        target,
+                        peer.RouteGeneration,
+                        ServiceWireConstants.Command.Hello
+                    )
+                )
+            )
+        )
+            return;
         var descriptor = EncodeLocalAdmission(command);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} command={command} endpoint={_advertisedEndpoint} lifecycle={_lifecycleGeneration} revision={_descriptorRevision}"
         );
         SendControl(target, peer.RouteGeneration, command, descriptor);
+    }
+
+    // The existing exchange owns the first outbound snapshot, including an ADMIT-first route.
+    private ControlSendState AdmissionExchangeUnderLock(RoutingId target, ulong generation)
+    {
+        var key = new ControlSendKey(target, generation, ServiceWireConstants.Command.Hello);
+        if (!_controlSends.TryGetValue(key, out var exchange))
+        {
+            exchange = new ControlSendState
+            {
+                Pending = EncodeLocalAdmission(ServiceWireConstants.Command.Hello),
+            };
+            if (NeedsHelloUnderLock(target, generation))
+                _controlSends.Add(key, exchange);
+        }
+        return exchange;
+    }
+
+    private static ZLinkServiceWireCodec.AdmissionRecord AdmissionDescriptor(
+        ControlSendState exchange
+    )
+    {
+        if (exchange.HelloDescriptor is { } submitted)
+            return submitted;
+        if (
+            !ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                exchange.Pending!,
+                out _,
+                out var descriptor,
+                out _
+            )
+        )
+            throw new InvalidOperationException("The local admission descriptor is invalid.");
+        return descriptor;
     }
 
     private byte[] EncodeLocalAdmission(ServiceWireConstants.Command command) =>
@@ -13582,40 +13621,40 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 {
                     if (_inboundOperationAdmissionClosed)
                         return ((ControlSendState?)null, false);
-                    if (_controlSends.TryGetValue(key, out var current))
+                    _controlSends.TryGetValue(key, out var current);
+                    if (command == ServiceWireConstants.Command.Hello)
                     {
-                        if (command == ServiceWireConstants.Command.Hello)
+                        // ADMIT or route termination may have retired a due snapshot.
+                        if (head is not null && current is null)
+                            return ((ControlSendState?)null, false);
+                        current ??= AdmissionExchangeUnderLock(target, routeGeneration);
+                        if (current.HelloDescriptor is null)
                         {
-                            // Only a due management turn supplies the accepted HELLO bytes.
-                            // Pending is empty while Core still owns a submission.
-                            if (head is null || current.Pending is null)
-                                return (current, false);
-                            head = current.Pending;
-                            current.Pending = null;
-                            return (current, true);
+                            current.HelloDescriptor = AdmissionDescriptor(current);
+                            if (_admissionActivityTicks == NoAdmissionActivityTicks)
+                            {
+                                Volatile.Write(
+                                    ref _admissionActivityTicks,
+                                    _deadlineClock.Elapsed.Ticks
+                                );
+                                SignalReceiveOwner();
+                            }
                         }
-                        // Admission and liveness are retryable state signals. If a
-                        // previous attempt is still waiting for Core admission,
-                        // retain only the newest signal for this peer epoch and
-                        // command. This bounds temporal amplification without
-                        // moving retry or completion ownership out of Core.
+                        else if (head is null || current.Pending is null)
+                            // Only a due management turn resubmits a completed HELLO.
+                            return (current, false);
+                        head = current.Pending;
+                        current.Pending = null;
+                        return (current, true);
+                    }
+                    if (current is not null)
+                    {
+                        // Core owns the outstanding submission; retain the newest signal.
                         current.Pending = head!;
                         return (current, false);
                     }
-
-                    // ADMIT or route termination may have retired a due snapshot.
-                    if (command == ServiceWireConstants.Command.Hello && head is not null)
-                        return ((ControlSendState?)null, false);
                     var created = new ControlSendState();
                     _controlSends.Add(key, created);
-                    if (
-                        command == ServiceWireConstants.Command.Hello
-                        && _admissionActivityTicks == NoAdmissionActivityTicks
-                    )
-                    {
-                        Volatile.Write(ref _admissionActivityTicks, _deadlineClock.Elapsed.Ticks);
-                        SignalReceiveOwner();
-                    }
                     return (created, true);
                 });
             (state, start) =
@@ -13641,29 +13680,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         try
         {
-            if (head is null)
-            {
-                head = RunState(() =>
-                {
-                    // The exchange owns the descriptor encoded in its first HELLO.
-                    var hello = EncodeLocalAdmission(command);
-                    if (
-                        !ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-                            hello,
-                            out _,
-                            out var descriptor,
-                            out _
-                        )
-                    )
-                        throw new InvalidOperationException(
-                            "The local HELLO descriptor is invalid."
-                        );
-                    state.HelloDescriptor = descriptor;
-                    return hello;
-                });
-                if (!IsValidControlHead(command, head))
-                    return false;
-            }
             if (
                 RunRoutedOperation(() =>
                     DrainControlSendAsync(key, state, head, _stop?.Token ?? CancellationToken.None)
