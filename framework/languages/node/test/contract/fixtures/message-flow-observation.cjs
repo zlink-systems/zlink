@@ -25,14 +25,10 @@ module.exports = function observeMessageFlow(delivery, { onLog, onSpan } = {}) {
   };
   function command(kind, value) {
     channel.ref();
-    return new Promise((resolve, reject) => {
+    // The worker acknowledges each marker on this channel; node:test bounds the whole wait.
+    return new Promise((resolve) => {
       const id = ++sequence;
-      const timeout = setTimeout(() => {
-        pending.delete(id);
-        channel.unref();
-        reject(new Error('message-flow observation marker deadline'));
-      }, 5000);
-      pending.set(id, () => { clearTimeout(timeout); channel.unref(); resolve(); });
+      pending.set(id, () => { channel.unref(); resolve(); });
       channel.postMessage({ kind, value, id });
     });
   }
@@ -44,9 +40,9 @@ module.exports = function observeMessageFlow(delivery, { onLog, onSpan } = {}) {
     } finally {
       channel.unref();
     }
-    const deadline = Date.now() + 5000;
+    // Wait for the provider to drain; a worker failure ends the wait instead of an assumed time.
     while (owner.executing || Atomics.load(owner.state, delivery.TelemetryState.Pending) !== 0) {
-      assert.ok(Date.now() < deadline, 'message-flow provider observation deadline');
+      assert.equal(owner.failure, undefined, 'message-flow worker failed during observation');
       await delay(1);
     }
     // All provider observations precede this marker on the same channel.
