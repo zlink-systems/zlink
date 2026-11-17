@@ -7629,6 +7629,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
                 });
                 if (!pending)
                     break;
+                // Accepted request payloads outlive their caller. Join admission
+                // controls still require their operation's terminal claim.
+                if (pending->record.kind == record_kind_t::spot_control
+                    && !_transport->operation_pending (pending->record.operation_id))
+                    continue;
                 if (pending->record.kind == record_kind_t::spot_multicast
                     && pending->record.spot_route) {
                     const auto &target = *pending->record.spot_route;
@@ -8986,6 +8991,18 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
       result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
     std::exception_ptr failure;
     std::optional<std::chrono::steady_clock::time_point> operation_deadline;
+    struct incomplete_join_t
+    {
+        static task_t<void> run (std::shared_ptr<public_host_runtime_t> host,
+                                 stateful::membership_token_t membership,
+                                 std::function<task_t<void> ()> cleanup)
+        {
+            if (cleanup)
+                co_await cleanup ();
+            if (membership.value != 0)
+                (void) co_await host->_objects.abort_membership_move_async (membership);
+        }
+    };
     try {
         co_await _lifecycle_configuration_lane.run_task ([&] {
             if (!_started || _closing)
@@ -8995,16 +9012,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                   operation, *reservation, timeout, {},
                   [host = shared_from_this (), membership,
                    cleanup = local_request_wait_cleanup (waiter)] () -> task_t<void> {
-                      if (cleanup)
-                          co_await cleanup ();
-                      if (membership.value != 0) {
-                          const auto abort =
-                            [] (std::shared_ptr<public_host_runtime_t> owner,
-                                stateful::membership_token_t move) -> task_t<void> {
-                              (void) co_await owner->_objects.abort_membership_move_async (move);
-                          };
-                          (void) abort (host, membership);
-                      }
+                      return incomplete_join_t::run (host, membership, cleanup);
                   });
             }
             catch (const framework_exception_t &failure) {
@@ -9169,13 +9177,21 @@ std::function<task_t<void> ()> public_host_runtime_t::local_request_wait_cleanup
 {
     if (!waiter)
         return {};
-    std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-    return [weak, waiter] () -> task_t<void> {
-        const auto cancel = [waiter] { (void) waiter->cancel (); };
-        if (auto host = weak.lock (); host && !host->_local_dispatch_completion_lane.is_on_lane ())
-            co_await host->_local_dispatch_completion_lane.run_task (cancel);
-        else
-            cancel ();
+    struct wait_cleanup_t
+    {
+        static task_t<void> run (std::weak_ptr<public_host_runtime_t> weak,
+                                 std::shared_ptr<application_job_queue_t::waiter_t> waiter)
+        {
+            const auto cancel = [waiter] { (void) waiter->cancel (); };
+            if (auto host = weak.lock ();
+                host && !host->_local_dispatch_completion_lane.is_on_lane ())
+                co_await host->_local_dispatch_completion_lane.run_task (cancel);
+            else
+                cancel ();
+        }
+    };
+    return [weak = weak_from_this (), waiter] () -> task_t<void> {
+        return wait_cleanup_t::run (weak, waiter);
     };
 }
 
