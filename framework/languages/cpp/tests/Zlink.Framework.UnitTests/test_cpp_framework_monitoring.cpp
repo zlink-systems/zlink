@@ -1,5 +1,5 @@
 #include "../support/runtime_failure_fixture.hpp"
-/* SPDX-License-Identifier: Elastic-2.0 */
+/* SPDX-License-Identifier: MPL-2.0 */
 
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"

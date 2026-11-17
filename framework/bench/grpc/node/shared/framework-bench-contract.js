@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Elastic-2.0
+// SPDX-License-Identifier: MPL-2.0
 'use strict';
 
 // The DTO and packet name the `zlink-framework-<lang>` row exchanges.

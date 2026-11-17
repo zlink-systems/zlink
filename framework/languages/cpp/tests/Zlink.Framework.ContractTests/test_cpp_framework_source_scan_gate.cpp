@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Elastic-2.0 */
+/* SPDX-License-Identifier: MPL-2.0 */
 
 #include "../support/read_text_file.hpp"
 #include "../support/target_contract_gate.hpp"

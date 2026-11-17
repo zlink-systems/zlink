@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Elastic-2.0
+// SPDX-License-Identifier: MPL-2.0
 'use strict';
 
 // Bench spec section 6: a 29-byte measurement header at the front of the payload

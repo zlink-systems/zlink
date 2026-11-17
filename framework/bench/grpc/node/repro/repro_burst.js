@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Elastic-2.0
+// SPDX-License-Identifier: MPL-2.0
 'use strict';
 // No window loop, no bench code: submit K concurrent ROUTER->ROUTER requests in
 // one go and report how many resolve. If some never resolve, the stall is a

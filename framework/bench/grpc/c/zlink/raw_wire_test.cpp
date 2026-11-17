@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Elastic-2.0
+// SPDX-License-Identifier: MPL-2.0
 // Include each driver's private encoder so the frozen dump checks production code.
 #define main bench_driver_main
 #ifdef RAW_WIRE_SERVER_TEST

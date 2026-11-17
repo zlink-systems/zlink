@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Every SPDX header under framework/ must declare the license of its scope (#3928):
 # Apache-2.0 for client connectors, engine adapters, http-client, samples, templates,
-# tutorials and quickstarts; Elastic-2.0 for everything else (the server Framework).
+# tutorials and quickstarts; MPL-2.0 for the binding layer, benchmarks and C++ test
+# files that already carry it; Elastic-2.0 for everything else (the server Framework).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
@@ -36,7 +37,16 @@ APACHE_FILES=(
   framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/ZLinkJsonOptional.java
 )
 
+# MPL-2.0 scopes. Only files that already declare MPL-2.0 keep it; new files in
+# these directories may use either MPL-2.0 or Elastic-2.0.
+MPL_SCOPES=(
+  '^framework/languages/java/zlink-framework-binding-internal/'
+  '^framework/bench/grpc/'
+  '^framework/languages/cpp/tests/'
+)
+
 apache_pattern=$(IFS='|'; printf '%s' "${APACHE_SCOPES[*]}")
+mpl_pattern=$(IFS='|'; printf '%s' "${MPL_SCOPES[*]}")
 declare -A apache_file=()
 for path in "${APACHE_FILES[@]}"; do apache_file["$path"]=1; done
 
@@ -45,6 +55,7 @@ while IFS=: read -r path _ content; do
   [[ "$content" =~ SPDX-License-Identifier:[[:space:]]*([^[:space:]*/]+) ]] || continue
   actual=${BASH_REMATCH[1]}
   if [[ -v apache_file["$path"] || "$path" =~ $apache_pattern ]]; then expected=Apache-2.0; else expected=Elastic-2.0; fi
+  if [[ "$actual" == MPL-2.0 && "$path" =~ $mpl_pattern ]]; then continue; fi
   if [[ "$actual" != "$expected" ]]; then
     printf '%s: expected %s, found %s\n' "$path" "$expected" "$actual"
     failures=$((failures + 1))

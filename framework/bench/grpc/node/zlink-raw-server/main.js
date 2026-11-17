@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Elastic-2.0
+// SPDX-License-Identifier: MPL-2.0
 'use strict';
 
 // `zlink-<lang>` server, node row: raw binding, ROUTER<->ROUTER (FB-001, spec section 1.3).

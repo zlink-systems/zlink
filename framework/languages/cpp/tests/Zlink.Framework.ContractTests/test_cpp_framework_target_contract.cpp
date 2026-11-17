@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Elastic-2.0 */
+/* SPDX-License-Identifier: MPL-2.0 */
 
 /* G0 target-contract gate for the C++ public-contract gap effort.
  * Each check corresponds to a target the C++ public headers and runtime
