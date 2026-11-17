@@ -511,6 +511,8 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 - **시도 사이의 지연에 무작위를 넣는다.** 첫 기준 지연은 초기 지연과 최대 지연 중 작은 값이다.
   이후 기준 지연은 직전 기준 지연에 backoff 계수를 곱한 값과 최대 지연 중 작은 값이다. 실제로 기다리는 시간은 **그 기준 지연의 50%에서 100%
   사이에서 고른 값**이다.
+- **끊김 뒤 첫 자동 시도도 같은 규칙으로 기다린다.** 첫 시도는 첫 기준 지연의 50%에서 100% 사이를 기다린 뒤
+  연결한다. 끊긴 직후 바로 연결하지 않는다.
 
     결정적 지연을 쓰면 서버가 한 번 끊겼을 때 연결되어 있던 client가 **모두 같은 시점에 다시
     연결한다.** 그 순간에 서버의 부하가 가장 크므로 시점을 서로 다르게 만든다.
@@ -858,7 +860,7 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **옵션 검증** | **연결이 이뤄지기 전에 전 항목을 검증하고, 값 범위 위반은 `ValidationFailed`, 항목 사이 불일치는 `ConfigurationError`로 거부한다(§6.3)** |
 | **transport 추론** | **transport를 명시하지 않으면 endpoint scheme이 정하고, 명시한 값이 scheme과 어긋나면 `ConfigurationError`다(§3.1)** |
 | **오류 전달** | **받는 쪽이 §9의 13개 중 무엇인지 읽어낸다. 언어 표준 예외를 그대로 쓰지 않는다(§9.2)** |
-| **재연결 지연** | **시도 사이의 대기가 기준 지연의 50%에서 100% 사이에 들어간다. 시도가 소진되면 상태가 `Disconnected`가 되고 끊김 handler가 실행된다(§6)** |
+| **재연결 지연** | **끊김 뒤 첫 시도와 시도 사이의 대기가 기준 지연의 50%에서 100% 사이에 들어간다. 시도가 소진되면 상태가 `Disconnected`가 되고 끊김 handler가 실행된다(§6)** |
 | **등록 해제** | **connector와 handle의 push, error, disconnect, connection state, Actor bound·unbound 등록이 모두 해제할 수 있는 값을 돌려주고, 해제한 handler는 그 뒤의 dispatch에서 실행되지 않는다(§7)** |
 | **수신 개수** | **`receivedCount(name)`가 받은 개수를 세고 소비해도 줄지 않으며, dispatch mode와 무관하다. 연결이 성립할 때 0에서 다시 시작한다(§10)** |
 | **대기 표면** | **이름을 명시하는 길과 payload type에서 결정하는 길이 모두 있고, 술어와 반환이 message이며, 관측 조건 위반은 `ValidationFailed`·연결 종료는 `Disconnected`다(§10.1)** |
