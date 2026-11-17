@@ -124,6 +124,7 @@ import {
   flowIfEnabled,
   messageFlowTracingEnabled,
   runWithFlow,
+  traceShutdownStep,
   ZLinkRuntimeMetrics,
   type ZLinkDiagnosticsContext,
   type ZLinkMessageFlowModeCell,
@@ -2062,12 +2063,28 @@ export class ZLinkFrameworkRuntimeHost
             'The host stopped before the request completed.'
           )
         );
-      await waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName));
+      await traceShutdownStep(
+        'session_barrier.force_notify',
+        () => waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName)),
+        meshName
+      );
     } else {
-      await awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal);
+      await traceShutdownStep(
+        'accepted_work.actor_join_sources',
+        () => awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal),
+        meshName
+      );
     }
-    await this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline);
-    await awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal);
+    await traceShutdownStep(
+      'owner_cleanup.spots',
+      () => this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline),
+      meshName
+    );
+    await traceShutdownStep(
+      'session_barrier.notify',
+      () => awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal),
+      meshName
+    );
   }
 
   private async publishMeshRetiring(meshName: string, signal?: AbortSignal): Promise<void> {

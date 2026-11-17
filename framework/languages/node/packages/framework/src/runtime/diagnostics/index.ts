@@ -70,6 +70,24 @@ export function relocationDebug(marker: string, detail: Record<string, unknown>)
   console.error('[zlink.runtime.relocation]', marker, detail);
 }
 
+/** Observes shutdown completion without owning its ordering or error policy. */
+export async function traceShutdownStep<T>(
+  stage: string,
+  operation: () => T | Promise<T>,
+  meshName?: string
+): Promise<T> {
+  if (!isRelocationDebugEnabled()) return operation();
+  relocationDebug('shutdown_step', { stage, meshName, outcome: 'started' });
+  try {
+    const result = await operation();
+    relocationDebug('shutdown_step', { stage, meshName, outcome: 'completed' });
+    return result;
+  } catch (error) {
+    relocationDebug('shutdown_step', { stage, meshName, outcome: 'failed', error });
+    throw error;
+  }
+}
+
 /** Emits high-cardinality resolver detail only on the existing relocation debug path. */
 export function emitActorOwnerLeaseObservation(observation: ZLinkActorOwnerLeaseObservation): void {
   if (!isRelocationDebugEnabled()) return;
