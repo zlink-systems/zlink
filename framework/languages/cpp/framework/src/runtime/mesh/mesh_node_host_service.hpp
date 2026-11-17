@@ -39,13 +39,6 @@ decode_mesh_record_header (const host::receive_record_t &record,
                            bool capture_flow,
                            const dispatch_options_t &dispatch_options = {});
 
-result_t<std::optional<messaging::envelope_header_t>>
-decode_mesh_record_header_view (const host::receive_record_t &record,
-                                std::vector<zlink::message_t> &parts,
-                                bool capture_flow,
-                                const dispatch_options_t &dispatch_options = {});
-
-
 class mesh_node_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
 {
   public:

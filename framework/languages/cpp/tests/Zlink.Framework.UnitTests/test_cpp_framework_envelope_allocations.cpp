@@ -430,6 +430,54 @@ TEST (EnvelopeAllocations, CanonicalHeaderDecodeAddsNoStorageBeyondHeaderOwnersh
     EXPECT_EQ (allocations, 0u);
 }
 
+TEST (EnvelopeAllocations, HeaderViewDecodeDoesNotAllocateAfterWarmup)
+{
+    msg::envelope_codec_t codec;
+    const msg::envelope_header_t header{.channel_name = std::string (48, 'c'),
+                                        .message_name = std::string (48, 'm'),
+                                        .content_type = std::string (48, 't'),
+                                        .correlation_id = std::string (48, 'i'),
+                                        .deadline = "2026-11-14T00:00:00Z"};
+    const auto wire = codec.encode_header (header);
+    ASSERT_TRUE (codec.decode_header_view (wire, false));
+    const auto allocations = count_allocations ([&] {
+        for (int index = 0; index < 10; ++index) {
+            auto decoded = codec.decode_header_view (wire, false);
+            EXPECT_TRUE (decoded);
+            if (decoded) {
+                EXPECT_EQ (decoded.value ().channel_name, header.channel_name);
+                EXPECT_EQ (decoded.value ().message_name, header.message_name);
+                EXPECT_EQ (decoded.value ().content_type, header.content_type);
+                EXPECT_EQ (decoded.value ().correlation_id, header.correlation_id);
+                EXPECT_EQ (decoded.value ().deadline, header.deadline);
+            }
+        }
+    });
+    std::printf ("warm protobuf header-view decode allocations per message: %zu\n",
+                 allocations / 10);
+    EXPECT_EQ (allocations, 0u);
+}
+
+TEST (EnvelopeAllocations, HeaderViewSurvivesEncodeUntilNextHeaderDecode)
+{
+    msg::envelope_codec_t codec;
+    const msg::envelope_header_t first{.channel_name = std::string (48, 'a'),
+                                       .message_name = std::string (48, 'b'),
+                                       .content_type = std::string (48, 'c')};
+    const msg::envelope_header_t next{.channel_name = std::string (48, 'x'),
+                                      .message_name = std::string (48, 'y'),
+                                      .content_type = std::string (48, 'z')};
+    const auto first_wire = codec.encode_header (first);
+    const auto next_wire = codec.encode_header (next);
+    auto view = codec.decode_header_view (first_wire, false);
+    ASSERT_TRUE (view);
+    (void) codec.encode_header (next);
+    EXPECT_EQ (view.value ().channel_name, first.channel_name);
+    EXPECT_EQ (view.value ().message_name, first.message_name);
+    EXPECT_EQ (view.value ().content_type, first.content_type);
+    ASSERT_TRUE (codec.decode_header_view (next_wire, false));
+}
+
 TEST (EnvelopeL2Cost, SynchronousSendBorrowsNamesUntilEncodingFinishes)
 {
     fw::serializer_registry_t serializers;
@@ -523,7 +571,7 @@ TEST (EnvelopeL2Cost, CompletionBorrowsNativeAndSpanBackedHeaderText)
         ASSERT_TRUE (*decoded);
         EXPECT_EQ (decoded->value ().value, 7);
         EXPECT_EQ (allocations, baseline);
-        EXPECT_EQ (allocations, 4u);
+        EXPECT_EQ (allocations, 0u);
     }
 }
 
@@ -565,7 +613,7 @@ TEST (EnvelopeL2Cost, RequestTargetAndResponseCosts)
     std::printf ("request-target-response allocations: request=%zu target=%zu response=%zu\n",
                  request_allocations, target_allocations, response_allocations);
     EXPECT_EQ (request_allocations, 2u);
-    EXPECT_EQ (target_allocations, 2u);
+    EXPECT_EQ (target_allocations, 0u);
     EXPECT_EQ (response_allocations, 1u);
 }
 
@@ -766,7 +814,7 @@ TEST (EnvelopeDeadline, IntegerUtcMatchesCalendarBoundaries)
     }
 }
 
-TEST (EnvelopeAllocations, DecodedHeaderViewsRetainValuesAcrossCopiesAndSuspension)
+TEST (EnvelopeAllocations, DecodedHeadersRetainValuesAcrossCopiesAndSuspension)
 {
     namespace msg = zlink::framework::runtime::messaging;
     msg::envelope_codec_t codec;
@@ -778,7 +826,7 @@ TEST (EnvelopeAllocations, DecodedHeaderViewsRetainValuesAcrossCopiesAndSuspensi
                                       .content_type = "application/json",
                                       .correlation_id = std::string (48, 'c')};
         auto wire = codec.encode_header (header);
-        auto decoded = codec.decode_header_view (wire, false);
+        auto decoded = codec.decode_header (wire, false);
         ASSERT_TRUE (decoded);
         decoded.value ().retained_header.message = std::move (wire);
         retained.emplace (std::move (decoded.value ()));
