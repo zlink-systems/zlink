@@ -183,7 +183,6 @@ internal sealed class OutageLocationStore(
             var proposed = Call("DecodeAuthorityMeta", actor.Bytes);
             Require(Property<ulong>(previous, "ObjectGeneration") == Property<ulong>(proposed, "ObjectGeneration"), "Relocation changed object generation.");
             Require(Property<ulong>(previous, "AuthorityOwnerGeneration") != Property<ulong>(proposed, "AuthorityOwnerGeneration"), "Target write is not NewOwner.");
-            _sourceRid = ((await RequireSourceAsync(cancellationToken)).NodeRid).ToString();
             _authorityBefore = previous;
             _commitHeld.TrySetResult();
             await _commitRelease.Task.WaitAsync(cancellationToken);
@@ -300,7 +299,12 @@ internal sealed class OutageLocationStore(
                 var codec = Repository.Assembly.GetType("Zlink.Framework.Runtime.Locations.ZLinkAuthorityKeyCodec", true)!;
                 var actorKey = codec.GetMethod("EncodeActor", Static)!.Invoke(null, [actorId]);
                 _actorKey = (ZLinkStoreKey)Call("AuthorityMetaKey", actorKey);
-                if (!source) return;
+                if (!source)
+                {
+                    // Public Find runs in the staged command, never inside a Store callback on the runtime path.
+                    _sourceRid = options.PeerRid ?? throw new InvalidOperationException("--peer-rid is required for the outage target.");
+                    return;
+                }
                 await SourceCreated.Task.WaitAsync(cancellationToken);
                 _identity = await ProbeAsync(client, "steady", cancellationToken);
                 _sourceRid = _identity.NodeRid;
