@@ -9,10 +9,10 @@
 | 항목 | 현재 상태 | 근거 |
 |---|---|---|
 | Client | 공식 etcd v3.6.16 proto에서 생성한 C++ gRPC stub을 사용한다. | [CMakeLists.txt:3](CMakeLists.txt) |
-| Version | Conan의 `with_etcd`는 `grpc/1.69.0`을 선언하며 공통 protobuf 선언은 `protobuf/5.27.0`이다. | [conanfile.py:70](../../packaging/conan/conanfile.py) |
-| Lockfile | etcd client 해석 그래프는 고정되지 않음. 아래 네 Conan lock에는 protobuf entry가 있지만 gRPC entry가 없다. | [conan.linux-x64.lock:3](../../packaging/conan/conan.linux-x64.lock) |
-| vcpkg | `etcd` feature는 `grpc`를 요구하지만 `builtin-baseline`과 version override가 없다. | [vcpkg.json:21](../../vcpkg.json) |
-| CMake | `find_package(gRPC CONFIG REQUIRED)`는 버전을 지정하지 않는다. CI의 vcpkg 설치 결과를 Conan 선언 버전의 결과로 간주하지 않는다. | [CMakeLists.txt:671](../../CMakeLists.txt) |
+| Version | Conan의 `with_etcd`는 `grpc/1.84.0`을 선언하고, 공통 선언은 `protobuf/6.33.5`·`abseil/20260107.1`이다. | [conanfile.py:73](../../packaging/conan/conanfile.py), [conanfile.py:27](../../packaging/conan/conanfile.py) |
+| Lockfile | 네 Conan lock은 prebuilt 배포물의 그래프(`with_etcd=False`)라 protobuf 6.33.5·abseil 20260107.1이 있고 gRPC entry는 없다. etcd의 gRPC 버전은 conanfile.py의 정확한 버전이 정한다. | [conan.linux-x64.lock:3](../../packaging/conan/conan.linux-x64.lock) |
+| vcpkg | `builtin-baseline`을 CI의 vcpkg commit `2ec0f1747d`로 고정하고, overrides로 grpc 1.84.0·abseil 20260107.1·protobuf 6.33.4(port-version 2)를 정한다. vcpkg 레지스트리에 protobuf 6.33.5가 없어 Conan과 patch 하나가 다르다. | [vcpkg.json:4](../../vcpkg.json), [vcpkg.json:35](../../vcpkg.json) |
+| CMake | `find_package(gRPC CONFIG REQUIRED)`는 버전을 지정하지 않는다. 버전은 위 Conan 선언과 vcpkg overrides가 정한다. | [CMakeLists.txt:671](../../CMakeLists.txt) |
 
 [linux-x64:3](../../packaging/conan/conan.linux-x64.lock) · [linux-arm64:3](../../packaging/conan/conan.linux-arm64.lock) · [macos-arm64:3](../../packaging/conan/conan.macos-arm64.lock) · [windows-x64:3](../../packaging/conan/conan.windows-x64.lock)
 
