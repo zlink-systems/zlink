@@ -264,8 +264,6 @@ final class ZLinkTopologyStatusSourceTest {
         state.set(ZLinkTopologyState.STOPPING);
         source.signal("first");
         // Sequence allocation belongs to the publication turn; projection entry precedes it.
-        // The source stores the payload after this callback returns, so the test reads the
-        // published values here instead of racing snapshot() against that store.
         var changed = published.poll(1, TimeUnit.SECONDS);
         assertNotNull(changed);
         assertEquals(ZLinkTopologyState.STOPPING, changed.state());
@@ -276,6 +274,8 @@ final class ZLinkTopologyStatusSourceTest {
         assertNotNull(stopped);
         assertEquals(ZLinkTopologyState.STOPPED, stopped.state());
         assertEquals(changed.sequence() + 1, stopped.sequence());
+        // snapshot() publishes from the same key turn, so a terminal query shares this sequence.
+        assertEquals(stopped, source.snapshot("first"));
     }
 
     @Test
