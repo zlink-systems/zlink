@@ -658,7 +658,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     @Override
     public CompletionStage<Boolean> close() {
         rejectAfterRelocationReady("close");
-        return ZLinkSerialExecutionQueue.yieldCurrent(host.closeSpot(this));
+        serials.spotQueue.ensureSpotCloseCallAllowed();
+        return host.closeSpot(this);
     }
 
     @Override

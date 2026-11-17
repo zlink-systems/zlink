@@ -212,7 +212,13 @@ export class ZLinkSpotSerialTurnExecutor {
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.enqueueFrameworkTurn(operation, workOptions);
+    const scheduler = this.scheduler;
+    return this.enqueueFrameworkTurn(operation, {
+      ...workOptions,
+      get lifecycleOwner() {
+        return scheduler.activeLifecycle;
+      }
+    });
   }
 
   /** Admits membership work and holds the lifecycle FIFO until its result settles. */
@@ -368,7 +374,7 @@ export class ZLinkSpotSerialTurnExecutor {
       const executor = this;
       const work = record;
       return Promise.resolve(executor.executionBarrier?.enter()).then((claim) =>
-        executor.runTurn(work.operation, work.resolve, work.reject, claim, work.release)
+        executor.runTurn(work.operation, work.resolve, work.reject, claim, work.release, work)
       );
     }
     return this.runTurn(
@@ -376,7 +382,8 @@ export class ZLinkSpotSerialTurnExecutor {
       record.resolve,
       record.reject,
       record.context as ZLinkExecutionBarrierClaim | undefined,
-      record.release
+      record.release,
+      record
     );
   }
 
@@ -393,12 +400,14 @@ export class ZLinkSpotSerialTurnExecutor {
     resolve: (value: T) => void,
     reject: (reason: unknown) => void,
     barrierClaim?: ZLinkExecutionBarrierClaim,
-    release?: () => void
+    release?: () => void,
+    work?: ZLinkSerialWorkRecord<unknown>
   ): Promise<void> {
     const turn = new ZLinkSpotSerialTurn(
       (resumeTurn, resume, resumeReject) => this.postResume(resumeTurn, resume, resumeReject),
       barrierClaim,
-      this.yieldAllowed
+      this.yieldAllowed,
+      work
     );
     const wrapped = async () => {
       this.depth += 1;

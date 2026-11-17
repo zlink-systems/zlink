@@ -401,7 +401,8 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public CompletionStage<Boolean> close() {
-        return ZLinkSerialExecutionQueue.yieldCurrent(activation.closeExplicit());
+        dispatchQueue.ensureSpotCloseCallAllowed();
+        return activation.closeExplicit();
     }
 
     @Override

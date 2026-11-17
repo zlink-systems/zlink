@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ZLinkExecutionPolicy } from '../admission';
 import { macrotaskBoundary } from '../abort';
 import {
@@ -15,6 +16,7 @@ export interface ZLinkSerialWorkOptions {
   /** Transfers an unstarted durable record out of this FIFO in the owner turn. */
   readonly onWithdrawable?: (withdraw: () => boolean) => void;
   readonly lane?: ZLinkSerialWorkLane;
+  readonly lifecycleOwner?: ZLinkSerialWorkRecord<unknown>;
   readonly payloadBytes?: number;
   readonly metadataBytes?: number;
 }
@@ -34,6 +36,7 @@ export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<ZLinkSerialSchedul
 export interface ZLinkSerialWorkRecord<T> {
   readonly acceptedSequence: bigint;
   readonly lane: ZLinkSerialWorkLane;
+  readonly lifecycleOwner?: ZLinkSerialWorkRecord<unknown>;
   operation: () => Promise<T> | T;
   readonly context?: unknown;
   readonly packetAdmission?: () => Promise<T> | T;
@@ -69,6 +72,8 @@ type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & 
 interface ZLinkSerialAdmissionLane {
   readonly records: Array<SerialWorkRecord<unknown>>;
 }
+
+const currentLifecycleOperation = new AsyncLocalStorage<ZLinkSerialWorkRecord<unknown>>();
 
 /**
  * One event-loop serial execution queue per Spot, Actor mailbox, or Stream session.
@@ -291,6 +296,11 @@ export class ZLinkSerialExecutionQueue {
     const record: SerialWorkRecord<T> = {
       acceptedSequence: 0n,
       lane,
+      lifecycleOwner:
+        options?.lifecycleOwner ??
+        (currentLifecycleOperation.getStore() === this.activeLifecycle
+          ? this.activeLifecycle
+          : undefined),
       operation,
       executionOwner,
       operationEnvelope,
@@ -453,7 +463,7 @@ export class ZLinkSerialExecutionQueue {
             record.operation();
           } else if (record.operationEnvelope) {
             try {
-              const outcome = record.operation();
+              const outcome = currentLifecycleOperation.run(record, record.operation);
               void Promise.resolve(outcome).then(
                 (value) => {
                   record.resolve(value);

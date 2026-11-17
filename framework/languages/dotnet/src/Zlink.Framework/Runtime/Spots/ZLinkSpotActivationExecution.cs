@@ -474,6 +474,11 @@ internal abstract partial class ZLinkSpotActivation
     protected ValueTask<bool> CloseFromContextAsync(CancellationToken cancellationToken)
     {
         EnsureContextOperationAllowed();
+        if (_serial.IsCurrentLifecycleTurn)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "A Spot cannot close itself from its lifecycle callback."
+            );
         if (_serial.IsPreparing)
             return _runtime.CloseCurrentSpotAsync(this, cancellationToken);
         if (

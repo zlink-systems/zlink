@@ -1069,6 +1069,16 @@ public final class ZLinkSerialExecutionQueue {
         return result;
     }
 
+    /** Enforces execution gate §6 before a public Spot Close submits work. */
+    public void ensureSpotCloseCallAllowed() {
+        SerialTurn turn = currentTurn();
+        if (isCurrent() && turn != null && isLifecycleTurn(turn.entry())) {
+            throw ZLinkFrameworkErrorOrigin.framework(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "A Spot cannot close itself from its lifecycle callback.");
+        }
+    }
+
     /**
      * Returns whether this queue currently owns the calling thread's serial turn. Internal dispatch
      * composition uses this to avoid waiting on a turn that was enqueued behind the operation

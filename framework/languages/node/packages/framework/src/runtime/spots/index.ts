@@ -1244,6 +1244,16 @@ export class DefaultZLinkSpotManager {
     objectGeneration: bigint,
     signal?: AbortSignal
   ): Promise<boolean> {
+    if (
+      activation.serial.isCurrentTurn &&
+      (activation.serial.currentTurn?.work?.lane === 'lifecycle' ||
+        activation.serial.currentTurn?.work?.lifecycleOwner !== undefined)
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        'A Spot cannot close itself from its lifecycle callback.'
+      );
+    }
     const { meshName, spotId } = activation;
     const operation = this.closeOperations.get(`${meshName}\0${String(spotId)}`);
     const current =
