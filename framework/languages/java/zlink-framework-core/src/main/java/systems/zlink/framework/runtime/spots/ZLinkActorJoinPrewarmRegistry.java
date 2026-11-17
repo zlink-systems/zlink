@@ -106,8 +106,21 @@ final class ZLinkActorJoinPrewarmRegistry {
 
     Attempt register(
             UUID relocationId, String actorId, long objectGeneration, Consumer<Attempt> evicted) {
+        return register(relocationId, actorId, objectGeneration, () -> {}, evicted);
+    }
+
+    Attempt register(
+            UUID relocationId,
+            String actorId,
+            long objectGeneration,
+            Runnable requireAdmission,
+            Consumer<Attempt> evicted) {
         RegistrationState registration =
-                inStateLane(() -> registerOnLane(relocationId, actorId, objectGeneration));
+                inStateLane(
+                        () -> {
+                            requireAdmission.run();
+                            return registerOnLane(relocationId, actorId, objectGeneration);
+                        });
         if (registration.displaced() != null
                 && !registration.displaced().attempt().hasTargetOwner()) {
             released.accept(registration.displaced().attempt().relocationId());
@@ -223,6 +236,50 @@ final class ZLinkActorJoinPrewarmRegistry {
                         parked -> {
                             if (parked != null) finishRelease(relocationId, parked);
                         });
+    }
+
+    CompletionStage<Void> discard(UUID relocationId) {
+        var prepared =
+                stateLane.isOnLane()
+                        ? java.util.concurrent.CompletableFuture.completedFuture(
+                                prepareDiscardOnLane(relocationId))
+                        : stateLane
+                                .runAsync(() -> prepareDiscardOnLane(relocationId))
+                                .toCompletableFuture();
+        var result = new java.util.concurrent.CompletableFuture<Void>();
+        ZLinkStateLane.publishOutsideLane(
+                prepared,
+                (action, failure) -> {
+                    if (failure != null) result.completeExceptionally(failure);
+                    else
+                        systems.zlink.framework.runtime.handlers.ZLinkHandlerStages
+                                .fromStageSupplier(action)
+                                .whenComplete(
+                                        (ignored, terminal) -> {
+                                            if (terminal == null) result.complete(null);
+                                            else result.completeExceptionally(terminal);
+                                        });
+                });
+        return result;
+    }
+
+    private Supplier<CompletionStage<Void>> prepareDiscardOnLane(UUID relocationId) {
+        Attempt attempt = byRelocation.get(relocationId);
+        if (attempt == null)
+            return () -> java.util.concurrent.CompletableFuture.completedFuture(null);
+        if (!attempt.hasTargetOwner()) {
+            var parked = releaseOnLane(relocationId);
+            return () -> {
+                finishRelease(relocationId, parked);
+                return java.util.concurrent.CompletableFuture.completedFuture(null);
+            };
+        }
+        var terminal = attempt.terminal;
+        var abort = attempt.liveAbort;
+        return () -> {
+            if (abort != null) abort.run();
+            return terminal;
+        };
     }
 
     void detachIngress(UUID relocationId) {

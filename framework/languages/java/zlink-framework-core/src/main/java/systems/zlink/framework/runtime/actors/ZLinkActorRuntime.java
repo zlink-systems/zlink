@@ -2237,7 +2237,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 : context.execution.ready();
     }
 
-    private void discardExecution(DefaultActorContext context) {
+    private CompletionStage<Void> discardExecution(DefaultActorContext context) {
         String actorId = context.actorId();
         ZLinkBackendActorRef actorRef = context.actorRef();
         ZLinkActor actor = context.actor();
@@ -2252,7 +2252,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         CompletionStage<Void> disconnected =
                 ZLinkHandlerStages.fromStageSupplier(context::disconnectBoundSessionForDestroy);
         // Detach local state before waiting for transport or Session completion.
-        ZLinkHandlerStages.completeAll(
+        return ZLinkHandlerStages.completeAll(
                 List.of(
                         () -> retired,
                         () ->
@@ -2268,18 +2268,44 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         () -> disconnected));
     }
 
-    public void discardLocalMembers(ZLinkSpot<?> spot) {
-        actorRegistry
+    public CompletionStage<Void> discardLocalMembers(ZLinkSpot<?> spot) {
+        return actorRegistry
                 .entriesAsync()
-                .thenAccept(
+                .thenCompose(
                         entries -> {
+                            var pending = new java.util.ArrayList<CompletableFuture<Void>>();
                             for (ActorEntry entry : entries) {
                                 DefaultActorContext context = entry.context();
-                                if (context.currentSpot() == spot
-                                        && !context.moving()
-                                        && context.execution != null) context.execution.discard();
+                                if (context.currentSpot() == spot && context.execution != null) {
+                                    // Both Join outcomes must settle before deciding which local
+                                    // incarnation remains a member. Disposal failures still
+                                    // propagate.
+                                    pending.add(
+                                            context.moveCompletion()
+                                                    .handle((ignored, failure) -> null)
+                                                    .thenCompose(
+                                                            ignored -> {
+                                                                if (context.currentSpot() == spot
+                                                                        && context.execution
+                                                                                != null)
+                                                                    return context.execution
+                                                                            .discardAsync();
+                                                                return CompletableFuture
+                                                                        .completedFuture(null);
+                                                            })
+                                                    .toCompletableFuture());
+                                }
                             }
+                            return CompletableFuture.allOf(
+                                    pending.toArray(CompletableFuture[]::new));
                         });
+    }
+
+    public CompletionStage<Void> discardTargetJoins(ZLinkSpot<?> spot) {
+        ZLinkActorJoinRelocationPort port = actorJoinRelocationPort;
+        return port == null
+                ? CompletableFuture.completedFuture(null)
+                : port.discardTargetJoins(spot);
     }
 
     CompletionStage<Void> deactivateActorOnOwnershipLoss(String actorId) {
@@ -4960,7 +4986,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     new systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner(
                             handlerFactory);
             this.execution =
-                    locations.execution(
+                    locations.executionAsync(
                             actorRef.actorId(),
                             state::steady,
                             snapshot ->
