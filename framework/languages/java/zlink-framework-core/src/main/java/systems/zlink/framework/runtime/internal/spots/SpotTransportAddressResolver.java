@@ -61,13 +61,21 @@ public interface SpotTransportAddressResolver {
 
     /** Removes a stale positive route for the next call while retaining this call's terminal. */
     default <T> CompletionStage<T> observeTerminal(String spotId, CompletionStage<T> stage) {
+        CompletableFuture<T> caller =
+                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                        .newCancellationFuture();
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                caller, stage);
         stage.whenComplete(
-                (ignored, failure) -> {
-                    if (isStaleRoute(failure)) {
-                        invalidate(spotId);
-                    }
-                });
-        return stage;
+                        (value, failure) -> {
+                            if (isStaleRoute(failure)) invalidate(spotId);
+                        })
+                .whenComplete(
+                        (value, failure) -> {
+                            if (failure == null) caller.complete(value);
+                            else caller.completeExceptionally(failure);
+                        });
+        return caller;
     }
 
     static boolean isStaleRoute(Throwable failure) {

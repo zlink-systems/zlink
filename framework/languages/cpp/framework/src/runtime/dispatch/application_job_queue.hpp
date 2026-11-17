@@ -17,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 #include <vector>
 #include <type_traits>
 
@@ -171,14 +172,28 @@ class application_job_queue_t
         }
         permit_t (const permit_t &) = delete;
         permit_t &operator= (const permit_t &) = delete;
-        explicit operator bool () const noexcept { return _phase != permit_phase_t::released; }
+        explicit operator bool () const noexcept { return phase () != permit_phase_t::released; }
+        bool needs_reacquisition () const noexcept
+        {
+            return std::holds_alternative<std::shared_ptr<std::atomic<permit_phase_t>>> (_phase)
+                   && !static_cast<bool> (*this);
+        }
         void mark_queued ()
         {
-            if (_phase != permit_phase_t::reserved)
+            if (phase () != permit_phase_t::reserved)
                 return;
             if (auto owner = _owner.lock ()) {
-                owner->credits.fetch_add (queued_credit - 1, std::memory_order_acq_rel);
-                _phase = permit_phase_t::queued;
+                if (auto *shared =
+                      std::get_if<std::shared_ptr<std::atomic<permit_phase_t>>> (&_phase)) {
+                    std::lock_guard lock (owner->mutex);
+                    if ((*shared)->load () != permit_phase_t::reserved)
+                        return;
+                    owner->credits.fetch_add (queued_credit - 1, std::memory_order_acq_rel);
+                    (*shared)->store (permit_phase_t::queued);
+                } else {
+                    owner->credits.fetch_add (queued_credit - 1, std::memory_order_acq_rel);
+                    _phase = permit_phase_t::queued;
+                }
             }
         }
         void release_for_handler_entry () noexcept { release (); }
@@ -192,15 +207,32 @@ class application_job_queue_t
         }
         void release () noexcept
         {
-            const auto phase = std::exchange (_phase, permit_phase_t::released);
+            auto owner = _owner.lock ();
+            permit_phase_t phase;
+            if (auto *local = std::get_if<permit_phase_t> (&_phase))
+                phase = std::exchange (*local, permit_phase_t::released);
+            else if (owner) {
+                std::lock_guard lock (owner->mutex);
+                phase = std::get<std::shared_ptr<std::atomic<permit_phase_t>>> (_phase)->exchange (
+                  permit_phase_t::released);
+            } else
+                phase = std::get<std::shared_ptr<std::atomic<permit_phase_t>>> (_phase)->exchange (
+                  permit_phase_t::released);
             if (phase == permit_phase_t::released)
                 return;
-            if (auto owner = _owner.lock ())
+            if (owner)
                 application_job_queue_t::release_credits (std::move (owner), phase, 1);
             _owner.reset ();
         }
         std::weak_ptr<state_t> _owner;
-        permit_phase_t _phase = permit_phase_t::released;
+        permit_phase_t phase () const noexcept
+        {
+            if (const auto *value = std::get_if<permit_phase_t> (&_phase))
+                return *value;
+            return std::get<std::shared_ptr<std::atomic<permit_phase_t>>> (_phase)->load ();
+        }
+        std::variant<permit_phase_t, std::shared_ptr<std::atomic<permit_phase_t>>> _phase =
+          permit_phase_t::released;
     };
 
     class permit_batch_t
@@ -481,26 +513,47 @@ class application_job_queue_t
 
     supply_registration_t register_supply (supply_callback_t callback, origin_t origin)
     {
+        return register_single_supply (std::move (callback), origin, {});
+    }
+
+    supply_registration_t register_request_supply (supply_callback_t callback, origin_t origin)
+    {
+        return register_single_supply (
+          std::move (callback), origin,
+          std::make_shared<std::atomic<permit_phase_t>> (permit_phase_t::reserved));
+    }
+
+    supply_registration_t
+    register_single_supply (supply_callback_t callback,
+                            origin_t origin,
+                            std::shared_ptr<std::atomic<permit_phase_t>> grant)
+    {
         if (!callback)
             throw std::invalid_argument ("Application Job Queue waiter callback is required");
         return register_supply_batch (
-          [callback = std::move (callback)] (std::optional<permit_batch_t> budget) mutable {
+          [callback = std::move (callback), grant] (std::optional<permit_batch_t> budget) mutable {
               std::optional<permit_t> permit;
-              if (budget)
+              if (budget) {
                   permit.emplace (budget->take ());
+                  if (grant)
+                      permit->_phase = grant;
+              }
               callback (std::move (permit));
           },
-          origin, 1);
+          origin, 1, grant);
     }
 
-    supply_registration_t register_supply_batch (batch_supply_callback_t callback,
-                                                 origin_t origin,
-                                                 std::uint32_t requested)
+    supply_registration_t
+    register_supply_batch (batch_supply_callback_t callback,
+                           origin_t origin,
+                           std::uint32_t requested,
+                           std::shared_ptr<std::atomic<permit_phase_t>> grant = {})
     {
         if (!callback || requested == 0)
             throw std::invalid_argument ("Application Job Queue waiter callback is required");
 
         auto waiter = std::make_shared<waiter_state_t> (origin, requested);
+        waiter->grant = std::move (grant);
         waiter->callback = std::move (callback);
         std::optional<permit_batch_t> immediate;
         std::optional<pressure_transition_t> transition;
@@ -509,6 +562,8 @@ class application_job_queue_t
         {
             std::lock_guard lock (_state->mutex);
             if (_state->stopped) {
+                if (waiter->grant)
+                    waiter->grant->store (permit_phase_t::released);
                 waiter->terminal = true;
                 stopped = true;
             } else if (_state->waiters.empty ()
@@ -541,7 +596,8 @@ class application_job_queue_t
     void deliver_immediate (supply_registration_t &registration, const waiter_t &waiter)
     {
         if (registration.immediate) {
-            waiter._waiter->callback (std::move (*registration.immediate));
+            auto callback = std::move (waiter._waiter->callback);
+            callback (std::move (*registration.immediate));
             registration.immediate.reset ();
         } else {
             settle_released_capacity (_state);
@@ -695,6 +751,8 @@ class application_job_queue_t
                     continue;
                 waiter->terminal = true;
                 update_local_waiters_locked (*_state, waiter->origin, -1);
+                if (waiter->grant)
+                    waiter->grant->store (permit_phase_t::released);
                 callbacks.push_back (std::move (waiter->callback));
             }
             _state->waiters.clear ();
@@ -724,6 +782,7 @@ class application_job_queue_t
         const origin_t origin;
         const std::uint32_t requested;
         std::uint32_t granted = 0;
+        std::shared_ptr<std::atomic<permit_phase_t>> grant;
         batch_supply_callback_t callback;
         std::chrono::steady_clock::time_point started_at{};
         std::uint64_t measurement_epoch = 0;
@@ -1102,21 +1161,34 @@ class application_job_queue_t
                                std::shared_ptr<waiter_state_t> waiter) noexcept
     {
         batch_supply_callback_t callback;
-        if (waiter->terminal.load (std::memory_order_acquire))
+        if (!waiter->grant && waiter->terminal.load (std::memory_order_acquire))
             return false;
+        auto phase = permit_phase_t::released;
         {
             std::lock_guard lock (owner->mutex);
-            if (waiter->terminal)
-                return false;
-            const auto found = std::find (owner->waiters.begin (), owner->waiters.end (), waiter);
-            if (found == owner->waiters.end ())
-                return false;
-            owner->waiters.erase (found);
-            waiter->terminal = true;
-            publish_waiters_locked (*owner);
-            account_wait_locked (*owner, *waiter);
-            callback = std::move (waiter->callback);
+            if (waiter->terminal) {
+                if (waiter->grant)
+                    phase = waiter->grant->exchange (permit_phase_t::released);
+            } else {
+                const auto found =
+                  std::find (owner->waiters.begin (), owner->waiters.end (), waiter);
+                if (found == owner->waiters.end ())
+                    return false;
+                owner->waiters.erase (found);
+                waiter->terminal = true;
+                if (waiter->grant)
+                    waiter->grant->store (permit_phase_t::released);
+                publish_waiters_locked (*owner);
+                account_wait_locked (*owner, *waiter);
+                callback = std::move (waiter->callback);
+            }
         }
+        if (phase != permit_phase_t::released) {
+            release_credits (std::move (owner), phase, 1);
+            return true;
+        }
+        if (!callback)
+            return false;
         try {
             callback (std::nullopt);
         }
@@ -1274,8 +1346,10 @@ class handler_entry_t
     handler_entry_t &operator= (const handler_entry_t &) = delete;
     explicit operator bool () const noexcept
     {
-        return static_cast<bool> (_callback) || static_cast<bool> (_permit);
+        return static_cast<bool> (_callback) || static_cast<bool> (_permit)
+               || needs_reacquisition ();
     }
+    bool needs_reacquisition () const noexcept { return _permit.needs_reacquisition (); }
     void operator() ()
     {
         _permit.release_for_handler_entry ();

@@ -259,7 +259,6 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
                         | TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default
                 );
-                ZLinkApplicationJobQueueInvocation.CurrentScope?.ReleaseDurablePermit();
             }
             return waiter;
         }

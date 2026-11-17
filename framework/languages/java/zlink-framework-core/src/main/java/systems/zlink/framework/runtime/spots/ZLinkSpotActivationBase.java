@@ -319,15 +319,12 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                         .map(CompletionStage::toCompletableFuture)
                         .toArray(CompletableFuture[]::new);
         CompletableFuture<Void> completion =
-                new CompletableFuture<>() {
-                    @Override
-                    public boolean cancel(boolean mayInterruptIfRunning) {
-                        boolean cancelled = false;
-                        for (var future : futures)
-                            cancelled |= future.cancel(mayInterruptIfRunning);
-                        return cancelled;
-                    }
-                };
+                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                        .newCancellationFuture(
+                                failure -> {
+                                    if (failure != null)
+                                        for (var future : futures) future.cancel(false);
+                                });
         CompletableFuture.allOf(futures)
                 .whenComplete(
                         (done, failure) -> {

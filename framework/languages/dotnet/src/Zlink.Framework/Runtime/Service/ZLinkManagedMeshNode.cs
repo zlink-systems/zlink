@@ -13065,7 +13065,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     requestAdmission: requestAdmission
                 );
             },
-            ZLinkApplicationJobOrigin.Local
+            ZLinkApplicationJobOrigin.Local,
+            terminal
         );
         _ = FinishAdmissionAsync();
 

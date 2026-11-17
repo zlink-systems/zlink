@@ -45,10 +45,9 @@ export class ZLinkSessionSerialExecutor {
         )
       );
     }
-    const boundWork = bindApplicationJobPermit(work);
     return hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(boundWork, { lane: 'application' })
-      : this.scheduler.submit(boundWork, { lane: 'application' });
+      ? this.scheduler.submitPreAdmitted(work, { lane: 'application' })
+      : this.scheduler.submit(bindApplicationJobPermit(work), { lane: 'application' });
   }
 
   private submit(
@@ -59,10 +58,9 @@ export class ZLinkSessionSerialExecutor {
   ): boolean {
     if (this.closed) return false;
     const serialOptions = { ...options, lane };
-    const boundWork = bindApplicationJobPermit(work);
     const submitted = hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(boundWork, serialOptions)
-      : this.scheduler.submit(boundWork, serialOptions);
+      ? this.scheduler.submitPreAdmitted(work, serialOptions)
+      : this.scheduler.submit(bindApplicationJobPermit(work), serialOptions);
     void submitted.catch((error) => onRejected?.(error));
     return true;
   }
