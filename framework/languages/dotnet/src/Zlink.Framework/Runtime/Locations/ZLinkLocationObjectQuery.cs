@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Spots;
 
@@ -66,42 +68,102 @@ internal sealed class ZLinkLocationObjectQuery(
                 ? ZLinkAuthorityKeyKind.Actor
                 : ZLinkAuthorityKeyKind.Spot
         );
-        var scan = await ReadAsync(
-                "object-location-query-list",
-                cancellationToken,
-                token =>
-                    store.ListAuthoritiesAsync(
-                        prefix,
-                        cursor,
-                        Math.Min(normalized.PageSize, MaximumStorePageSize),
-                        token
-                    )
-            )
-            .ConfigureAwait(false);
-        if (scan is not ZLinkAuthorityScanResult.Page result)
-            throw Unavailable("The object location continuation token expired.");
-
-        var items = new List<ZLinkLocationObjectEntry>(result.Value.Items.Count);
-        foreach (var authority in result.Value.Items)
+        var items = new List<ZLinkLocationObjectEntry>(normalized.PageSize);
+        var itemRows = new List<(ZLinkAuthorityScanCursor? Start, int Rows)>();
+        long encodedItemsBytes = 0;
+        while (items.Count < normalized.PageSize)
         {
-            if (!MatchesKind(authority.Snapshot.Allocation.ObjectKind, filter.ObjectKind))
-                continue;
-            var globalId = GetGlobalId(authority, filter.ObjectKind);
-            var entry = await ProjectAsync(globalId, authority.Snapshot, cancellationToken)
+            var batchCursor = cursor;
+            var scan = await ReadAsync(
+                    "object-location-query-list",
+                    cancellationToken,
+                    token =>
+                        store.ListAuthoritiesAsync(
+                            prefix,
+                            batchCursor,
+                            Math.Min(normalized.PageSize - items.Count, MaximumStorePageSize),
+                            token
+                        )
+                )
                 .ConfigureAwait(false);
-            if (entry is not null && Matches(entry, filter))
-                items.Add(entry);
-        }
+            if (scan is not ZLinkAuthorityScanResult.Page result)
+                throw Unavailable("The object location continuation token expired.");
 
-        var pageResult = new ZLinkLocationPage<ZLinkLocationObjectEntry>(
-            items,
-            result.Value.NextCursor?.Encoded
-        );
-        if (EncodedSizeUpperBound(pageResult) > MaximumEncodedPageBytes)
-            throw Unavailable(
-                $"The encoded object location page exceeds {MaximumEncodedPageBytes} bytes."
-            );
-        return pageResult;
+            var index = 0;
+            for (; index < result.Value.Items.Count && items.Count < normalized.PageSize; index++)
+            {
+                var authority = result.Value.Items[index];
+                if (!MatchesKind(authority.Snapshot.Allocation.ObjectKind, filter.ObjectKind))
+                    continue;
+                var globalId = GetGlobalId(authority, filter.ObjectKind);
+                var entry = await ProjectAsync(globalId, authority.Snapshot, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!Matches(entry, filter))
+                    continue;
+                var entryBytes = EncodedObjectSize(entry);
+                var candidateItemsBytes = encodedItemsBytes + entryBytes;
+                var continuation = result.Value.NextCursor?.Encoded;
+                if (!EncodedPageFits(candidateItemsBytes, items.Count + 1, continuation))
+                {
+                    if (items.Count == 0)
+                        throw Unavailable(
+                            $"The encoded object location entry exceeds {MaximumEncodedPageBytes} bytes."
+                        );
+                    break;
+                }
+                items.Add(entry);
+                itemRows.Add((batchCursor, index + 1));
+                encodedItemsBytes = candidateItemsBytes;
+            }
+
+            cursor = result.Value.NextCursor;
+            if (index < result.Value.Items.Count)
+            {
+                if (index == 0)
+                    cursor = batchCursor;
+                else
+                {
+                    var consumed = await ReadAsync(
+                            "object-location-query-list",
+                            cancellationToken,
+                            token => store.ListAuthoritiesAsync(prefix, batchCursor, index, token)
+                        )
+                        .ConfigureAwait(false);
+                    if (consumed is not ZLinkAuthorityScanResult.Page consumedPage)
+                        throw Unavailable("The object location continuation token expired.");
+                    cursor = consumedPage.Value.NextCursor;
+                }
+                while (!EncodedPageFits(encodedItemsBytes, items.Count, cursor?.Encoded))
+                {
+                    encodedItemsBytes -= EncodedObjectSize(items[^1]);
+                    items.RemoveAt(items.Count - 1);
+                    var (start, rows) = itemRows[^1];
+                    itemRows.RemoveAt(itemRows.Count - 1);
+                    if (items.Count == 0)
+                        throw Unavailable(
+                            $"The encoded object location entry exceeds {MaximumEncodedPageBytes} bytes."
+                        );
+                    if (rows == 1)
+                    {
+                        cursor = start;
+                        continue;
+                    }
+                    var prior = await ReadAsync(
+                            "object-location-query-list",
+                            cancellationToken,
+                            token => store.ListAuthoritiesAsync(prefix, start, rows - 1, token)
+                        )
+                        .ConfigureAwait(false);
+                    if (prior is not ZLinkAuthorityScanResult.Page priorPage)
+                        throw Unavailable("The object location continuation token expired.");
+                    cursor = priorPage.Value.NextCursor;
+                }
+                break;
+            }
+            if (cursor is null)
+                break;
+        }
+        return new ZLinkLocationPage<ZLinkLocationObjectEntry>(items, cursor?.Encoded);
     }
 
     private async ValueTask<ZLinkLocationObjectEntry> ProjectAsync(
@@ -208,23 +270,39 @@ internal sealed class ZLinkLocationObjectQuery(
             || string.Equals(entry.MeshName, filter.MeshName, StringComparison.Ordinal)
         );
 
-    private static long EncodedSizeUpperBound(ZLinkLocationPage<ZLinkLocationObjectEntry> page)
-    {
-        const int fixedPageBytes = 256;
-        const int fixedEntryBytes = 256;
-        var size = fixedPageBytes;
-        if (page.ContinuationToken is { } continuationToken)
-            size += Encoding.UTF8.GetByteCount(continuationToken) * 6;
-        foreach (var entry in page.Items)
-        {
-            size += fixedEntryBytes;
-            size += Encoding.UTF8.GetByteCount(entry.GlobalId) * 6;
-            size += Encoding.UTF8.GetByteCount(entry.MeshName) * 6;
-            size += Encoding.UTF8.GetByteCount(entry.StableType) * 6;
-            size += entry.NodeRid.ToString().Length * 6;
-        }
-        return size;
-    }
+    internal static bool EncodedPageFits(
+        long encodedItemsBytes,
+        int itemCount,
+        string? continuationToken
+    ) =>
+        Encoding.UTF8.GetByteCount("{\"items\":[")
+            + encodedItemsBytes
+            + Math.Max(0, itemCount - 1)
+            + Encoding.UTF8.GetByteCount("],\"continuationToken\":")
+            + (continuationToken is null ? 4 : JsonStringSize(continuationToken))
+            + 1
+        <= MaximumEncodedPageBytes;
+
+    internal static long EncodedObjectSize(ZLinkLocationObjectEntry entry) =>
+        Encoding.UTF8.GetByteCount("{\"globalId\":")
+        + JsonStringSize(entry.GlobalId)
+        + Encoding.UTF8.GetByteCount(",\"objectGeneration\":")
+        + entry.ObjectGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture).Length
+        + Encoding.UTF8.GetByteCount(",\"meshName\":")
+        + JsonStringSize(entry.MeshName)
+        + Encoding.UTF8.GetByteCount(",\"nodeRid\":")
+        + JsonStringSize(entry.NodeRid.ToString())
+        + Encoding.UTF8.GetByteCount(",\"state\":")
+        + JsonStringSize(entry.State.ToString())
+        + Encoding.UTF8.GetByteCount(",\"stableType\":")
+        + JsonStringSize(entry.StableType)
+        + 1;
+
+    private static long JsonStringSize(string value) =>
+        (long)
+            JsonEncodedText
+                .Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping)
+                .EncodedUtf8Bytes.Length + 2;
 
     private static ZLinkFrameworkException Unavailable(string message, Exception? error = null) =>
         new(
