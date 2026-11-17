@@ -987,6 +987,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 committedAuthorityOwnerGeneration
             );
             var header = ZLinkClientCallCodec.CreateEnvelope(
+                Registration.TimeProvider,
                 ZLinkMessageKind.Command,
                 meshName,
                 ZLinkRemoteActorSourceLeaveProtocol.PacketName
@@ -4590,6 +4591,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             body
         );
         var envelope = ZLinkClientCallCodec.CreateEnvelope(
+            Registration.TimeProvider,
             ZLinkMessageKind.Command,
             meshName,
             ZLinkRemoteActorFrameProtocol.PacketName
@@ -4798,6 +4800,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             frame
         );
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            Registration.TimeProvider,
             ZLinkMessageKind.Command,
             session.MeshName.Value,
             ZLinkRemoteSessionPushProtocol.PacketName
@@ -5117,6 +5120,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 frame
             );
             var envelope = ZLinkClientCallCodec.CreateEnvelope(
+                Registration.TimeProvider,
                 ZLinkMessageKind.Command,
                 meshName,
                 ZLinkRemoteActorReplyProtocol.PacketName

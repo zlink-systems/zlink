@@ -5,6 +5,7 @@ namespace Zlink.Framework.Runtime.Messaging;
 internal static class ZLinkClientCallCodec
 {
     public static ZLinkEnvelopeHeader CreateEnvelope(
+        TimeProvider timeProvider,
         ZLinkMessageKind kind,
         string channelName,
         string messageName,
@@ -12,8 +13,7 @@ internal static class ZLinkClientCallCodec
         string? topic = null,
         string? source = null,
         bool includeDeadline = true,
-        IReadOnlyDictionary<string, string>? metadata = null,
-        TimeProvider? timeProvider = null
+        IReadOnlyDictionary<string, string>? metadata = null
     )
     {
         if (kind is ZLinkMessageKind.Response or ZLinkMessageKind.Error)
@@ -31,9 +31,7 @@ internal static class ZLinkClientCallCodec
             messageName,
             ZLinkEnvelopeCodec.DefaultContentType,
             correlationRequired ? ZlinkStreamCorrelation.Next() : null,
-            includeDeadline && timeout is { } value
-                ? (timeProvider ?? TimeProvider.System).GetUtcNow().Add(value)
-                : null,
+            includeDeadline && timeout is { } value ? timeProvider.GetUtcNow().Add(value) : null,
             topic,
             null,
             null,

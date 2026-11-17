@@ -5024,6 +5024,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         public TimeSpan DefaultRequestTimeout => TimeSpan.FromSeconds(1);
 
+        public TimeProvider TimeProvider => TimeProvider.System;
+
         public ZLinkCodecRegistryBuilder Codecs { get; } = new();
 
         public ZLinkMessageFlowTracer Flow => flow;

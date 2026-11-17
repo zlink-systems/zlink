@@ -55,7 +55,12 @@ public sealed partial class EntrySpotActorDispatchTests
                 joinTimeProvider: timeProvider
             );
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-                ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "entry", "Probe"),
+                ZLinkClientCallCodec.CreateEnvelope(
+                    timeProvider,
+                    ZLinkMessageKind.Request,
+                    "entry",
+                    "Probe"
+                ),
                 new ProbeRouteMessage("probe"),
                 runtime.Registration.Codecs
             );
@@ -522,6 +527,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
                     ZLinkMessageKind.Request,
                     "entry",
                     ZLinkMessageNameResolver.ResolveFromMessage(message)
@@ -701,6 +707,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var message = new ProbeRouteMessage(Guid.NewGuid().ToString("N"));
             var encoded = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
                     ZLinkMessageKind.Request,
                     "entry",
                     ZLinkMessageNameResolver.ResolveFromMessage(message)
@@ -1154,6 +1161,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var flowId = ZlinkStreamFlowId.Create();
         using var header = ZLinkEnvelopeCodec.EncodeHeader(
             ZLinkClientCallCodec.CreateEnvelope(
+                TimeProvider.System,
                 ZLinkMessageKind.Command,
                 "entry",
                 "ProbeRouteMessage"

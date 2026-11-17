@@ -36,7 +36,12 @@ public sealed class TypedJsonPayloadStorageTests
         Assert.Equal(expected, genericPart.ToArray());
         Assert.Equal(expected, declaredPart.ToArray());
 
-        var header = ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Command, "test", "bytes");
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
+            ZLinkMessageKind.Command,
+            "test",
+            "bytes"
+        );
         var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, payload, null);
         try
         {

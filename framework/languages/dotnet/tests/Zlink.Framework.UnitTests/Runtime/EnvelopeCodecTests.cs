@@ -59,7 +59,7 @@ public sealed class EnvelopeCodecTests
     {
         var kind = (ZLinkMessageKind)kindValue;
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkClientCallCodec.CreateEnvelope(kind, "route", "message")
+            ZLinkClientCallCodec.CreateEnvelope(TimeProvider.System, kind, "route", "message")
         );
     }
 
