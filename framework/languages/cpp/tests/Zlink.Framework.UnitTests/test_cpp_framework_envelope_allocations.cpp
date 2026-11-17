@@ -270,6 +270,36 @@ TEST (EnvelopeEncoding, ChangedValuesAndInvalidHeadersCannotReusePreviousBytes)
     EXPECT_EQ (recovered_header.value ().channel_name, "cache-values");
 }
 
+TEST (EnvelopeAllocations, HeaderEncodeAndDecodeMessageAllocations)
+{
+    msg::envelope_codec_t codec;
+    msg::envelope_header_t header{.kind = msg::message_kind_t::request,
+                                  .channel_name = std::string (64, 'c'),
+                                  .message_name = std::string (64, 'm'),
+                                  .content_type = "application/x-protobuf",
+                                  .correlation_id = std::string (36, 'a'),
+                                  .deadline = std::string (20, 'd')};
+    auto wire = codec.encode_header (header);
+    (void) codec.decode_header (wire, false);
+    const auto encode_allocations = count_allocations ([&] {
+        for (int index = 0; index != 10; ++index) {
+            header.correlation_id[35] = header.correlation_id[35] == 'a' ? 'b' : 'a';
+            auto encoded = codec.encode_header (header);
+            EXPECT_EQ (encoded.size (), wire.size ());
+        }
+    });
+    const auto decode_allocations = count_allocations ([&] {
+        for (int index = 0; index != 10; ++index) {
+            auto decoded = codec.decode_header (wire, false);
+            EXPECT_TRUE (decoded);
+        }
+    });
+    std::printf ("header message allocations per 10: encode=%zu decode=%zu\n",
+                 encode_allocations, decode_allocations);
+    EXPECT_EQ (encode_allocations, 10u);
+    EXPECT_EQ (decode_allocations, 50u);
+}
+
 // Container members (std::map metadata) may allocate even when empty, and how
 // many allocations that costs differs by standard library (MSVC allocates a
 // sentinel node). Measure a header whose strings fit inline as the baseline.
