@@ -531,6 +531,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                                 RemoteSessionBindingTransition, CompletionStage<Boolean>>
                         transition);
 
+        /** Restores the preserved route under the relocation owner's existing move gate. */
         default CompletionStage<Boolean> restoreRelocated(
                 ZLinkInternalSpotNode node,
                 ZLinkBackendActorRef actor,
@@ -552,9 +553,25 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                     public void retire(BoundSessionRoute route) {}
                 };
 
+        /** Applies the decided binding in the state owner turn, outside the user callback. */
+        default CompletionStage<Boolean> commit(
+                java.util.function.Supplier<CompletionStage<Boolean>> transition) {
+            return transition.get();
+        }
+
         void bind(BoundSessionRoute route);
 
         void retire(BoundSessionRoute route);
+
+        /** Executes the callback and binding commit in one turn when a callback is required. */
+        default CompletionStage<Boolean> acceptBinding(
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
+                RoutingId incomingSessionRid,
+                java.util.function.Function<
+                                RemoteSessionBindingTransition, CompletionStage<Boolean>>
+                        transition) {
+            return transition.apply(this);
+        }
 
         default CompletionStage<java.util.Optional<String>> decideDuplicateBind(
                 systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,

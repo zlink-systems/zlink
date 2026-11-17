@@ -422,6 +422,12 @@ Actor gate와 lifecycle lane을 사용한다. `SpotWide`에서는 shared Spot ga
 중복 bind 판정을 위한 별도 queue·gate·current 상태를 두지 않는다. 판정과 그 결과의 binding 반영은
 같은 Actor owner 순서에서 수행한다.
 
+**Callback을 호출하지 않는 bind는 Actor gate를 기다리지 않는다.** Current가 없거나, 같은 physical Session의
+idempotent 재제출이거나, callback이 없는 bind는 사용자 코드를 실행하지 않는 infrastructure 진행이다.
+Actor owner는 §5의 fence 검증 뒤 이 bind의 binding 반영을 Actor gate·lifecycle lane에 넣지 않고 바로
+확정한다([Handler turn과 execution gate §1·§13](../01-execution/02-handler-turn-and-execution-gate.ko.md)).
+Actor gate를 쓰는지는 callback을 호출하는지 하나로 정한다.
+
 Callback 실행 제한 시간은 server 설정 `SessionReplacementCallbackTimeout`이며 기본값은 `30,000 ms`다.
 이 값은 Actor owner의 중복 bind callback에도 적용한다. 제한 시간 안에 결과가 없으면 incoming bind를 `DeadlineExceeded`로
 끝내고 callback에 취소를 전달한다. 늦게 반환한 받아들임은 binding을 바꾸지 않는다. 기존 bind operation의
