@@ -485,9 +485,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 var scenarioName = scenario.GetProperty("name").GetString();
                 if (scenarioName is not ("empty-key" or "nul-key" or "nul-value"))
                     continue;
-                var protoHeader = new global::Zlink.Framework.Channel.V1.ChannelHeader
+                var protoHeader = new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader
                 {
-                    Kind = global::Zlink.Framework.Channel.V1.ChannelKind.Request,
+                    Kind = global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelKind.Request,
                     ChannelName = "work",
                     MessageName = "EchoRequest",
                     ContentType = "application/json",
@@ -495,7 +495,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 };
                 foreach (var entry in scenario.GetProperty("metadata").EnumerateObject())
                     protoHeader.Metadata.Add(
-                        new global::Zlink.Framework.Channel.V1.MetadataEntry
+                        new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry
                         {
                             Key = entry.Name,
                             Value = entry.Value.GetString()!,

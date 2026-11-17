@@ -5,9 +5,9 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
-using ProtoChannelHeader = global::Zlink.Framework.Channel.V1.ChannelHeader;
-using ProtoChannelKind = global::Zlink.Framework.Channel.V1.ChannelKind;
-using ProtoMetadataEntry = global::Zlink.Framework.Channel.V1.MetadataEntry;
+using ProtoChannelHeader = global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader;
+using ProtoChannelKind = global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelKind;
+using ProtoMetadataEntry = global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 

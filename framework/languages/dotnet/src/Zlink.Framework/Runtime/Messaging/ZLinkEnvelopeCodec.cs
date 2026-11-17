@@ -6,9 +6,10 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
-using ProtoChannelHeader = Zlink.Framework.Channel.V1.ChannelHeader;
-using ProtoChannelKind = Zlink.Framework.Channel.V1.ChannelKind;
-using ProtoFlowOrigin = Zlink.Framework.Channel.V1.FlowOrigin;
+using ProtoChannelHeader = Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader;
+using ProtoChannelKind = Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelKind;
+using ProtoFlowOrigin = Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.FlowOrigin;
+using ProtoMetadataEntry = Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
@@ -392,7 +393,7 @@ internal static class ZLinkEnvelopeCodec
                 )
             )
                 proto.Metadata.Add(
-                    new Zlink.Framework.Channel.V1.MetadataEntry { Key = key, Value = value }
+                    new ProtoMetadataEntry { Key = key, Value = value }
                 );
         }
         return proto;

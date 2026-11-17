@@ -98,7 +98,7 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         var poller = new MeshReceiveWakeTests.ControlledReceivePoller();
         var receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() => poller);
         using var release = new SemaphoreSlim(0);
-        var entered = global::System.Threading.Channels.Channel.CreateUnbounded<int>();
+        var entered = Channel.CreateUnbounded<int>();
         var calls = 0;
         var running = 0;
         var failures = new ConcurrentQueue<Exception>();
@@ -192,7 +192,7 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         var poller = new MeshReceiveWakeTests.ControlledReceivePoller();
         var receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() => poller);
         using var release = new SemaphoreSlim(0);
-        var entered = global::System.Threading.Channels.Channel.CreateUnbounded<int>();
+        var entered = Channel.CreateUnbounded<int>();
         var calls = 0;
         var failures = new ConcurrentQueue<Exception>();
         var source = ZLinkProcessExecutionPool.CreateApplicationSource(
@@ -785,8 +785,7 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
 
     private class DrainNode : DispatchProxy
     {
-        private readonly Channel<bool> _entered =
-            global::System.Threading.Channels.Channel.CreateUnbounded<bool>();
+        private readonly Channel<bool> _entered = Channel.CreateUnbounded<bool>();
         private int _drainCount;
         internal int DrainCount => Volatile.Read(ref _drainCount);
         internal readonly ConcurrentDictionary<int, Thread> Threads = new();

@@ -1,6 +1,10 @@
 syntax = "proto3";
 package zlink.framework.channel.v1;
 
+// C# only: keep the generated types out of the Zlink.Framework.Channel namespace so it
+// does not shadow System.Threading.Channels.Channel. Wire format is unchanged.
+option csharp_namespace = "Zlink.Framework.Runtime.Protocol.ChannelHeaderV1";
+
 enum ChannelKind { CHANNEL_KIND_UNSPECIFIED = 0; REQUEST = 1; RESPONSE = 2; COMMAND = 3; PUBLISH = 4; ERROR = 5; }
 enum FlowOrigin  { FLOW_ORIGIN_UNSPECIFIED = 0; INBOUND = 1; TIMER = 2; APPLICATION = 3; LIFECYCLE = 4; }
 
