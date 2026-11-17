@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/messaging/client_call_codec.hpp"

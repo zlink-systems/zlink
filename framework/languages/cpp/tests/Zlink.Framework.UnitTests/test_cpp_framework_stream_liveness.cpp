@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "runtime/streams/session_liveness.hpp"
 #include "runtime/disconnect_rid.hpp"
 #include <zlink/Contracts/Errors/errors.hpp>

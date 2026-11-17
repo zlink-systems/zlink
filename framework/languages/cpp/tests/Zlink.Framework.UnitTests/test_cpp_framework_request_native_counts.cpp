@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include <gtest/gtest.h>
 #include "native_call_counter.hpp"
 #include "runtime/messaging/client_call_codec.hpp"

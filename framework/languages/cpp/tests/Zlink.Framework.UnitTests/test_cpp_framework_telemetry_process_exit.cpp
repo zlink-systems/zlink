@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include <zlink/framework/contracts/configuration/app.hpp>
