@@ -320,7 +320,6 @@ class location_store_backend_t final : public location_store_t
             throw std::invalid_argument ("location scan limit must be 1..1000");
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
         return _worker.submit<store_scan_result_t> ([this, request = std::move (request)] {
-            auto now = std::chrono::system_clock::time_point{};
             const auto steady_now = std::chrono::steady_clock::now ();
             for (auto item = _scan_snapshots.begin (); item != _scan_snapshots.end ();) {
                 if (item->second.expires_at <= steady_now)
@@ -370,7 +369,7 @@ class location_store_backend_t final : public location_store_t
                                        .get ();
                 if (scanned.empty () || (scanned.size () - 1) % 2 != 0)
                     throw sw::redis::Error ("invalid opaque location scan result");
-                now = from_unix_ms (std::stoll (scanned[0]));
+                snapshot.store_now = from_unix_ms (std::stoll (scanned[0]));
                 for (std::size_t index = 1; index + 1 < scanned.size (); index += 2) {
                     const auto &original_key = scanned[index];
                     const auto decoded = detail::decode_opaque_value (scanned[index + 1]);
@@ -378,7 +377,8 @@ class location_store_backend_t final : public location_store_t
                         continue;
                     if (decoded.tombstone
                         || (decoded.expires_at_ms > 0
-                            && decoded.expires_at_ms <= static_cast<std::uint64_t> (unix_ms (now))))
+                            && decoded.expires_at_ms
+                                 <= static_cast<std::uint64_t> (unix_ms (snapshot.store_now))))
                         continue;
                     snapshot.items.push_back (
                       {{decoded.original_key},
@@ -387,18 +387,15 @@ class location_store_backend_t final : public location_store_t
                          decoded.expires_at_ms > 0
                            ? std::optional{from_unix_ms (
                                static_cast<std::int64_t> (decoded.expires_at_ms))}
-                           : std::nullopt,
-                         now }});
+                           : std::nullopt }});
                 }
             }
 
             const auto snapshot = _scan_snapshots.find (snapshot_id);
             if (snapshot == _scan_snapshots.end () || offset > snapshot->second.items.size ())
                 return store_scan_result_t{store_scan_expired_t {}};
-            if (request.cursor)
-                now = snapshot->second.items.front ().value.store_now;
             store_scan_page_t page;
-            page.store_now = now;
+            page.store_now = snapshot->second.store_now;
             auto end = offset;
             std::size_t encoded_size = 0;
             while (end < snapshot->second.items.size () && end - offset < request.limit) {
@@ -412,6 +409,8 @@ class location_store_backend_t final : public location_store_t
                                snapshot->second.items.begin ()
                                  + static_cast<std::ptrdiff_t> (offset),
                                snapshot->second.items.begin () + static_cast<std::ptrdiff_t> (end));
+            for (auto &item : page.items)
+                item.value.store_now = snapshot->second.store_now;
             if (end < snapshot->second.items.size ())
                 page.next_cursor =
                   store_scan_cursor_t{std::to_string (_scan_epoch) + ":"
@@ -676,6 +675,7 @@ return result
     struct scan_snapshot_t
     {
         std::vector<store_scan_item_t> items;
+        std::chrono::system_clock::time_point store_now{};
         std::chrono::steady_clock::time_point expires_at;
     };
     static constexpr std::size_t max_scan_snapshots = 128;

@@ -58,5 +58,13 @@ jobs:
       - name: Install clang-format 18
         run: sudo apt-get update && sudo apt-get install -y clang-format-18
 
+      # format.sh downloads pinned formatter jars into .artifacts/format; reuse
+      # them so queue batches do not hit the Maven Central rate limit (#4663).
+      - name: Restore formatter jars
+        uses: actions/cache@v5
+        with:
+          path: .artifacts/format
+          key: framework-format-jars-${{ hashFiles('scripts/format/format.sh') }}
+
       - name: Check source format
         run: bash scripts/format/format.sh --check
