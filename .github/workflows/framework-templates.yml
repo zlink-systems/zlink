@@ -393,6 +393,7 @@ jobs:
           TEMPLATE_NAME: ${{ matrix.template }}
           TEMPLATE_PATH: ${{ matrix.path }}
           PACKAGE_NAME: ${{ matrix.package }}
+          ZLINK_DEBUG_FRAMEWORK_RELOCATION: ${{ matrix.package == 'node' && '1' || '0' }}
         run: bash scripts/templates/run-template.sh "${LANG_NAME}" "${TEMPLATE_NAME}" "${TEMPLATE_PATH}" "${PACKAGE_NAME}"
 
       - uses: actions/upload-artifact@v6
