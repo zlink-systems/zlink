@@ -3841,6 +3841,73 @@ test('stream connector randomizes the wait between reconnect attempts', async ()
   await instance.close();
 });
 
+test('stream connector waits at least half the initial reconnect delay after a drop', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(Math, 'random', () => 0);
+
+  const oldConnection = new MemoryConnection();
+  let rejectRead;
+  let notifyReadStarted;
+  const readStarted = new Promise((resolve) => {
+    notifyReadStarted = resolve;
+  });
+  oldConnection.read = () => new Promise((_resolve, reject) => {
+    rejectRead = reject;
+    notifyReadStarted();
+  });
+  const newConnection = new MemoryConnection();
+  let connectCalls = 0;
+  let notifyReconnectAttempt;
+  const reconnectAttempt = new Promise((resolve) => {
+    notifyReconnectAttempt = resolve;
+  });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        connectCalls += 1;
+        if (connectCalls === 2) notifyReconnectAttempt();
+        return connectCalls === 1 ? oldConnection : newConnection;
+      }
+    },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+    reconnect: { initialDelayMs: 100, maxDelayMs: 100, maxAttempts: 2 },
+    heartbeat: { enabled: false }
+  });
+  let connected = false;
+  let notifyAutomaticAttempt;
+  const automaticAttempt = new Promise((resolve) => {
+    notifyAutomaticAttempt = resolve;
+  });
+  instance.onConnectionStateChanged(({ current }) => {
+    if (current === connector.ZlinkStreamConnectionState.Connected) connected = true;
+    if (
+      connected &&
+      (current === connector.ZlinkStreamConnectionState.Connecting ||
+        current === connector.ZlinkStreamConnectionState.Reconnecting)
+    )
+      notifyAutomaticAttempt();
+  });
+  const disconnected = new Promise((resolve) => instance.onDisconnected(resolve));
+
+  try {
+    await instance.connect();
+    await readStarted;
+    rejectRead(new Error('old transport failed'));
+    await disconnected;
+    await automaticAttempt;
+
+    assert.equal(connectCalls, 1);
+    t.mock.timers.tick(49);
+    assert.equal(connectCalls, 1);
+    t.mock.timers.tick(1);
+    await reconnectAttempt;
+    assert.equal(connectCalls, 2);
+  } finally {
+    await instance.close();
+  }
+});
+
 test('stream connector runs the disconnect handler when reconnect attempts are spent', async () => {
   const transportFactory = new FlakyTransportFactory(5);
   let disconnected = 0;
