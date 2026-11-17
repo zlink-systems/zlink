@@ -353,7 +353,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }
     const scan = await this.provider.scan(
       {
-        prefix: AUTHORITY_PREIMAGE_PREFIX,
+        prefix: authorityScanPrefix(prefix),
         cursor:
           cursor === undefined ? undefined : ({ value: cursor.encoded } as ZLinkStoreScanCursor),
         limit
@@ -4123,6 +4123,19 @@ function ownerKey(ownerId: string) {
 }
 
 const AUTHORITY_PREIMAGE_PREFIX = `${opaqueRecordPreimage('authority')}\0`;
+
+function authorityScanPrefix(prefix: string): string {
+  switch (prefix) {
+    case '':
+      return AUTHORITY_PREIMAGE_PREFIX;
+    case 'zla1:a:':
+      return `${AUTHORITY_PREIMAGE_PREFIX}actor\0`;
+    case 'zla1:s:':
+      return `${AUTHORITY_PREIMAGE_PREFIX}spot\0`;
+    default:
+      throw new TypeError(`unsupported authority scan prefix: ${prefix}`);
+  }
+}
 
 function authorityKey(value: string) {
   return storeKey(authorityPreimage(value));

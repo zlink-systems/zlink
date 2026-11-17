@@ -6813,6 +6813,34 @@ void configure_review_host (app_t &app,
 }
 }
 
+TEST (ProviderLocationRepositoryTest, AuthorityKindPrefixIsPassedToProvider)
+{
+    startup_review_store_t store;
+    provider_location_repository_t repository (store);
+    const auto check = [&] (std::string logical, std::string physical) {
+        unsigned scans = 0;
+        store.before_scan = [&] (const store_scan_request_t &request) -> task_t<void> {
+            ++scans;
+            EXPECT_EQ (request.prefix, physical);
+            EXPECT_FALSE (request.cursor);
+            EXPECT_EQ (request.limit, 100u);
+            co_return;
+        };
+        auto read = repository.list_authorities (logical, std::nullopt, 100).result ().value ();
+        const auto *page = std::get_if<authority_page_t> (&read);
+        ASSERT_NE (page, nullptr);
+        EXPECT_TRUE (page->items.empty ());
+        EXPECT_FALSE (page->next_cursor);
+        EXPECT_EQ (scans, 1u);
+        store.before_scan = {};
+    };
+    check ("", std::string ("authority\0", 10));
+    check ("zla1:a:", std::string ("authority\0actor\0", 16));
+    check ("zla1:s:", std::string ("authority\0spot\0", 15));
+    EXPECT_THROW (repository.list_authorities ("invalid", std::nullopt, 100).result ().value (),
+                  std::invalid_argument);
+}
+
 TEST (CppFrameworkOpaqueLocationStore, FixedRidCompetingStartupRejectsLoserAfterPreparing)
 {
     const auto verify = [] (unsigned mode) {
