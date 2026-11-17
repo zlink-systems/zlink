@@ -11162,7 +11162,6 @@ public sealed partial class EntrySpotActorDispatchTests
         var probe = runtime.Services.GetRequiredService<LocalEntryJoinProbe>();
         var leftCount = 0;
         var allLeft = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task? close = null;
         try
         {
             var created = await runtime.CreateAsync<EntryReturnSourceSpot>();
@@ -11194,7 +11193,6 @@ public sealed partial class EntrySpotActorDispatchTests
                 await releaseSource.Task.WaitAsync(ct);
                 if (Interlocked.Increment(ref leftCount) == actors.Count)
                 {
-                    close = ((IZLinkSpotContext)source).CloseAsync(CancellationToken.None).AsTask();
                     allLeft.TrySetResult();
                 }
             };
@@ -11222,9 +11220,11 @@ public sealed partial class EntrySpotActorDispatchTests
             releaseSource.TrySetResult();
             var results = await Task.WhenAll(joins).WaitAsync(TimeSpan.FromSeconds(2));
             Assert.All(results, result => Assert.IsType<ZLinkActorJoinResult.Accepted>(result));
-            // The source owner drains callbacks and the accepted Close without cancelling the host.
+            // Close is submitted outside the source lifecycle callbacks (execution gate §6).
             await allLeft.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await close!.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(
+                await runtime.CloseAsync(created.Spot).AsTask().WaitAsync(TimeSpan.FromSeconds(5))
+            );
             foreach (var actor in actors)
                 await runtime.DestroyActorAsync(
                     RoutingId.From("entry-node"),

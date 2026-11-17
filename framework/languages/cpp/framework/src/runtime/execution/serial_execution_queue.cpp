@@ -792,6 +792,7 @@ class serial_turn_handle_impl_t final
     }
 
     bool belongs_to (const void *owner) const noexcept override { return owner == &_queue; }
+    bool is_lifecycle () const noexcept { return _lane == serial_work_lane_t::lifecycle; }
     bool is_after_active_phase () const noexcept override
     {
         return std::holds_alternative<serial_execution_queue_t::barrier_origin_t> (_origin);
@@ -1104,6 +1105,13 @@ class serial_turn_handle_impl_t final
     };
     phase_t _phase = phase_t::open;
 };
+
+bool serial_execution_queue_t::is_current_lifecycle_turn () const noexcept
+{
+    const auto turn =
+      std::dynamic_pointer_cast<serial_turn_handle_impl_t> (detail::capture_current_serial_turn ());
+    return turn && turn->belongs_to (this) && turn->is_lifecycle ();
+}
 
 serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor,
                                                     serial_execution_queue_options_t options,

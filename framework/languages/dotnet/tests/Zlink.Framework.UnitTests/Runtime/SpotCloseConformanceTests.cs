@@ -58,11 +58,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             host.Store.ThrowAuthorityDelete = true;
         }
         ZLinkSpotActivation? activation = null;
-        host.State.OnInstanceInitializing = context =>
-        {
-            activation = (ZLinkSpotActivation)context;
-            host.State.ContextCloseTask = context.CloseAsync().AsTask();
-        };
+        host.State.OnInstanceInitializing = context => activation = (ZLinkSpotActivation)context;
         var selected = new TaskCompletionSource<(int Pending, bool Committed, bool Stopped)>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -90,6 +86,16 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         };
 
         await host.RequestInstanceAsync(spotId);
+        await activation!._serial.ExecuteAsync(
+            (_, _) =>
+            {
+                host.State.ContextCloseTask = ((IZLinkInstanceSpotContext)activation)
+                    .CloseAsync()
+                    .AsTask();
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None
+        );
         Exception? ownerFailure = null;
         if (failOwner)
         {
@@ -131,7 +137,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Initialization_Close_join_preserves_cancellation_without_canceling_the_owner(
+    public async Task Context_Close_join_preserves_cancellation_without_canceling_the_owner(
         bool cancelJoined
     )
     {
@@ -144,15 +150,32 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         output.WriteLine($"Message flow file: {flowPath}");
         using var cancellation = new CancellationTokenSource();
         await using var host = await SpotCloseHost.StartAsync();
-        host.State.OnInstanceInitializing = context =>
+        IZLinkInstanceSpotContext? context = null;
+        host.State.OnInstanceInitializing = current => context = current;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.State.StoredMarker = "initial";
+        host.State.OnReinitialize = _ =>
         {
-            host.State.ContextCloseTask = context.CloseAsync(cancellation.Token).AsTask();
+            entered.SetResult();
+            return release.Task;
+        };
+        var initializing = host.RequestInstanceAsync(
+            $"context-close-cancellation-{Guid.NewGuid():N}"
+        );
+        await entered.Task.WaitAsync(Wait);
+        try
+        {
+            host.State.ContextCloseTask = context!.CloseAsync(cancellation.Token).AsTask();
             host.State.JoinedContextCloseTask = context.CloseAsync(cancellation.Token).AsTask();
             if (cancelJoined)
                 cancellation.Cancel();
-        };
-
-        await host.RequestInstanceAsync($"initialization-close-cancellation-{Guid.NewGuid():N}");
+        }
+        finally
+        {
+            release.SetResult();
+        }
+        await initializing;
         Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
         var joined = host.State.JoinedContextCloseTask!;
         if (cancelJoined)
