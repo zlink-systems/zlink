@@ -392,9 +392,7 @@ internal static class ZLinkEnvelopeCodec
                     ZLinkMeshMetadataCodec.Utf8ByteComparer
                 )
             )
-                proto.Metadata.Add(
-                    new ProtoMetadataEntry { Key = key, Value = value }
-                );
+                proto.Metadata.Add(new ProtoMetadataEntry { Key = key, Value = value });
         }
         return proto;
     }

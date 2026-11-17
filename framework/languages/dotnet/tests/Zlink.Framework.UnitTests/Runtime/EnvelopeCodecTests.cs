@@ -139,9 +139,10 @@ public sealed class EnvelopeCodecTests
         );
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-        var parsed = Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader.Parser.ParseFrom(
-            encoded.AsReadOnlySpan()
-        );
+        var parsed =
+            Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader.Parser.ParseFrom(
+                encoded.AsReadOnlySpan()
+            );
 
         Assert.Equal(expected, parsed.Deadline);
     }

@@ -136,11 +136,21 @@ public sealed class ChannelEnvelopeHandoffTests
             ContentType = "application/json",
             CorrelationId = "handoff-request",
             FlowId = flowId,
-            FlowOrigin = global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.FlowOrigin.Inbound,
+            FlowOrigin = global::Zlink
+                .Framework
+                .Runtime
+                .Protocol
+                .ChannelHeaderV1
+                .FlowOrigin
+                .Inbound,
         };
         if (malformed)
             protoHeader.Metadata.Add(
-                new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry { Key = "", Value = "invalid" }
+                new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry
+                {
+                    Key = "",
+                    Value = "invalid",
+                }
             );
         using var headerFrame = Message.From(protoHeader.ToByteArray());
         var replyTask = dealer.Request().Message(headerFrame).Async(CancellationToken.None).Reply;

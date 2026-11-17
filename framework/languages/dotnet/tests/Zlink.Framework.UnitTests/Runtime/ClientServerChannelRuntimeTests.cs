@@ -485,14 +485,21 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 var scenarioName = scenario.GetProperty("name").GetString();
                 if (scenarioName is not ("empty-key" or "nul-key" or "nul-value"))
                     continue;
-                var protoHeader = new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader
-                {
-                    Kind = global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelKind.Request,
-                    ChannelName = "work",
-                    MessageName = "EchoRequest",
-                    ContentType = "application/json",
-                    CorrelationId = "invalid-metadata",
-                };
+                var protoHeader =
+                    new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader
+                    {
+                        Kind = global::Zlink
+                            .Framework
+                            .Runtime
+                            .Protocol
+                            .ChannelHeaderV1
+                            .ChannelKind
+                            .Request,
+                        ChannelName = "work",
+                        MessageName = "EchoRequest",
+                        ContentType = "application/json",
+                        CorrelationId = "invalid-metadata",
+                    };
                 foreach (var entry in scenario.GetProperty("metadata").EnumerateObject())
                     protoHeader.Metadata.Add(
                         new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry
