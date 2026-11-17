@@ -392,8 +392,7 @@ void serialize_header_into (const channel_header_proto_t &proto,
                             std::span<std::byte> destination,
                             std::size_t size)
 {
-    if (destination.size () != size
-        || proto.GetCachedSize () != static_cast<int> (size)
+    if (destination.size () != size || proto.GetCachedSize () != static_cast<int> (size)
         || proto.SerializeWithCachedSizesToArray (
              reinterpret_cast<std::uint8_t *> (destination.data ()))
              != reinterpret_cast<std::uint8_t *> (destination.data ()) + size)

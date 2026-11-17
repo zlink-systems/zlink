@@ -296,8 +296,8 @@ TEST (EnvelopeAllocations, HeaderEncodeAndDecodeMessageAllocations)
             EXPECT_TRUE (decoded);
         }
     });
-    std::printf ("header message allocations per 10: encode=%zu decode=%zu\n",
-                 encode_allocations, decode_allocations);
+    std::printf ("header message allocations per 10: encode=%zu decode=%zu\n", encode_allocations,
+                 decode_allocations);
     EXPECT_EQ (encode_allocations, 10u);
     EXPECT_EQ (decode_allocations, 50u);
 }
