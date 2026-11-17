@@ -10,6 +10,10 @@ const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 const framework = require('../packages/framework/dist');
 const nestjs = require('../packages/nestjs/dist');
 const locations = require('../packages/framework-locations-redis/dist');
+const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const { OutageStore, until, configureOutage } = require('./outage-control');
+const { decodeActorAuthorityPayload } = require('../packages/framework/dist/runtime/actors/actor-authority-payload-codec');
 const { decodeActorJoin28 } = require(
   '../packages/framework/dist/runtime/protocol/service_wire_pilot_codec.generated.js'
 );
@@ -23,6 +27,20 @@ const mode = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 let userSpotTargetJoined;
 let resolveUserSpotTargetJoined;
+let outageStore;
+let actorCreations = 0;
+let probeExecutions = 0;
+
+function locationStore(builder, keyPrefix, target) {
+  const store = new locations.ZLinkRedisLocationStore({
+    url: `redis://${require_('redis-endpoint')}`,
+    keyPrefix: `${keyPrefix}:location`
+  });
+  if (!args['outage-control-prefix']) return store;
+  configureOutage(builder);
+  outageStore = new OutageStore(store, args, appendEvent, target);
+  return outageStore;
+}
 
 function parseArgs(argv) {
   const values = {};
@@ -259,6 +277,8 @@ Injectable()(UserSpotDiscoveryProbeHandler);
 
 class RelocationActor {
   constructor(actorId, context) {
+    this.instanceId = randomUUID();
+    this.creationCount = ++actorCreations;
     this.actorId = actorId;
     this.context = context;
     this.stateVersion = 0;
@@ -361,12 +381,15 @@ nestjs.zlinkEntrySpotActorRequestHandler({
 
 class SourceProbeHandler {
   async handle(_spot, actor, _context, request) {
+    probeExecutions += 1;
     return {
       actorId: actor.actorId,
       spotId: String(actor.context.spotId),
       nodeRid: require_('node-rid'),
       stateVersion: actor.stateVersion,
-      marker: request.marker
+      marker: request.marker,
+      instanceId: actor.instanceId,
+      creationCount: actor.creationCount
     };
   }
 }
@@ -379,6 +402,7 @@ nestjs.zlinkEntrySpotActorRequestHandler({
 
 class TargetProbeHandler {
   async handle(_spot, actor, _context, request) {
+    probeExecutions += 1;
     const nodeRid = require_('node-rid');
     appendEvent(`user-spot-probe-served|nodeRid=${nodeRid}|actor=${actor.actorId}`);
     return {
@@ -409,10 +433,7 @@ async function userSpotJoinSource() {
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
         builder.configureDispatch().messageFlow('normal');
-        builder.addLocationStore(new locations.ZLinkRedisLocationStore({
-          url: `redis://${require_('redis-endpoint')}`,
-          keyPrefix: `${keyPrefix}:location`
-        }));
+        builder.addLocationStore(locationStore(builder, keyPrefix, false));
         builder.addRelocationStore(new locations.ZLinkRedisRelocationStore({
           url: `redis://${require_('redis-endpoint')}`,
           keyPrefix: `${keyPrefix}:relocation`
@@ -481,6 +502,10 @@ async function userSpotJoinSource() {
   appendEvent(`user-spot-source-actor-created|status=${created.status}|node=${created.actor?.nodeRid}`);
 
   const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
+  if (outageStore) {
+    await runOutageSource(app, actorManager, actorClient, actorId, targetSpotId);
+    await new Promise(() => {});
+  }
   const reply = await actorClient
     .requestToActor(actorId, new BeginUserSpotJoinReq(targetSpotId, 'canonical-28'))
     .timeout(45_000)
@@ -569,10 +594,7 @@ async function userSpotJoinTarget() {
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
         builder.configureDispatch().messageFlow('normal');
-        builder.addLocationStore(new locations.ZLinkRedisLocationStore({
-          url: `redis://${require_('redis-endpoint')}`,
-          keyPrefix: `${keyPrefix}:location`
-        }));
+        builder.addLocationStore(locationStore(builder, keyPrefix, true));
         builder.addRelocationStore(new locations.ZLinkRedisRelocationStore({
           url: `redis://${require_('redis-endpoint')}`,
           keyPrefix: `${keyPrefix}:relocation`
@@ -633,6 +655,10 @@ async function userSpotJoinTarget() {
   writeReady();
 
   const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
+  if (outageStore) {
+    await runOutageTarget(app, actorClient, created.spot.nodeRid);
+    await new Promise(() => {});
+  }
   void probeUserSpotTarget(actorClient, created.spot.nodeRid);
 
   await new Promise(() => {});
@@ -672,6 +698,124 @@ async function probeUserSpotTarget(actorClient, targetNodeRid) {
     await new Promise(resolve => setTimeout(resolve, 500));
   }
   appendEvent(`user-spot-probe-timeout|targetRid=${targetNodeRid}|failure=${lastFailure}`);
+}
+
+async function runOutageSource(app, actorManager, actorClient, actorId, targetSpotId) {
+  const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+  const probe = marker => actorClient.requestToActor(actorId, new UserSpotProbeReq(marker))
+    .timeout(5_000).submit();
+  let initial;
+  let join;
+  await outageStore.commands(async phase => {
+    switch (phase) {
+      case 'steady': {
+        initial = await probe('outage-steady');
+        outageStore.owner = runtime.locationOwner.currentRuntime.currentOwnerToken;
+        outageStore.baseline = await outageStore.observer.readAuthority(outageStore.authorityKey);
+        assert.equal(outageStore.baseline.kind, 'snapshot');
+        assert.equal(decodeActorAuthorityPayload(outageStore.baseline.payload)?.state, 'ready');
+        assert.equal(outageStore.baseline.ownerLeaseGeneration, outageStore.owner.leaseGeneration);
+        appendEvent(`outage-identity|instance=${initial.instanceId}|creations=${initial.creationCount}`
+          + `|object=${outageStore.baseline.objectGeneration}|authority=${outageStore.baseline.authorityOwnerGeneration}`
+          + `|lease=${outageStore.owner.leaseGeneration}`);
+        break;
+      }
+      case 'outage':
+        outageStore.outage = true;
+        await until(() => outageStore.failed, 'actual Store failure');
+        break;
+      case 'expired':
+        await until(async () => (await outageStore.observer.readOwnerLease(outageStore.owner.ownerId)).kind === 'missing', 'old lease expiry');
+        break;
+      case 'recover':
+        outageStore.recovering = true;
+        outageStore.outage = false;
+        await until(() => outageStore.newOwner, 'new lease claim');
+        appendEvent(`outage-new-lease|old=${outageStore.owner.leaseGeneration}|new=${outageStore.newOwner.leaseGeneration}`);
+        break;
+      case 'release-descriptor':
+        await outageStore.release('descriptor');
+        break;
+      case 'release-cas':
+        await outageStore.release('cas');
+        break;
+      case 'partial': {
+        const pending = args['outage-order'] === 'descriptor-first' ? 'cas' : 'descriptor';
+        await until(() => outageStore.holds.has(pending), `${pending} remains held`);
+        const before = probeExecutions;
+        await assert.rejects(probe('outage-partial'), error =>
+          error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown);
+        assert.equal(probeExecutions, before);
+        appendEvent('outage-partial|kind=ShuttingDown|handlers=0');
+        break;
+      }
+      case 'resumed': {
+        await until(() => runtime.locationOwner.currentRuntime.boundExecutionUsable, 'source execution gate resumed');
+        const reply = await probe('outage-resumed');
+        assert.equal(reply.instanceId, initial.instanceId);
+        assert.equal(reply.creationCount, initial.creationCount);
+        const fence = runtime.actorHandoff.options.currentOwnerFence(actorId);
+        assert.equal(fence.ownerLeaseGeneration, String(outageStore.newOwner.leaseGeneration));
+        appendEvent(`outage-resumed|instance=${reply.instanceId}|creations=${reply.creationCount}|lease=${fence.ownerLeaseGeneration}`);
+        outageStore.recovering = false;
+        break;
+      }
+      case 'relocation':
+        join = Promise.resolve(actorClient.requestToActor(actorId,
+          new BeginUserSpotJoinReq(targetSpotId, 'outage-relocation'))
+          .timeout(45_000).submit()).then(
+          value => ({ value }), error => ({ error }));
+        break;
+      case 'completed': {
+        const result = await join;
+        if (result.error) throw result.error;
+        assert.equal(result.value.accepted, true);
+        assert(outageStore.relocationFenceObserved, 'source/coordinator relocation fence was not observed');
+        const authority = await outageStore.observer.readAuthority(outageStore.authorityKey);
+        assert.equal(authority.kind, 'snapshot');
+        assert.notEqual(authority.ownerId, outageStore.owner.ownerId);
+        assert.equal(authority.objectGeneration, outageStore.baseline.objectGeneration);
+        break;
+      }
+      default: throw new Error(`unsupported source outage command ${phase}`);
+    }
+  });
+}
+
+async function runOutageTarget(app, actorClient, targetNodeRid) {
+  const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+  const actorManager = app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false });
+  const actorId = require_('actor-id');
+  await outageStore.commands(async phase => {
+    switch (phase) {
+      case 'steady':
+        outageStore.owner = runtime.locationOwner.currentRuntime.currentOwnerToken;
+        outageStore.armed = true;
+        break;
+      case 'staged': {
+        await until(() => outageStore.holds.has('commit'), 'target NewOwner CAS');
+        const found = await actorManager.find(actorId);
+        assert.equal(String(found.nodeRid), require_('peer-rid'));
+        assert.equal(probeExecutions, 0);
+        assert.equal(runtime.actorHandoff.options.currentOwnerFence(actorId), undefined);
+        appendEvent('outage-staged|find=source|handlers=0|fence=absent');
+        break;
+      }
+      case 'commit': await outageStore.release('commit'); break;
+      case 'completed':
+        await until(() => userSpotTargetJoined && runtime.actorManager.publishedState(actorId), 'target publication');
+        await userSpotTargetJoined;
+        for (const marker of ['outage-target', 'outage-followup']) {
+          const reply = await actorClient.requestToActor(actorId, new UserSpotProbeReq(marker))
+            .timeout(5_000).submit();
+          assert.equal(reply.nodeRid, String(targetNodeRid));
+          assert.equal(reply.marker, marker);
+        }
+        appendEvent(`outage-completed|nodeRid=${targetNodeRid}|messages=2`);
+        break;
+      default: throw new Error(`unsupported target outage command ${phase}`);
+    }
+  });
 }
 
 async function main() {

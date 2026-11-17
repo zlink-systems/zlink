@@ -47,6 +47,8 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.runtime.internal.locations.CrossLanguageOutageStore;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
@@ -120,14 +122,17 @@ public final class Program {
     }
 
     @Bean
-    ZLinkRedisLocationStore relocationLocationStore(HostArgs args) {
+    ZLinkLocationStore relocationLocationStore(HostArgs args) {
         String redisEndpoint = args.option("redis-endpoint", null);
         if (redisEndpoint == null || redisEndpoint.isBlank()) {
             return null;
         }
-        return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
+        ZLinkRedisLocationStore redis = new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
             .setConnectionString(redisEndpoint)
             .setKeyPrefix(args.option("redis-key-prefix", "zlink-cross-relocation") + ":location"));
+        if (args.option("outage-control-prefix", null) == null) return redis;
+        return new CrossLanguageOutageStore(redis, args.require("mesh-name"), args.require("node-rid"),
+            args.option("actor-id", "cross-lang-user-spot-actor"), "user-spot-target".equals(args.mode()));
     }
 
     @Bean
@@ -144,14 +149,23 @@ public final class Program {
     @Bean
     ZLinkFrameworkConfigurer crossLanguageFramework(
         HostArgs args,
-        ObjectProvider<ZLinkRedisLocationStore> locationStoreProvider,
+        ObjectProvider<ZLinkLocationStore> locationStoreProvider,
         ObjectProvider<ZLinkRedisRelocationStore> relocationStoreProvider) {
         // The store beans are null in modes without --redis-endpoint
         // (spot-route, channel); ObjectProvider keeps them optional so those
         // modes can still wire this configurer.
-        ZLinkRedisLocationStore locationStore = locationStoreProvider.getIfAvailable();
+        ZLinkLocationStore locationStore = locationStoreProvider.getIfAvailable();
         ZLinkRedisRelocationStore relocationStore = relocationStoreProvider.getIfAvailable();
         return options -> {
+            if (args.option("outage-control-prefix", null) != null) {
+                var locations = options.configureLocations();
+                locations.setStoreOutageRetention(true);
+                locations.setOwnerLeaseTtl(Duration.ofSeconds(30));
+                locations.setOwnerLeaseRenewInterval(Duration.ofSeconds(5));
+                locations.setOwnerLeaseFencingMargin(Duration.ofSeconds(5));
+                locations.setOwnerLeaseRenewTimeout(Duration.ofSeconds(3));
+                locations.setStoreFailureGrace(Duration.ofSeconds(30));
+            }
             String mode = args.mode();
             if ("entry-spot-source".equals(mode) || "entry-spot-target".equals(mode)) {
                 String meshName = args.require("mesh-name");
@@ -310,7 +324,9 @@ public final class Program {
         ObjectProvider<ZLinkActorClient> actorClientProvider,
         ObjectProvider<ZLinkRouteClient> routeClientProvider,
         ObjectProvider<ZLinkRouteMeshRuntime> meshRuntimeProvider,
-        ObjectProvider<ZLinkRouteMeshRuntimeOptions> runtimeOptionsProvider) {
+        ObjectProvider<ZLinkRouteMeshRuntimeOptions> runtimeOptionsProvider,
+        ObjectProvider<ZLinkLocationStore> locationStoreProvider,
+        ObjectProvider<ZLinkFrameworkLifecycle> lifecycleProvider) {
         return applicationArguments -> {
             String mode = args.mode();
             if ("user-spot-source".equals(mode)) {
@@ -320,7 +336,9 @@ public final class Program {
                         sink,
                         actorsProvider.getObject(),
                         actorClientProvider.getObject(),
-                        meshRuntimeProvider.getObject()),
+                        meshRuntimeProvider.getObject(),
+                        locationStoreProvider.getIfAvailable(),
+                        lifecycleProvider.getObject()),
                     "user-spot-source");
                 worker.setDaemon(true);
                 worker.start();
@@ -336,6 +354,11 @@ public final class Program {
                     routeClientProvider.getObject(),
                     meshRuntimeProvider.getObject(),
                     runtimeOptionsProvider.getObject());
+                if (locationStoreProvider.getIfAvailable() instanceof CrossLanguageOutageStore outageStore) {
+                    startDaemon("user-spot-outage-target", () -> new OutageScenario(args, sink, outageStore,
+                        actorsProvider.getObject(), actorClientProvider.getObject(),
+                        lifecycleProvider.getObject().runtimeBean()).run());
+                }
             }
         };
     }
@@ -345,7 +368,9 @@ public final class Program {
         EventSink sink,
         ZLinkActorManager actors,
         ZLinkActorClient actorClient,
-        ZLinkRouteMeshRuntime meshRuntime) {
+        ZLinkRouteMeshRuntime meshRuntime,
+        ZLinkLocationStore locationStore,
+        ZLinkFrameworkLifecycle lifecycle) {
         String meshName = args.require("mesh-name");
         String actorId = args.option("actor-id", "cross-lang-user-spot-actor");
         String targetSpotId = args.require("spot-id");
@@ -395,6 +420,11 @@ public final class Program {
             };
             sink.append("user-spot-source-actor-created|status=" + createStatus
                 + "|node=" + ownerNode);
+
+            if (locationStore instanceof CrossLanguageOutageStore outageStore) {
+                new OutageScenario(args, sink, outageStore, actors, actorClient, lifecycle.runtimeBean()).run();
+                return;
+            }
 
             UserSpotJoinRes reply = actorClient
                 .requestToActor(actorId, new BeginUserSpotJoinReq(targetSpotId, "canonical-28"))
@@ -450,8 +480,10 @@ public final class Program {
                 startDaemon("user-spot-target-discovery",
                     () -> observeSourcePeer(sink, routes, meshRuntime, meshName, sourceNodeRid));
             }
-            startDaemon("user-spot-target-probe",
-                () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
+            if (args.option("outage-control-prefix", null) == null) {
+                startDaemon("user-spot-target-probe",
+                    () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
+            }
         } catch (ExecutionException | TimeoutException error) {
             sink.append("user-spot-target-error|" + describe(error));
         } catch (InterruptedException error) {
