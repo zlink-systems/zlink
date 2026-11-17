@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ZLinkExecutionPolicy } from '../admission';
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
 import {
@@ -20,6 +21,7 @@ export interface ZLinkSerialWorkOptions {
   /** Transfers an unstarted durable record out of this FIFO in the owner turn. */
   readonly onWithdrawable?: (withdraw: () => boolean) => void;
   readonly lane?: ZLinkSerialWorkLane;
+  readonly lifecycleOwner?: ZLinkSerialWorkRecord<unknown>;
   readonly payloadBytes?: number;
   readonly metadataBytes?: number;
 }
@@ -39,6 +41,7 @@ export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<ZLinkSerialSchedul
 export interface ZLinkSerialWorkRecord<T> {
   readonly acceptedSequence: bigint;
   readonly lane: ZLinkSerialWorkLane;
+  readonly lifecycleOwner?: ZLinkSerialWorkRecord<unknown>;
   operation: () => Promise<T> | T;
   readonly context?: unknown;
   readonly packetAdmission?: () => Promise<T> | T;
@@ -75,6 +78,8 @@ type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & 
 interface ZLinkSerialAdmissionLane {
   readonly records: Array<SerialWorkRecord<unknown>>;
 }
+
+const currentLifecycleOperation = new AsyncLocalStorage<ZLinkSerialWorkRecord<unknown>>();
 
 /**
  * One event-loop serial execution queue per Spot, Actor mailbox, or Stream session.
@@ -300,6 +305,12 @@ export class ZLinkSerialExecutionQueue {
     const record: SerialWorkRecord<T> = {
       acceptedSequence: 0n,
       lane,
+      lifecycleOwner:
+        options?.lifecycleOwner ??
+        (this.activeLifecycle !== undefined &&
+        currentLifecycleOperation.getStore() === this.activeLifecycle
+          ? this.activeLifecycle
+          : undefined),
       operation,
       executionOwner,
       operationEnvelope,
@@ -472,7 +483,12 @@ export class ZLinkSerialExecutionQueue {
             record.operation();
           } else if (record.operationEnvelope) {
             try {
-              const outcome = record.operation();
+              // Only lifecycle work and turns inherited from it carry the lifecycle owner.
+              const owner = record.lane === 'lifecycle' ? record : record.lifecycleOwner;
+              const outcome =
+                owner === undefined
+                  ? record.operation()
+                  : currentLifecycleOperation.run(owner, record.operation);
               void Promise.resolve(outcome).then(
                 (value) => {
                   record.resolve(value);

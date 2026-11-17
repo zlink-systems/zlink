@@ -5,6 +5,7 @@ using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -20,12 +21,8 @@ public sealed partial class SpotCloseConformanceTests
         );
         await using var host = await SpotCloseHost.StartAsync();
         var spotId = $"close-admission-terminal-{Guid.NewGuid():N}";
-        host.State.OnInstanceInitializing = context =>
-        {
-            // Isolate the record's admission from the creating request's ambient lease.
-            using var operation = ZLinkFrameworkRuntime.EnterAcceptedOperation(null);
-            host.State.ContextCloseTask = context.CloseAsync().AsTask();
-        };
+        IZLinkInstanceSpotContext? context = null;
+        host.State.OnInstanceInitializing = current => context = current;
         var terminalAdmission = new TaskCompletionSource<int>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -37,6 +34,15 @@ public sealed partial class SpotCloseConformanceTests
             );
 
         await host.RequestInstanceAsync(spotId);
+        await ((ZLinkSpotActivation)context!)._serial.ExecuteAsync(
+            (_, _) =>
+            {
+                using var operation = ZLinkFrameworkRuntime.EnterAcceptedOperation(null);
+                host.State.ContextCloseTask = context.CloseAsync().AsTask();
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None
+        );
         Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
         var active = await terminalAdmission.Task.WaitAsync(Wait);
         output.WriteLine($"Host admissions at Close record terminal: {active}");
@@ -54,14 +60,19 @@ public sealed partial class SpotCloseConformanceTests
         );
         await using var host = await SpotCloseHost.StartAsync();
         var catalog = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Catalog;
-        host.State.OnInstanceInitializing = context =>
-        {
-            host.Runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
-            using var operation = ZLinkFrameworkRuntime.EnterAcceptedOperation(null);
-            host.State.ContextCloseTask = context.CloseAsync().AsTask();
-        };
-
+        IZLinkInstanceSpotContext? context = null;
+        host.State.OnInstanceInitializing = current => context = current;
         await host.RequestInstanceAsync($"close-admission-refused-{Guid.NewGuid():N}");
+        await ((ZLinkSpotActivation)context!)._serial.ExecuteAsync(
+            (_, _) =>
+            {
+                host.Runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
+                using var operation = ZLinkFrameworkRuntime.EnterAcceptedOperation(null);
+                host.State.ContextCloseTask = context.CloseAsync().AsTask();
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None
+        );
         var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
             host.State.ContextCloseTask!.WaitAsync(Wait)
         );
