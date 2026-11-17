@@ -524,10 +524,16 @@ int main ()
                   "flow_origin_t enum is missing");
     gate.require (stream_hpp.find ("has_flow_id") != std::string::npos, "CPP-G0-FLOW-001",
                   "stream header flag has_flow_id is missing");
-    gate.require (tree_contains (root / "framework/src", "channel-header-v1.pb.h")
-                    && tree_contains (root / "framework/src", "ParseFromArray")
-                    && tree_contains (root / "framework/src", "SerializeToArray"),
-                  "CPP-G0-FLOW-001", "generated ChannelHeader protobuf codec is missing");
+    const auto codec_source = root / "framework/src";
+    const bool has_generated_header_codec =
+      tree_contains (codec_source, "channel-header-v1.pb.h")
+      && tree_contains (codec_source, "ParseFromArray")
+      && (tree_contains (codec_source, "SerializeToArray")
+          || (tree_contains (codec_source, "ByteSizeLong")
+              && tree_contains (codec_source, "GetCachedSize")
+              && tree_contains (codec_source, "SerializeWithCachedSizesToArray")));
+    gate.require (has_generated_header_codec, "CPP-G0-FLOW-001",
+                  "generated ChannelHeader protobuf codec is missing");
 
     /* CPP-CONTRACT-DIAG-001 — diagnostics exports the four exact levels. */
     for (const std::string required :
