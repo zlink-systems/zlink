@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // Every runtime poll loop that cannot be woken states its tick as a duration and
 // then re-reads the state it is waiting on. If the wait silently rounds that tick

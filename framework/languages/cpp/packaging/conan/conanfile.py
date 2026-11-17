@@ -38,7 +38,7 @@ class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
     version = "0.32.0"
     package_type = "static-library"
-    license = "zlink License 1.0"
+    license = "Elastic-2.0"
     homepage = "https://github.com/zlink-systems/zlink"
     description = "C++ framework, HTTP client and stream connector for zlink"
     settings = "os", "arch", "compiler", "build_type"

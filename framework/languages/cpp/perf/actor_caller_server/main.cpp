@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // The ActorCaller source role of §10.9 and §10.10: an Object Client without a Session, addressing Actors by global ActorId.
 

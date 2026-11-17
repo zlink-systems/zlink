@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "allocation_counter.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
