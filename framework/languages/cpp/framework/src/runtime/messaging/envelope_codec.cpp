@@ -421,7 +421,7 @@ decode_header_bytes (std::span<const std::byte> bytes,
     if (bytes.size () > static_cast<std::size_t> (std::numeric_limits<int>::max ()))
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
                                                      "ZLink envelope header is too large");
-    channel_header_proto_t proto;
+    auto &proto = channel_header_scratch ();
     if (!proto.ParseFromArray (bytes.data (), static_cast<int> (bytes.size ())))
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
                                                      "ZLink envelope header protobuf is invalid");
@@ -474,15 +474,15 @@ decode_header_bytes (std::span<const std::byte> bytes,
         }
         return result_t<envelope_header_t>::failure (valid.error_kind (), valid.error ()->what ());
     }
-    // Parsing validates from protobuf-owned fields. Move those strings into the
-    // returned header only after validation, avoiding a second copy per field.
-    header.channel_name = std::move (*proto.mutable_channel_name ());
-    header.message_name = std::move (*proto.mutable_message_name ());
-    header.content_type = std::move (*proto.mutable_content_type ());
+    // Keep parser capacity for the next frame; the returned header owns the
+    // fields that outlive this decode.
+    header.channel_name = std::string (proto.channel_name ());
+    header.message_name = std::string (proto.message_name ());
+    header.content_type = std::string (proto.content_type ());
     if (proto.has_correlation_id ())
-        header.correlation_id = std::move (*proto.mutable_correlation_id ());
+        header.correlation_id = std::string (proto.correlation_id ());
     if (proto.has_deadline ())
-        header.deadline = header_text_t (std::move (*proto.mutable_deadline ()));
+        header.deadline = header_text_t (std::string (proto.deadline ()));
     if (proto.has_error_code ())
         header.error_code = std::move (*proto.mutable_error_code ());
     if (proto.has_error_message ())
