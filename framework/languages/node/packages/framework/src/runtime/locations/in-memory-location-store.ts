@@ -1,3 +1,4 @@
+import { cleanupDiscardedAuthority } from './discarded-authority-cleanup';
 import type { RoutingId } from '../../contracts/Common';
 import { ZLinkSpotKind } from '../../contracts';
 import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
@@ -227,6 +228,22 @@ export class ZLinkInMemoryLocationStore
     signal?: AbortSignal
   ): Promise<ZLinkCreationTerminalReadResult> {
     return this.authority.readCreationTerminal(operation, signal);
+  }
+
+  async cleanupDiscardedAuthority(
+    key: ZLinkAuthorityKey,
+    fence: import('./lifecycle-runtime').ZLinkDiscardedAuthorityFence,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    return cleanupDiscardedAuthority(
+      this,
+      (current) => this.authority.releaseDiscardedAuthority(key, current, fence),
+      key,
+      fence,
+      owner,
+      signal
+    );
   }
 
   async releaseEndedReservation(

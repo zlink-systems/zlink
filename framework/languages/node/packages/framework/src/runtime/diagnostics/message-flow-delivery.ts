@@ -72,6 +72,7 @@ export class ZLinkMessageFlowDelivery {
   readonly ready: Promise<void>;
   private readonly worker?: Worker;
   private failure?: Error;
+  private rejectReady!: (error: Error) => void;
   private pending: ZLinkTelemetryDelivery[] = [];
   private executing = false;
   private workerReady = false;
@@ -79,11 +80,13 @@ export class ZLinkMessageFlowDelivery {
 
   constructor() {
     let published!: () => void;
-    // A failed bootstrap leaves this incomplete. Runtime processing never waits
-    // for it, and no rejected promise can escape into the host process.
-    this.ready = new Promise((resolve) => {
+    this.ready = new Promise((resolve, reject) => {
       published = resolve;
+      this.rejectReady = reject;
     });
+    // Bootstrap failure is observable through ready; observe it here because
+    // production never waits for worker startup.
+    this.ready.catch(() => {});
     // NODE_OPTIONS preloads precede execArgv preloads. Keep both application
     // lists intact and capture the public default provider before either list.
     try {
@@ -116,6 +119,7 @@ export class ZLinkMessageFlowDelivery {
   private workerFailed(error: Error): void {
     if (this.failure !== undefined) return;
     this.failure = error;
+    this.rejectReady(error);
     Atomics.add(this.counters, TelemetryCounter.WorkerFailures, 1n);
     Atomics.store(this.state, TelemetryState.Enabled, 0);
     this.workerReady = false;

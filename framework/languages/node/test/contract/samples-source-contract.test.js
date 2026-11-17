@@ -508,10 +508,10 @@ test('SupportChat uses managers for object creation and keeps API authentication
   assert.match(supportModule, /\.listen\(config\.supportSpotEndpoint\)\s*\.setRoutingIdPrefix\('support-owner'\)/);
   assert.match(sessionModule, /\.listen\(config\.sessionSpotEndpoint\)\s*\.setRoutingIdPrefix\('support-session'\)/);
   assert.match(apiModule, /addClientServerChannel\(SampleNames\.apiChannel\)[\s\S]*\.server\(\)[\s\S]*\.addHandlerGroup\('api'\)/);
-  assert.match(supportModule, /addClientServerChannel\(SampleNames\.apiChannel\)\.client\(\)/);
-  assert.match(sessionModule, /addClientServerChannel\(SampleNames\.apiChannel\)\.client\(\)/);
-  assert.match(apiModule, /mesh\.objects\(\)\.client\(\)/);
-  assert.match(sessionModule, /mesh\.objects\(\)\.client\(\)/);
+  assert.match(supportModule, /addClientServerChannel\(SampleNames\.apiChannel\)\s*\.client\(\)/);
+  assert.match(sessionModule, /addClientServerChannel\(SampleNames\.apiChannel\)\s*\.client\(\)/);
+  assert.match(apiModule, /mesh\.objects\(\)\s*\.client\(\)/);
+  assert.match(sessionModule, /mesh\.objects\(\)\s*\.client\(\)/);
   assert.doesNotMatch(supportModule, /supportChannel|ensureSupportUserActor|allocateConversation/);
 });
 
@@ -557,8 +557,8 @@ test('DeliveryDispatch TypeScript sample uses framework channel topology', () =>
     assert.match(module, /\.addRouteMesh\(SampleNames\.customerMeshName\)/);
   }
   assert.match(dispatchCenterModule, /addClientServerChannel\(SampleNames\.dispatchChannel\)[\s\S]*\.server\(\)/);
-  assert.match(dispatchCenterModule, /addClientServerChannel\(SampleNames\.trackingChannel\)\.client\(\)/);
-  assert.match(courierModule, /addClientServerChannel\(SampleNames\.dispatchChannel\)\.client\(\)/);
+  assert.match(dispatchCenterModule, /addClientServerChannel\(SampleNames\.trackingChannel\)\s*\.client\(\)/);
+  assert.match(courierModule, /addClientServerChannel\(SampleNames\.dispatchChannel\)\s*\.client\(\)/);
   assert.match(trackingModule, /addClientServerChannel\(SampleNames\.trackingChannel\)[\s\S]*\.server\(\)/);
   assert.match(dispatchCenterModule, /\.listen\(config\.dispatchSpotEndpoint\)/);
   assert.match(sessionModule, /\.addStreamNode\(SampleNames\.customerStreamNode\)/);
@@ -788,7 +788,7 @@ test('ShoppingMall TypeScript sample uses framework channel topology', () => {
   assert.match(messageContracts, /@ZLinkPacket\(PacketNames\.startOrderWorkflowReq\)/);
   assert.match(messageContracts, /class StartOrderWorkflowReq[\s\S]*?sourceCommandId: string/);
   assert.match(messageContracts, /readonly amount: DecimalWireNumber/);
-  assert.match(messageContracts, /DecimalAmount\.fromWire\(amount\)\.toWireNumber\(\)/);
+  assert.match(messageContracts, /DecimalAmount\.fromWire\(amount\)\s*\.toWireNumber\(\)/);
   assert.doesNotMatch(decimalAmount, /toJSON\s*\(/);
   assert.match(messageContracts, /interface StartOrderRes \{[\s\S]*?state: OrderState/);
   assert.match(messageContracts, /class ContinueOrderWorkflowReq[\s\S]*?sourceCommandId: string/);
@@ -1835,11 +1835,11 @@ test('TicTacToe keeps manual topology on one physical MeshNode per process', () 
     assert.equal((module.match(/\.addRouteMesh\(/g) ?? []).length, 1);
     assert.match(module, /addRouteMesh\(SampleNames\.playSpotNode\)/);
     assert.match(module, /addClientServerChannel\(SampleNames\.apiChannel\)/);
-    assert.match(module, /peerConnections\(\)\.connect\(/);
+    assert.match(module, /peerConnections\(\)\s*\.connect\(/);
     assert.doesNotMatch(module, /mesh\.channel\(SampleNames\.apiChannel\)/);
   }
   assert.match(apiModule, /\.addRequestHandler\(PacketNames\.authenticatePlayerReq, AuthenticatePlayerHandler\)/);
-  assert.match(apiModule, /mesh\.objects\(\)\.client\(\)/);
+  assert.match(apiModule, /mesh\.objects\(\)\s*\.client\(\)/);
   assert.match(apiModule, /\.listen\(config\.apiSpotEndpoint\)/);
   assert.match(playModule, /objectServer\.addSpotFactory\(/);
   assert.match(playModule, /apiChannel\.connect\(endpoint\)/);
@@ -1853,7 +1853,7 @@ test('only TicTacToe uses manual server-to-server connections', () => {
   const ticTacToeServer = sampleSourceFiles(path.join(samplesRoot, 'TicTacToe.Ts', 'Server'))
     .map((file) => readSourceText(file))
     .join('\n');
-  assert.match(ticTacToeServer, /\.peerConnections\(\)\.connect\(/);
+  assert.match(ticTacToeServer, /\.peerConnections\(\)\s*\.connect\(/);
 
   const violations = [];
   for (const sample of requiredSamples.filter((name) => name !== 'TicTacToe.Ts')) {
@@ -2358,7 +2358,7 @@ test('node to dotnet channel stage uses the ClientServer transport contract', ()
   )?.[1];
 
   assert.notEqual(stage, undefined);
-  assert.match(stage, /addClientServerChannel\('profiles'\)\.client\(\)\.connect\(endpoint\)/);
+  assert.match(stage, /addClientServerChannel\('profiles'\)\s*\.client\(\)\s*\.connect\(endpoint\)/);
   assert.match(stage, /ZLINK_CHANNEL_CLIENT/);
   assert.match(stage, /ZLINK_CLIENT_SERVER_RUNTIME/);
   assert.doesNotMatch(stage, /addRouteMesh\('profiles'\)/);
@@ -2371,7 +2371,7 @@ test('dotnet to node channel stage uses the ClientServer transport contract', ()
   )?.[1];
 
   assert.notEqual(stage, undefined);
-  assert.match(stage, /addClientServerChannel\('profiles'\)\.server\(\)/);
+  assert.match(stage, /addClientServerChannel\('profiles'\)\s*\.server\(\)/);
   assert.doesNotMatch(stage, /addRouteMesh\('profiles'\)/);
 });
 

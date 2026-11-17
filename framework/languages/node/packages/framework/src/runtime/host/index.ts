@@ -2344,10 +2344,7 @@ export class ZLinkFrameworkRuntimeHost
         runtimeEventPublisher: this.runtimeEventPublisher,
         spotNodeRuntime: () => this.spotNodeRuntime,
         actorManager: () => this.actorManager,
-        // User Spot visibility is published only by the generic authority
-        // coordinator after application initialization. The legacy location
-        // claim would expose a Creating object before that Ready barrier.
-        locationLifecycle: () => undefined,
+        locationLifecycle: () => this.locationOwner.currentLifecycle,
         releaseInstanceAuthority: async (meshName, spotId, objectGeneration) => {
           await this.locationOwner.currentLifecycle?.releaseSpot(
             meshName,
@@ -2830,8 +2827,7 @@ export class ZLinkFrameworkRuntimeHost
                   entrySpotId,
                   entrySpotGeneration: entrySpot.lifecycleGeneration,
                   ...(reply === undefined ? {} : { reply }),
-                  onPublished: () =>
-                    actors.adoptCreatedAuthority(record.actorId, authority.authorityOwnerGeneration)
+                  onPublished: (ready) => actors.adoptCreatedAuthority(record.actorId, ready)
                 };
               },
               signal

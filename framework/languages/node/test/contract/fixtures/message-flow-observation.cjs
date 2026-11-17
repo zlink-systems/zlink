@@ -39,13 +39,9 @@ module.exports = function observeMessageFlow(delivery, { onLog, onSpan } = {}) {
   async function observed() {
     channel.ref();
     const owner = delivery.messageFlowDelivery();
-    let startupTimeout;
     try {
-      await Promise.race([owner.ready, new Promise((_resolve, reject) => {
-        startupTimeout = setTimeout(() => reject(new Error('message-flow bootstrap observation deadline')), 5000);
-      })]);
+      await owner.ready;
     } finally {
-      clearTimeout(startupTimeout);
       channel.unref();
     }
     const deadline = Date.now() + 5000;
