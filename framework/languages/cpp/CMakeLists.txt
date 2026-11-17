@@ -2940,6 +2940,26 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;stream;reply"
     unit)
   add_zlink_framework_test(
+    test_cpp_framework_same_node_duplicate_bind
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_same_node_duplicate_bind.cpp
+    "framework-integration;framework-contract;stream;stream-session"
+    contract)
+  target_link_libraries(test_cpp_framework_same_node_duplicate_bind PRIVATE zlink::stream_connector nlohmann_json::nlohmann_json)
+  target_compile_definitions(test_cpp_framework_same_node_duplicate_bind PRIVATE
+    ZLINK_BINDING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/bound-session-relocation-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_remote_duplicate_bind_replacement
+    COMMAND test_cpp_framework_same_node_duplicate_bind remote
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_same_node_duplicate_bind_reject
+    COMMAND test_cpp_framework_same_node_duplicate_bind reject
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  add_zlink_framework_test(
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")

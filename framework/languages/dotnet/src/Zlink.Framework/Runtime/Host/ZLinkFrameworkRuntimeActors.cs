@@ -3200,7 +3200,15 @@ internal sealed partial class ZLinkFrameworkRuntime
             duplicateBindMethodIndex >= 0
             && actorInterfaceMap.TargetMethods[duplicateBindMethodIndex].DeclaringType
                 != typeof(IZLinkActor);
-        if (!hasDuplicateBindCallback)
+        if (
+            !state.TryGetBoundSession(out var currentBinding)
+            || currentBinding.IsSamePhysicalSessionOwner(
+                sourceNodeRid,
+                sourceNodeGeneration,
+                sessionRid
+            )
+            || !hasDuplicateBindCallback
+        )
         {
             ScheduleReplacementNotification(ReplaceBinding());
             return;
@@ -3217,21 +3225,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ExecuteDispatchAsync(
                 async _ =>
                 {
-                    if (
-                        !state.TryGetBoundSession(out var currentBinding)
-                        || currentBinding.IsSamePhysicalSessionOwner(
-                            sourceNodeRid,
-                            sourceNodeGeneration,
-                            sessionRid
-                        )
-                    )
-                    {
-                        return (
-                            Transition: (ZLinkActorSessionBindingTransition?)ReplaceBinding(),
-                            Rejected: false
-                        );
-                    }
-
                     var actor =
                         state.Actor
                         ?? throw new ZLinkFrameworkException(
