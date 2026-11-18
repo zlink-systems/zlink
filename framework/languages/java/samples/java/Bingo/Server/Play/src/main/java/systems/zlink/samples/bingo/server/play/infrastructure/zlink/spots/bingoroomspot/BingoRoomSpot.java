@@ -18,6 +18,7 @@ import systems.zlink.samples.bingo.server.play.domain.bingo.BingoGame;
 import systems.zlink.samples.bingo.server.play.domain.bingo.BingoRoomGame;
 import systems.zlink.samples.bingo.server.play.domain.bingo.BingoRoomModels;
 import systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors.PlayerActor;
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers.BingoRoomCloseTimerHandler;
 import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers.BingoRoomSettingsInitializer;
 import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers.BingoRoomTimerHandler;
 import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
@@ -51,6 +52,8 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                     "two-player", 0, SampleTimings.DrawPeriod.toMillis());
     private BingoRoomGame game;
     private ZLinkTimer timer;
+    private ZLinkTimer closeTimer;
+    private boolean closeRequested;
     private boolean cleanupStarted;
 
     public BingoRoomSpot(
@@ -164,9 +167,10 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     public CompletionStage<Void> onLeaveActor(PlayerActor actor) {
         if (!actors.containsKey(actor.actorId()) || game == null) {
             observers.remove(actor.actorId());
-            if (settings.observerMode() && observers.isEmpty()) context.close();
             logger.info("bingo-lifecycle room-leave actor={}", actor.actorId());
-            return CompletableFuture.completedFuture(null);
+            return settings.observerMode() && observers.isEmpty()
+                    ? scheduleClose()
+                    : CompletableFuture.completedFuture(null);
         }
         Messages.BingoRoomState finalState = game.snapshot();
         Messages.ReportBingoResultReq report =
@@ -179,7 +183,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                 .requestToChannel(SampleNames.ApiChannel, report)
                 .timeout(SampleTimings.RequestTimeout)
                 .yield(Messages.ReportBingoResultRes.class)
-                .thenAccept(
+                .thenCompose(
                         record -> {
                             logger.info(
                                     "bingo-record reported actor={} wins={} losses={}",
@@ -187,9 +191,27 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                                     record.getWins(),
                                     record.getLosses());
                             actors.remove(actor.actorId());
-                            if (actors.isEmpty() && observers.isEmpty()) context.close();
                             logger.info("bingo-lifecycle room-leave actor={}", actor.actorId());
+                            return actors.isEmpty() && observers.isEmpty()
+                                    ? scheduleClose()
+                                    : CompletableFuture.completedFuture(null);
                         });
+    }
+
+    public boolean tryRequestClose() {
+        if (closeRequested) return false;
+        closeRequested = true;
+        return true;
+    }
+
+    private CompletionStage<Void> scheduleClose() {
+        if (closeTimer != null) return CompletableFuture.completedFuture(null);
+        return context.addTimer(
+                        "bingo-room-close",
+                        Duration.ofMillis(1),
+                        BingoRoomCloseTimerHandler.class,
+                        null)
+                .thenAccept(created -> closeTimer = created);
     }
 
     @Override
@@ -213,7 +235,13 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<Void> onClosing() {
-        return timer == null ? CompletableFuture.completedFuture(null) : timer.cancel();
+        CompletionStage<Void> drawCancelled =
+                timer == null ? CompletableFuture.completedFuture(null) : timer.cancel();
+        return drawCancelled.thenCompose(
+                ignored ->
+                        closeTimer == null
+                                ? CompletableFuture.completedFuture(null)
+                                : closeTimer.cancel());
     }
 
     @Override

@@ -212,6 +212,7 @@ wait_log_count 1 "bingo-lifecycle entry-destroy-complete actor=player-1" "${PLAY
 wait_log_count 1 "bingo-lifecycle entry-destroy-complete actor=player-2" "${PLAY_LOGS[@]}"
 wait_log_count 1 "bingo-lifecycle session-disconnect actor=player-1 destroy=false" "${SESSION_LOGS[@]}"
 wait_log_count 1 "bingo-lifecycle session-disconnect actor=player-2 destroy=false" "${SESSION_LOGS[@]}"
+wait_log_count 2 "bingo-lifecycle room-close spot=" "${PLAY_LOGS[@]}"
 wait_log_count 0 "bingo-record reported actor=observer" "${PLAY_LOGS[@]}"
 wait_log_count 0 "bingo-lifecycle entry-destroy-complete actor=observer" "${PLAY_LOGS[@]}"
 grep -Eq "zlink metric name=zlink\.stream\.connections\.(active|opened)" "${LOG_DIR}/session-a.log"
