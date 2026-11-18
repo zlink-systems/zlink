@@ -66,9 +66,6 @@ export class ZLinkActorCreationCoordinator {
         if (activation.generation !== undefined) {
           state.setLocationGeneration(activation.generation);
         }
-        if (activation.ownerLeaseGeneration !== undefined) {
-          state.setOwnerLeaseGeneration(activation.ownerLeaseGeneration);
-        }
         state.markLocationOwned();
         return activation.activated;
       }
@@ -213,7 +210,7 @@ export class ZLinkActorCreationCoordinator {
         await this.options.locationLifecycle?.setActorRef(
           actorType,
           actorId,
-          { actorId, objectGeneration: 1n, meshName, nodeRid },
+          toFrameworkActorRef(state.currentActorRef(), meshName),
           0n
         );
       }

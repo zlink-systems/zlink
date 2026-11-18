@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // `zlink-cpp` raw server: the ROUTER<->ROUTER echo and command endpoints.
 //
 // spec 1.3 / FB-001: both ZLink rows use ROUTER<->ROUTER, so this server
@@ -7,6 +7,8 @@
 // separate sockets so a command measurement never has echo replies mixed into
 // it.
 #include "../common/bench_common.hpp"
+#include "../common/binding_wire.hpp"
+#include "../common/game_message.hpp"
 #include "../common/bench_stats_server.hpp"
 
 #include <zlink.hpp>
@@ -34,7 +36,9 @@ zlink::routing_id_t make_routing_id (const std::string &value)
 // The request echo loop. A ROUTER peer's request arrives with a reply token; the
 // echo goes back through reply(). A DEALER peer (the legacy configuration kept
 // reachable for comparison) arrives without one and is answered with send().
-void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metrics_t &metrics)
+void request_loop (zlink::router_socket_t &router,
+                   zlink_cpp_bench::server_metrics_t &metrics,
+                   bool json_body)
 {
     zlink::received_t received;
     while (!g_stop.load ()) {
@@ -50,19 +54,25 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
                 continue;
             }
             zlink::message_t &body = parts.back ();
-            zlink::framework::bench::withgrpc::BenchPayload payload;
-            if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ())))
-                throw std::runtime_error ("invalid raw protobuf payload");
-            metrics.record (payload.body ().data (), payload.body ().size ());
-
+            zlink::message_t echo;
             const char *envelope = zlink_cpp_bench::response_envelope ();
-            zlink::message_t header = zlink::message_t::from (std::as_bytes (
-              std::span<const char> (envelope, std::strlen (envelope))));
-            zlink::framework::bench::withgrpc::BenchPayload reply;
-            reply.set_body (payload.body ());
-            const std::string encoded = zlink_cpp_bench::encode_bench_payload (reply);
-            zlink::message_t echo = zlink::message_t::from (
-              std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));
+            if (json_body) {
+                const auto payload = zlink_cpp_bench::decode_game_json (body.data (), body.size ());
+                metrics.record_game (payload);
+                const auto encoded = zlink_cpp_bench::encode_game_json (payload);
+                echo = zlink::message_t::from (std::as_bytes (std::span<const char> (encoded)));
+                envelope = zlink_cpp_bench::response_json_envelope ();
+            } else {
+                zlink::framework::bench::withgrpc::BenchPayload payload;
+                if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ())))
+                    throw std::runtime_error ("invalid raw protobuf payload");
+                metrics.record (payload.body ().data (), payload.body ().size ());
+                zlink::framework::bench::withgrpc::BenchPayload reply;
+                reply.set_body (payload.body ());
+                echo = zlink_cpp_bench::encode_bench_payload_message (reply);
+            }
+            zlink::message_t header = zlink::message_t::from (
+              std::as_bytes (std::span<const char> (envelope, std::strlen (envelope))));
             if (received.reply_token ())
                 received.reply ().message (header).message (echo).submit ();
             else
@@ -77,7 +87,9 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
 
 // The command loop. No reply: spec 2 measures the one-way path, and the
 // throughput of that pattern is this server's received count (spec 5, G3).
-void command_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metrics_t &metrics)
+void command_loop (zlink::router_socket_t &router,
+                   zlink_cpp_bench::server_metrics_t &metrics,
+                   bool json_body)
 {
     zlink::received_t received;
     while (!g_stop.load ()) {
@@ -93,10 +105,15 @@ void command_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
                 continue;
             }
             zlink::message_t &body = parts.back ();
-            zlink::framework::bench::withgrpc::BenchPayload payload;
-            if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ())))
-                throw std::runtime_error ("invalid raw protobuf payload");
-            metrics.record (payload.body ().data (), payload.body ().size ());
+            if (json_body) {
+                const auto payload = zlink_cpp_bench::decode_game_json (body.data (), body.size ());
+                metrics.record_game (payload);
+            } else {
+                zlink::framework::bench::withgrpc::BenchPayload payload;
+                if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ())))
+                    throw std::runtime_error ("invalid raw protobuf payload");
+                metrics.record (payload.body ().data (), payload.body ().size ());
+            }
         }
         catch (const std::exception &error) {
             std::fprintf (stderr, "zlink-cpp command loop: %s\n", error.what ());
@@ -115,6 +132,8 @@ int main (int argc, char **argv)
     const std::string command_endpoint =
       arg_value (argc, argv, "--command-endpoint", "tcp://127.0.0.1:5288");
     const int stats_port = std::atoi (arg_value (argc, argv, "--stats-port", "5289").c_str ());
+    const std::string implementation = arg_value (argc, argv, "--implementation", "zlink-cpp");
+    const bool json_body = implementation == "zlink-cpp-json";
     const std::string request_rid =
       arg_value (argc, argv, "--request-routing-id", "zlink-cpp-bench-request-server");
     const std::string command_rid =
@@ -141,8 +160,8 @@ int main (int argc, char **argv)
                       request_endpoint.c_str (), command_endpoint.c_str (), stats_port);
         std::fflush (stderr);
 
-        std::thread request_thread ([&] { request_loop (request_router, metrics); });
-        std::thread command_thread ([&] { command_loop (command_router, metrics); });
+        std::thread request_thread ([&] { request_loop (request_router, metrics, json_body); });
+        std::thread command_thread ([&] { command_loop (command_router, metrics, json_body); });
         while (!g_stop.load ())
             std::this_thread::sleep_for (std::chrono::milliseconds (100));
         ctx.shutdown ();

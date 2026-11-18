@@ -3,6 +3,8 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -418,19 +420,30 @@ final class ZLinkSpotLifecycle {
         return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
     }
 
-    void discardExecution(DefaultSpotContext context) {
+    CompletionStage<Void> discardExecution(DefaultSpotContext context) {
         SpotActivation activation = spots.get(context.spotId());
         if (activation == null
                 || activation.context != context
-                || !spots.remove(context.spotId(), activation)) return;
+                || !spots.remove(context.spotId(), activation))
+            return CompletableFuture.completedFuture(null);
         recordSpotCount(activation.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, -1);
         countChanged.run();
-        context.closeResourcesAsync();
+        return context.closeResourcesAsync();
     }
 
     ZLinkSpot<?> spotFor(String spotId) {
         SpotActivation activation = spots.get(spotId);
         return activation == null ? null : activation.spot();
+    }
+
+    SpotActivationBase<?> actorJoinTarget(String spotId) {
+        SpotActivationBase<?> activation = spotActivationFor(spotId);
+        if (activation == null) activation = entrySpotActivationFor(spotId);
+        if (activation == null)
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Actor Join target is not active: " + spotId);
+        return activation;
     }
 
     SpotActivation spotActivationFor(String spotId) {

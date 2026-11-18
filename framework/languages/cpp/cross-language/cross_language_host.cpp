@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 /* C++ cross-language host (G6).
  *
@@ -361,7 +361,7 @@ int run_message_follow_host ()
                                                      1024 * 1024);
             if (!claim)
                 break;
-            for (const auto *record : claim->records) {
+            for (const auto &record : claim->records) {
                 if (record->parts ().size () != 1)
                     continue;
                 const auto notice = decode_message_follow (

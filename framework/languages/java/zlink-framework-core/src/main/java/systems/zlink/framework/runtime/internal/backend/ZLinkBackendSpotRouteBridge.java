@@ -25,6 +25,7 @@ public interface ZLinkBackendSpotRouteBridge extends ZLinkBackendObject {
             String channelName,
             RoutingId targetNodeRid,
             String targetSpotId,
+            long targetNodeGeneration,
             List<Message> parts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission);

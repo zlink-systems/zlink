@@ -6,7 +6,11 @@ internal static class IsolatedTestProcess
 {
     private const string EnvironmentVariable = "ZLINK_TEST_ISOLATED_PROCESS";
 
-    internal static async Task<bool> RunIsolatedAsync(Type testClass, string methodName)
+    internal static async Task<bool> RunIsolatedAsync(
+        Type testClass,
+        string methodName,
+        int? processorCount = null
+    )
     {
         var testName = $"{testClass.FullName}.{methodName}";
         if (Environment.GetEnvironmentVariable(EnvironmentVariable) == testName)
@@ -27,6 +31,10 @@ internal static class IsolatedTestProcess
         start.ArgumentList.Add("--");
         start.ArgumentList.Add("RunConfiguration.TreatNoTestsAsError=true");
         start.Environment[EnvironmentVariable] = testName;
+        if (processorCount is { } count)
+            start.Environment["DOTNET_PROCESSOR_COUNT"] = count.ToString(
+                System.Globalization.CultureInfo.InvariantCulture
+            );
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();

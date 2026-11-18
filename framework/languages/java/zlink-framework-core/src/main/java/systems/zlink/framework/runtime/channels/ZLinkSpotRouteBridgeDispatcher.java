@@ -42,6 +42,7 @@ final class ZLinkSpotRouteBridgeDispatcher {
             String routerChannelId,
             RoutingId targetNodeRid,
             String targetSpotId,
+            long targetNodeGeneration,
             List<Message> requestParts,
             Duration timeout,
             CompletableFuture<List<Message>> result) {
@@ -50,6 +51,7 @@ final class ZLinkSpotRouteBridgeDispatcher {
                 routerChannelId,
                 targetNodeRid,
                 targetSpotId,
+                targetNodeGeneration,
                 requestParts,
                 timeout,
                 result,
@@ -61,6 +63,7 @@ final class ZLinkSpotRouteBridgeDispatcher {
             String routerChannelId,
             RoutingId targetNodeRid,
             String targetSpotId,
+            long targetNodeGeneration,
             List<Message> requestParts,
             Duration timeout,
             CompletableFuture<List<Message>> result,
@@ -70,6 +73,7 @@ final class ZLinkSpotRouteBridgeDispatcher {
                             routerChannelId,
                             targetNodeRid,
                             targetSpotId,
+                            targetNodeGeneration,
                             requestParts,
                             timeout,
                             requestAdmission)

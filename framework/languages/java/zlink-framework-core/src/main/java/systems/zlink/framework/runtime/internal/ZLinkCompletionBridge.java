@@ -81,12 +81,7 @@ public final class ZLinkCompletionBridge {
     public static <T> CompletableFuture<T> newCancellationFuture(
             Consumer<Throwable> beforeCompletion) {
         Objects.requireNonNull(beforeCompletion, "beforeCompletion");
-        return new CancellationFuture<>(null) {
-            @Override
-            protected void beforeCompletion(Throwable failure) {
-                beforeCompletion.accept(failure);
-            }
-        };
+        return new CleanupFuture<>(beforeCompletion);
     }
 
     /** Creates a terminal future with a side effect that does not need its own dependent stage. */
@@ -94,6 +89,22 @@ public final class ZLinkCompletionBridge {
             BiConsumer<CompletableFuture<T>, Throwable> terminalObserver) {
         return new CancellationFuture<>(
                 Objects.requireNonNull(terminalObserver, "terminalObserver"));
+    }
+
+    private static final class CleanupFuture<T> extends CancellationFuture<T> {
+        private Consumer<Throwable> cleanup;
+
+        private CleanupFuture(Consumer<Throwable> cleanup) {
+            super(null);
+            this.cleanup = cleanup;
+        }
+
+        @Override
+        protected void beforeCompletion(Throwable failure) {
+            Consumer<Throwable> action = cleanup;
+            cleanup = null;
+            action.accept(failure);
+        }
     }
 
     public static class CancellationFuture<T> extends CompletableFuture<T> {
@@ -132,8 +143,8 @@ public final class ZLinkCompletionBridge {
             Objects.requireNonNull(failure, "failure");
             Object target = finish(failure);
             if (target == FINISHED) return false;
+            cancelIfIncomplete(target);
             boolean completed = super.completeExceptionally(failure);
-            if (failure instanceof CancellationException) cancelIfIncomplete(target);
             if (completed) observeTerminal(failure);
             return completed;
         }
@@ -142,8 +153,8 @@ public final class ZLinkCompletionBridge {
         public boolean cancel(boolean mayInterruptIfRunning) {
             Object target = finish(CANCELLED);
             if (target == FINISHED) return isCancelled();
-            boolean cancelled = super.cancel(mayInterruptIfRunning);
             cancelIfIncomplete(target);
+            boolean cancelled = super.cancel(mayInterruptIfRunning);
             if (cancelled) observeTerminal(CANCELLED);
             return cancelled;
         }
@@ -159,8 +170,8 @@ public final class ZLinkCompletionBridge {
         public void obtrudeException(Throwable failure) {
             Objects.requireNonNull(failure, "failure");
             Object target = finish(failure);
+            cancelIfIncomplete(target);
             super.obtrudeException(failure);
-            if (failure instanceof CancellationException) cancelIfIncomplete(target);
             if (target != FINISHED) observeTerminal(failure);
         }
 

@@ -1,14 +1,279 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Service;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class MessagingHotPathWireTests
 {
+    public static IEnumerable<object?[]> ServiceApplicationHeadVectors()
+    {
+        (int Command, string Prefix, string Correlation)[] commands =
+        [
+            (16, "5A4D0110", ""),
+            (17, "5A4D0111", "FEDCBA9876543210"),
+            (18, "5A4D0112", ""),
+            (19, "5A4D0113", "FEDCBA9876543210"),
+        ];
+        (string? Text, string Hex)[] channels =
+        [
+            ("a", "0161"),
+            ("bench", "0562656E6368"),
+            ("한글", "06ED959CEAB880"),
+            (new string('a', 255), "FF" + string.Concat(Enumerable.Repeat("61", 255))),
+            (new string('한', 85), "FF" + string.Concat(Enumerable.Repeat("ED959C", 85))),
+            (
+                string.Concat(Enumerable.Repeat("😀", 63)) + "한",
+                "FF" + string.Concat(Enumerable.Repeat("F09F9880", 63)) + "ED959C"
+            ),
+        ];
+        foreach (var (command, prefix, correlation) in commands)
+        foreach (var metadata in new[] { false, true })
+        foreach (
+            var (text, hex) in command < 18 ? new (string?, string)[] { (null, "") } : channels
+        )
+            yield return
+            [
+                command,
+                metadata,
+                text,
+                prefix + (metadata ? "01" : "00") + correlation + hex,
+            ];
+    }
+
+    [Theory]
+    [InlineData(
+        "empty",
+        "0100000042175A4C696E6B4672616D65776F726B4D756C7469706172741D6170706C69636174696F6E2F782D7A6C696E6B2D6D756C746970617274000000080000000100000000"
+    )]
+    [InlineData(
+        "binary",
+        "0100000050175A4C696E6B4672616D65776F726B4D756C7469706172741D6170706C69636174696F6E2F782D7A6C696E6B2D6D756C7469706172740000001600000003000000030102030000000000000003FF0080"
+    )]
+    public void Framework_multipart_matches_literal_golden_bytes(string name, string goldenHex)
+    {
+        byte[][] parts =
+            name == "empty"
+                ?
+                [
+                    [],
+                ]
+                :
+                [
+                    [1, 2, 3],
+                    [],
+                    [255, 0, 128],
+                ];
+        var expected = Convert.FromHexString(goldenHex);
+        var malformed = (byte[])expected.Clone();
+        malformed[5] = 22; // The schema packet name is 23 ASCII bytes.
+        Assert.False(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(malformed, out _)
+        );
+        using var malformedNative = Message.From(malformed);
+        Assert.False(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                malformedNative,
+                out _
+            )
+        );
+        var memories = parts.Select(static part => (ReadOnlyMemory<byte>)part).ToArray();
+        Assert.Equal(
+            expected,
+            ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(memories)
+        );
+        var messages = parts.Select(static part => Message.From(part)).ToArray();
+        try
+        {
+            Assert.Equal(
+                expected,
+                ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(messages)
+            );
+            using var native = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                messages
+            );
+            Assert.Equal(expected, native.ToArray());
+            Assert.True(
+                ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                    native,
+                    out var view
+                )
+            );
+            Assert.Equal(parts.Length, view.Count);
+            for (var index = 0; index < parts.Length; index++)
+                Assert.Equal(parts[index], view.GetSpan(index).ToArray());
+            for (var length = 0; length < expected.Length; length++)
+                Assert.False(
+                    ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                        expected.AsMemory(0, length),
+                        out _
+                    )
+                );
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(messages);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ServiceApplicationHeadVectors))]
+    public void Service_application_heads_match_independent_golden_bytes(
+        int commandId,
+        bool metadata,
+        string? channel,
+        string goldenHex
+    )
+    {
+        var command = (ServiceWireConstants.Command)commandId;
+        var correlation = commandId is 17 or 19 ? 0xFEDCBA9876543210UL : 0;
+        var expected = Convert.FromHexString(goldenHex);
+        Assert.Equal(
+            expected,
+            ZLinkServiceWireCodec.EncodeApplication(command, correlation, channel, metadata)
+        );
+        using var native = ZLinkServiceWireCodec.EncodeApplicationMessage(
+            command,
+            correlation,
+            channel,
+            metadata
+        );
+        Assert.Equal(expected, native.ToArray());
+        Assert.True(ZLinkServiceWireCodec.TryDecodeApplication(expected, out var decoded, out _));
+        Assert.Equal(channel, decoded.ChannelName);
+        Assert.Equal(correlation, decoded.Correlation);
+        Assert.Equal(metadata, decoded.HasMetadata);
+        for (var length = 0; length < expected.Length; length++)
+            Assert.False(
+                ZLinkServiceWireCodec.TryDecodeApplication(expected.AsSpan(0, length), out _, out _)
+            );
+        Assert.False(ZLinkServiceWireCodec.TryDecodeApplication([.. expected, 0], out _, out _));
+    }
+
+    [Theory]
+    [InlineData(0, 0u, "", "0000000000000000")]
+    [InlineData(0, 0u, "0001FF", "00000000000000000001FF")]
+    [InlineData(101, 0u, "", "0000006500000000")]
+    [InlineData(102, 1u, "", "0000006600000001")]
+    [InlineData(105, 17u, "", "0000006900000011")]
+    [InlineData(104, 16u, "", "0000006800000010")]
+    public void Service_reply_heads_match_independent_golden_bytes(
+        int terminal,
+        uint failure,
+        string tailHex,
+        string fieldsHex
+    )
+    {
+        const ulong correlation = 0xFEDCBA9876543210UL;
+        var tail = Convert.FromHexString(tailHex);
+        var expected = Convert.FromHexString("5A4D011400FEDCBA9876543210" + fieldsHex);
+        Assert.Equal(
+            expected,
+            ZLinkServiceWireCodec.EncodeReply(correlation, terminal, failure, tail)
+        );
+        using var native = ZLinkServiceWireCodec.EncodeReplyMessage(
+            correlation,
+            terminal,
+            failure,
+            tail
+        );
+        Assert.Equal(expected, native.ToArray());
+        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(expected, out var decoded, out _));
+        Assert.Equal(tail, decoded.Tail.ToArray());
+        for (var length = 0; length < 21; length++)
+            Assert.False(
+                ZLinkServiceWireCodec.TryDecodeReply(expected.AsSpan(0, length), out _, out _)
+            );
+    }
+
+    public static IEnumerable<object?[]> InvalidServiceText()
+    {
+        foreach (
+            var text in new[]
+            {
+                null,
+                "",
+                "\0",
+                "a\0b",
+                "\uD800",
+                "\uDC00",
+                new string('a', 256),
+                new string('한', 86),
+                new string('a', 254) + "한",
+            }
+        )
+            yield return [text];
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidServiceText))]
+    public void Service_text_rejection_is_shared_by_array_and_native_encoders(string? text)
+    {
+        Assert.ThrowsAny<ArgumentException>(() => ZLinkServiceWireCodec.EncodeText(text!));
+        foreach (
+            var command in new[]
+            {
+                ServiceWireConstants.Command.ChannelSend,
+                ServiceWireConstants.Command.ChannelRequest,
+            }
+        )
+        {
+            var correlation = command == ServiceWireConstants.Command.ChannelRequest ? 1UL : 0;
+            Assert.ThrowsAny<ArgumentException>(() =>
+                ZLinkServiceWireCodec.EncodeApplication(command, correlation, text, false)
+            );
+            Assert.ThrowsAny<ArgumentException>(() =>
+                ZLinkServiceWireCodec.EncodeApplicationMessage(command, correlation, text, false)
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData(16, 1UL)]
+    [InlineData(17, 0UL)]
+    [InlineData(18, 1UL)]
+    [InlineData(19, 0UL)]
+    [InlineData(20, 0UL)]
+    public void Service_application_rejects_invalid_command_or_correlation(
+        int commandId,
+        ulong correlation
+    )
+    {
+        var command = (ServiceWireConstants.Command)commandId;
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeApplication(command, correlation, "bench", false)
+        );
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeApplicationMessage(command, correlation, "bench", false)
+        );
+    }
+
+    [Theory]
+    [InlineData(0UL, 0, 0u)]
+    [InlineData(1UL, -1, 0u)]
+    [InlineData(1UL, 0, 1u)]
+    [InlineData(1UL, 102, 0u)]
+    [InlineData(1UL, 105, 1u)]
+    [InlineData(1UL, 104, 999u)]
+    public void Service_reply_rejection_is_shared_by_array_and_native_encoders(
+        ulong correlation,
+        int terminal,
+        uint failure
+    )
+    {
+        Assert.ThrowsAny<ArgumentException>(() =>
+            ZLinkServiceWireCodec.EncodeReply(correlation, terminal, failure)
+        );
+        Assert.ThrowsAny<ArgumentException>(() =>
+            ZLinkServiceWireCodec.EncodeReplyMessage(correlation, terminal, failure)
+        );
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -140,6 +405,12 @@ public sealed class MessagingHotPathWireTests
         var encoded = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart([header, body]);
 
         Assert.Equal(ReferenceMultipartFrame(headerBytes, payload), encoded);
+        Assert.Equal(
+            ReferenceMultipartFrame(headerBytes, payload),
+            ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+                new ReadOnlyMemory<byte>[] { headerBytes, payload }
+            )
+        );
         using var native = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
             header,
             body,

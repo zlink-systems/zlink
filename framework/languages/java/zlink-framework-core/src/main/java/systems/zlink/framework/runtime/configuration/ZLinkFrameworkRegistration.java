@@ -5,9 +5,11 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.runtime.channels.ChannelKind;
 import systems.zlink.framework.runtime.channels.ChannelRegistration;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanValidation;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
+import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
@@ -295,6 +297,36 @@ public final class ZLinkFrameworkRegistration {
         workers.validate();
         inboundDispatch.applicationJobQueue(handlerExecutor);
         ZLinkScannedHandlerCatalog handlerCatalog = ZLinkHandlerScanner.scan(handlerPackageMarkers);
+        Set<Class<?>> spotTypes = new LinkedHashSet<>();
+        for (var node : spotNodes) {
+            spotTypes.addAll(node.spotFactories());
+            spotTypes.addAll(node.entrySpots());
+        }
+        for (var node : meshNodes) {
+            spotTypes.addAll(node.spotFactories());
+            spotTypes.addAll(node.entrySpots());
+            node.relocatableInstanceSpotFactories()
+                    .values()
+                    .forEach(factory -> spotTypes.add(factory.spotType()));
+        }
+        for (var handler : handlerCatalog.handlers()) {
+            if (handler.surface() != ZLinkScannedHandlerSurface.SPOT
+                    || handler.spotType() == null) {
+                continue;
+            }
+            var expectedOwner =
+                    spotTypes.contains(handler.spotType())
+                            ? handler.spotType()
+                            : spotTypes.stream()
+                                    .filter(handler.spotType()::isAssignableFrom)
+                                    .findFirst()
+                                    .orElse(null);
+            if (expectedOwner != null) {
+                ZLinkHandlerScanValidation.requireExactSpotType(
+                        handler.handlerType(), expectedOwner, handler.spotType());
+            }
+        }
+
         for (ChannelRegistration channel : channels) {
             channel.validate(locations.enabled(), handlerCatalog);
         }

@@ -726,6 +726,33 @@ test('Entry relocation staging preserves absent joined Spot membership', async (
   }
 });
 
+test('public Find uses the current Ready authority instead of a staged local ActorRef', async () => {
+  const current = {
+    actorId: 'staged-find', nodeRid: rid('current-owner'), objectGeneration: 7n, meshName: 'play'
+  };
+  const manager = createActorManager({
+    actorFactories: new Map([['player', { create: (context) => ({ context }) }]]),
+    nativeActorNode: createMockSpotNode({
+      restoreActorAuthority(actorId, _type, generation) {
+        return { nodeRid: rid('staged-target'), actorId, generation };
+      }
+    }),
+    actorRefResolver: {
+      async resolveActorRef(actorId) {
+        assert.equal(actorId, current.actorId);
+        return current;
+      }
+    }
+  });
+  await manager.prepareRelocationActor(current.actorId, 'player', 7n, 11n, undefined, 0n, 0n);
+  try {
+    assert.strictEqual(await manager.find(current.actorId), current);
+    assert.equal(await manager.findActor(current.actorId), undefined);
+  } finally {
+    await manager.abortRelocationActor(current.actorId);
+  }
+});
+
 test('relocation Actor materialization bypasses the new-Actor Entry Spot callback', async () => {
   const events = [];
   class RelocatedActor {
@@ -1475,6 +1502,7 @@ test('ZLinkActorManager rejects duplicate create and actor type mismatch', async
   }
   class SpectatorFactory extends PlayerFactory {}
   const manager = createActorManager({
+    nativeActorNode: createMockSpotNode({}),
     actorFactories: new Map([
       ['player', PlayerFactory],
       ['spectator', SpectatorFactory]
@@ -1925,6 +1953,7 @@ test('actor manager fluent getOrCreate uses global id lookup and returns the exa
     }
   }
   const manager = createActorManager({
+    nativeActorNode: createMockSpotNode({}),
     actorFactories: new Map([['player', PlayerFactory]]),
     actorMeshNameProvider: (actorType) => ( actorType === 'player' ? 'play-mesh' : undefined) ,
     actorCreatedNodeRidProvider: () => rid('node-a')
@@ -2003,6 +2032,7 @@ test('actor manager prevents the same global Actor ID from changing type or Mesh
   }
   const remote = { nodeRid: rid('node-b'), actorId: 'shared', generation: 9n };
   const manager = createActorManager({
+    nativeActorNode: createMockSpotNode({}),
     actorFactories: new Map([['player-a', PlayerFactory], ['player-b', PlayerFactory]]),
     actorMeshNameProvider: (actorType) =>
       actorType === 'player-a' ? 'mesh-a' : actorType === 'player-b' ? 'mesh-b' : undefined,
@@ -2679,6 +2709,9 @@ test('cross-owner formal join rejection returns its typed terminal to the source
     actorFactories: new Map([['player', PlayerFactory]]),
     joinCoordinator: new framework.ZLinkActorNativeJoinCoordinator({
       node,
+      locationLifecycle: {
+        currentOwnerToken: { ownerId: 'source-owner', leaseGeneration: 1n }
+      },
       entrySpotIdProvider: () => 'play-entry-123e4567-e89b-42d3-a456-426614174000',
       completionTableProvider: () => node.completionTable,
       spotRouteResolver: {
@@ -2726,7 +2759,6 @@ test('cross-owner formal join rejection returns its typed terminal to the source
     generation: 1n
   });
   sourceState.setLocationGeneration(1n);
-  sourceState.setOwnerLeaseGeneration(1n);
 
   const result = await submitDeferredActorJoin(
     actor,
@@ -2768,7 +2800,6 @@ function boundSessionCommand44Harness(overrides = {}) {
   const state = {
     nativeActorRef: actorRef,
     locationGeneration: 17n,
-    ownerLeaseGeneration: 23n,
     spotId: 'room-target',
     remoteBoundSessionTarget: {
       routerChannelId: 'session.route',
@@ -2803,6 +2834,7 @@ function boundSessionCommand44Harness(overrides = {}) {
     storeNow: new Date(0)
   };
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'target-owner', leaseGeneration: 23n }),
     routeTransport: {
       async sendToSpot() { throw new Error('command 44 must use the service-wire path'); },
       requestToSpot() { return prepareZLinkRequestReply((async () => { throw new Error('command 44 must not use request/reply transport'); })(), identityRequestReply); }
@@ -3015,7 +3047,6 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     actorType: 'player',
     nativeActorRef: { nodeRid: rid('source-node'), actorId: 'actor-seal', generation: 9n },
     locationGeneration: 3n,
-    ownerLeaseGeneration: 5n,
     get boundSession() {
       return remoteTarget;
     },
@@ -3049,6 +3080,7 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
   const seals = [];
   const routes = [];
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 5n }),
     routeTransport: {},
     spotManager: () => undefined,
     actorManager: () => ({ getState: () => state }),
@@ -3190,7 +3222,6 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     spotId: rid('room-source'),
     nativeActorRef: { nodeRid: rid('source-node'), actorId: 'actor-abort-reopen', generation: 9n },
     locationGeneration: 3n,
-    ownerLeaseGeneration: 5n,
     get boundSession() {
       return remoteTarget;
     },
@@ -3237,6 +3268,7 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     storeNow: new Date(0)
   };
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'owner-source', leaseGeneration: 5n }),
     routeTransport: {},
     spotManager: () => ({
       async beginActorTransfer() { events.push('begin-transfer'); },
@@ -3562,8 +3594,6 @@ test('one-way command 44 shutdown failure preserves the committed target without
     setJoinedSpot() {},
     get locationGeneration() { return locationGeneration; },
     setLocationGeneration(value) { locationGeneration = value; },
-    ownerLeaseGeneration: 23n,
-    setOwnerLeaseGeneration(value) { this.ownerLeaseGeneration = value; },
     get ownsLocation() { return ownsLocation; },
     markLocationOwned() { ownsLocation = true; },
     markLocationReleased() { ownsLocation = false; }
@@ -3611,6 +3641,7 @@ test('one-way command 44 shutdown failure preserves the committed target without
   };
   let authorityReads = 0;
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'target-owner', leaseGeneration: 23n }),
     routeTransport: {},
     spotManager: () => undefined,
     actorManager: () => ({
@@ -3675,7 +3706,6 @@ test('native target actor location installs its enclosing User Spot Ready route'
     nativeActorRef: { nodeRid: rid('target-node'), actorId: 'alice', generation: 9n },
     clearAfterDestroy() {},
     setLocationGeneration() {},
-    setOwnerLeaseGeneration() {},
     setJoinedSpot() {},
     markLocationOwned() {},
     setRemoteActorPacketTarget(target) { remoteActorPacketTarget = target; }
@@ -4047,51 +4077,87 @@ test('DefaultZLinkActorManager shares concurrent destroy completion', async () =
   assert.equal(await manager.findActor('alice'), undefined);
 });
 
-test('DefaultZLinkActorManager retries cleanup without destroying the native actor twice', async () => {
-  let nativeDestroyCalls = 0;
-  let releaseCalls = 0;
-  class PlayerFactory {
-    create(context) {
-      const { actorId } = context;
-      return { actorId, context };
+for (const self of [false, true]) {
+  test(`DefaultZLinkActorManager retries cleanup without destroying the native actor twice (self=${self})`, async (t) => {
+    const {
+      ZLinkSpotSerialExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+    const {
+      ZLinkSpotSerialTurnExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+    const serial = new ZLinkSpotSerialExecutor(
+      new ZLinkSpotSerialTurnExecutor(false),
+      framework.ZLinkUserSpotExecutionMode.PerActor,
+      'entry'
+    );
+    let nativeDestroyCalls = 0;
+    let releaseCalls = 0;
+    const releaseError = new Error('location release failed');
+    class PlayerFactory {
+      create(context) {
+        const { actorId } = context;
+        return { actorId, context };
+      }
     }
-  }
-  const node = createMockSpotNode({
-    createActor(actorId) {
-      return { nodeRid: 'node-a', actorId, generation: 1n };
-    },
-    async destroyActor() {
-      nativeDestroyCalls += 1;
+    const node = createMockSpotNode({
+      createActor(actorId) {
+        return { nodeRid: 'node-a', actorId, generation: 7n };
+      },
+      async destroyActor() {
+        nativeDestroyCalls += 1;
+      }
+    });
+    const options = {
+      actorFactories: new Map([['player', PlayerFactory]]),
+      nativeActorNode: node,
+      terminateActorActivation: (actor, terminal) =>
+        serial.terminateActor(actor.context.actorId, terminal)
+    };
+    const manager = createActorManager(options);
+    const actor = await manager.getOrCreateActor('alice', 'player');
+    const state = manager.getState('alice');
+    const nativeRef = state.nativeActorRef;
+    state.markLocationOwned();
+    options.locationLifecycle = {
+      forgetExecution(owner) {
+        assert.strictEqual(owner, actor);
+      },
+      async releaseActor(_actorType, _actorId, releasedRef) {
+        assert.equal(releasedRef.objectGeneration, 7n);
+        releaseCalls += 1;
+        if (releaseCalls === 1) throw releaseError;
+      }
+    };
+
+    if (self) {
+      const failed = new Promise((resolve) => {
+        const unsubscribe = actorTaskRunner.errorSink.onRuntimeTaskException((event) => {
+          if (event.error === releaseError) resolve(event.error);
+        });
+        t.after(unsubscribe);
+      });
+      await serial.executeActor('alice', () => manager.destroyActor(node, rid('node-a'), actor));
+      assert.equal(await failed, releaseError);
+    } else {
+      await assert.rejects(
+        () => manager.destroyActor(node, rid('node-a'), actor),
+        (error) => error === releaseError
+      );
     }
+    assert.equal(nativeDestroyCalls, 1);
+    assert.equal(releaseCalls, 1);
+    assert.strictEqual(manager.getState('alice'), state);
+    assert.strictEqual(state.nativeActorRef, nativeRef);
+    assert.equal(nativeRef.generation, 7n);
+    assert.equal(actor.context.objectGeneration, 7n);
+    assert.equal((await manager.find('alice')).objectGeneration, 7n);
+
+    await manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor);
+    assert.equal(nativeDestroyCalls, 1);
+    assert.equal(releaseCalls, 2);
+    assert.equal(await manager.findActor('alice'), undefined);
   });
-  const options = {
-    actorFactories: new Map([['player', PlayerFactory]]),
-    nativeActorNode: node
-  };
-  const manager = createActorManager(options);
-  const actor = await manager.getOrCreateActor('alice', 'player');
-  manager.getState('alice').markLocationOwned();
-  options.locationLifecycle = {
-    forgetExecution(owner) {
-      assert.strictEqual(owner, actor);
-    },
-    async releaseActor() {
-      releaseCalls += 1;
-      if (releaseCalls === 1) throw new Error('location release failed');
-    }
-  };
-
-  await assert.rejects(
-    () => manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor),
-    /location release failed/
-  );
-  assert.equal(manager.getState('alice').nativeActorRef, undefined);
-
-  await manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor);
-  assert.equal(nativeDestroyCalls, 1);
-  assert.equal(releaseCalls, 2);
-  assert.equal(await manager.findActor('alice'), undefined);
-});
+}
 
 test('DefaultZLinkActorManager adopts native actor ref before creating routed actor instance', async () => {
   const events = [];
@@ -4204,10 +4270,24 @@ test('DefaultZLinkActorManager runs destroy cleanup for local actors without nat
   });
 
   const actor = await manager.getOrCreateActor('local-alice', 'player');
+  assert.equal(await manager.find('local-alice'), undefined);
+  assert.throws(() => actor.context.objectGeneration, /lifecycle identity is not initialized/);
+  await assert.rejects(
+    () => manager.getOrCreate('local-alice', 'player').inMesh('play').submit(),
+    /lifecycle identity is not initialized/
+  );
   await manager.destroyActor(node, zlink.RoutingId.from('node-a'), actor);
 
   assert.equal(await manager.find('local-alice'), undefined);
   assert.deepEqual(events, ['cleanup:local-alice']);
+});
+
+test('Actor context rejects a missing incarnation instead of inventing generation one', async () => {
+  const manager = createActorManager({
+    actorFactories: new Map([['player', { create: (context) => ({ context }) }]])
+  });
+  const actor = await manager.getOrCreateActor('uninitialized', 'player');
+  assert.throws(() => actor.context.objectGeneration, /lifecycle identity is not initialized/);
 });
 
 test('ZLinkEntrySpotActivation destroyActor does not invoke Entry Spot lifecycle callbacks', async () => {
@@ -5224,6 +5304,5 @@ function createEntryActorRuntime(resolveActor, destroyActor = async () => {}) {
     resolveActor,
     async commitActorTransaction(_actor, onJoined) { await onJoined(); },
     destroyActor,
-    routePacket() { return { handled: false }; }
   };
 }

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { acquireNodeTestGateLock } = require('./node-test-gate-lock');
 const { nodeTestConcurrencyArgs } = require(path.join(__dirname, 'node-test-options'));
+const { runTestFileWithDeadline } = require('./node-test-file-runner');
 
 const nodeRoot = path.resolve(__dirname, '..');
 const eslintEntry = path.resolve(nodeRoot, 'node_modules/eslint/bin/eslint.js');
@@ -45,51 +46,58 @@ run('lint', process.execPath, [
   'packages/*/src/**/*.ts',
   ...(includeSamples ? ['samples/**/*.ts'] : [])
 ]);
-for (const testFile of listTestFiles(nodeRoot)) {
-  const relative = relativePath(nodeRoot, testFile);
-  // Actual browser E2E belongs to `test:browser`, whose CI jobs install Chromium.
-  if (relative.startsWith('test/browser/')) continue;
-  if (!includeSamples && sampleTestPattern.test(path.basename(testFile))) continue;
-  if (skippedTestFiles.has(relative) || skippedTestFiles.has(path.basename(testFile))) {
-    console.log(`-- ${relative} # SKIP explicitly requested; skipped tests are not a pass`);
-    skipped.push(relative);
-    continue;
+runTestFiles().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+
+async function runTestFiles() {
+  for (const testFile of listTestFiles(nodeRoot)) {
+    const relative = relativePath(nodeRoot, testFile);
+    // Actual browser E2E belongs to `test:browser`, whose CI jobs install Chromium.
+    if (relative.startsWith('test/browser/')) continue;
+    if (!includeSamples && sampleTestPattern.test(path.basename(testFile))) continue;
+    if (skippedTestFiles.has(relative) || skippedTestFiles.has(path.basename(testFile))) {
+      console.log(`-- ${relative} # SKIP explicitly requested; skipped tests are not a pass`);
+      skipped.push(relative);
+      continue;
+    }
+    //  타임아웃이 없으면 suite가 멈췄을 때 게이트가 실패가 아니라 "영원히 진행 중"이
+    //  된다. 실제로 그 상태에서 부분 로그를 통과로 오인하기 쉬웠다.
+    const result = await runTestFile(relative, [
+      '--test',
+      ...testConcurrencyArgs,
+      '--test-timeout=600000',
+      //  inspectTap() below parses TAP. TAP is Node 22's default reporter but not
+      //  every Node's, so pin it explicitly instead of relying on the default.
+      '--test-reporter=tap',
+      '--test-reporter-destination=stdout',
+      testFile
+    ]);
+    expectedTestCount += result.announced;
+    completedTestCount += result.completed;
+    if (!result.passed) failedTestFiles.push(relative);
   }
-  //  타임아웃이 없으면 suite가 멈췄을 때 게이트가 실패가 아니라 "영원히 진행 중"이
-  //  된다. 실제로 그 상태에서 부분 로그를 통과로 오인하기 쉬웠다.
-  const result = runTestFile(relative, [
-    '--test',
-    ...testConcurrencyArgs,
-    '--test-timeout=600000',
-    //  inspectTap() below parses TAP. TAP is Node 22's default reporter but not
-    //  every Node's, so pin it explicitly instead of relying on the default.
-    '--test-reporter=tap',
-    '--test-reporter-destination=stdout',
-    testFile
-  ]);
-  expectedTestCount += result.announced;
-  completedTestCount += result.completed;
-  if (!result.passed) failedTestFiles.push(relative);
-}
-releaseGateLock();
-if (skipped.length > 0) {
-  console.error(`Framework CI skipped ${skipped.length} test file(s): ${skipped.join(', ')}`);
-  process.exit(2);
-}
-if (completedTestCount !== expectedTestCount) {
-  console.error(
-    `Runtime test aggregate is incomplete: announced ${expectedTestCount}, completed ${completedTestCount}.`
+  releaseGateLock();
+  if (skipped.length > 0) {
+    console.error(`Framework CI skipped ${skipped.length} test file(s): ${skipped.join(', ')}`);
+    process.exit(2);
+  }
+  if (completedTestCount !== expectedTestCount) {
+    console.error(
+      `Runtime test aggregate is incomplete: announced ${expectedTestCount}, completed ${completedTestCount}.`
+    );
+    process.exit(1);
+  }
+  console.log(
+    `-- runtime test integrity: announced=${expectedTestCount} completed=${completedTestCount}`
   );
-  process.exit(1);
-}
-console.log(
-  `-- runtime test integrity: announced=${expectedTestCount} completed=${completedTestCount}`
-);
-if (failedTestFiles.length > 0) {
-  console.error(
-    `Framework runtime tests failed in ${failedTestFiles.length} file(s): ${failedTestFiles.join(', ')}`
-  );
-  process.exit(1);
+  if (failedTestFiles.length > 0) {
+    console.error(
+      `Framework runtime tests failed in ${failedTestFiles.length} file(s): ${failedTestFiles.join(', ')}`
+    );
+    process.exit(1);
+  }
 }
 
 function relativePath(base, file) {
@@ -114,17 +122,13 @@ function run(label, command, args) {
   }
 }
 
-function runTestFile(label, args) {
+async function runTestFile(label, args) {
   console.log(`-- ${label}`);
-  const result = childProcess.spawnSync(process.execPath, args, {
+  const result = await runTestFileWithDeadline(args, {
     cwd: nodeRoot,
-    encoding: 'utf8',
     env: process.env,
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: 600000
+    deadlineMs: 600000
   });
-  process.stdout.write(result.stdout ?? '');
-  process.stderr.write(result.stderr ?? '');
 
   const tap = inspectTap(result.stdout ?? '');
   const integrityErrors = [];
@@ -139,17 +143,16 @@ function runTestFile(label, args) {
   if (tap.summary !== undefined && tap.summary !== tap.totalCompleted) {
     integrityErrors.push(`summary=${tap.summary}, completed=${tap.totalCompleted}`);
   }
-  if (result.error) {
+  if (result.stalled) {
     integrityErrors.push(
-      result.error.code === 'ETIMEDOUT'
-        ? 'parent watchdog expired after 600000ms'
-        : `runner error: ${result.error.message}`
+      `STALLED after 600000ms; process tree killed; running: ${result.running || '(none)'}; last ok: ${result.lastOk ?? '(none)'}; processes: ${result.processes.join(' | ') || '(none listed)'}`
     );
   }
+  if (result.error) integrityErrors.push(`runner error: ${result.error.message}`);
   if (integrityErrors.length > 0) {
     console.error(`${label} produced incomplete TAP: ${integrityErrors.join('; ')}.`);
   }
-  if (result.status !== 0 && !result.error) {
+  if (result.status !== 0 && !result.error && !result.stalled) {
     console.error(`${label} failed with exit code ${result.status ?? 1}.`);
   }
 

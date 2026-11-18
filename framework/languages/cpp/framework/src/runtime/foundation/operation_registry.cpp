@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
@@ -71,6 +71,10 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
                              mesh_request_metric_t request_metric = {},
                              std::optional<request_identity_t> request = {},
                              std::stop_token cancellation = {});
+    bool continue_operation (call_id_t id,
+                             callback_t &&callback,
+                             std::vector<std::uint8_t> target_routing_id);
+    std::optional<clock_t::time_point> deadline (const call_id_t &id) const;
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                              operation_terminal_t terminal);
@@ -654,6 +658,39 @@ bool operation_registry_state_t::unregister (const call_id_t &id)
     return true;
 }
 
+bool operation_registry_state_t::continue_operation (call_id_t id,
+                                                     callback_t &&callback,
+                                                     std::vector<std::uint8_t> target_routing_id)
+{
+    callback_t previous;
+    completion_item_ptr_t expired;
+    {
+        std::lock_guard lock (_mutex);
+        auto entry = find_pending (_entries, id);
+        if (entry == _entries.end ())
+            return false;
+        if (entry->second.deadline > _now ()) {
+            previous = std::exchange (entry->second.completion->callback, std::move (callback));
+            entry->second.target_routing_id = std::move (target_routing_id);
+        } else
+            expired = take_completion (entry->second);
+    }
+    if (!expired)
+        return true;
+    expired->cancellation.reset ();
+    notify (std::move (expired), operation_terminal_t::timed_out,
+            result_t<zlink::message_t>::success ({}));
+    return false;
+}
+
+std::optional<operation_registry_state_t::clock_t::time_point>
+operation_registry_state_t::deadline (const call_id_t &id) const
+{
+    std::lock_guard lock (_mutex);
+    const auto entry = find_pending (_entries, id);
+    return entry == _entries.end () ? std::nullopt : std::optional{entry->second.deadline};
+}
+
 bool operation_registry_state_t::contains (const call_id_t &id) const
 {
     std::lock_guard lock (_mutex);
@@ -877,6 +914,19 @@ bool operation_registry_t::register_operation (call_id_t id,
     return _state->register_operation (std::move (id), std::move (deadline), std::move (callback),
                                        std::move (target_routing_id), std::move (request_metric),
                                        std::move (request), std::move (cancellation));
+}
+
+bool operation_registry_t::continue_operation (call_id_t id,
+                                               callback_t &&callback,
+                                               std::vector<std::uint8_t> target_routing_id)
+{
+    return _state->continue_operation (id, std::move (callback), std::move (target_routing_id));
+}
+
+std::optional<operation_registry_t::clock_t::time_point>
+operation_registry_t::deadline (const call_id_t &id) const
+{
+    return _state->deadline (id);
 }
 
 bool operation_registry_t::contains (const call_id_t &id) const

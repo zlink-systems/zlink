@@ -22,31 +22,50 @@ const { argValue } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
 const contract = require('../shared/framework-bench-contract');
 const { createBenchPayloadSerializer } = require('../shared/framework-protobuf');
+const gamePayload = require('../shared/game-payload');
 
 const argv = process.argv.slice(2);
 const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5234');
 const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5235');
+const jsonBody = argv.includes('--json-body');
+const packetName = jsonBody ? 'BenchGameMessage' : contract.PACKET_NAME;
 
 const metrics = new BenchServerMetrics();
 
-class EchoHandler {
-  // spec section 2: request patterns echo the payload back so the
-  // client can validate the 29-byte header it sent (G2).
-  async handle(request) {
-    metrics.record(toBuffer(request && request.body));
-    return request;
-  }
-}
+const EchoHandler = jsonBody
+  ? class EchoHandler {
+      async handle(request) {
+        metrics.recordGamePayload(request);
+        return request;
+      }
+    }
+  : class EchoHandler {
+      // spec section 2: request patterns echo the payload back so the
+      // client can validate the 29-byte header it sent (G2).
+      async handle(request) {
+        metrics.record(toBuffer(request && request.body));
+        return request;
+      }
+    };
 Injectable()(EchoHandler);
+if (jsonBody) EchoHandler.messageType = gamePayload.GameMessage;
 
-class CommandHandler {
-  // spec section 5 / G3: the send row's throughput is this count, taken on the server.
-  async handle(message) {
-    metrics.record(toBuffer(message && message.body));
-    return undefined;
-  }
-}
+const CommandHandler = jsonBody
+  ? class CommandHandler {
+      async handle(message) {
+        metrics.recordGamePayload(message);
+        return undefined;
+      }
+    }
+  : class CommandHandler {
+      // spec section 5 / G3: the send row's throughput is this count, taken on the server.
+      async handle(message) {
+        metrics.record(toBuffer(message && message.body));
+        return undefined;
+      }
+    };
 Injectable()(CommandHandler);
+if (jsonBody) CommandHandler.messageType = gamePayload.GameMessage;
 
 function toBuffer(body) {
   if (body === undefined || body === null) return Buffer.alloc(0);
@@ -62,16 +81,19 @@ Module({
       inject: [],
       useFactory: () => {
         const builder = zlinkFramework();
-        builder.codecs().use({
-          register: (codecs) => {
-            codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
-          }
-        });
-        const mesh = builder.addRouteMesh(contract.MESH_NAME)
+        if (!jsonBody) {
+          builder.codecs().use({
+            register: (codecs) => {
+              codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
+            }
+          });
+        }
+        const mesh = builder
+          .addRouteMesh(contract.MESH_NAME)
           .listen(endpoint)
           .routingId(contract.SERVER_ROUTING_ID);
-        mesh.addRequestHandler(contract.PACKET_NAME, EchoHandler);
-        mesh.addSendHandler(contract.PACKET_NAME, CommandHandler);
+        mesh.addRequestHandler(packetName, EchoHandler);
+        mesh.addSendHandler(packetName, CommandHandler);
         return builder.build();
       }
     })
@@ -85,13 +107,16 @@ Module({
     abortOnError: false
   });
   startStatsServer(metricsUrl, metrics, {
-    implementation: 'zlink-framework-node',
+    implementation: jsonBody ? 'zlink-framework-node-json' : 'zlink-framework-node',
     host: '@zlink-systems/nestjs',
-    codec: 'framework-codec-protobuf',
+    codec: jsonBody ? 'framework-default-typed-json' : 'framework-codec-protobuf',
     endpoint
   });
   process.stderr.write(`[framework-server] endpoint=${endpoint} stats=${metricsUrl}\n`);
-  process.on('SIGTERM', async () => { await app.close(); process.exit(0); });
+  process.on('SIGTERM', async () => {
+    await app.close();
+    process.exit(0);
+  });
 })().catch((error) => {
   console.error(`framework server failed: ${error && error.stack}`);
   process.exit(1);

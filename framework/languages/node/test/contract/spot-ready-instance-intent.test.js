@@ -57,6 +57,8 @@ for (const instanceIntent of [false, true]) {
     const frames = [];
     const owner = new ServiceStatefulRuntime({ setServiceIngress() {},
       isPeerRouteReady: () => true,
+      peerLifecycleGeneration: (rid) =>
+        rid === route.targetNodeRid ? route.targetNodeGeneration : undefined,
       async sendService(target, parts) { frames.push(parts[0]); return true; },
       async requestService(target, parts) {
         frames.push(parts[0]);

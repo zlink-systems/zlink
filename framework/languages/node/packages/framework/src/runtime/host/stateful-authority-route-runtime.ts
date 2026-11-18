@@ -308,45 +308,52 @@ export class ZLinkStatefulAuthorityRouteRuntime {
     const relocationCodec = new ServiceRelocationAuthorityPayloadCodec();
     for (const { key, snapshot: scanned } of candidates.values()) {
       let current: ZLinkAuthorityReadResult = scanned;
-      if (authorityNeedsExactRead(scanned, relocationCodec)) {
+      let decoded = decodeAuthoritySnapshot(scanned, relocationCodec);
+      if (authorityNeedsExactRead(decoded)) {
         current = await this.options.store.readAuthority(key, signal);
         if (current.kind !== 'snapshot') continue;
+        if (current.storeVersion.value !== scanned.storeVersion.value) {
+          decoded = decodeAuthoritySnapshot(current, relocationCodec);
+        }
       }
-      const route = authorityRoute(current);
+      const route = authorityRoute(current, decoded.readySpot);
       if (route !== undefined) result.set(key.value, route);
-      if (
-        current.allocation.state === 'active' &&
-        current.allocation.objectKind === 'actor' &&
-        decodeActorAuthorityIdentity(
-          serviceRelocationAuthorityApplicationPayload(current.payload),
-          current.objectGeneration
-        ) !== undefined
-      ) {
+      if (decoded.actor !== undefined) {
         actors.push(current);
       }
-      const pendingRecovery = pendingInstanceActivation(current);
-      if (pendingRecovery !== undefined) pending.push(pendingRecovery);
+      if (decoded.pending !== undefined) pending.push(decoded.pending);
     }
     return { routes: result, pending, actors };
   }
 }
 
-function authorityNeedsExactRead(
+function decodeAuthoritySnapshot(
   snapshot: ZLinkAuthoritySnapshot,
   relocationCodec: ServiceRelocationAuthorityPayloadCodec
-): boolean {
-  if (pendingInstanceActivation(snapshot) !== undefined) return true;
-  if (relocationCodec.read(snapshot.payload) !== undefined) return true;
-  if (
-    decodeServiceReadySpotAuthority(serviceRelocationAuthorityApplicationPayload(snapshot.payload))
-      ?.activationRecovery !== undefined
-  ) {
-    return true;
-  }
+) {
+  const actor =
+    snapshot.allocation.state === 'active' && snapshot.allocation.objectKind === 'actor'
+      ? decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration)
+      : undefined;
+  return {
+    actor,
+    readySpot:
+      actor === undefined
+        ? decodeServiceReadySpotAuthority(
+            serviceRelocationAuthorityApplicationPayload(snapshot.payload)
+          )
+        : undefined,
+    relocation: relocationCodec.read(snapshot.payload),
+    pending: pendingInstanceActivation(snapshot)
+  };
+}
+
+function authorityNeedsExactRead(decoded: ReturnType<typeof decodeAuthoritySnapshot>): boolean {
   return (
-    snapshot.allocation.state === 'active' &&
-    snapshot.allocation.objectKind === 'actor' &&
-    decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration) !== undefined
+    decoded.pending !== undefined ||
+    decoded.relocation !== undefined ||
+    decoded.readySpot?.activationRecovery !== undefined ||
+    decoded.actor !== undefined
   );
 }
 
@@ -355,11 +362,14 @@ function pendingInstanceActivation(
 ): PendingInstanceActivationRecovery | undefined {
   const allocation = snapshot.allocation;
   const projection = snapshot.pendingCreation;
-  const decoded = decodeServiceInstanceAuthorityPayload(snapshot.payload);
   if (
     allocation.state !== 'reserved' ||
     allocation.objectKind !== 'instance_spot' ||
-    projection === undefined ||
+    projection === undefined
+  )
+    return undefined;
+  const decoded = decodeServiceInstanceAuthorityPayload(snapshot.payload);
+  if (
     decoded?.state !== 'coldActivating' ||
     decoded.stableType !== allocation.stableType ||
     decoded.ownerId !== snapshot.ownerId ||
@@ -394,11 +404,10 @@ function pendingInstanceActivation(
 }
 
 function authorityRoute(
-  snapshot: ZLinkAuthoritySnapshot
+  snapshot: ZLinkAuthoritySnapshot,
+  decoded: ReturnType<typeof decodeServiceReadySpotAuthority>
 ): InstanceActivationRecoveryRoute | undefined {
   const allocation = snapshot.allocation;
-  const payload = serviceRelocationAuthorityApplicationPayload(snapshot.payload);
-  const decoded = decodeServiceReadySpotAuthority(payload);
   if (
     allocation.state !== 'active' ||
     allocation.objectKind !== 'instance_spot' ||

@@ -10,13 +10,16 @@ void test_x ()
     void *sb = test_context_socket (ZLINK_SOCKET_DEALER);
     void *sc = test_context_socket (ZLINK_SOCKET_DEALER);
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sc, ENDPOINT_3));
+    char endpoint[MAX_SOCKET_STRING];
+    test_bind (sb, "tcp://127.0.0.1:*", endpoint, sizeof (endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_unbind (sb, endpoint));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sc, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (sb, endpoint));
 
     send_string_expect_success (sc, "foobar", 0);
     send_string_expect_success (sc, "baz", 0);
     send_string_expect_success (sc, "buzz", 0);
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (sb, ENDPOINT_3));
 
     recv_string_expect_success (sb, "foobar", 0);
     recv_string_expect_success (sb, "baz", 0);

@@ -197,7 +197,7 @@ void reply_contract ()
     parts[1] = ladder::message (std::string_view ("\xff", 1));
     require_rejected ([&] { ladder::decode_reply (parts, 2, 0); },
                       "source completion accepted an invalid protobuf body");
-    parts[1] = ladder::message (encode_bench_payload (payload));
+    parts[1] = encode_bench_payload_message (payload);
     fw::detail::channel_reply_writer_t writer;
     auto error = writer.create_error_header ("bench", request,
       fw::framework_exception_t (fw::framework_error_kind_t::internal_failure, "contract error"));

@@ -1,4 +1,3 @@
-import { routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -27,7 +26,6 @@ import type {
 } from '../backend/contracts';
 import { RequestResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import { ZLinkBufferMessage as NativeMessage } from '../backend/runtime-message';
-import { diagnosticTextOrAbsent } from '../diagnostics/diagnostic-text';
 import type {
   StreamSessionActorAuthorityFence,
   StreamSessionService
@@ -44,7 +42,7 @@ import {
   encodeActorBoundFrame,
   encodeActorUnboundFrame,
   encodeSessionClosingFrame,
-  encodeStreamControlFrame,
+  streamControlFrame,
   ZLinkStreamCloseReasonCode
 } from './protocol';
 import type { ZLinkActorSessionAuthorityFence } from './actor-session-binding-registry';
@@ -161,7 +159,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   async writeControl(name: string): Promise<void> {
-    const control = NativeMessage.from(encodeStreamControlFrame(name));
+    const control = streamControlFrame(name);
     try {
       await this.socket.submit(this.backendRoutingId(), control);
     } finally {
@@ -196,8 +194,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     authorityFence?: ZLinkActorSessionAuthorityFence
   ): Promise<void> {
     const operationName = `Actor '${actor.actorId}' native session bind`;
-    // One deadline for lookup and bind. A timeout of 0 keeps the socket default for both
-    // stages; a positive timeout that runs out before bind fails without submitting it.
+    // A positive timeout covers the bind, including logical request admission.
     const deadlineMs = timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
     const bindTimeoutMs = () => remainingRequestTimeout(operationName, deadlineMs) ?? timeoutMs;
     throwIfAborted(signal);
@@ -212,13 +209,6 @@ export class ZLinkManagedStream implements ZLinkStream {
     if (route !== undefined) {
       if (route.service.status().state === 1) {
         route.service.start();
-      }
-      await this.ensureNativeActorRoute(route, actor, timeoutMs, signal);
-      if (this.isTransportClosed()) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          `Stream session '${this.sessionId}' is disconnected.`
-        );
       }
       await this.requireSuccessfulCompletion(
         route.completions.submit(
@@ -292,46 +282,6 @@ export class ZLinkManagedStream implements ZLinkStream {
       signal
     );
     this.nativeActorBindings.set(actor.actorId, { actor: nativeActor });
-  }
-
-  private async ensureNativeActorRoute(
-    route: ZLinkNativeSessionRoute,
-    actor: ActorRef,
-    timeoutMs: number,
-    signal?: AbortSignal
-  ): Promise<void> {
-    const completion = await route.completions.submit(
-      () => route.service.lookupActor(actor.nodeRid, actor.actorId, timeoutMs),
-      signal
-    );
-    try {
-      const resolved =
-        completion.kindData?.kind === 'actorLookupCompletion'
-          ? completion.kindData.location.actor
-          : undefined;
-      if (
-        completion.terminalResult !== 0 ||
-        completion.failureErrno !== 0 ||
-        resolved === undefined ||
-        resolved.actorId !== actor.actorId ||
-        resolved.generation !== actor.objectGeneration ||
-        !routingIdsEqual(resolved.nodeRid, actor.nodeRid)
-      ) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-          `Actor '${actor.actorId}' native route fence does not match its ActorRef ` +
-            `(expected ${String(actor.nodeRid)}/${actor.objectGeneration}, ` +
-            `resolved ${diagnosticTextOrAbsent(
-              resolved === undefined
-                ? undefined
-                : `${String(resolved.nodeRid)}/${resolved.generation}`
-            )}, ` +
-            `terminal=${completion.terminalResult}, failure=${completion.failureErrno}).`
-        );
-      }
-    } finally {
-      closeMeshCompletion(completion);
-    }
   }
 
   async unbindActor(actorId: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {

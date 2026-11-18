@@ -19,6 +19,7 @@ dependencies {
     compileOnlyApi("io.micrometer:micrometer-core:1.15.8")
     testImplementation("io.micrometer:micrometer-core:1.15.8")
     testImplementation(project(":zlink-framework-testkit"))
+    testImplementation(testFixtures(project(":zlink-framework-core")))
     testImplementation(project(":zlink-framework-codec-protobuf"))
     testImplementation("com.google.protobuf:protobuf-java:4.30.2")
     testImplementation(project(":zlink-framework-locations-redis"))
@@ -26,7 +27,7 @@ dependencies {
 
 tasks.named<Test>("integrationTest") {
     systemProperty("zlink.test.classpath", sourceSets["integrationTest"].runtimeClasspath.asPath)
-    inputs.property("redisEndpoint", System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT") ?: "")
+    inputs.property("redisEndpoint", System.getenv("ZLINK_REDIS_TEST_ENDPOINT") ?: "")
 }
 
 // Spring resolves Java parameter names from MethodParameters metadata.

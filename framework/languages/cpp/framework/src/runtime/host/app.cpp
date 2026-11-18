@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include <zlink/framework/contracts/configuration/app.hpp>
 #include <runtime/locations/location_repository.hpp>
@@ -60,6 +60,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <iterator>
@@ -569,6 +570,26 @@ class app_state_t
         (void) detail::task_result_access_t::read (terminal);
     }
 
+    void complete_termination (termination_result_t terminal)
+    {
+        std::vector<std::shared_ptr<termination_waiter_t>> waiters;
+        {
+            std::lock_guard lock (termination_operation.mutex);
+            if (!termination_operation.terminal) {
+                termination_operation.terminal = true;
+                termination_operation.result = terminal;
+                waiters = std::move (termination_operation.waiters);
+                termination_operation.waiters.clear ();
+            }
+            auto expected = framework_runtime_state_t::draining;
+            (void) runtime_state.compare_exchange_strong (
+              expected, framework_runtime_state_t::stopped, std::memory_order_acq_rel);
+        }
+        for (auto &waiter : waiters) {
+            waiter->complete (terminal);
+        }
+    }
+
     service_collection_t services;
     handler_registry_t handlers;
     config_builder_t config;
@@ -887,7 +908,8 @@ void trace_instance_spot_activation (
   zlink::framework::dispatch_message_kind_t message_kind,
   const instance_spot_activation_trace_context_t &context,
   std::optional<zlink::framework::message_flow_result_t> result = std::nullopt,
-  std::optional<zlink::framework::message_flow_reason_t> reason = std::nullopt)
+  std::optional<zlink::framework::message_flow_reason_t> reason = std::nullopt,
+  std::exception_ptr failure = {})
 {
     if (zlink::framework::detail::message_flow_tracer_t (dispatch).enabled_for (outcome, result)) {
         zlink::framework::detail::message_flow_tracer_t (dispatch).trace (outcome, result, [&] {
@@ -925,6 +947,7 @@ void trace_instance_spot_activation (
                 event.result = *result;
             if (reason)
                 event.reason = *reason;
+            event.exception = failure;
             return event;
         });
     }
@@ -1228,6 +1251,14 @@ apply_bound_session_bind_async (
         return ::zlink::framework::result_t<bind_result_t>::success (
           bind_result_t{runtime::stateful::stateful_error_t::none, std::move (replacement)});
     };
+    const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
+    const bool duplicate = current && current->session_rid && current->node_generation != 0
+                           && current->binding_generation != 0
+                           && (current->node_rid != incoming_route.node_rid
+                               || current->node_generation != incoming_route.node_generation
+                               || *current->session_rid != *incoming_route.session_rid);
+    if (!duplicate)
+        co_return replace_binding ();
     const bool callback_absent = co_await spot_state->lane.run_task ([spot_state, actor] {
         auto actor_type = std::string (actor_ref_access_t::actor_type (actor));
         if (actor_type.empty ()) {
@@ -1283,9 +1314,7 @@ apply_bound_session_bind_async (
     struct accept_session_binding_t
     {
         static task_t<::zlink::framework::result_t<bool>>
-        run (std::decay_t<decltype (actor_gateway_runtime)> actor_gateway_runtime,
-             std::decay_t<decltype (actor)> actor,
-             std::decay_t<decltype (incoming_route)> incoming_route,
+        run (actor_session_binding_identity_t current_identity,
              std::decay_t<decltype (actor_session_binding_identity_t{
                node_rid_t::from_string (session_owner.to_string ()), session_owner_generation,
                bind.binding.generation})> incoming_identity,
@@ -1296,36 +1325,21 @@ apply_bound_session_bind_async (
              actor_t *actor_instance,
              std::stop_token cancellation)
         {
-            const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
-            const bool duplicate = current && current->session_rid && current->node_generation != 0
-                                   && current->binding_generation != 0
-                                   && (current->node_rid != incoming_route.node_rid
-                                       || current->node_generation != incoming_route.node_generation
-                                       || *current->session_rid != *incoming_route.session_rid);
-            if (duplicate) {
-                const actor_session_binding_identity_t current_identity{
-                  node_rid_t::from_string (current->node_rid.to_string ()),
-                  current->node_generation, current->binding_generation};
-                start_callback_timeout ();
-                const auto rejection = co_await actor_instance->on_duplicate_bind (
-                  current_identity, incoming_identity, cancellation);
-                std::uint8_t pending = 0;
-                if (!race->decision.compare_exchange_strong (pending, 1))
-                    co_return ::zlink::framework::result_t<bool>::success (false);
-                if (rejection && !rejection->empty ()) {
-                    completion->complete (
-                      ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
-                        runtime::stateful::stateful_error_t::conflict, std::nullopt,
-                        static_cast<std::uint32_t> (
-                          runtime::protocol::request_terminal_result::rejected),
-                        static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
-                        runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
-                    co_return ::zlink::framework::result_t<bool>::success (false);
-                }
-            } else {
-                std::uint8_t pending = 0;
-                if (!race->decision.compare_exchange_strong (pending, 1))
-                    co_return ::zlink::framework::result_t<bool>::success (false);
+            start_callback_timeout ();
+            const auto rejection = co_await actor_instance->on_duplicate_bind (
+              current_identity, incoming_identity, cancellation);
+            std::uint8_t pending = 0;
+            if (!race->decision.compare_exchange_strong (pending, 1))
+                co_return ::zlink::framework::result_t<bool>::success (false);
+            if (rejection && !rejection->empty ()) {
+                completion->complete (
+                  ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
+                    runtime::stateful::stateful_error_t::conflict, std::nullopt,
+                    static_cast<std::uint32_t> (
+                      runtime::protocol::request_terminal_result::rejected),
+                    static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                    runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
+                co_return ::zlink::framework::result_t<bool>::success (false);
             }
             if (cancellation.stop_requested ())
                 co_return ::zlink::framework::result_t<bool>::success (false);
@@ -1342,7 +1356,10 @@ apply_bound_session_bind_async (
     };
     auto turn = spot_runtime.run_actor_turn (
       actor,
-      [actor_gateway_runtime, actor, incoming_route, replace_binding = std::move (replace_binding),
+      [current_identity =
+         actor_session_binding_identity_t{node_rid_t::from_string (current->node_rid.to_string ()),
+                                          current->node_generation, current->binding_generation},
+       replace_binding = std::move (replace_binding),
        incoming_identity =
          actor_session_binding_identity_t{node_rid_t::from_string (session_owner.to_string ()),
                                           session_owner_generation, bind.binding.generation},
@@ -1350,10 +1367,9 @@ apply_bound_session_bind_async (
         actor_t &actor_instance,
         std::stop_token cancellation) mutable -> task_t<::zlink::framework::result_t<bool>> {
           // run_actor_turn owns the Actor instance until this task completes.
-          return accept_session_binding_t::run (actor_gateway_runtime, actor, incoming_route,
-                                                incoming_identity, std::move (replace_binding),
-                                                race, completion, start_callback_timeout,
-                                                &actor_instance, cancellation);
+          return accept_session_binding_t::run (
+            current_identity, incoming_identity, std::move (replace_binding), race, completion,
+            start_callback_timeout, &actor_instance, cancellation);
       },
       race->cancellation.get_token ());
     observe_task_completion (
@@ -2053,6 +2069,17 @@ void app_t::_apply_zlink_framework ()
     }
     std::vector<std::weak_ptr<detail::mesh_node_runtime_t>> weak_mesh_nodes (mesh_nodes.begin (),
                                                                              mesh_nodes.end ());
+    for (const auto &mesh : mesh_nodes) {
+        mesh->configure_operation_owner_resolver (
+          [weak_mesh_nodes] (runtime::foundation::call_id_t operation, std::uint64_t reply_route_id)
+            -> std::optional<runtime::mesh::raw_mesh_node_owner_t::operation_owner_t> {
+              for (const auto &weak : weak_mesh_nodes)
+                  if (const auto candidate = weak.lock ())
+                      if (auto owner = candidate->local_operation_owner (operation, reply_route_id))
+                          return owner;
+              return std::nullopt;
+          });
+    }
     if (!mesh_nodes.empty ()) {
         const auto application_mesh_it =
           std::find_if (mesh_nodes.begin (), mesh_nodes.end (), [&] (const auto &mesh) {
@@ -2396,9 +2423,10 @@ void app_t::_apply_zlink_framework ()
                     application_payload.flow_origin = flow->origin;
                 }
                 const auto trace_context = make_instance_spot_activation_trace_context (
-                  detail::message_flow_tracer_t (dispatch).capture_enabled (), packet_name,
-                  selected.value ().target.mesh_name, selected.value ().target.rid, spot_id,
-                  header);
+                  detail::message_flow_tracer_t (dispatch).enabled_for (
+                    message_flow_outcome_t::reply_received, message_flow_result_t::failed),
+                  packet_name, selected.value ().target.mesh_name, selected.value ().target.rid,
+                  spot_id, header);
                 if (trace_context) {
                     trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::sent,
                                                     dispatch_message_kind_t::request,
@@ -2418,43 +2446,46 @@ void app_t::_apply_zlink_framework ()
                       runtime::protocol::reply_header_t reply,
                       std::optional<runtime::protocol::application_payload_t> application_reply) {
                         if (terminal != runtime::foundation::operation_terminal_t::completed) {
-                            if (trace_context) {
-                                trace_instance_spot_activation (
-                                  dispatch, flow, message_flow_outcome_t::reply_received,
-                                  dispatch_message_kind_t::request, *trace_context,
-                                  message_flow_result_t::failed);
-                            }
-                            completion->complete (result_t<zlink::message_t>::failure (
+                            auto failure = result_t<zlink::message_t>::failure (
                               framework_error_kind_t::unavailable,
-                              "Instance Spot activation transport did not complete"));
-                            return;
-                        }
-                        if (reply.terminal_result != 0) {
-                            if (trace_context) {
+                              "Instance Spot activation transport did not complete");
+                            const auto error = failure.exception ();
+                            if (completion->complete (std::move (failure)) && trace_context) {
                                 trace_instance_spot_activation (
                                   dispatch, flow, message_flow_outcome_t::reply_received,
                                   dispatch_message_kind_t::request, *trace_context,
                                   message_flow_result_t::failed,
-                                  message_flow_reason_t::activation_rejected);
+                                  message_flow_reason_t::stale_target, error);
                             }
-                            completion->complete (
-                              detail::result_access_t::failure<zlink::message_t> (
-                                runtime::messaging::request_failure_mapper_t{}
-                                  .reply_header_exception (reply.terminal_result,
-                                                           reply.failure_code,
-                                                           "Instance Spot activation request")));
                             return;
                         }
-                        if (!application_reply) {
-                            if (trace_context) {
+                        if (reply.terminal_result != 0) {
+                            auto failure = detail::result_access_t::failure<zlink::message_t> (
+                              runtime::messaging::request_failure_mapper_t{}
+                                .reply_header_exception (reply.terminal_result, reply.failure_code,
+                                                         "Instance Spot activation request"));
+                            const auto error = failure.exception ();
+                            if (completion->complete (std::move (failure)) && trace_context) {
                                 trace_instance_spot_activation (
                                   dispatch, flow, message_flow_outcome_t::reply_received,
                                   dispatch_message_kind_t::request, *trace_context,
-                                  message_flow_result_t::failed);
+                                  message_flow_result_t::failed,
+                                  message_flow_reason_t::activation_rejected, error);
                             }
-                            completion->complete (result_t<zlink::message_t>::failure (
+                            return;
+                        }
+                        if (!application_reply) {
+                            auto failure = result_t<zlink::message_t>::failure (
                               framework_error_kind_t::protocol_error,
-                              "Instance Spot activation reply payload is missing"));
+                              "Instance Spot activation reply payload is missing");
+                            const auto error = failure.exception ();
+                            if (completion->complete (std::move (failure)) && trace_context) {
+                                trace_instance_spot_activation (
+                                  dispatch, flow, message_flow_outcome_t::reply_received,
+                                  dispatch_message_kind_t::request, *trace_context,
+                                  message_flow_result_t::failed,
+                                  message_flow_reason_t::activation_rejected, error);
+                            }
                             return;
                         }
                         if (trace_context) {
@@ -2467,16 +2498,17 @@ void app_t::_apply_zlink_framework ()
                             std::move (application_reply->payload_bytes ()))));
                     });
                 if (!submitted) {
-                    if (trace_context) {
+                    auto failure = result_t<zlink::message_t>::failure (
+                      framework_error_kind_t::unavailable,
+                      "Instance Spot activation was not admitted");
+                    const auto error = failure.exception ();
+                    if (completion->complete (std::move (failure)) && trace_context) {
                         trace_instance_spot_activation (
                           dispatch, flow, message_flow_outcome_t::reply_received,
                           dispatch_message_kind_t::request, *trace_context,
-                          message_flow_result_t::failed,
-                          message_flow_reason_t::activation_rejected);
+                          message_flow_result_t::failed, message_flow_reason_t::stale_target,
+                          error);
                     }
-                    completion->complete (result_t<zlink::message_t>::failure (
-                      framework_error_kind_t::unavailable,
-                      "Instance Spot activation was not admitted"));
                 }
                 if (submitted)
                     co_await detail::request_admitted_t{};
@@ -2519,7 +2551,7 @@ void app_t::_apply_zlink_framework ()
                 }
                 const auto trace_context = make_instance_spot_activation_trace_context (
                   detail::message_flow_tracer_t (dispatch).enabled_for (
-                    message_flow_outcome_t::sent),
+                    message_flow_outcome_t::dropped),
                   packet_name, selected.value ().target.mesh_name, selected.value ().target.rid,
                   spot_id, header);
                 if (trace_context) {
@@ -2532,10 +2564,17 @@ void app_t::_apply_zlink_framework ()
                     metadata_frame.empty () ? std::optional<std::vector<std::uint8_t>>{}
                                             : std::make_optional (std::move (metadata_frame)),
                     std::move (application_payload));
-                co_return submitted
-                  ? result_t<void>::success ()
-                  : result_t<void>::failure (framework_error_kind_t::unavailable,
-                                             "Instance Spot activation was not admitted");
+                if (submitted)
+                    co_return result_t<void>::success ();
+                auto failure = result_t<void>::failure (
+                  framework_error_kind_t::unavailable, "Instance Spot activation was not admitted");
+                if (trace_context) {
+                    trace_instance_spot_activation (
+                      dispatch, flow, message_flow_outcome_t::dropped,
+                      dispatch_message_kind_t::send, *trace_context, message_flow_result_t::failed,
+                      message_flow_reason_t::stale_target, failure.exception ());
+                }
+                co_return failure;
             }
         };
         channel_runtime.bind_instance_spot_activator (
@@ -2745,26 +2784,9 @@ void app_t::_apply_zlink_framework ()
               const auto mesh = detail::lock_runtime_owner (weak_application_mesh);
               const auto gateway = detail::actor_gateway_runtime_t (
                 detail::lock_runtime_owner (weak_actor_gateway_runtime));
-              auto located = co_await resolver->resolve_spot_address ({}, target_spot);
-              if (!located) {
-                  co_return result_t<detail::actor_join_reply_t>::failure (
-                    framework_error_kind_t::not_found, "target Spot location was not found");
-              }
-              const auto &target = *located;
-              if (target.object_generation == 0) {
-                  co_return result_t<detail::actor_join_reply_t>::failure (
-                    framework_error_kind_t::not_found,
-                    "target Spot lifecycle generation was not published");
-              }
-              if (target.owner.lease_generation > 0) {
-                  mesh->observe_spot_authority (
-                    target.node_rid, target.spot_id, target.object_generation,
-                    target.node_generation, target.authority_owner_generation,
-                    static_cast<std::uint64_t> (target.owner.lease_generation));
-              }
               const auto bound_session = co_await gateway.bound_session_route_async (actor);
               co_return co_await mesh->join_application_actor_to_spot (
-                actor, target, request, timeout,
+                actor, std::move (target_spot), resolver, request, timeout,
                 bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
                 bound_session ? bound_session->session_rid : std::nullopt, std::move (packet_name),
                 std::move (content_type));
@@ -3225,13 +3247,13 @@ void app_t::_apply_zlink_framework ()
     }
     if (!_state->services.contains (std::type_index (typeid (actor_client_t)))) {
         _state->services.add_factory<actor_client_t> (
-          [mesh_nodes, actor_location_observer, delays = &_state->delays,
+          [mesh_nodes, actor_location_observer,
            admission = detail::channel_runtime_t::from (_state->zlink.message_bus ()),
            location_options = options.location_options ()] (service_provider_t &provider) mutable {
               return runtime::make_actor_client (
                 provider.get_required<runtime::live_location_reader_t> (),
                 provider.get_required<serializer_registry_t> (), mesh_nodes,
-                actor_location_observer, location_options, *delays,
+                actor_location_observer, location_options,
                 [admission] { admission.admit_outbound (); });
           },
           service_lifetime_t::singleton);
@@ -3412,35 +3434,37 @@ try {
     }
     const completion_owner_t completion_owner;
     const auto completion_dispatcher = detail::borrow_completion_dispatcher ();
-    _apply_zlink_framework ();
-    _state->config.load_cli (argc, argv);
-    detail::serializer_registry_access_t::freeze (_state->serializers);
-    _state->handlers.bind_codecs (_state->serializers);
-    _state->config.model ().set ("host.signal_handlers", "installed");
-    g_stop_signal_requested = 0;
-    std::signal (SIGINT, handle_process_signal);
-    std::signal (SIGTERM, handle_process_signal);
-#ifdef _WIN32
-    std::signal (SIGBREAK, handle_process_signal);
-#endif
-
-    auto provider = _state->services.build_provider ();
-    {
-        std::lock_guard lock (_state->termination_teardown_mutex);
-        if (_state->runtime_state.load (std::memory_order_acquire)
-            == framework_runtime_state_t::stopped)
-            return 0;
-        _state->run_active = true;
-        _state->teardown_complete = false;
-    }
+    std::optional<service_provider_t> provider;
     std::vector<hosted_service_t *> started;
     task_t<void> startup_publication (result_t<void>::success ());
+    std::exception_ptr startup_failure;
     try {
+        _apply_zlink_framework ();
+        _state->config.load_cli (argc, argv);
+        detail::serializer_registry_access_t::freeze (_state->serializers);
+        _state->handlers.bind_codecs (_state->serializers);
+        _state->config.model ().set ("host.signal_handlers", "installed");
+        g_stop_signal_requested = 0;
+        std::signal (SIGINT, handle_process_signal);
+        std::signal (SIGTERM, handle_process_signal);
+#ifdef _WIN32
+        std::signal (SIGBREAK, handle_process_signal);
+#endif
+
+        provider.emplace (_state->services.build_provider ());
+        {
+            std::lock_guard lock (_state->termination_teardown_mutex);
+            if (_state->runtime_state.load (std::memory_order_acquire)
+                == framework_runtime_state_t::stopped)
+                return 0;
+            _state->run_active = true;
+            _state->teardown_complete = false;
+        }
         runtime::install_host_context_hooks ();
         runtime::configure_handler_coroutine_executor (
           _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0,
           completion_dispatcher);
-        _state->start_hosted_services (provider, started);
+        _state->start_hosted_services (*provider, started);
         startup_publication = detail::app_state_t::enter_serving_after_publication (
           _state->status_access, _state->startup_publication ());
         while (!_state->stop_requested.load (std::memory_order_acquire)) {
@@ -3460,30 +3484,38 @@ try {
         }
     }
     catch (...) {
+        startup_failure = std::current_exception ();
         _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
-        _state->delays.stop_and_join ();
-        _state->wait_relocation_cleanup ();
-        _state->stop_hosted_services (started);
-        _state->close_framework_resources (provider);
-        {
-            std::lock_guard lock (_state->termination_teardown_mutex);
-            _state->run_active = false;
-            _state->teardown_complete = true;
-        }
-        _state->termination_teardown_changed.notify_all ();
-        throw;
     }
 
+    // Reserve the shared termination operation before releasing any resources.
+    // A concurrent shutdown either joins this teardown or already owns its worker.
+    {
+        std::lock_guard lock (_state->termination_operation.mutex);
+        _state->termination_operation.started = true;
+    }
+    if (_state->termination_operation.worker.joinable ()) {
+        std::unique_lock lock (_state->termination_teardown_mutex);
+        _state->termination_teardown_changed.wait (
+          lock, [&] { return _state->stop_requested.load (std::memory_order_acquire); });
+    }
     _state->delays.stop_and_join ();
     _state->wait_relocation_cleanup ();
     _state->stop_hosted_services (started);
-    _state->close_framework_resources (provider);
+    if (provider)
+        _state->close_framework_resources (*provider);
     {
         std::lock_guard lock (_state->termination_teardown_mutex);
         _state->run_active = false;
         _state->teardown_complete = true;
     }
     _state->termination_teardown_changed.notify_all ();
+    if (_state->termination_operation.worker.joinable ())
+        _state->termination_operation.worker.join ();
+    else
+        _state->complete_termination ({termination_outcome_t::stopped, termination_reason_t::none});
+    if (startup_failure)
+        std::rethrow_exception (startup_failure);
     if (startup_publication.await_ready ())
         startup_publication.result ().value ();
     _state->runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
@@ -4642,10 +4674,11 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     termination_result_t terminal{force_stopped ? termination_outcome_t::force_stopped
                                                 : termination_outcome_t::stopped,
                                   terminal_reason};
-    state.stop_requested.store (true, std::memory_order_release);
     bool teardown_completed = true;
     {
         std::unique_lock lock (state.termination_teardown_mutex);
+        state.stop_requested.store (true, std::memory_order_release);
+        state.termination_teardown_changed.notify_all ();
         if (state.run_active) {
             teardown_completed = state.termination_teardown_changed.wait_until (
               lock, deadline_at, [&] { return state.teardown_complete; });
@@ -4675,22 +4708,7 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
                                            ? "deadline_exceeded"
                                            : "teardown_failed"}});
     }
-    std::vector<std::shared_ptr<detail::app_state_t::termination_waiter_t>> waiters;
-    {
-        std::lock_guard lock (state.termination_operation.mutex);
-        if (!state.termination_operation.terminal) {
-            state.termination_operation.terminal = true;
-            state.termination_operation.result = terminal;
-            waiters = std::move (state.termination_operation.waiters);
-            state.termination_operation.waiters.clear ();
-        }
-        auto expected = framework_runtime_state_t::draining;
-        (void) state.runtime_state.compare_exchange_strong (
-          expected, framework_runtime_state_t::stopped, std::memory_order_acq_rel);
-    }
-    for (auto &waiter : waiters) {
-        waiter->complete (terminal);
-    }
+    state.complete_termination (terminal);
 }
 
 void app_t::stop () noexcept

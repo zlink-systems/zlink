@@ -137,14 +137,17 @@ internal static class ZLinkEnvelopeCodec
     private const int MaximumCorrelationIdBytes = 64;
     private const string JsonContentType = "application/json";
     private const int MaximumSimpleHeaderCacheEntries = 4096;
-    internal static readonly ZLinkStateLane CacheLane = new();
-    private static ImmutableDictionary<SimpleHeaderKey, HeaderPlan> SimpleHeaderCache =
-        ImmutableDictionary<SimpleHeaderKey, HeaderPlan>.Empty;
-    private static readonly Queue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
+    private static HeaderPlanCache SimpleHeaderCache = new(
+        ImmutableDictionary<SimpleHeaderKey, HeaderPlan>.Empty,
+        ImmutableQueue<SimpleHeaderKey>.Empty
+    );
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
     internal static (int SimpleHeaders, int DecodedHeaders) SnapshotCacheCounts() =>
-        (Volatile.Read(ref SimpleHeaderCache).Count, Volatile.Read(ref DecodedHeaderCache).Length);
+        (
+            Volatile.Read(ref SimpleHeaderCache).Entries.Count,
+            Volatile.Read(ref DecodedHeaderCache).Length
+        );
 
     public static string DefaultContentType => JsonContentType;
 
@@ -636,36 +639,44 @@ internal static class ZLinkEnvelopeCodec
 
     private static HeaderField ReadHeaderField(ref Utf8JsonReader reader)
     {
-        // Canonical field names fit on the stack. Escaped/long names still use
-        // the reader's unescaping and the ordinal field-name match.
-        Span<char> buffer = stackalloc char[14];
-        ReadOnlySpan<char> name =
-            reader.ValueSpan.Length <= buffer.Length
-                ? buffer[..reader.CopyString(buffer)]
-                : reader.GetString().AsSpan();
+        // Compare canonical names in place. A known name has at most 13 ASCII
+        // characters, each at most six bytes when escaped. Longer encoded
+        // names cannot match; the unknown-name path still validates Unicode.
+        Span<byte> buffer = stackalloc byte[13 * 6];
+        scoped ReadOnlySpan<byte> name = reader.ValueSpan;
+        if (reader.ValueIsEscaped && name.Length <= buffer.Length)
+            name = buffer[..reader.CopyString(buffer)];
         // Length partitions keep the field mapping in one place while retaining
         // the case-sensitive envelope property-name contract.
-        return name.Length switch
+        var field = name.Length switch
         {
-            4 when name.Equals("kind", StringComparison.Ordinal) => HeaderField.Kind,
-            5 when name.Equals("topic", StringComparison.Ordinal) => HeaderField.Topic,
-            6 when name.Equals("source", StringComparison.Ordinal) => HeaderField.Source,
-            6 when name.Equals("flowId", StringComparison.Ordinal) => HeaderField.FlowId,
-            8 when name.Equals("deadline", StringComparison.Ordinal) => HeaderField.Deadline,
-            8 when name.Equals("metadata", StringComparison.Ordinal) => HeaderField.Metadata,
-            9 when name.Equals("errorCode", StringComparison.Ordinal) => HeaderField.ErrorCode,
-            10 when name.Equals("flowOrigin", StringComparison.Ordinal) => HeaderField.FlowOrigin,
-            11 when name.Equals("channelName", StringComparison.Ordinal) => HeaderField.ChannelName,
-            11 when name.Equals("messageName", StringComparison.Ordinal) => HeaderField.MessageName,
-            11 when name.Equals("contentType", StringComparison.Ordinal) => HeaderField.ContentType,
-            12 when name.Equals("formatMarker", StringComparison.Ordinal) =>
-                HeaderField.FormatMarker,
-            12 when name.Equals("errorMessage", StringComparison.Ordinal) =>
-                HeaderField.ErrorMessage,
-            13 when name.Equals("correlationId", StringComparison.Ordinal) =>
-                HeaderField.CorrelationId,
+            4 when name.SequenceEqual("kind"u8) => HeaderField.Kind,
+            5 when name.SequenceEqual("topic"u8) => HeaderField.Topic,
+            6 when name.SequenceEqual("source"u8) => HeaderField.Source,
+            6 when name.SequenceEqual("flowId"u8) => HeaderField.FlowId,
+            8 when name.SequenceEqual("deadline"u8) => HeaderField.Deadline,
+            8 when name.SequenceEqual("metadata"u8) => HeaderField.Metadata,
+            9 when name.SequenceEqual("errorCode"u8) => HeaderField.ErrorCode,
+            10 when name.SequenceEqual("flowOrigin"u8) => HeaderField.FlowOrigin,
+            11 when name.SequenceEqual("channelName"u8) => HeaderField.ChannelName,
+            11 when name.SequenceEqual("messageName"u8) => HeaderField.MessageName,
+            11 when name.SequenceEqual("contentType"u8) => HeaderField.ContentType,
+            12 when name.SequenceEqual("formatMarker"u8) => HeaderField.FormatMarker,
+            12 when name.SequenceEqual("errorMessage"u8) => HeaderField.ErrorMessage,
+            13 when name.SequenceEqual("correlationId"u8) => HeaderField.CorrelationId,
             _ => HeaderField.Unknown,
         };
+        if (field == HeaderField.Unknown)
+        {
+            // Matching ASCII bytes already establishes valid Unicode for known
+            // names. Preserve the reader's strict validation for ignored names.
+            Span<char> characters = stackalloc char[14];
+            if (reader.ValueSpan.Length <= characters.Length)
+                _ = reader.CopyString(characters);
+            else
+                _ = reader.GetString();
+        }
+        return field;
     }
 
     private enum HeaderField
@@ -854,12 +865,12 @@ internal static class ZLinkEnvelopeCodec
 
     public static Message EncodeJsonPart<T>(T value)
     {
-        return Message.From(EncodeJsonBytes(value));
+        return ZLinkFrameworkJsonPayloadCodec.SerializePart(value, typeof(T));
     }
 
     public static Message EncodeJsonPart(object? value, Type valueType)
     {
-        return Message.From(EncodeJsonBytes(value, valueType));
+        return ZLinkFrameworkJsonPayloadCodec.SerializePart(value, valueType);
     }
 
     public static byte[] EncodeJsonBytes<T>(T value)
@@ -1143,35 +1154,35 @@ internal static class ZLinkEnvelopeCodec
         // Message and channel names are application input. Keep a bounded
         // replacement cache so hot keys remain cheap after arbitrary keys
         // have filled the cache.
-        if (Volatile.Read(ref SimpleHeaderCache).TryGetValue(key, out var hit))
-            return hit;
-        return AddOnMiss(key);
+        while (true)
+        {
+            var snapshot = Volatile.Read(ref SimpleHeaderCache);
+            if (snapshot.Entries.TryGetValue(key, out var hit))
+                return hit;
 
-        // Keep the mutation closure on the miss path; a warm lookup does not
-        // allocate an owner-turn callback merely to return immutable bytes.
-        static HeaderPlan AddOnMiss(SimpleHeaderKey key) =>
-            AwaitStateLane(
-                CacheLane.RunAsync(() =>
-                {
-                    var cache = SimpleHeaderCache;
-                    if (cache.TryGetValue(key, out var cached))
-                        return cached;
+            var cache = snapshot.Entries;
+            var order = snapshot.Order;
+            while (cache.Count >= MaximumSimpleHeaderCacheEntries && !order.IsEmpty)
+            {
+                order = order.Dequeue(out var evicted);
+                cache = cache.Remove(evicted);
+            }
 
-                    while (
-                        cache.Count >= MaximumSimpleHeaderCacheEntries
-                        && SimpleHeaderCacheOrder.TryDequeue(out var evicted)
-                    )
-                        cache = cache.Remove(evicted);
-
-                    var bytes = EncodeSimpleHeaderBytes(key);
-                    ReadOnlySpan<byte> dynamicField = ",\"correlationId\":"u8;
-                    var dynamicOffset = bytes.AsSpan().IndexOf(dynamicField) + dynamicField.Length;
-                    var encoded = new HeaderPlan(bytes, dynamicOffset);
-                    SimpleHeaderCacheOrder.Enqueue(key);
-                    Volatile.Write(ref SimpleHeaderCache, cache.Add(key, encoded));
-                    return encoded;
-                })
-            );
+            var bytes = EncodeSimpleHeaderBytes(key);
+            ReadOnlySpan<byte> dynamicField = ",\"correlationId\":"u8;
+            var dynamicOffset = bytes.AsSpan().IndexOf(dynamicField) + dynamicField.Length;
+            var encoded = new HeaderPlan(bytes, dynamicOffset);
+            // Publish entries and their FIFO order together; a competing miss
+            // must recompute from the snapshot that won the exchange.
+            var next = new HeaderPlanCache(cache.Add(key, encoded), order.Enqueue(key));
+            if (
+                ReferenceEquals(
+                    Interlocked.CompareExchange(ref SimpleHeaderCache, next, snapshot),
+                    snapshot
+                )
+            )
+                return encoded;
+        }
     }
 
     private static byte[] EncodeSimpleHeaderBytes(SimpleHeaderKey key) =>
@@ -1199,11 +1210,23 @@ internal static class ZLinkEnvelopeCodec
         ZLinkFlowOrigin? flowOrigin
     )
     {
-        var length = WritePlannedHeader(Span<byte>.Empty, header, plan, flowId, flowOrigin);
+        Span<byte> deadlineBuffer = stackalloc byte[35];
+        var deadline = FormatHeaderDeadline(header.Deadline, deadlineBuffer);
+        var length = WritePlannedHeader(
+            Span<byte>.Empty,
+            header,
+            plan,
+            flowId,
+            flowOrigin,
+            deadline
+        );
         var result = new Message(length);
         try
         {
-            if (WritePlannedHeader(result.AsSpan(), header, plan, flowId, flowOrigin) != length)
+            if (
+                WritePlannedHeader(result.AsSpan(), header, plan, flowId, flowOrigin, deadline)
+                != length
+            )
                 throw new InvalidOperationException("ZLink envelope changed while being encoded.");
             return result;
         }
@@ -1219,15 +1242,15 @@ internal static class ZLinkEnvelopeCodec
         ZLinkEnvelopeHeader header,
         HeaderPlan plan,
         string? flowId,
-        ZLinkFlowOrigin? flowOrigin
+        ZLinkFlowOrigin? flowOrigin,
+        ReadOnlySpan<byte> deadline
     )
     {
         var written = 0;
         WriteHeaderToken(plan.Bytes.AsSpan(0, plan.DynamicOffset), destination, ref written);
         WriteHeaderString(header.CorrelationId, destination, ref written);
         WriteHeaderToken(",\"deadline\":"u8, destination, ref written);
-        Span<byte> deadline = stackalloc byte[35];
-        WriteHeaderToken(FormatHeaderDeadline(header.Deadline, deadline), destination, ref written);
+        WriteHeaderToken(deadline, destination, ref written);
         WriteHeaderToken(",\"topic\":"u8, destination, ref written);
         WriteHeaderString(header.Topic, destination, ref written);
         WriteHeaderToken(",\"errorCode\":"u8, destination, ref written);
@@ -1382,6 +1405,11 @@ internal static class ZLinkEnvelopeCodec
 
     private sealed record HeaderPlan(byte[] Bytes, int DynamicOffset);
 
+    private sealed record HeaderPlanCache(
+        ImmutableDictionary<SimpleHeaderKey, HeaderPlan> Entries,
+        ImmutableQueue<SimpleHeaderKey> Order
+    );
+
     private static void AddDecodedHeaderCacheEntry(
         ReadOnlySpan<byte> bytes,
         ZLinkEnvelopeHeader header
@@ -1403,31 +1431,36 @@ internal static class ZLinkEnvelopeCodec
         return null;
     }
 
-    private static void AddDecodedHeaderCacheEntry(byte[] copy, ZLinkEnvelopeHeader header) =>
-        AwaitStateLane(
-            CacheLane.RunAsync(() =>
+    // Publishes a new immutable snapshot with one compare-exchange; a lost race
+    // rebuilds from the latest snapshot, so no caller waits on another execution lane.
+    private static void AddDecodedHeaderCacheEntry(byte[] copy, ZLinkEnvelopeHeader header)
+    {
+        while (true)
+        {
+            var cache = Volatile.Read(ref DecodedHeaderCache);
+            foreach (var entry in cache)
             {
-                if (FindDecodedHeaderCacheEntry(copy) is not null)
+                if (entry.Bytes.AsSpan().SequenceEqual(copy))
                     return;
-                var cache = DecodedHeaderCache;
-                var next =
-                    cache.Length < 64
-                        ? new HeaderCacheEntry[cache.Length + 1]
-                        : new HeaderCacheEntry[cache.Length];
-                if (cache.Length == next.Length)
-                {
-                    Array.Copy(cache, 1, next, 0, next.Length - 1);
-                    next[^1] = new HeaderCacheEntry(copy, header);
-                }
-                else
-                {
-                    Array.Copy(cache, next, cache.Length);
-                    next[^1] = new HeaderCacheEntry(copy, header);
-                }
-
-                Volatile.Write(ref DecodedHeaderCache, next);
-            })
-        );
+            }
+            var next =
+                cache.Length < 64
+                    ? new HeaderCacheEntry[cache.Length + 1]
+                    : new HeaderCacheEntry[cache.Length];
+            if (cache.Length == next.Length)
+                Array.Copy(cache, 1, next, 0, next.Length - 1);
+            else
+                Array.Copy(cache, next, cache.Length);
+            next[^1] = new HeaderCacheEntry(copy, header);
+            if (
+                ReferenceEquals(
+                    Interlocked.CompareExchange(ref DecodedHeaderCache, next, cache),
+                    cache
+                )
+            )
+                return;
+        }
+    }
 
     private readonly record struct HeaderCacheEntry(byte[] Bytes, ZLinkEnvelopeHeader Header);
 }

@@ -1,3 +1,5 @@
 package MyGame;
 
-public record ShotResult(String outcome, String targetId, long sequence) {}
+import org.jspecify.annotations.Nullable;
+
+public record ShotResult(String outcome, @Nullable String targetId, long sequence) {}

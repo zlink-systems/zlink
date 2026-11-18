@@ -1,5 +1,7 @@
 package systems.zlink.samples.zoneworld.shared;
 
+import org.jspecify.annotations.Nullable;
+
 import java.util.List;
 
 public final class Messages {
@@ -17,7 +19,8 @@ public final class Messages {
 
     public record JoinWorldMsg(String playerId) {}
 
-    public record JoinWorldNotify(String playerId, String zoneId, int x, int y, String error) {}
+    public record JoinWorldNotify(
+            String playerId, String zoneId, int x, int y, @Nullable String error) {}
 
     public record MoveMsg(int x, int y) {}
 
@@ -50,7 +53,7 @@ public final class Messages {
     public record SetMaintenanceReq(String nodeId, boolean enabled) {}
 
     public record SetMaintenanceRes(
-            String nodeId, boolean enabled, List<String> zones, String error) {}
+            String nodeId, boolean enabled, List<String> zones, @Nullable String error) {}
 
     public record NodeDiagnosticsReq(String nodeId) {}
 
@@ -59,7 +62,7 @@ public final class Messages {
             List<String> zones,
             int playerCount,
             boolean maintenance,
-            String error) {}
+            @Nullable String error) {}
 
     public record RelocationPairReq() {}
 
@@ -68,17 +71,17 @@ public final class Messages {
             String targetZoneId,
             String sourceOwnerNodeRid,
             String targetOwnerNodeRid,
-            String error) {}
+            @Nullable String error) {}
 
     public record ActorLocationProbeReq(String actorId) {}
 
     public record ActorLocationProbeRes(
-            String actorId, long objectGeneration, String ownerNodeRid, String error) {}
+            String actorId, long objectGeneration, String ownerNodeRid, @Nullable String error) {}
 
     public record FreshActorProbeReq(String actorId) {}
 
     public record FreshActorProbeRes(
-            String actorId, long objectGeneration, String ownerNodeRid, String error) {}
+            String actorId, long objectGeneration, String ownerNodeRid, @Nullable String error) {}
 
     public record WorldAnnounceEvent(String announcementId, String text) {}
 
@@ -90,7 +93,7 @@ public final class Messages {
 
     public record EnterWorldReq(int x, int y, boolean isBot, int dirX, int dirY) {}
 
-    public record EnterWorldRes(String zoneId, int x, int y, String error) {}
+    public record EnterWorldRes(String zoneId, int x, int y, @Nullable String error) {}
 
     public record ReportSpotEventMsg(
             String nodeId, String kind, String detail, String occurredAt) {}
@@ -110,7 +113,7 @@ public final class Messages {
             String fromZoneId,
             boolean crashBoundaryProbe) {}
 
-    public record EnterZoneRes(String zoneId, String error) {}
+    public record EnterZoneRes(String zoneId, @Nullable String error) {}
 
     public record UpdatePositionMsg(String playerId, int x, int y, boolean isBot) {}
 
@@ -128,5 +131,5 @@ public final class Messages {
 
     public record CrashRelocationProbeMsg(int x, int y) {}
 
-    public record CrashRelocationProbeRes(String error) {}
+    public record CrashRelocationProbeRes(@Nullable String error) {}
 }

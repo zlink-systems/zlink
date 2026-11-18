@@ -495,7 +495,8 @@ final class ZLinkBoundActorReturnTest {
                 // Model the same Actor returning: ObjectGeneration stays unchanged; authority
                 // advances.
                 long returnedAuthority = oldAuthority + 2;
-                node.rememberActorAuthority(actorRef, returnedAuthority, ownerLease);
+                node.rememberActorAuthority(
+                        actorRef, returnedAuthority, ownerLease, node.localNodeGeneration());
                 systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess
                         .removeMessageFollowSource(runtime, route);
                 runtime.applyRemoteSessionBinding(node, actorRef, ignored -> true)

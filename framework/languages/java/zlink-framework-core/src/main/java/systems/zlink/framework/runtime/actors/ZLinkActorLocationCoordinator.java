@@ -46,7 +46,7 @@ final class ZLinkActorLocationCoordinator {
         return lifecycle != null && intent != null;
     }
 
-    systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
+    systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution executionAsync(
             String key,
             java.util.function.BooleanSupplier steady,
             java.util.function.Function<
@@ -55,8 +55,10 @@ final class ZLinkActorLocationCoordinator {
                             CompletionStage<Void>>
                     apply,
             java.util.function.Supplier<String> parent,
-            Runnable cleanup) {
-        return lifecycle == null ? null : lifecycle.execution(key, steady, apply, parent, cleanup);
+            java.util.function.Supplier<CompletionStage<Void>> cleanup) {
+        return lifecycle == null
+                ? null
+                : lifecycle.executionAsync(key, steady, apply, parent, cleanup);
     }
 
     void ensureOwnerAdmissionOpen() {

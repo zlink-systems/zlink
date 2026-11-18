@@ -17,6 +17,7 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.channels.ZLinkRequestCallerAllocationTest;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.time.Duration;
 import java.util.List;
@@ -30,7 +31,7 @@ public final class ZLinkBindingRequestAllocationTest {
 
     @Test
     void countsOneThousandNativeRequestsAndCancelledLateReplies() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     public static void main(String[] args) throws Exception {

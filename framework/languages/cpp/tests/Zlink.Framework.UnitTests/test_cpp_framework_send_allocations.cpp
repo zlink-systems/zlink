@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include <gtest/gtest.h>
 #include "task_allocation_counter.hpp"
 #include "location_runtime_test_access.hpp"

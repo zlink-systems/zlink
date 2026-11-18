@@ -24,13 +24,12 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistryTesting;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.lang.reflect.Proxy;
-import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -108,14 +107,22 @@ public final class ZLinkJavaRequestCompletionCostTest {
                 var requestPart = Message.from(new byte[] {1});
                 try {
                     var admission = new CompletableFuture<Void>();
-                    mesh.requestActor(
-                            target,
-                            List.of(requestPart),
+                    meshOperations.<List<Message>>submitTerminal(
+                            result.id(),
                             TIMEOUT,
-                            admission,
-                            java.util.function.Function.identity(),
+                            terminal -> {
+                                mesh.requestActor(
+                                        target,
+                                        List.of(requestPart),
+                                        TIMEOUT,
+                                        admission,
+                                        java.util.function.Function.identity(),
+                                        Message::closeAll,
+                                        java.util.function.Function.identity(),
+                                        result);
+                                return result;
+                            },
                             Message::closeAll,
-                            java.util.function.Function.identity(),
                             result);
                     admission.get(1, TimeUnit.SECONDS);
                     assertEquals(1, fixture.submits.get());
@@ -212,22 +219,32 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                         "public timeout");
                         var admission = new CompletableFuture<Void>();
                         try (var requestPart = Message.from(new byte[] {1})) {
-                            mesh.spotNode()
-                                    .requestToActor(
-                                            target,
-                                            List.of(requestPart),
-                                            systems.zlink.contracts.sockets.SendFlags.NONE,
+                            mesh.operationRegistry()
+                                    .<Integer>submitTerminal(
+                                            result.id(),
                                             TIMEOUT,
-                                            admission,
-                                            parts -> {
-                                                throw mapped;
+                                            terminal -> {
+                                                mesh.spotNode()
+                                                        .requestToActor(
+                                                                target,
+                                                                List.of(requestPart),
+                                                                systems.zlink.contracts.sockets
+                                                                        .SendFlags.NONE,
+                                                                TIMEOUT,
+                                                                admission,
+                                                                parts -> {
+                                                                    throw mapped;
+                                                                },
+                                                                ignored -> {},
+                                                                failure -> {
+                                                                    calls.incrementAndGet();
+                                                                    observed.complete(null);
+                                                                    return mapped;
+                                                                },
+                                                                result);
+                                                return result;
                                             },
                                             ignored -> {},
-                                            failure -> {
-                                                calls.incrementAndGet();
-                                                observed.complete(null);
-                                                return mapped;
-                                            },
                                             result);
                             admission.get(1, TimeUnit.SECONDS);
                             if (late) {
@@ -320,42 +337,15 @@ public final class ZLinkJavaRequestCompletionCostTest {
 
     /** Runs allocation assertions with TLAB disabled, including under the normal Gradle JVM. */
     public static void launchAllocationProbe(Class<?> testClass, String mode) throws Exception {
-        var classpath = new LinkedHashSet<String>();
-        for (ClassLoader loader = testClass.getClassLoader();
-                loader != null;
-                loader = loader.getParent()) {
-            if (loader instanceof URLClassLoader urls) {
-                for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
-            }
-        }
-        classpath.addAll(
-                List.of(System.getProperty("java.class.path").split(java.io.File.pathSeparator)));
-        Path output = Files.createTempFile("zlink-request-completion-", ".log");
-        try {
-            Process process =
-                    new ProcessBuilder(
-                                    Path.of(System.getProperty("java.home"), "bin", "java")
-                                            .toString(),
-                                    "--enable-native-access=ALL-UNNAMED",
-                                    "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),
-                                    "-XX:-UseTLAB",
-                                    "-XX:-DoEscapeAnalysis",
-                                    "-XX:ActiveProcessorCount=2",
-                                    "-XX:FlightRecorderOptions=stackdepth=128",
-                                    "-cp",
-                                    String.join(java.io.File.pathSeparator, classpath),
-                                    testClass.getName(),
-                                    mode)
-                            .redirectErrorStream(true)
-                            .redirectOutput(output.toFile())
-                            .start();
-            int exit = process.waitFor();
-            String log = Files.readString(output);
-            System.out.print(log);
-            assertEquals(0, exit, log);
-        } finally {
-            Files.deleteIfExists(output);
-        }
+        ChildJvm.runInJvm(
+                testClass,
+                List.of(
+                        "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),
+                        "-XX:-UseTLAB",
+                        "-XX:-DoEscapeAnalysis",
+                        "-XX:ActiveProcessorCount=2",
+                        "-XX:FlightRecorderOptions=stackdepth=128"),
+                mode);
     }
 
     public static void main(String[] args) throws Exception {

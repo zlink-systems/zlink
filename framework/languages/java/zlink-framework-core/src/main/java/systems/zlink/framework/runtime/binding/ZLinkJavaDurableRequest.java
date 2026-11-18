@@ -6,6 +6,7 @@ import systems.zlink.contracts.sockets.ConnectionAttemptState;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerAdmissionExpectation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerRouteObservation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
@@ -52,6 +53,7 @@ public final class ZLinkJavaDurableRequest<T> {
     private final CompletableFuture<Void> admission;
     private final Supplier<List<ConnectionAttempt>> connections;
     private Map<Long, Long> baseline;
+    private PeerAdmissionExpectation baselineExpectation;
     private CompletionStage<?> pending;
     private AutoCloseable observation;
     private Runnable abandon = () -> {};
@@ -282,6 +284,18 @@ public final class ZLinkJavaDurableRequest<T> {
                 baseline == null && currentRoute.ready()
                         ? List.<ConnectionAttempt>of()
                         : connections.get();
+        var expectation = currentRoute.expectation();
+        if (baselineExpectation != null
+                && (expectation == null
+                        || baselineExpectation.lifecycleGeneration()
+                                != expectation.lifecycleGeneration()
+                        || !baselineExpectation.endpoint().equals(expectation.endpoint())
+                        || !baselineExpectation
+                                .securityIdentity()
+                                .equals(expectation.securityIdentity()))) {
+            endTarget();
+            return;
+        }
         if (baseline != null) {
             for (var previous : baseline.entrySet()) {
                 if (current.stream()
@@ -303,6 +317,7 @@ public final class ZLinkJavaDurableRequest<T> {
         }
         // Only a new request with an already admitted selected route bypasses past failures.
         if (!currentRoute.ready()) {
+            if (baselineExpectation == null) baselineExpectation = expectation;
             if (currentRoute.selectedGeneration() == 0
                     && current.stream()
                             .anyMatch(

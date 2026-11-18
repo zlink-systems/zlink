@@ -289,18 +289,12 @@ sockaddr_in bind_bsd_socket (int socket_)
     memset (&saddr, 0, sizeof (saddr));
     saddr.sin_family = AF_INET;
     saddr.sin_addr.s_addr = INADDR_ANY;
-#if !defined(_WIN32_WINNT) || (_WIN32_WINNT >= 0x0600)
     saddr.sin_port = 0;
-#else
-    saddr.sin_port = htons (PORT_6);
-#endif
 
     TEST_ASSERT_SUCCESS_RAW_ERRNO (bind (socket_, (struct sockaddr *) &saddr, sizeof (saddr)));
 
-#if !defined(_WIN32_WINNT) || (_WIN32_WINNT >= 0x0600)
     socklen_t saddr_len = sizeof (saddr);
     TEST_ASSERT_SUCCESS_RAW_ERRNO (getsockname (socket_, (struct sockaddr *) &saddr, &saddr_len));
-#endif
 
     return saddr;
 }

@@ -449,7 +449,8 @@ message-flow 관측에서 제공한다.
 
 Runtime reflection을 제공하는 언어는 명시한 assembly, module 또는 package 범위에서 handler를 찾을 수
 있다. C++는 compile-time type과 명시 builder 등록을 사용한다. 어떤 방식을 사용해도 같은 dispatch key와
-중복 검증 규칙을 적용한다.
+중복 검증 규칙을 적용한다. Spot·Actor handler가 선언한 owner type은 그 handler를 등록한 구체 Spot·Actor
+type과 같아야 한다. 다르면 명시 등록과 scan 등록 모두 startup 설정 오류이며 handler를 조용히 제외하지 않는다.
 
 ## 10. Handler filter
 

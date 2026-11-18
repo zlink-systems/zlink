@@ -336,7 +336,10 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                 })
                 .ConfigureAwait(false);
             if (stop is null)
+            {
+                await DrainDiscardedLocalExecutionsAsync(cancellationToken).ConfigureAwait(false);
                 return;
+            }
             var heartbeat = stop.Value.Heartbeat;
             var heartbeatLoop = stop.Value.HeartbeatLoop;
             if (heartbeat is not null)
@@ -352,6 +355,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             }
 
             heartbeat?.Dispose();
+            await DrainDiscardedLocalExecutionsAsync(cancellationToken).ConfigureAwait(false);
             UpdateHealth(static health => health with { Healthy = false });
 
             // Keep the lease valid while owned rows are removed. Allocated routing-id slots are
@@ -754,7 +758,8 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                             if (confirmed is not null)
                                 return await CompleteOwnerLeaseRenewalAsync(
                                         confirmed,
-                                        leaseOperationStartedAt
+                                        leaseOperationStartedAt,
+                                        cancellationToken: deadlineToken
                                     )
                                     .ConfigureAwait(false);
                             if (rejectedClaim is not null)
@@ -789,7 +794,8 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                                 .ConfigureAwait(false);
                             return await CompleteOwnerLeaseRenewalAsync(
                                     result,
-                                    leaseOperationStartedAt
+                                    leaseOperationStartedAt,
+                                    cancellationToken: deadlineToken
                                 )
                                 .ConfigureAwait(false);
                         }
@@ -852,7 +858,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                                 {
                                     _ownerAdmissionDeadline = null;
                                     ScheduleOwnerDeadlinesOnLane();
-                                    ExecutionsDiscarded?.Invoke(
+                                    DiscardExecutionsOnLane(
                                         CaptureExecutions?.Invoke() ?? new HashSet<object>()
                                     );
                                 })
@@ -865,7 +871,8 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                         return await CompleteOwnerLeaseRenewalAsync(
                                 result,
                                 leaseOperationStartedAt,
-                                owner.Token
+                                owner.Token,
+                                deadlineToken
                             )
                             .ConfigureAwait(false);
                     }
@@ -933,7 +940,8 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
     private async ValueTask<bool> CompleteOwnerLeaseRenewalAsync(
         ZLinkOwnerLeaseRenewResult.Renewed result,
         long leaseOperationStartedAt,
-        ZLinkLocationOwnerToken? renewingOwner = null
+        ZLinkLocationOwnerToken? renewingOwner = null,
+        CancellationToken cancellationToken = default
     )
     {
         var admissionLifetime =
@@ -969,6 +977,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             }
         );
 
+        await CleanupDiscardedExecutionsAsync(cancellationToken).ConfigureAwait(false);
         OwnerLeaseRenewed?.Invoke(
             new ZLinkOwnerLeaseRenewal(result.LeaseExpiresAt, result.StoreNow)
         );
@@ -1069,14 +1078,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
         if (remaining > TimeSpan.Zero)
             return remaining;
         UpdateHealth(health => health with { StoreOutage = episode with { Discarded = true } });
-        ExecutionsDiscarded?.Invoke(episode.Executions);
-        if (episode.Executions.Count != 0)
-            UpdateHealth(health =>
-                health with
-                {
-                    StoreOutage = health.StoreOutage! with { Executions = new HashSet<object>() },
-                }
-            );
+        DiscardExecutionsOnLane(episode.Executions);
         return null;
     }
 

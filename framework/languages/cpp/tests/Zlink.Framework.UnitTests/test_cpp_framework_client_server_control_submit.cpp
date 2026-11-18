@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include <iostream>
 #include <mutex>

@@ -1881,9 +1881,11 @@ public sealed partial class StatefulServiceRuntimeTests
             spot.AuthorityOwnerGeneration,
             17
         );
-        Assert.Equal(SubmitResult.NotFound, source.SendToActor(actor, [payload]));
+        // Authority names node generation G+1 while only G is admitted: no route
+        // to the authority's owner, so send is NotConnected (submit spec §5).
+        Assert.Equal(SubmitResult.NotConnected, source.SendToActor(actor, [payload]));
         Assert.Equal(
-            SubmitResult.NotFound,
+            SubmitResult.NotConnected,
             source
                 .EntrySpot()
                 .SendToSpot(target.RoutingId, spotId, spot.LifecycleGeneration, [payload])
@@ -2145,7 +2147,9 @@ public sealed partial class StatefulServiceRuntimeTests
         );
         caller.SetLocalRequestSourceFence(requestSource);
         var callerBackend = new ZLinkBackendSpotNodeWrapper(caller);
-        caller.SetRelocationReplyRelayTarget(new ZLinkRelocationReplyTarget(callerBackend));
+        caller.SetRelocationReplyRelayTarget(
+            new ZLinkRelocationReplyTarget(callerBackend.TryCompleteRelocationReply)
+        );
         caller.Start();
         owner.Start();
         await WaitUntilAsync(() =>
@@ -2400,7 +2404,9 @@ public sealed partial class StatefulServiceRuntimeTests
             caller.Status().LifecycleGeneration
         );
         caller.SetLocalRequestSourceFence(requestSource);
-        var replyTarget = new ZLinkRelocationReplyTarget(new ZLinkBackendSpotNodeWrapper(caller));
+        var replyTarget = new ZLinkRelocationReplyTarget(
+            new ZLinkBackendSpotNodeWrapper(caller).TryCompleteRelocationReply
+        );
         caller.SetRelocationReplyRelayTarget(replyTarget);
         caller.Start();
         oldOwner.Start();
@@ -3526,9 +3532,27 @@ public sealed partial class StatefulServiceRuntimeTests
     [Fact]
     public async Task RemoteUserSpotCreateAndCloseUseGenerationFencedTerminalOperations()
     {
-        await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var source = NewNode(context, "user-spot-source");
-        await using var target = NewNode(context, "user-spot-target");
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                nameof(RemoteUserSpotCreateAndCloseUseGenerationFencedTerminalOperations)
+            )
+        )
+            return;
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
+        var time = new ControllableTimeProvider();
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            deadlineTimeProvider: time,
+            receivePollerFactory: () =>
+                new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                    Systems.Zlink.Zlink.CreatePoller()
+                )
+        );
+        source.SetRoutingId(RoutingId.From("user-spot-source"));
+        await using var target = NewNode(native, "user-spot-target");
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://user-spot-source-{suffix}";
         var targetEndpoint = $"inproc://user-spot-target-{suffix}";
@@ -3658,20 +3682,39 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Null(movingCompletion.UserSpotCloseCompletion);
         Assert.Equal(2, operationTarget.CloseCount);
 
+        var submittedBeforeStale = context.NativeRequests;
+        var staleCompleted = new TaskCompletionSource<MeshReceiveRecord>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        source.SetCompletionHandlerCore(
+            (record, parts) =>
+            {
+                Assert.Empty(parts);
+                staleCompleted.TrySetResult(record);
+                return true;
+            }
+        );
         Assert.Equal(
-            SubmitResult.NotConnected,
+            SubmitResult.Ok,
             source.CloseUserSpot(
                 target.RoutingId,
                 closeFence with
                 {
-                    TargetNodeGeneration = targetGeneration + 1,
+                    TargetNodeGeneration = targetGeneration == 1UL ? 2UL : 1UL,
                 },
                 deadline,
                 out var staleOperation,
                 TimeSpan.FromSeconds(1)
             )
         );
-        Assert.Equal(default, staleOperation);
+        Assert.NotEqual(default, staleOperation);
+        Assert.False(staleCompleted.Task.IsCompleted);
+        Assert.Equal(submittedBeforeStale, context.NativeRequests);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        var staleCompletion = await staleCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(staleOperation, staleCompletion.OperationId);
+        Assert.Equal((int)RequestResult.TimedOut, staleCompletion.TerminalResult);
+        Assert.Equal(submittedBeforeStale, context.NativeRequests);
         Assert.Equal(2, operationTarget.CloseCount);
     }
 
@@ -4008,6 +4051,69 @@ public sealed partial class StatefulServiceRuntimeTests
         );
         Assert.Equal(MeshOperationKind.InstanceSpotRequest, cold.OperationKind);
         Assert.Equal((int)RequestResult.Ok, cold.TerminalResult);
+    }
+
+    [Fact]
+    public async Task RelocationReplyRelayCompletesOnTheRequesterNodeAndValidatesItsAck()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "relay-local");
+        node.SetBind($"inproc://relay-local-{Guid.NewGuid():N}");
+        var source = new ZLinkServiceWireCodec.RequestSourceFence(
+            "request-owner",
+            17,
+            node.RoutingId,
+            node.Status().LifecycleGeneration
+        );
+        var target = new RecordingReplyRelayTarget(
+            source,
+            dropFirstAcknowledgement: false,
+            corruptSecondSource: true
+        );
+        node.SetRelocationReplyRelayTarget(target);
+        node.Start();
+        var relay = new ZLinkServiceWireCodec.ReplyRelayRecord(
+            new MeshOperationId(21, 22),
+            23,
+            new ZLinkServiceWireCodec.RelocationWireId(24, 25),
+            node.Status().LifecycleGeneration,
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                "request-owner",
+                17,
+                node.RoutingId,
+                node.Status().LifecycleGeneration,
+                "store-27"
+            ),
+            28,
+            29,
+            0,
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
+        using var payload = Message.From(new byte[] { 7, 8, 9 });
+        var ack = await node.RelayRelocationReplyAsync(
+            node.RoutingId,
+            relay,
+            source,
+            [payload],
+            TimeSpan.FromSeconds(3),
+            CancellationToken.None
+        );
+        Assert.Equal(source, ack.RequestSource);
+        Assert.Equal(relay.OperationId, ack.OperationId);
+        Assert.Equal(1, target.InvocationCount);
+        Assert.Equal(new byte[] { 7, 8, 9 }, payload.ToArray());
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await node.RelayRelocationReplyAsync(
+                node.RoutingId,
+                relay,
+                source,
+                [payload],
+                TimeSpan.FromMilliseconds(50),
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(2, target.InvocationCount);
+        Assert.Equal(new byte[] { 7, 8, 9 }, payload.ToArray());
     }
 
     [Fact]
@@ -4577,7 +4683,9 @@ public sealed partial class StatefulServiceRuntimeTests
         );
         caller.SetLocalRequestSourceFence(requestSource);
         caller.SetRelocationReplyRelayTarget(
-            new ZLinkRelocationReplyTarget(new ZLinkBackendSpotNodeWrapper(caller))
+            new ZLinkRelocationReplyTarget(
+                new ZLinkBackendSpotNodeWrapper(caller).TryCompleteRelocationReply
+            )
         );
         caller.Start();
         oldOwner.Start();

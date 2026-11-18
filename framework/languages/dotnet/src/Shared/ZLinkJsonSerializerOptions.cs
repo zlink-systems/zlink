@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Buffers.Text;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -40,6 +42,7 @@ internal static class ZLinkJsonSerializerOptions
         options.Converters.Add(new FrameworkSigned64JsonConverter());
         options.Converters.Add(new FrameworkUnsigned64JsonConverter());
         options.Converters.Add(new FrameworkSingleJsonConverter());
+        options.Converters.Add(new FrameworkByteArrayJsonConverter());
         options.Converters.Add(new FrameworkEnumJsonConverterFactory());
         options.Converters.Add(new UnsupportedImplicitTypeJsonConverterFactory());
 #if ZLINK_FRAMEWORK
@@ -55,14 +58,14 @@ internal static class ZLinkJsonSerializerOptions
     {
         if (typeInfo.Kind != JsonTypeInfoKind.Object)
             return;
-        ApplyConstructorRequiredness(typeInfo);
-        RequireDeclaredNullability(typeInfo);
+        var constructor = ApplyConstructorRequiredness(typeInfo);
+        RequireDeclaredNullability(typeInfo, constructor);
     }
 
-    private static void ApplyConstructorRequiredness(JsonTypeInfo typeInfo)
+    private static ConstructorInfo? ApplyConstructorRequiredness(JsonTypeInfo typeInfo)
     {
         if (Nullable.GetUnderlyingType(typeInfo.Type) is not null)
-            return;
+            return null;
 
         var constructors = typeInfo.Type.GetConstructors(
             BindingFlags.Instance | BindingFlags.Public
@@ -73,7 +76,7 @@ internal static class ZLinkJsonSerializerOptions
         if (constructor is null)
         {
             if (constructors.Any(candidate => candidate.GetParameters().Length == 0))
-                return;
+                return null;
             var publicParameterized = constructors.Where(candidate =>
                 candidate.GetParameters().Length > 0
             );
@@ -81,7 +84,7 @@ internal static class ZLinkJsonSerializerOptions
                 publicParameterized.Take(2).Count() == 1 ? publicParameterized.First() : null;
         }
         if (constructor is null)
-            return;
+            return null;
 
         foreach (var parameter in constructor.GetParameters())
         {
@@ -104,43 +107,88 @@ internal static class ZLinkJsonSerializerOptions
             property.Set ??= static (_, _) => { };
             property.IsRequired = !parameter.HasDefaultValue;
         }
+        return constructor;
     }
 
-    private static void RequireDeclaredNullability(JsonTypeInfo typeInfo)
+    private static void RequireDeclaredNullability(
+        JsonTypeInfo typeInfo,
+        ConstructorInfo? constructor
+    )
     {
 #if NET6_0_OR_GREATER
         var nullability = new System.Reflection.NullabilityInfoContext();
 #endif
+        var parameters = constructor?.GetParameters();
         foreach (var property in typeInfo.Properties)
         {
             if (property.PropertyType.IsValueType || property.Set is null)
                 continue;
+            var memberName = property.AttributeProvider is MemberInfo member
+                ? member.Name
+                : property.Name;
+            var parameter = parameters?.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, memberName, StringComparison.OrdinalIgnoreCase)
+            );
 #if NET6_0_OR_GREATER
-            var state = property.AttributeProvider switch
-            {
-                System.Reflection.PropertyInfo reflectedProperty => nullability
-                    .Create(reflectedProperty)
-                    .WriteState,
-                System.Reflection.FieldInfo reflectedField => nullability
-                    .Create(reflectedField)
-                    .WriteState,
-                _ => System.Reflection.NullabilityState.Unknown,
-            };
+            var state = parameter is not null
+                ? nullability.Create(parameter).WriteState
+                : property.AttributeProvider switch
+                {
+                    PropertyInfo reflectedProperty => nullability
+                        .Create(reflectedProperty)
+                        .WriteState,
+                    FieldInfo reflectedField => nullability.Create(reflectedField).WriteState,
+                    _ => System.Reflection.NullabilityState.Unknown,
+                };
             if (state != System.Reflection.NullabilityState.NotNull)
                 continue;
-
 #else
-            if (!IsDeclaredNotNull(property.AttributeProvider))
+            if (
+                !IsDeclaredNotNull(
+                    (System.Reflection.ICustomAttributeProvider?)parameter
+                        ?? property.AttributeProvider
+                )
+            )
                 continue;
 #endif
+            var converter =
+                property.CustomConverter ?? typeInfo.Options.GetConverter(property.PropertyType);
+            if (converter is JsonConverterFactory factory)
+                converter = factory.CreateConverter(property.PropertyType, typeInfo.Options)!;
+            // STJ also uses the matching property's converter for constructor arguments.
+            property.CustomConverter = (JsonConverter)
+                Activator.CreateInstance(
+                    typeof(NonNullJsonConverter<>).MakeGenericType(property.PropertyType),
+                    converter,
+                    property.Name
+                )!;
+        }
+    }
 
-            var assign = property.Set;
-            property.Set = (instance, value) =>
-            {
-                if (value is null)
-                    throw new JsonException($"Property '{property.Name}' does not allow null.");
-                assign(instance, value);
-            };
+    private sealed class NonNullJsonConverter<T>(JsonConverter<T> converter, string propertyName)
+        : JsonConverter<T>
+        where T : class
+    {
+        public override bool HandleNull => true;
+
+        public override T? Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options
+        )
+        {
+            if (reader.TokenType == JsonTokenType.Null)
+                throw new JsonException($"Property '{propertyName}' does not allow null.");
+            return converter.Read(ref reader, typeToConvert, options);
+        }
+
+        // HandleNull also routes null values here on encode; the same non-null rule
+        // rejects them instead of writing a payload every receiver refuses (spec 05 5).
+        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+        {
+            if (value is null)
+                throw new JsonException($"Property '{propertyName}' does not allow null.");
+            converter.Write(writer, value, options);
         }
     }
 
@@ -153,9 +201,10 @@ internal static class ZLinkJsonSerializerOptions
 
     private static bool IsDeclaredNotNull(System.Reflection.ICustomAttributeProvider? provider)
     {
-        if (provider is not System.Reflection.MemberInfo member)
+        var member = provider as MemberInfo ?? (provider as ParameterInfo)?.Member;
+        if (member is null)
             return false;
-        var declared = NullableFlag(member, NullableAttributeName);
+        var declared = NullableFlag(provider!, NullableAttributeName);
         if (declared.HasValue)
             return declared.Value == NotNullFlag;
         for (var type = member.DeclaringType; type is not null; type = type.DeclaringType)
@@ -167,9 +216,18 @@ internal static class ZLinkJsonSerializerOptions
         return false;
     }
 
-    private static byte? NullableFlag(System.Reflection.MemberInfo member, string attributeName)
+    private static byte? NullableFlag(
+        System.Reflection.ICustomAttributeProvider provider,
+        string attributeName
+    )
     {
-        foreach (var attribute in member.GetCustomAttributesData())
+        var attributes = provider switch
+        {
+            ParameterInfo parameter => parameter.GetCustomAttributesData(),
+            MemberInfo member => member.GetCustomAttributesData(),
+            _ => Array.Empty<CustomAttributeData>(),
+        };
+        foreach (var attribute in attributes)
         {
             if (
                 attribute.AttributeType.FullName != attributeName
@@ -276,6 +334,87 @@ internal static class ZLinkJsonSerializerOptions
             writer.WriteStringValue(
                 value.ToString(System.Globalization.CultureInfo.InvariantCulture)
             );
+    }
+
+    private sealed class FrameworkByteArrayJsonConverter : JsonConverter<byte[]>
+    {
+        public override byte[] Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options
+        )
+        {
+            if (reader.TokenType != JsonTokenType.String)
+                throw new JsonException("Byte sequences must be Base64 strings.");
+
+            // One decode path: obtain the unescaped token bytes, then decode once.
+            byte[]? copied = null;
+            ReadOnlySpan<byte> encoded;
+            if (!reader.HasValueSequence && !reader.ValueIsEscaped)
+            {
+                encoded = reader.ValueSpan;
+            }
+            else
+            {
+                copied = ArrayPool<byte>.Shared.Rent(
+                    reader.HasValueSequence
+                        ? checked((int)reader.ValueSequence.Length)
+                        : reader.ValueSpan.Length
+                );
+                encoded = copied.AsSpan(0, reader.CopyString(copied));
+            }
+
+            try
+            {
+                return Decode(encoded);
+            }
+            finally
+            {
+                if (copied is not null)
+                    ArrayPool<byte>.Shared.Return(copied);
+            }
+        }
+
+        private static byte[] Decode(ReadOnlySpan<byte> encoded)
+        {
+            if ((encoded.Length & 3) != 0)
+                throw new JsonException("Byte sequence requires padded RFC 4648 Base64.");
+            var padding =
+                encoded.Length == 0 || encoded[^1] != '=' ? 0
+                : encoded[^2] == '=' ? 2
+                : 1;
+            if (padding != 0)
+            {
+                var ch = encoded[encoded.Length - padding - 1];
+                // Only letters and digits can have zero padding bits. The BCL
+                // below still owns validation of the complete Base64 alphabet.
+                var last =
+                    ch >= (byte)'a' ? ch - 'a' + 26
+                    : ch >= (byte)'A' ? ch - 'A'
+                    : ch >= (byte)'0' ? ch - '0' + 52
+                    : -1;
+                if ((padding == 2 && (last & 15) != 0) || (padding == 1 && (last & 3) != 0))
+                    throw new JsonException("Byte sequence has nonzero Base64 padding bits.");
+            }
+            // With a padded input length, skipped whitespace necessarily makes
+            // the BCL write fewer bytes than this exact canonical length.
+            var length = encoded.Length / 4 * 3 - padding;
+            var decoded = length == 0 ? Array.Empty<byte>() : new byte[length];
+            if (
+                Base64.DecodeFromUtf8(encoded, decoded, out var consumed, out var written)
+                    != OperationStatus.Done
+                || consumed != encoded.Length
+                || written != length
+            )
+                throw new JsonException("Byte sequence is not valid Base64.");
+            return decoded;
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            byte[] value,
+            JsonSerializerOptions options
+        ) => writer.WriteBase64StringValue(value);
     }
 
     private sealed class FrameworkSingleJsonConverter : JsonConverter<float>

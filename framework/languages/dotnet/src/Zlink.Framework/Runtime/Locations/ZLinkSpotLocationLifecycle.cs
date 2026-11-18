@@ -255,7 +255,7 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         _lane.RunAsync(() =>
             _spots.TryGetValue(spot.RuntimeSpotId, out var tracked)
             && spot.ObjectGeneration == tracked.SpotGeneration
-                ? tracked.PreservedSnapshot
+                ? tracked.PreservedSnapshot ?? tracked.Snapshot
                 : null
         );
 

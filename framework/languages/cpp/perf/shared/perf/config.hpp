@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 // Perf spec §5.1, §5.2: the role config a server executable reads (one file, `--config`), the endpoint manifest the

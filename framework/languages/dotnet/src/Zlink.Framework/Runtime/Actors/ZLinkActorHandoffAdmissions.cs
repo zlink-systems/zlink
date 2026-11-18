@@ -34,7 +34,8 @@ internal sealed class ZLinkActorHandoffAdmissions(
         ZLinkRemoteActorAdmissionRequest request,
         string targetSpotId,
         Func<CancellationToken, ValueTask<ZLinkRemoteActorAdmissionReply>> admit,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<bool>? targetDiscarded = null
     )
     {
         ArgumentNullException.ThrowIfNull(admit);
@@ -90,7 +91,8 @@ internal sealed class ZLinkActorHandoffAdmissions(
         {
             EnsureDeadlineAndCancellation(request, cancellationToken);
             var reply = await admit(cancellationToken).ConfigureAwait(false);
-            await RegisterReservedAsync(request, targetSpotId, reply).ConfigureAwait(false);
+            await RegisterReservedAsync(request, targetSpotId, reply, targetDiscarded)
+                .ConfigureAwait(false);
             execution.Complete(reply);
             return reply;
         }
@@ -149,7 +151,8 @@ internal sealed class ZLinkActorHandoffAdmissions(
     private async ValueTask RegisterReservedAsync(
         ZLinkRemoteActorAdmissionRequest request,
         string targetSpotId,
-        ZLinkRemoteActorAdmissionReply reply
+        ZLinkRemoteActorAdmissionReply reply,
+        Func<bool>? targetDiscarded = null
     )
     {
         if (string.IsNullOrWhiteSpace(request.HandoffId))
@@ -174,6 +177,11 @@ internal sealed class ZLinkActorHandoffAdmissions(
         var added = await _lane
             .RunAsync(() =>
             {
+                if (targetDiscarded?.Invoke() == true)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.NotFound,
+                        $"Spot '{targetSpotId}' was discarded before membership admission settled."
+                    );
                 if (_pending.TryGetValue(request.HandoffId, out var existing))
                 {
                     if (
@@ -227,6 +235,18 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 $"Actor '{request.ActorId}' handoff admission deadline has expired."
             );
     }
+
+    internal ValueTask DiscardLocationSpotAsync(string spotId) =>
+        _lane.RunAsync(() =>
+        {
+            foreach (
+                var pending in _pending
+                    .Values.Where(item => item.TargetSpotId == spotId && !item.Committing)
+                    .ToArray()
+            )
+                _pending.Remove(pending.HandoffId);
+            TryCompleteDrainSafeLocked();
+        });
 
     public ValueTask BeginCommitAsync(ZLinkRemoteActorJoinRequest request, string targetSpotId) =>
         _lane.RunAsync(() =>
@@ -752,6 +772,8 @@ internal sealed class ZLinkActorHandoffAdmissions(
         public void SetExpirationTask(Task expirationTask) => _expirationTask = expirationTask;
 
         public Task WaitForExpirationOwnerAsync() => _expirationTask;
+
+        internal string TargetSpotId => targetSpotId;
 
         public bool MatchesAbort(
             ZLinkRemoteActorAdmissionAbortRequest candidate,

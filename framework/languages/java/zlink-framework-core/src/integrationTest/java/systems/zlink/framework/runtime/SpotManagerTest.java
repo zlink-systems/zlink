@@ -77,6 +77,7 @@ final class SpotManagerTest {
                                             targetRid,
                                             entry.spotId(),
                                             entry.lifecycleGeneration(),
+                                            node.localNodeGeneration(),
                                             null,
                                             java.util.List.of(request),
                                             Duration.ofSeconds(5),

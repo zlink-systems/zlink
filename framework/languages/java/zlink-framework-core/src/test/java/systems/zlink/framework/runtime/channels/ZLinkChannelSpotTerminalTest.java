@@ -125,6 +125,7 @@ final class ZLinkChannelSpotTerminalTest {
                                 node,
                                 spot,
                                 generation,
+                                targetNodeGeneration,
                                 authority,
                                 lease,
                                 parts,
@@ -157,6 +158,7 @@ final class ZLinkChannelSpotTerminalTest {
                                 probe.address.targetNodeRid(),
                                 probe.address.spotId(),
                                 probe.address.spotGeneration(),
+                                probe.address.targetNodeGeneration(),
                                 probe.address.authorityOwnerGeneration(),
                                 probe.address.ownerLeaseGeneration(),
                                 java.util.List.of(payload),
@@ -211,6 +213,9 @@ final class ZLinkChannelSpotTerminalTest {
                     "no second operation ID");
             assertEquals(1, probe.resolves, "Ready routes use the resolver before activation");
             assertEquals(missing ? 1 : 0, probe.coordinatorCalls);
+            // The caller result may complete before the invalidation callback on another thread
+            // (submit-and-completion §9); wait for the invalidation itself before counting it.
+            if (stale) probe.invalidated.orTimeout(5, java.util.concurrent.TimeUnit.SECONDS).join();
             assertEquals(stale ? 1 : 0, probe.invalidations);
             assertEquals(missing ? 1 : 0, probe.activations);
         } finally {

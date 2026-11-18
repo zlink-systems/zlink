@@ -104,7 +104,7 @@ final class ZLinkLocalActorFollowAdmissionTest {
             try (var create = Message.from("create")) {
                 actor = spots.createActor("actor", create);
             }
-            spots.rememberActorAuthority(actor, 11, 3);
+            spots.rememberActorAuthority(actor, 11, 3, spots.localNodeGeneration());
             var dispatches = new AtomicInteger();
             spots.entrySpot()
                     .onDispatchEvent(

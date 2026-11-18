@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "mailbox_claim_fixture.hpp"
 #include "../support/telemetry_observation.hpp"
 
@@ -52,9 +52,11 @@
 #endif
 
 #if !defined(_WIN32)
-// Linux interposes the Core C entry point to inject a binding failure.
+// Linux interposes Core entry points for binding failure injection and submission counts.
 namespace
 {
+std::atomic_bool count_request_submissions{false};
+std::atomic_int request_submissions{0};
 std::atomic_bool fail_next_disconnect_rid{false};
 std::atomic_int injected_disconnect_rid_calls{0};
 std::atomic<zlink_connect_result_t> injected_disconnect_result{ZLINK_CONNECT_INTERNAL_ERROR};
@@ -70,6 +72,24 @@ disconnect_rid_fn_t native_disconnect_rid ()
     return function;
 }
 } // namespace
+
+extern "C" zlink_submit_result_t zlink_request (void *socket,
+                                                const zlink_routing_id_t *target,
+                                                zlink_msg_t *parts,
+                                                size_t part_count,
+                                                zlink_send_flags_t flags,
+                                                uint32_t timeout_ms,
+                                                void *context,
+                                                zlink_completion_id_t *completion)
+{
+    using request_fn_t = decltype (&zlink_request);
+    static const auto request = reinterpret_cast<request_fn_t> (dlsym (RTLD_NEXT, "zlink_request"));
+    if (!request)
+        std::abort ();
+    if (count_request_submissions.load (std::memory_order_acquire))
+        request_submissions.fetch_add (1, std::memory_order_relaxed);
+    return request (socket, target, parts, part_count, flags, timeout_ms, context, completion);
+}
 
 extern "C" zlink_connect_result_t zlink_disconnect_rid (void *socket,
                                                         const zlink_routing_id_t *peer_rid)
@@ -342,7 +362,7 @@ void admit_pair (mesh::raw_mesh_node_owner_t &source,
         (void) target.observe_routes ();
         (void) await_task (source.pump_one (now));
         (void) await_task (target.pump_one (now));
-        std::this_thread::sleep_for (1ms);
+        std::this_thread::yield ();
     }
     assert (ready ());
 }
@@ -569,80 +589,125 @@ bound_session_request (mesh::raw_mesh_node_owner_t &source,
     return result;
 }
 
-void verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ()
+// Discovery publishes expectations and admission; the operation owner handles expiry and fence removal.
+void verify_bound_session_bind_missing_descriptor (std::string_view outcome)
 {
     using namespace zlink::framework;
-    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
-      .descriptor = descriptor ("bind-missing-descriptor-source"),
-      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
-    const auto remote = descriptor ("bind-missing-descriptor-target");
-
-    std::promise<void> lane_entered_promise;
-    auto lane_entered = lane_entered_promise.get_future ();
-    std::promise<void> release_lane_promise;
-    auto release_lane = release_lane_promise.get_future ().share ();
-    std::thread lane_blocker ([&] {
-        (void) source.publish_descriptor_update ([&] (auto &local) {
-            ++local.descriptor_revision;
-            lane_entered_promise.set_value ();
-            release_lane.wait ();
-        });
-    });
-
-    const bool lane_entered_in_time = lane_entered.wait_for (2s) == std::future_status::ready;
-    if (!lane_entered_in_time) {
-        release_lane_promise.set_value ();
-        lane_blocker.join ();
-        assert (lane_entered_in_time);
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("bind-missing-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("bind-missing-target")}));
+    source.start ();
+    target.start ();
+    auto remote = target.topology ().local_descriptor ();
+    const bool invalidated_other_generation = outcome == "invalidated-other-generation";
+    if (outcome == "other-generation" || invalidated_other_generation) {
+        admit_pair (source, target, remote);
+        remote.lifecycle_generation =
+          remote.lifecycle_generation == std::numeric_limits<std::uint64_t>::max ()
+            ? 1
+            : std::numeric_limits<std::uint64_t>::max ();
     }
-
-    std::promise<task_t<bool>> bind_promise;
-    auto bind_result = bind_promise.get_future ();
-    std::thread bind_caller ([&] {
-        bind_promise.set_value (source.request_bound_session_bind (
-          remote.node_routing_id, bound_session_bind_request (remote, "missing-bind-actor"), 2s,
-          [] (foundation::operation_terminal_t, ::zlink::framework::result_t<zlink::message_t>) {
-          }));
-    });
-    const bool returned_while_lane_held = bind_result.wait_for (2s) == std::future_status::ready;
-    std::optional<task_t<bool>> bind;
-    bool pending_while_lane_held = false;
-    if (returned_while_lane_held) {
-        bind.emplace (bind_result.get ());
-        pending_while_lane_held = !bind->await_ready ();
+    if (outcome == "invalidated" || invalidated_other_generation)
+        source.expect_peer (remote);
+#if !defined(_WIN32)
+    request_submissions.store (0);
+    count_request_submissions.store (true);
+#endif
+    std::promise<bound_session_completion_t> promise;
+    auto completion = promise.get_future ();
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    const auto invalidation_deadline = invalidated_other_generation
+                                         ? std::chrono::steady_clock::now () + 2s
+                                         : std::chrono::steady_clock::time_point::max ();
+    const auto request_timeout = outcome == "late-endpoint-failure" ? 5s : 2s;
+    assert (await_task (source.request_bound_session_bind (
+      remote.node_routing_id, bound_session_bind_request (remote, "missing-bind-actor"),
+      request_timeout,
+      [&promise] (foundation::operation_terminal_t terminal, result_t<zlink::message_t> payload) {
+          promise.set_value ({terminal, payload.value ().to_bytes ()});
+      },
+      admitted)));
+    assert (!admitted->task ().await_ready ());
+    assert (completion.wait_for (0ms) == std::future_status::timeout);
+    assert (!target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+#if !defined(_WIN32)
+    assert (request_submissions.load () == 0);
+#endif
+    if (outcome == "late") {
+        source.expect_peer (remote);
+        admit_pair (source, target, remote);
+        complete_bound_session_bind (source, target, completion, "missing-bind-actor");
+        assert (admitted->task ().await_ready ());
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+    } else if (outcome == "late-endpoint-failure") {
+        target.close ();
+        source.expect_peer (remote);
+        assert (source.connect_peer (remote.advertised_endpoint, remote));
+        // Windows confirms a refused connect at about 2s, so this request must outlast that event.
+        const auto failure_deadline = std::chrono::steady_clock::now () + request_timeout;
+        bool observed_failure = false;
+        while (!observed_failure && std::chrono::steady_clock::now () < failure_deadline) {
+            // Core snapshot changes signal POLLCONNECT; use the existing ingress poller.
+            const auto readiness = source.wait_for_activity (
+              std::max (0ms, std::chrono::ceil<std::chrono::milliseconds> (
+                               failure_deadline - std::chrono::steady_clock::now ())));
+            assert (readiness);
+            assert (source.begin_receive_turn (*readiness));
+            const auto observation = source.topology ().observe_peer (
+              remote.node_routing_id, remote.advertised_endpoint) ();
+            const auto attempt = observation.connection_attempt ();
+            observed_failure = attempt && attempt->last_failure_id != 0;
+        }
+        assert (observed_failure);
+#if !defined(_WIN32)
+        assert (request_submissions.load () == 0);
+#endif
+        assert (completion.wait_for (250ms) == std::future_status::ready);
+        assert (completion.get ().first == foundation::operation_terminal_t::route_unavailable);
+        assert (!admitted->task ().await_ready ());
+    } else if (invalidated_other_generation) {
+        source.forget_peer (remote.node_routing_id, remote.advertised_endpoint);
+        const auto remaining_peer = source.topology ().peer (remote.node_routing_id);
+        assert (remaining_peer
+                && remaining_peer->descriptor.lifecycle_generation != remote.lifecycle_generation);
+        assert (peer_ready (source, remote.node_routing_id));
+#if !defined(_WIN32)
+        assert (request_submissions.load () == 0);
+#endif
+        // The older admitted peer must not retain the authority-selected request.
+        assert (completion.wait_for (250ms) == std::future_status::ready);
+        assert (std::chrono::steady_clock::now () < invalidation_deadline);
+        assert (completion.get ().first == foundation::operation_terminal_t::route_unavailable);
+        assert (!admitted->task ().await_ready ());
+    } else {
+        const auto expected = outcome != "invalidated"
+                                ? foundation::operation_terminal_t::timed_out
+                                : foundation::operation_terminal_t::route_unavailable;
+        if (outcome != "invalidated")
+            assert (await_task (source.expire_requests (std::chrono::steady_clock::now () + 3s))
+                    == 1);
+        else {
+            assert (outcome == "invalidated");
+            source.forget_peer (remote.node_routing_id, remote.advertised_endpoint);
+        }
+        // Terminal callbacks are delivered on an independent completion turn.
+        completion.wait ();
+        assert (completion.get ().first == expected);
+        assert (!admitted->task ().await_ready ());
+        remote = target.topology ().local_descriptor ();
+        source.expect_peer (remote);
+        admit_pair (source, target, remote);
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
     }
-    release_lane_promise.set_value ();
-    lane_blocker.join ();
-    bind_caller.join ();
-    if (!bind)
-        bind.emplace (bind_result.get ());
-    assert (returned_while_lane_held && pending_while_lane_held);
-
-    const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
-    while (!bind->await_ready () && std::chrono::steady_clock::now () < completion_deadline)
-        std::this_thread::yield ();
-    assert (bind->await_ready ());
-
-    bool unavailable = false;
-    try {
-        (void) await_task (std::move (*bind));
-    }
-    catch (const framework_exception_t &error) {
-        unavailable = error.kind () == framework_error_kind_t::unavailable
-                      && std::string_view (error.what ())
-                           == "Remote Actor session binding owner descriptor is unavailable";
-    }
-    assert (unavailable);
-
-    source.expect_peer (remote);
-    bool shutdown_callback_called = false;
-    const auto submitted = await_task (source.request_bound_session_bind (
-      remote.node_routing_id, bound_session_bind_request (remote, "configured-bind-actor"), 2s,
-      [&shutdown_callback_called] (foundation::operation_terminal_t terminal,
-                                   ::zlink::framework::result_t<zlink::message_t>) {
-          shutdown_callback_called = terminal == foundation::operation_terminal_t::shutdown;
-      }));
-    assert (submitted && shutdown_callback_called);
+#if !defined(_WIN32)
+    assert (request_submissions.load () == (outcome == "late" ? 1 : 0));
+    count_request_submissions.store (false);
+#endif
+    source.close ();
+    target.close ();
 }
 
 // Opt-in Core boundary repro: send the first new handshake record after local
@@ -3592,6 +3657,156 @@ claim_actor_join (mesh::raw_mesh_node_owner_t &target)
     return claim;
 }
 
+
+// Authority-selected lifecycle generations wait independently of an older admitted peer.
+void verify_authority_generation_request (std::string_view path, bool invalidated)
+{
+    using namespace zlink::framework;
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("authority-generation-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("authority-generation-target")}));
+    source.start ();
+    target.start ();
+    auto remote = target.topology ().local_descriptor ();
+    admit_pair (source, target, remote);
+    const auto admitted_generation = remote.lifecycle_generation;
+    remote.lifecycle_generation = admitted_generation == std::numeric_limits<std::uint64_t>::max ()
+                                    ? 1
+                                    : std::numeric_limits<std::uint64_t>::max ();
+    if (path == "prepare")
+        remote.lifecycle_generation = admitted_generation == 1 ? 2 : 1;
+    source.expect_peer (remote);
+#if !defined(_WIN32)
+    request_submissions.store (0);
+    count_request_submissions.store (true);
+#endif
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    auto verify_waiting = [&] {
+        assert (source.pending_operation_count () == 1);
+#if !defined(_WIN32)
+        assert (request_submissions.load () == 0);
+#endif
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096));
+    };
+    auto end_wait = [&] {
+        verify_waiting ();
+        if (invalidated) {
+            source.forget_peer (remote.node_routing_id, remote.advertised_endpoint);
+            const auto remaining = source.topology ().peer (remote.node_routing_id);
+            assert (remaining && remaining->descriptor.lifecycle_generation == admitted_generation);
+            assert (peer_ready (source, remote.node_routing_id));
+        } else {
+            assert (await_task (source.expire_requests (deadline + 1s)) == 1);
+        }
+    };
+    if (path == "join") {
+        auto pending =
+          source.request_actor_join (remote.node_routing_id,
+                                     actor_join_request (source.topology ().local_descriptor (),
+                                                         remote, 8181, "actor", "spot"),
+                                     std::nullopt, 2s);
+        end_wait ();
+        const auto result = await_task (std::move (pending));
+        assert (!result.reply);
+        assert (result.failure
+                == (invalidated ? mesh::actor_join_wire_failure_t::unavailable
+                                : mesh::actor_join_wire_failure_t::deadline_exceeded));
+    } else if (path == "prepare") {
+        auto pending = source.request_relocation_prepare (
+          remote.node_routing_id,
+          relocation_prepare_request (source.topology ().local_descriptor (), remote), 2s);
+        end_wait ();
+        const auto result = await_task (std::move (pending));
+        assert (!result.ready && !result.failed);
+        if (invalidated)
+            assert (await_task (source.expire_requests (deadline + 1s)) == 0);
+    } else if (path == "actor-create" || path == "instance") {
+        std::promise<foundation::operation_terminal_t> promise;
+        auto terminal = promise.get_future ();
+        auto callback = [&promise] (auto result, auto) { promise.set_value (result); };
+        const auto local = source.topology ().local_descriptor ();
+        task_t<bool> pending =
+          path == "actor-create"
+            ? source.request_actor_create (remote.node_routing_id,
+                                           actor_create_request (local, remote, "authority-actor"),
+                                           2s, callback)
+            : source.request_instance_spot_activation (
+                remote.node_routing_id,
+                protocol::instance_spot_activation_header_t{
+                  {remote.node_routing_id, remote.lifecycle_generation, "instance-1", "admission",
+                   "room", "descriptor-1",
+                   static_cast<std::uint64_t> (
+                     std::chrono::duration_cast<std::chrono::milliseconds> (
+                       (std::chrono::system_clock::now () + 2s).time_since_epoch ())
+                       .count ())},
+                  local.lifecycle_generation,
+                  local.node_routing_id,
+                  std::string ("source-spot"),
+                  true,
+                  {local.lifecycle_generation, 91},
+                  0,
+                  false},
+                std::nullopt,
+                protocol::application_payload_t{"AuthorityGeneration", "application/json", {}}, 2s,
+                callback);
+        end_wait ();
+        assert (terminal.wait_for (250ms) == std::future_status::ready);
+        assert (terminal.get ()
+                == (invalidated ? foundation::operation_terminal_t::route_unavailable
+                                : foundation::operation_terminal_t::timed_out));
+        // Actor create reports registration; Instance Spot reports the failed admission.
+        const auto submitted = pending.result ();
+        if (path == "actor-create")
+            assert (submitted && submitted.value ());
+        else
+            assert (!submitted);
+    } else {
+        assert (path == "spot" || path == "actor");
+        std::promise<foundation::operation_terminal_t> promise;
+        auto terminal = promise.get_future ();
+        auto callback = [&promise] (auto result, auto) { promise.set_value (result); };
+        protocol::application_payload_t payload{"AuthorityGeneration", "application/json", {}};
+        task_t<bool> pending =
+          path == "spot" ? source.request_to_spot (
+                             remote.node_routing_id, "source-spot",
+                             protocol::spot_route_fence_t{"spot", 1, remote.node_routing_id,
+                                                          remote.lifecycle_generation, 1, 1},
+                             payload, 2s, callback)
+                         : source.request_to_actor (
+                             remote.node_routing_id, std::nullopt,
+                             protocol::actor_route_fence_t{"actor", 1, remote.node_routing_id,
+                                                           remote.lifecycle_generation, 1, 1},
+                             payload, 2s, callback);
+        end_wait ();
+        assert (terminal.wait_for (250ms) == std::future_status::ready);
+        assert (terminal.get ()
+                == (invalidated ? foundation::operation_terminal_t::route_unavailable
+                                : foundation::operation_terminal_t::timed_out));
+        try {
+            (void) await_task (std::move (pending));
+            assert (false);
+        }
+        catch (const framework_exception_t &error) {
+            assert (error.kind ()
+                    == (invalidated ? framework_error_kind_t::unavailable
+                                    : framework_error_kind_t::deadline_exceeded));
+        }
+    }
+    if (invalidated)
+        assert (std::chrono::steady_clock::now () < deadline);
+    assert (source.pending_operation_count () == 0);
+#if !defined(_WIN32)
+    assert (request_submissions.load () == 0);
+    count_request_submissions.store (false);
+#endif
+    source.close ();
+    target.close ();
+}
+
 void verify_actor_join_waits_for_admit_without_replay ()
 {
     for (const bool handover : {false, true}) {
@@ -4102,10 +4317,9 @@ void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
     target.close ();
 }
 
-// Canonical actorJoin(28)'s target Spot fence is intentionally not a
-// transport decision. Once the source peer and its execution generation are
-// authenticated, raw ingress routes this frame to the Store-backed admission,
-// which owns the target/owner fence terminal.
+// Matching target RID and lifecycle generation permits sender admission.
+// The receiving owner independently rejects a stale target authority fence;
+// raw ingress must preserve that request for the receiving admission owner.
 void verify_actor_join_target_fence_reaches_admission ()
 {
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
@@ -4124,8 +4338,6 @@ void verify_actor_join_target_fence_reaches_admission ()
 
     auto request =
       actor_join_request (source_descriptor, target_descriptor, 4646, "actor-5", "spot-5");
-    request.target_spot.target_node_routing_id = bytes ("stale-target");
-    request.target_spot.target_node_generation = 99;
 
     mesh::actor_join_wire_outcome_t outcome;
     std::atomic_bool settled{false};
@@ -4138,8 +4350,20 @@ void verify_actor_join_target_fence_reaches_admission ()
     assert (claim && claim->records.size () == 1);
     assert (claim->records.front ()->correlation
             && *claim->records.front ()->correlation == request.correlation);
-    assert (target.reply_actor_join ((*claim->records.front ()),
-                                     protocol::actor_join_result_t::rejected, std::nullopt, 0, 0));
+    // This raw fixture models the receiving admission owner with a newer authority fence.
+    auto current_target = request.target_spot;
+    ++current_target.authority_owner_generation;
+    const auto incoming = protocol::decode_actor_join_28 (
+      zlink::framework::detail::backend::copy_binding_parts (claim->records.front ()->parts ()));
+    assert (incoming.target_spot.target_node_rid == target_descriptor.node_routing_id);
+    assert (incoming.target_spot.target_node_generation == target_descriptor.lifecycle_generation);
+    const auto admission_result = incoming.target_spot.expected_authority_owner_generation
+                                      == current_target.authority_owner_generation
+                                    ? protocol::actor_join_result_t::accepted
+                                    : protocol::actor_join_result_t::rejected;
+    assert (admission_result == protocol::actor_join_result_t::rejected);
+    assert (
+      target.reply_actor_join ((*claim->records.front ()), admission_result, std::nullopt, 0, 0));
     assert (target.mailbox ().release (*claim));
 
     const auto deadline = std::chrono::steady_clock::now () + 2s;
@@ -4759,8 +4983,18 @@ void verify_unadmitted_route (bool repeat_hello)
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 4 && std::string_view (argv[1]) == "--authority-generation-case") {
+        verify_authority_generation_request (argv[2], std::string_view (argv[3]) == "invalidated");
+        return 0;
+    }
+    if (argc == 3 && std::string_view (argv[1]) == "--bound-session-descriptor-case") {
+        verify_bound_session_bind_missing_descriptor (argv[2]);
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--bound-session-missing-descriptor") {
-        verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ();
+        for (const auto outcome : {"late", "timeout", "invalidated", "other-generation",
+                                   "invalidated-other-generation", "late-endpoint-failure"})
+            verify_bound_session_bind_missing_descriptor (outcome);
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--request-submit-cost") {
@@ -4809,6 +5043,8 @@ int main (int argc, char **argv)
                 verify_stale_rid_disconnect_preserves_same_endpoint_replacement ();
             else if (name == "bilateral")
                 verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ();
+            else if (name == "join-target-fence")
+                verify_actor_join_target_fence_reaches_admission ();
             else if (name == "join")
                 verify_actor_join_waits_for_admit_without_replay ();
             else
@@ -4880,7 +5116,9 @@ int main (int argc, char **argv)
     verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_close_reply_grammar ();
-    verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ();
+    for (const auto outcome : {"late", "timeout", "invalidated", "other-generation",
+                               "invalidated-other-generation", "late-endpoint-failure"})
+        verify_bound_session_bind_missing_descriptor (outcome);
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_exposes_only_accepted_attempt ();
     verify_bound_session_bind_unadmitted_deadline_fails_both_stages ();
@@ -4924,6 +5162,9 @@ int main (int argc, char **argv)
     verify_actor_join_rejected_reply_completes_typed_failure ();
     verify_actor_join_wrong_source_generation_is_fenced ();
     verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ();
+    for (const auto path : {"join", "prepare", "spot", "actor", "actor-create", "instance"})
+        for (const bool invalidated : {false, true})
+            verify_authority_generation_request (path, invalidated);
     verify_actor_join_target_fence_reaches_admission ();
     return 0;
 }

@@ -1,3 +1,5 @@
+import { cleanupDiscardedAuthority } from './discarded-authority-cleanup';
+import { sameAuthorityIncarnation, type ZLinkDiscardedAuthorityFence } from './lifecycle-runtime';
 import { validateAuthorityMutation } from './in-memory-authority-store';
 import { macrotaskBoundary } from '../abort';
 import type { ZLinkRuntimeMetrics } from '../diagnostics/runtime-metrics';
@@ -351,7 +353,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }
     const scan = await this.provider.scan(
       {
-        prefix: AUTHORITY_PREIMAGE_PREFIX,
+        prefix: authorityScanPrefix(prefix),
         cursor:
           cursor === undefined ? undefined : ({ value: cursor.encoded } as ZLinkStoreScanCursor),
         limit
@@ -1336,6 +1338,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }
   }
 
+  override async cleanupDiscardedAuthority(
+    key: ZLinkAuthorityKey,
+    fence: ZLinkDiscardedAuthorityFence,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    return cleanupDiscardedAuthority(
+      this,
+      async (current) =>
+        (await this.tryReleaseEndedReservation(key, current.storeVersion.value, signal, {
+          discarded: fence
+        })) === 'reclaimed',
+      key,
+      fence,
+      owner,
+      signal
+    );
+  }
+
   override async releaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
@@ -1370,10 +1391,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
     signal?: AbortSignal,
-    request?: ZLinkEndedOwnerReleaseIntent,
+    request?: ZLinkEndedOwnerReleaseIntent | { readonly discarded: ZLinkDiscardedAuthorityFence },
     deadlineUnixMs?: bigint,
     requiredOwner?: ZLinkLocationOwnerToken
   ): Promise<'notReclaimable' | 'conflict' | 'reclaimed'> {
+    const discarded =
+      request !== undefined && 'discarded' in request ? request.discarded : undefined;
+    const creation = request !== undefined && 'key' in request ? request : undefined;
     for (;;) {
       throwIfOperationExpired(signal, deadlineUnixMs);
       const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
@@ -1391,6 +1415,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       )
         return 'conflict';
       const snapshot = record.snapshot;
+      if (
+        discarded !== undefined &&
+        !sameAuthorityIncarnation(
+          authoritySnapshot(snapshot, current.value.version, current.value.storeNow),
+          discarded
+        )
+      )
+        return 'reclaimed';
       if (
         snapshot.allocation.state === 'active'
           ? request === undefined
@@ -1417,15 +1449,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         requiredOwner === undefined &&
         record.aggregate === undefined &&
         !hasRelocationAuthority(snapshot.payload) &&
-        request?.actorRelocationPolicy === 'disabled' &&
-        request.key.kind === snapshot.allocation.objectKind &&
-        request.intent.stableType === snapshot.allocation.stableType &&
-        (readySpot !== undefined || readyActor?.state === 'ready') &&
-        (readySpot === undefined ||
-          (readySpot.kind === request.key.kind &&
-            readySpot.stableType === request.intent.stableType &&
-            readySpot.spotId === request.key.globalId &&
-            readySpot.activationRecovery === undefined));
+        (discarded !== undefined ||
+          (creation?.actorRelocationPolicy === 'disabled' &&
+            creation.key.kind === snapshot.allocation.objectKind &&
+            creation.intent.stableType === snapshot.allocation.stableType &&
+            (readySpot !== undefined || readyActor?.state === 'ready') &&
+            (readySpot === undefined ||
+              (readySpot.kind === creation.key.kind &&
+                readySpot.stableType === creation.intent.stableType &&
+                readySpot.spotId === creation.key.globalId &&
+                readySpot.activationRecovery === undefined))));
       if (!releaseCandidate) this.ownerLeaseReleaseDelay.clearAuthority(key.value);
       const descriptorKey = meshKey(
         snapshot.allocation.descriptor.meshName,
@@ -1461,6 +1494,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           snapshot.objectGeneration,
           signal
         );
+        if (discarded !== undefined) {
+          return {
+            members,
+            owners: new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>(),
+            releaseStates: new Map<string, { ownerLive: boolean; allowed: boolean }>()
+          };
+        }
         const targetsByOwner = new Map<
           string,
           { member: EndedSpotMember; scope: string; owner: ZLinkLocationOwnerToken }[]
@@ -1520,24 +1560,31 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       )
         return 'notReclaimable';
       const members = memberObservation.members;
+      if (discarded !== undefined && members.length > 0) return 'notReclaimable';
       if (snapshot.allocation.state === 'active') {
         if (ownerLive) return 'notReclaimable';
         let unavailable =
           record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload);
-        if (snapshot.allocation.objectKind !== 'actor') {
+        if (discarded === undefined && snapshot.allocation.objectKind !== 'actor') {
           const spot = readySpot;
           unavailable ||=
             spot === undefined ||
-            spot.kind !== request?.key.kind ||
-            spot.stableType !== request.intent.stableType ||
-            spot.spotId !== request.key.globalId ||
+            spot.kind !== creation?.key.kind ||
+            spot.stableType !== creation.intent.stableType ||
+            spot.spotId !== creation.key.globalId ||
             spot.activationRecovery !== undefined;
         }
-        if (unavailable || request?.actorRelocationPolicy !== 'disabled')
+        if (discarded !== undefined && unavailable) return 'notReclaimable';
+        if (
+          unavailable ||
+          (discarded === undefined && creation?.actorRelocationPolicy !== 'disabled')
+        )
           throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
             'Object owner lease is unavailable.'
           );
+        if (discarded !== undefined && releaseCandidate && !ownerReleaseAllowed)
+          return 'notReclaimable';
         if (releaseCandidate && !ownerReleaseAllowed)
           throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
@@ -4076,6 +4123,19 @@ function ownerKey(ownerId: string) {
 }
 
 const AUTHORITY_PREIMAGE_PREFIX = `${opaqueRecordPreimage('authority')}\0`;
+
+function authorityScanPrefix(prefix: string): string {
+  switch (prefix) {
+    case '':
+      return AUTHORITY_PREIMAGE_PREFIX;
+    case 'zla1:a:':
+      return `${AUTHORITY_PREIMAGE_PREFIX}actor\0`;
+    case 'zla1:s:':
+      return `${AUTHORITY_PREIMAGE_PREFIX}spot\0`;
+    default:
+      throw new TypeError(`unsupported authority scan prefix: ${prefix}`);
+  }
+}
 
 function authorityKey(value: string) {
   return storeKey(authorityPreimage(value));

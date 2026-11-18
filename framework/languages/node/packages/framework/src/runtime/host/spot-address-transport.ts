@@ -30,6 +30,7 @@ import {
   type ZLinkChannelEnvelopeCodecRegistry
 } from '../channels/channel-envelope';
 import { flowIfEnabled } from '../diagnostics';
+import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -168,7 +169,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           existing.routerChannelId,
           existing.stableType,
           existing.targetNodeRid,
-          reason
+          reason,
+          error
         );
         throw error;
       }
@@ -220,27 +222,44 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const encoded = this.encode(ZLinkChannelMessageKind.Command, selected.meshName, message);
     const sourceSpotId =
       call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId);
-    const mapped = classifySubmitResult(
-      await selected.node.sendToMissingInstanceSpot(
-        selected.target,
-        encoded,
-        activationDeadlineUnixMs,
-        sourceSpotId,
-        call.metadata
-      ),
-      'Instance Spot submission'
-    );
-    this.traceInstanceAddress(
-      submitResultFlowOutcome(mapped.status),
-      ZLinkDispatchMessageKind.Send,
-      spotId,
-      message,
-      selected.meshName,
-      selected.target.stableType,
-      selected.target.targetNodeRid,
-      mapped.status === ZLinkSubmitStatus.Submitted ? undefined : submitResultReason(mapped.status)
-    );
-    return mapped;
+    try {
+      const mapped = classifySubmitResult(
+        await selected.node.sendToMissingInstanceSpot(
+          selected.target,
+          encoded,
+          activationDeadlineUnixMs,
+          sourceSpotId,
+          call.metadata
+        ),
+        'Instance Spot submission'
+      );
+      this.traceInstanceAddress(
+        submitResultFlowOutcome(mapped.status),
+        ZLinkDispatchMessageKind.Send,
+        spotId,
+        message,
+        selected.meshName,
+        selected.target.stableType,
+        selected.target.targetNodeRid,
+        mapped.status === ZLinkSubmitStatus.Submitted
+          ? undefined
+          : submitResultReason(mapped.status)
+      );
+      return mapped;
+    } catch (error) {
+      this.traceInstanceAddress(
+        ZLinkMessageFlowOutcome.Dropped,
+        ZLinkDispatchMessageKind.Send,
+        spotId,
+        message,
+        selected.meshName,
+        selected.target.stableType,
+        selected.target.targetNodeRid,
+        addressedInstanceErrorReason(error),
+        error
+      );
+      throw error;
+    }
   }
 
   requestToSpotAddress<TReply = unknown>(
@@ -438,36 +457,56 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const table = this.options.completions(selected.meshName);
     if (table === undefined)
       throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
-    const completionPromise = table.submit(
-      () =>
-        selected.node.requestToMissingInstanceSpot(
-          selected.target,
-          encoded,
-          deadlineUnixMs,
-          call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
-          call.metadata,
-          call.onAdmitted,
-          deadline.operation
-        ),
-      deadline.signal,
-      deadline.operation
-    );
-    this.traceInstanceAddress(
-      ZLinkMessageFlowOutcome.Sent,
-      ZLinkDispatchMessageKind.Request,
-      spotId,
-      request,
-      selected.meshName,
-      selected.target.stableType,
-      selected.target.targetNodeRid
-    );
-    const completion = await completionPromise;
     try {
-      if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
-        const error = missingInstanceRequestFailure(
-          completion.terminalResult,
-          completion.failureErrno
+      const completionPromise = table.submit(
+        () =>
+          selected.node.requestToMissingInstanceSpot(
+            selected.target,
+            encoded,
+            deadlineUnixMs,
+            call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
+            call.metadata,
+            call.onAdmitted,
+            deadline.operation
+          ),
+        deadline.signal,
+        deadline.operation
+      );
+      this.traceInstanceAddress(
+        ZLinkMessageFlowOutcome.Sent,
+        ZLinkDispatchMessageKind.Request,
+        spotId,
+        request,
+        selected.meshName,
+        selected.target.stableType,
+        selected.target.targetNodeRid
+      );
+      const completion = await completionPromise;
+      try {
+        if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
+          const error = missingInstanceRequestFailure(
+            completion.terminalResult,
+            completion.failureErrno,
+            completion.cause
+          );
+          throw error;
+        }
+        const reply = decodeChannelReply<TReply>(completion.parts, this.options.codecs);
+        this.traceInstanceAddress(
+          ZLinkMessageFlowOutcome.ReplyReceived,
+          ZLinkDispatchMessageKind.Request,
+          spotId,
+          request,
+          selected.meshName,
+          selected.target.stableType,
+          selected.target.targetNodeRid
         );
+        return reply;
+      } finally {
+        closeMeshCompletion(completion);
+      }
+    } catch (error) {
+      if (!isPreAdmissionStaleRoute(error)) {
         this.reportInstanceRequestError(
           spotId,
           request,
@@ -477,21 +516,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           selected.target.stableType,
           addressedInstanceErrorReason(error)
         );
-        throw error;
       }
-      const reply = decodeChannelReply<TReply>(completion.parts, this.options.codecs);
-      this.traceInstanceAddress(
-        ZLinkMessageFlowOutcome.ReplyReceived,
-        ZLinkDispatchMessageKind.Request,
-        spotId,
-        request,
-        selected.meshName,
-        selected.target.stableType,
-        selected.target.targetNodeRid
-      );
-      return reply;
-    } finally {
-      closeMeshCompletion(completion);
+      throw error;
     }
   }
 
@@ -504,7 +530,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     instanceSpotType: string | undefined,
     reason: ZLinkDispatchErrorReason
   ): void {
-    this.options.dispatchErrors?.report({
+    if (this.options.dispatchErrors?.captureEnabled() !== true) return;
+    this.options.dispatchErrors.report({
       surface: ZLinkDispatchErrorSurface.InstanceSpot,
       messageKind: ZLinkDispatchMessageKind.Request,
       packetName: resolveFrameworkPacketName(request, undefined, 'Channel'),
@@ -526,7 +553,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     meshName: string | undefined,
     instanceSpotType: string | undefined,
     targetRid: string | undefined,
-    errorReason?: ZLinkDispatchErrorReason
+    errorReason?: ZLinkDispatchErrorReason,
+    error?: unknown
   ): void {
     const flow = flowIfEnabled(this.options.dispatchErrors?.flow, outcome);
     if (flow === undefined) return;
@@ -539,7 +567,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       targetRid,
       spotId: String(spotId),
       instanceSpotType,
-      errorReason
+      errorReason,
+      ...dispatchErrorDetails(error)
     });
   }
 
@@ -729,11 +758,12 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
 
 function missingInstanceRequestFailure(
   result: number,
-  nativeErrno: number
+  failureCode: number,
+  cause?: unknown
 ): ZLinkFrameworkException {
-  const canonical = isCanonicalWireReplyTerminal(result, nativeErrno);
+  const canonical = isCanonicalWireReplyTerminal(result, failureCode);
   const wireKind = canonical
-    ? internalFrameworkErrorKindFromWireReply(result, nativeErrno)
+    ? internalFrameworkErrorKindFromWireReply(result, failureCode)
     : undefined;
   const kind = !canonical
     ? ZLinkFrameworkInternalErrorKind.RequestProtocolError
@@ -752,7 +782,8 @@ function missingInstanceRequestFailure(
               : (wireKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed);
   return createInternalFrameworkException(
     kind,
-    `Instance Spot request failed with result ${result} and errno ${nativeErrno}.`
+    `Instance Spot request failed with result ${result} and service-wire failure code ${failureCode}.`,
+    cause
   );
 }
 

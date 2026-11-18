@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -49,9 +50,70 @@ final class ZLinkJsonMessageSerializerTest {
     }
 
     @Test
+    void declarationNullableAcceptsNullAndUnannotatedReferenceRejectsIt() throws Exception {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        try (Message payload = Message.from("{\"code\":\"a\",\"note\":null}")) {
+            assertEquals(
+                    new DeclarationNullable("a", null),
+                    serializer.deserializeBorrowed(
+                            payload.dataBuffer(), DeclarationNullable.class));
+        }
+        try (Message payload = Message.from("{\"code\":null,\"note\":\"x\"}")) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            serializer.deserializeBorrowed(
+                                    payload.dataBuffer(), DeclarationNullable.class));
+        }
+    }
+
+    @Test
+    void missingOptionalReferenceComponentIsNullAndExplicitNullFollowsNullability()
+            throws Exception {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        try (Message payload = Message.from("{\"code\":\"a\"}")) {
+            assertEquals(
+                    new OptionalReference("a", null),
+                    serializer.deserializeBorrowed(payload.dataBuffer(), OptionalReference.class));
+        }
+        try (Message payload = Message.from("{\"code\":\"a\",\"note\":null}")) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            serializer.deserializeBorrowed(
+                                    payload.dataBuffer(), OptionalReference.class));
+        }
+        for (String json : List.of("{\"code\":\"a\"}", "{\"code\":\"a\",\"note\":null}")) {
+            try (Message payload = Message.from(json)) {
+                assertEquals(
+                        new OptionalNullableReference("a", null),
+                        serializer.deserializeBorrowed(
+                                payload.dataBuffer(), OptionalNullableReference.class));
+            }
+        }
+    }
+
+    record OptionalReference(String code, @ZLinkJsonOptional String note) {}
+
+    record OptionalNullableReference(String code, @ZLinkJsonOptional @Nullable String note) {}
+
+    /** Holds a declaration-target annotation named like JSR 305 or Jakarta Nullable. */
+    static final class Jsr305 {
+        @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+        @java.lang.annotation.Target({
+            java.lang.annotation.ElementType.PARAMETER,
+            java.lang.annotation.ElementType.FIELD,
+            java.lang.annotation.ElementType.METHOD
+        })
+        @interface Nullable {}
+    }
+
+    record DeclarationNullable(String code, @Jsr305.Nullable String note) {}
+
+    @Test
     void borrowedTypedJsonPreservesTheArrayDecoderResultsAndErrors() throws Exception {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
-        for (String json : List.of("{\"value\":\"한글😀\"}", "null", "{\"value\":\"first\"} {}")) {
+        for (String json : List.of("{\"value\":\"한글😀\"}", "null")) {
             try (Message payload = Message.from(json)) {
                 assertEquals(
                         ZLinkFrameworkJsonProfile.mapper()
@@ -60,7 +122,15 @@ final class ZLinkJsonMessageSerializerTest {
                         serializer.deserializeBorrowed(payload.dataBuffer(), ProfileReply.class));
             }
         }
-        for (String json : List.of("", "{", "{\"value\":", "{\"value\":[]}")) {
+        for (String json :
+                List.of(
+                        "",
+                        "{",
+                        "{\"value\":",
+                        "{\"value\":[]}",
+                        "{\"value\":null}",
+                        "{\"value\":\"first\"} {}",
+                        "{\"value\":\"first\",\"future\":{\"nested\":[1e400]}}")) {
             try (Message payload = Message.from(json)) {
                 assertThrows(
                         IllegalArgumentException.class,
@@ -442,7 +512,7 @@ final class ZLinkJsonMessageSerializerTest {
 
     record EnumPayload(ProfileReportReason reasonId) {}
 
-    record CourierActorFound(String courierId, ActorRefWire actor) {}
+    record CourierActorFound(String courierId, @Nullable ActorRefWire actor) {}
 
     record ActorRefWire(String nodeRid, String actorId, long generation) {}
 
@@ -462,12 +532,12 @@ final class ZLinkJsonMessageSerializerTest {
             double ratio,
             GoldenState state,
             byte[] bytes,
-            Object nullable,
+            @Nullable Object nullable,
             Map<String, Integer> labels) {}
 
     record RequiredPresenceRecord(
             @JsonProperty("code") String code,
-            String accessToken,
+            @Nullable String accessToken,
             int accountId,
             @ZLinkJsonOptional int attempts) {}
 

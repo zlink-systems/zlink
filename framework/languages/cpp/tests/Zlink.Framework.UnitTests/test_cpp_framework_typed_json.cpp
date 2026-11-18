@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include <zlink/json.hpp>
 #include <zlink/framework.hpp>
 #include <zlink/framework/codecs/json_stream_connector.hpp>
@@ -278,6 +278,23 @@ void verify_float_bytes ()
     }
 }
 
+std::string legacy_encode_bytes (const std::vector<std::byte> &bytes)
+{
+    std::string text;
+    text.reserve ((bytes.size () / 3 + (bytes.size () % 3 != 0)) * 4);
+    for (std::size_t i = 0; i < bytes.size (); i += 3) {
+        const unsigned a = std::to_integer<unsigned> (bytes[i]);
+        const unsigned b = i + 1 < bytes.size () ? std::to_integer<unsigned> (bytes[i + 1]) : 0;
+        const unsigned c = i + 2 < bytes.size () ? std::to_integer<unsigned> (bytes[i + 2]) : 0;
+        text += zlink::detail::json_profile::base64_alphabet[a >> 2];
+        text += zlink::detail::json_profile::base64_alphabet[((a & 3) << 4) | (b >> 4)];
+        text += i + 1 < bytes.size ()
+                  ? zlink::detail::json_profile::base64_alphabet[((b & 15) << 2) | (c >> 6)]
+                  : '=';
+        text += i + 2 < bytes.size () ? zlink::detail::json_profile::base64_alphabet[c & 63] : '=';
+    }
+    return text;
+}
 bool legacy_decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
 {
     namespace p = zlink::detail::json_profile;
@@ -300,7 +317,7 @@ bool legacy_decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
         if (text[i + 3] != '=')
             bytes.push_back (std::byte ((v[2] << 6) | v[3]));
     }
-    return p::encode_bytes (bytes) == text;
+    return legacy_encode_bytes (bytes) == text;
 }
 void verify_base64_padding ()
 {
@@ -327,9 +344,85 @@ void verify_base64_padding ()
     for (const std::string text : {"", "AAAA", "AQIDBAUG", "A", "AAA", "AAAA=", "=AAA", "A=AA",
                                    "AA=A", "AA==AAAA", "AAAA\n", "AA-_", "AA?="})
         verify (text);
+    for (unsigned ch = 0; ch < 256; ++ch)
+        for (std::size_t position = 0; position < 4; ++position) {
+            auto text = std::string ("AAAA");
+            text[position] = static_cast<char> (ch);
+            verify (text);
+            verify ("AAAA" + text);
+            verify (text + "AAAA");
+        }
     assert (canonical > 0 && noncanonical > 0);
     std::cout << "base64_canonical=" << canonical << " base64_noncanonical=" << noncanonical
               << '\n';
+}
+struct bytes_dto
+{
+    std::vector<std::byte> body;
+};
+template <> struct zlink::json::dto_traits<bytes_dto>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("body", &bytes_dto::body)};
+};
+void verify_byte_sequence_wire ()
+{
+    namespace fw = zlink::framework;
+    namespace p = zlink::detail::json_profile;
+    fw::serializer_registry_t registry;
+    const auto serializer = registry.get<bytes_dto> ();
+    assert (serializer.content_type () == "application/json");
+    std::ifstream goldens (ZLINK_TYPED_JSON_BYTES_GOLDEN_PATH);
+    assert (goldens);
+    for (const auto size : {0, 1, 2, 3, 127, 128, 1024, 4096}) {
+        bytes_dto input;
+        input.body.resize (size);
+        for (int i = 0; i < size; ++i)
+            input.body[i] = std::byte (i % 256);
+        std::string expected;
+        assert (std::getline (goldens, expected));
+        auto encoded = serializer.serialize (input);
+        assert (encoded.to_string () == expected);
+        assert (serializer.deserialize (encoded).body == input.body);
+        assert (serializer.deserialize (fw::encoded_payload_t::from_string (expected)).body
+                == input.body);
+        const auto message = zlink::message_t::from_json (input);
+        assert (std::string (reinterpret_cast<const char *> (message.data ()), message.size ())
+                == expected);
+        assert (message.parse_json<bytes_dto> ().body == input.body);
+        auto connector = zlink::stream_connector::detail::to_packet_payload (input, 0);
+        assert (connector);
+        assert (std::string (connector.value ().begin (), connector.value ().end ()) == expected);
+        auto decoded = zlink::stream_connector::detail::decode_typed_message<bytes_dto> (
+          zlink::stream_connector::codec_t::json, connector.value ());
+        assert (decoded && decoded.value ().body == input.body);
+        const auto atom = expected.substr (8, expected.size () - 9);
+        using collection_t = std::vector<std::vector<std::byte>>;
+        const collection_t collection{input.body, {}, input.body};
+        assert (p::encode (input.body) == atom);
+        const auto array = "[" + atom + ",\"\"," + atom + "]";
+        assert (p::encode (collection) == array);
+        const auto back = p::try_decode<collection_t> (array.begin (), array.end ());
+        assert (back && *back == collection);
+    }
+    std::string extra;
+    assert (!std::getline (goldens, extra));
+    for (const std::string text : {R"({"body":"\u0041A=="})", R"({"body":"\/w=="})"}) {
+        const auto value = serializer.deserialize (fw::encoded_payload_t::from_string (text));
+        assert (value.body.size () == 1);
+    }
+    for (const std::string text :
+         {R"({"body":null})", R"({"body":[0]})", R"({"body":"AB=="})", R"({"body":"AAF="})",
+          R"({"body":"AA"})", R"({"body":"AA==AA=="})"}) {
+        bool rejected = false;
+        try {
+            (void) serializer.deserialize (fw::encoded_payload_t::from_string (text));
+        }
+        catch (const fw::framework_exception_t &) {
+            rejected = true;
+        }
+        assert (rejected);
+    }
+    std::cout << "byte_sequence_wire_sizes=0,1,2,3,127,128,1024,4096\n";
 }
 struct mask_dto
 {
@@ -380,8 +473,113 @@ void verify_field_masks ()
         assert (!p::try_decode<empty_dto> (text.begin (), text.end ()));
 }
 
+struct payload_contract_dto
+{
+    std::vector<std::byte> body;
+};
+template <> struct zlink::json::dto_traits<payload_contract_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("body", &payload_contract_dto::body)};
+};
+struct property_contract_dto
+{
+    std::vector<std::byte> body;
+};
+template <> struct zlink::json::dto_traits<property_contract_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("body", &property_contract_dto::body, zlink::json::defaulted)};
+};
+struct encode_string_dto
+{
+    std::string value;
+};
+template <> struct zlink::json::dto_traits<encode_string_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("wireValue", &encode_string_dto::value)};
+};
+struct encode_object_dto
+{
+    encode_string_dto value;
+};
+template <> struct zlink::json::dto_traits<encode_object_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("wireValue", &encode_object_dto::value)};
+};
+struct encode_nullable_dto
+{
+    std::optional<std::string> text;
+    std::optional<encode_string_dto> child;
+};
+template <> struct zlink::json::dto_traits<encode_nullable_dto>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("text", &encode_nullable_dto::text),
+                 zlink::json::field ("child", &encode_nullable_dto::child)};
+};
+
+void verify_payload_contract ()
+{
+    namespace p = zlink::detail::json_profile;
+    std::ifstream input (ZLINK_PAYLOAD_CONTRACT_PATH);
+    assert (input);
+    std::string line;
+    int failures = 0;
+    while (std::getline (input, line)) {
+        if (line.empty () || line[0] == '#')
+            continue;
+        const auto a = line.find ('\t');
+        const auto b = line.find ('\t', a + 1);
+        const auto c = line.find ('\t', b + 1);
+        const auto text = line.substr (c + 1);
+        const auto shape = line.substr (b + 1, c - b - 1);
+        if (shape.starts_with ("encode-")) {
+            const bool expected = line.substr (a + 1, b - a - 1) == "accept";
+            if (shape == "encode-nullable") {
+                const auto wire = p::try_encode (encode_nullable_dto{});
+                std::cout << "ENCODE_CONTRACT " << line.substr (0, a)
+                          << " wire=" << wire.value_or ("<error>") << std::endl;
+                assert (expected && wire
+                        && nlohmann::json::parse (*wire) == nlohmann::json::parse (text));
+            } else {
+                // By-value string/DTO fields cannot contain null. Raw and smart pointers
+                // are not typed JSON candidates; optional<T> is the nullable declaration.
+                // Assigning a null C string violates std::string preconditions; it
+                // does not create a valid null string and must not be used as a probe.
+                static_assert (!std::is_assignable_v<encode_string_dto &, std::nullptr_t>);
+                static_assert (!p::is_json_candidate<std::string *> ());
+                static_assert (!p::is_json_candidate<std::shared_ptr<encode_string_dto>> ());
+                const bool representable =
+                  shape == "encode-string"
+                    ? p::try_decode<encode_string_dto> (text.begin (), text.end ()).has_value ()
+                    : p::try_decode<encode_object_dto> (text.begin (), text.end ()).has_value ();
+                std::cout << "ENCODE_CONTRACT " << line.substr (0, a)
+                          << " null-not-representable=" << !representable << std::endl;
+                assert (!expected && !representable);
+                assert (p::try_encode (encode_string_dto{""}) == "{\"wireValue\":\"\"}");
+                assert (p::try_encode (encode_object_dto{})
+                        == "{\"wireValue\":{\"wireValue\":\"\"}}");
+            }
+            continue;
+        }
+        const bool accepted =
+          line.substr (b + 1, c - b - 1) == "ctor"
+            ? p::try_decode<payload_contract_dto> (text.begin (), text.end ()).has_value ()
+            : p::try_decode<property_contract_dto> (text.begin (), text.end ()).has_value ();
+        const bool expected = line.substr (a + 1, b - a - 1) == "accept";
+        std::cout << "PAYLOAD_CONTRACT " << line.substr (0, a) << " accepted=" << accepted
+                  << " expected=" << expected << std::endl;
+        failures += accepted != expected;
+    }
+    assert (failures == 0);
+}
 int main ()
 {
+    verify_payload_contract ();
+    verify_byte_sequence_wire ();
     verify_base64_padding ();
     verify_field_masks ();
     verify_float_round_trips ();

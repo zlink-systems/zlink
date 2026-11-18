@@ -80,7 +80,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private final Map<String, ZLinkJavaRawSpot> spots = new ConcurrentHashMap<>();
     final Map<String, NativeActorStay> actors = new ConcurrentHashMap<>();
     private final Map<SpotAuthorityKey, AuthorityFence> spotAuthorities = new ConcurrentHashMap<>();
-    private final Map<ZLinkBackendActorRef, AuthorityFence> actorAuthorities =
+    private final Map<ZLinkBackendActorRef, RemoteActorAuthority> actorAuthorities =
             new ConcurrentHashMap<>();
     private final AtomicLong nextGeneration = new AtomicLong(1);
     private final AtomicLong nextRequestSequence = new AtomicLong(1);
@@ -564,18 +564,15 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     @Override
-    public void rememberActorAuthority(ZLinkBackendActorRef actor, long authorityOwnerGeneration) {
-        rememberActorAuthority(
-                actor, authorityOwnerGeneration, owner.localAuthorityLeaseGeneration());
-    }
-
-    @Override
     public void rememberActorAuthority(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
+            ZLinkBackendActorRef actor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long targetNodeGeneration) {
         requireActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
-        AuthorityFence authority =
-                new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration);
         if (routingId().equals(actor.nodeRid())) {
+            AuthorityFence authority =
+                    new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration);
             actors.computeIfPresent(
                     actor.actorId(),
                     (id, current) ->
@@ -595,13 +592,17 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 : entry;
                     });
         } else {
-            observeActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+            observeActorAuthority(
+                    actor, authorityOwnerGeneration, ownerLeaseGeneration, targetNodeGeneration);
         }
     }
 
     @Override
     public void observeActorAuthority(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
+            ZLinkBackendActorRef actor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long targetNodeGeneration) {
         requireActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
         if (routingId().equals(actor.nodeRid())) {
             return;
@@ -613,11 +614,15 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 actor,
                 (key, current) ->
                         authorityAdvanced(current, authorityOwnerGeneration)
-                                ? new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration)
+                                ? new RemoteActorAuthority(
+                                        authorityOwnerGeneration,
+                                        ownerLeaseGeneration,
+                                        targetNodeGeneration)
                                 : current);
     }
 
-    private static boolean authorityAdvanced(AuthorityFence current, long observedGeneration) {
+    private static boolean authorityAdvanced(
+            RemoteActorAuthority current, long observedGeneration) {
         return current == null || current.authorityOwnerGeneration() < observedGeneration;
     }
 
@@ -859,11 +864,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (!routingId().equals(target.actor().nodeRid())) {
             return owner.requestActor(target, parts, timeout, requestAdmission);
         }
+        var retained = ZLinkJavaRawSpot.copy(parts);
         return requestLocalActor(
-                (requestId, admission) ->
-                        dispatchLocalOrdinaryActor(target, parts, requestId, admission),
-                timeout,
-                requestAdmission);
+                        (requestId, admission) ->
+                                dispatchLocalOrdinaryActor(target, retained, requestId, admission),
+                        timeout,
+                        requestAdmission)
+                .whenComplete((reply, failure) -> Message.closeAll(retained));
     }
 
     @Override
@@ -889,16 +896,16 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     completion);
             return;
         }
-        ZLinkInternalSpotNode.super.requestToActor(
-                target,
-                parts,
-                flags,
-                timeout,
-                requestAdmission,
-                decodeReply,
-                discardReply,
-                mapFailure,
-                completion);
+        var retained = ZLinkJavaRawSpot.copy(parts);
+        requestRegisteredLocalActor(
+                        (requestId, admission) ->
+                                dispatchLocalOrdinaryActor(target, retained, requestId, admission),
+                        requestAdmission,
+                        decodeReply,
+                        discardReply,
+                        mapFailure,
+                        completion)
+                .whenComplete((accepted, failure) -> Message.closeAll(retained));
     }
 
     CompletionStage<List<Message>> requestExactActor(
@@ -913,16 +920,77 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (actor == null || !actors.containsKey(actor.actorId())) {
             return CompletableFuture.failedFuture(new IllegalStateException("actor is not local"));
         }
+        var retained = ZLinkJavaRawSpot.copy(parts);
         return requestLocalActor(
-                (requestId, admission) -> dispatchLocalActor(actor, parts, requestId, 1, admission),
-                timeout,
-                requestAdmission);
+                        (requestId, admission) ->
+                                dispatchLocalActor(actor, retained, requestId, 1, admission),
+                        timeout,
+                        requestAdmission)
+                .whenComplete((reply, failure) -> Message.closeAll(retained));
     }
 
     private CompletionStage<List<Message>> requestLocalActor(
             BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>> dispatch,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
+        var completion =
+                ZLinkServiceOperationRegistry.<List<Message>>prepareOperation(
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
+                                .next());
+        operationRegistry()
+                .<List<Message>>submitTerminal(
+                        completion.id(),
+                        timeout,
+                        terminal -> {
+                            requestRegisteredLocalActor(
+                                    dispatch,
+                                    requestAdmission,
+                                    Function.identity(),
+                                    Message::closeAll,
+                                    Function.identity(),
+                                    completion);
+                            return completion;
+                        },
+                        Message::closeAll,
+                        completion);
+        return completion;
+    }
+
+    private <T> CompletionStage<Boolean> requestRegisteredLocalActor(
+            BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>> dispatch,
+            CompletableFuture<Void> requestAdmission,
+            Function<List<Message>, T> decodeReply,
+            Consumer<T> discardReply,
+            Function<Throwable, Throwable> mapFailure,
+            ZLinkServiceOperationRegistry.Operation<T> completion) {
+        return operationRegistry()
+                .<T>submitRegistered(
+                        completion.id(),
+                        terminal -> {
+                            var physical =
+                                    dispatchLocalActorRequest(
+                                            dispatch, requestAdmission, completion);
+                            physical.whenComplete(
+                                    (messages, failure) -> {
+                                        if (failure != null)
+                                            terminal.accept(null, mapFailure.apply(failure));
+                                        else {
+                                            try {
+                                                terminal.accept(decodeReply.apply(messages), null);
+                                            } catch (RuntimeException | Error error) {
+                                                terminal.accept(null, mapFailure.apply(error));
+                                            }
+                                        }
+                                    });
+                            return physical;
+                        },
+                        discardReply);
+    }
+
+    private CompletionStage<List<Message>> dispatchLocalActorRequest(
+            BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>> dispatch,
+            CompletableFuture<Void> requestAdmission,
+            ZLinkServiceOperationRegistry.Operation<?> logical) {
         Long requestId = nextActorRequestSequence.getAndIncrement();
         CompletableFuture<List<Message>> completion = new CompletableFuture<>();
         actorRequests.put(requestId, completion);
@@ -938,21 +1006,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("actor Spot is not local"));
         }
-        if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
-            CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)
-                    .execute(
-                            () -> {
-                                if (actorRequests.remove(requestId, completion)) {
-                                    var deadlineFailure =
-                                            new ZlinkRequestException(RequestResult.TIMED_OUT);
-                                    dispatched.whenComplete(
-                                            (ignored, failure) ->
-                                                    completion.completeExceptionally(
-                                                            deadlineFailure));
-                                    dispatched.toCompletableFuture().cancel(false);
-                                }
-                            });
-        }
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                logical, dispatched);
+        logical.whenComplete(
+                (ignored, failure) -> {
+                    if (actorRequests.remove(requestId, completion)) completion.cancel(false);
+                });
         dispatched.whenComplete(
                 (ignored, error) -> {
                     if (error != null && actorRequests.remove(requestId, completion)) {
@@ -1370,14 +1429,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     @Override
     public CompletionStage<Void> closeActorBoundSessionAsync(
-            ZLinkBackendActorRef actor, Duration timeout) {
+            ZLinkBackendActorRef actor,
+            Duration timeout,
+            Supplier<CompletionStage<Void>> whenUnbound) {
         BindingEntry entry = actorBindings.get(actor.actorId());
-        if (entry == null || !entry.binding().actor().equals(actor))
-            return CompletableFuture.failedFuture(
-                    new systems.zlink.framework.errors.ZLinkFrameworkException(
-                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                                    .INVALID_OPERATION,
-                            "No current session binding exists for Actor " + actor.actorId()));
+        if (entry == null || !entry.binding().actor().equals(actor)) return whenUnbound.get();
         var binding = entry.binding();
         return owner.requestBoundSessionClose(
                 new ZLinkServiceM6BWireCodec.BoundSessionClose(
@@ -1526,7 +1582,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private CompletionStage<Void> verifyActorLease(
             StreamBinding route,
             ZLinkAutoConnectPeer descriptor,
-            AuthorityFence current,
+            RemoteActorAuthority current,
             ZLinkLocationRepository repository) {
         return repository
                 .read(ZLinkAuthorityKeyCodec.actor(route.actor().actorId()), () -> false)
@@ -1604,11 +1660,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                                                         route
                                                                                                 .actor(),
                                                                                         current,
-                                                                                        new AuthorityFence(
+                                                                                        new RemoteActorAuthority(
                                                                                                 current
                                                                                                         .authorityOwnerGeneration(),
                                                                                                 descriptor
-                                                                                                        .ownerLeaseGeneration()));
+                                                                                                        .ownerLeaseGeneration(),
+                                                                                                current
+                                                                                                        .targetNodeGeneration()));
                                                                     })
                                                             .thenApply(ignored -> (Void) null));
                         });
@@ -1811,17 +1869,23 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     @Override
     public long actorAuthorityOwnerGeneration(ZLinkBackendActorRef actor) {
-        AuthorityFence fence = actorAuthority(actor);
+        ActorAuthority fence = actorAuthority(actor);
         return fence == null ? 0L : fence.authorityOwnerGeneration();
     }
 
     @Override
     public long actorAuthorityOwnerLeaseGeneration(ZLinkBackendActorRef actor) {
-        AuthorityFence fence = actorAuthority(actor);
+        ActorAuthority fence = actorAuthority(actor);
         return fence == null ? 0L : fence.ownerLeaseGeneration();
     }
 
-    private AuthorityFence actorAuthority(ZLinkBackendActorRef actor) {
+    long actorAuthorityNodeGeneration(ZLinkBackendActorRef actor) {
+        if (routingId().equals(actor.nodeRid())) return owner.lifecycleGeneration();
+        var authority = actorAuthorities.get(actor);
+        return authority == null ? 0 : authority.targetNodeGeneration();
+    }
+
+    private ActorAuthority actorAuthority(ZLinkBackendActorRef actor) {
         if (routingId().equals(actor.nodeRid())) {
             NativeActorStay stay = nativeActor(actor);
             return stay == null ? null : stay.authority();
@@ -2269,7 +2333,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         ZLinkBackendActorRef currentActor = nativeStay.actor();
         long currentAuthority = nativeStay.authority().authorityOwnerGeneration();
         long currentOwnerLease = nativeStay.authority().ownerLeaseGeneration();
-        if (currentAuthority != header.target().authorityOwnerGeneration()
+        if ((currentActor.generation() == actor.generation()
+                        && currentAuthority != header.target().authorityOwnerGeneration())
                 || currentOwnerLease != header.target().ownerLeaseGeneration()) {
             return null;
         }
@@ -2546,7 +2611,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return bindLocalSession(sessionRid, actor, bindingGeneration);
         }
         return owner.bindRemoteStreamSession(
-                sessionRid, actor, authorityOwnerGeneration, bindingGeneration, true, timeout);
+                sessionRid,
+                actor,
+                actorAuthorityNodeGeneration(actor),
+                authorityOwnerGeneration,
+                bindingGeneration,
+                true,
+                timeout);
     }
 
     void publishStreamSession(
@@ -2562,7 +2633,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         actor,
                         bindingGeneration,
                         authorityOwnerGeneration,
-                        owner.nodeLifecycleGeneration(actor.nodeRid()),
+                        actorAuthorityNodeGeneration(actor),
                         actorSlot,
                         stream);
         inStateLane(
@@ -2616,6 +2687,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return owner.bindRemoteStreamSession(
                         sessionRid,
                         actor,
+                        current.targetNodeGeneration(),
                         current.authorityOwnerGeneration(),
                         bindingGeneration,
                         false,
@@ -2652,53 +2724,42 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             "Session owner has no live MeshNode descriptor"));
         }
         ZLinkInternalMeshNode.PeerAuthorityFence sessionOwner = local.orElseThrow();
-        ActorSessionBinding candidate =
-                new ActorSessionBinding(
+        var route =
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        owner.lifecycleGeneration(),
+                        actorAuthorityOwnerGeneration(actor),
+                        actorAuthorityOwnerLeaseGeneration(actor));
+        var command =
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                        1, route, sessionRid, true, bindingGeneration);
+        var result = new CompletableFuture<ZLinkServiceM6BWireCodec.BoundSessionBindReply>();
+        var operation =
+                applyRemoteStreamBinding(
                         sessionOwner.sourceNodeRid(),
                         sessionOwner.sourceNodeGeneration(),
                         sessionOwner.ownerId(),
                         sessionOwner.ownerLeaseGeneration(),
-                        sessionRid,
-                        actor,
-                        0,
-                        bindingGeneration,
-                        actorAuthorityOwnerGeneration(actor),
-                        actorAuthorityOwnerLeaseGeneration(actor),
-                        false);
-        return remoteSessionBindingOwner
-                .apply(
-                        this,
-                        actor,
-                        applied -> {
-                            var current = actorBindings.get(actor.actorId());
-                            var accepted =
-                                    admitRemoteStreamBinding(
-                                            new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                                    actor,
-                                                    owner.lifecycleGeneration(),
-                                                    candidate.authorityOwnerGeneration(),
-                                                    candidate.actorOwnerLeaseGeneration()),
-                                            candidate,
-                                            current == null ? null : current.binding(),
-                                            true,
-                                            applied);
-                            if (accepted == null) {
-                                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
-                                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                                                .UNAVAILABLE,
-                                        "Session binding generation is stale");
-                            }
-                            if (accepted == candidate) installActorBinding(accepted);
-                            return CompletableFuture.completedFuture(true);
-                        })
-                .thenApply(
-                        ignored ->
-                                new ZLinkServiceM6BWireCodec.BoundSessionBindReply(
-                                        1,
-                                        0,
-                                        0,
-                                        candidate.bindingGeneration(),
-                                        candidate.authorityOwnerGeneration()));
+                        command,
+                        result::complete);
+        operation.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) result.completeExceptionally(failure);
+                });
+        return result.thenCompose(
+                reply -> {
+                    if (reply.terminalResult() != 0 || reply.failureCode() != 0) {
+                        throw ZLinkRequestFailureMapping.receivedFailure(
+                                ZLinkBackendRequestResult.fromWireTerminal(reply.terminalResult())
+                                        .toFrameworkErrorKind(reply.failureCode()),
+                                reply.rejectionMessage().isEmpty()
+                                        ? "bound session binding was rejected"
+                                        : reply.rejectionMessage(),
+                                reply.failureCode(),
+                                java.util.Map.of());
+                    }
+                    return operation.thenApply(ignored -> reply);
+                });
     }
 
     /**
@@ -2765,9 +2826,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             long sessionOwnerLeaseGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionBind command,
             Consumer<ZLinkServiceM6BWireCodec.BoundSessionBindReply> reply) {
-        return remoteSessionBindingOwner.apply(
-                this,
-                command.actor().actor(),
+        Function<RemoteSessionBindingTransition, CompletionStage<Boolean>> transition =
                 applied ->
                         acceptRemoteStreamBindingOnOwner(
                                 sourceNodeRid,
@@ -2776,7 +2835,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 sessionOwnerLeaseGeneration,
                                 command,
                                 reply,
-                                applied));
+                                applied);
+        return remoteSessionBindingOwner.apply(this, command.actor().actor(), transition);
     }
 
     private CompletionStage<Boolean> acceptRemoteStreamBindingOnOwner(
@@ -2801,7 +2861,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         command.bindingGeneration(),
                         route.authorityOwnerGeneration(),
                         route.ownerLeaseGeneration(),
-                        true);
+                        !sourceNodeRid.equals(routingId()));
         BindingEntry entry = actorBindings.get(actor.actorId());
         ActorSessionBinding current = entry == null ? null : entry.binding();
         if (!command.active()) {
@@ -2827,10 +2887,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     bindReply(command.correlation(), unavailable[0], unavailable[1], null, ""));
             return CompletableFuture.completedFuture(false);
         }
-        if (current == null || samePhysicalSession(current, candidate)) {
-            return commitRemoteStreamBinding(route, candidate, command, reply, applied);
-        }
+        return applied.acceptBinding(
+                sessionBindingIdentity(candidate),
+                command.sessionRid(),
+                accepted -> decideRemoteStreamBinding(route, candidate, command, reply, accepted));
+    }
 
+    private CompletionStage<Boolean> decideRemoteStreamBinding(
+            ZLinkServiceM6BWireCodec.ActorRouteFence route,
+            ActorSessionBinding candidate,
+            ZLinkServiceM6BWireCodec.BoundSessionBind command,
+            Consumer<ZLinkServiceM6BWireCodec.BoundSessionBindReply> reply,
+            RemoteSessionBindingTransition applied) {
         var result = new CompletableFuture<Boolean>();
         var decided = new AtomicBoolean();
         var cancellation = new AtomicBoolean();
@@ -2922,7 +2990,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         result.complete(false);
                         return;
                     }
-                    commitRemoteStreamBinding(route, candidate, command, reply, applied)
+                    applied.commit(
+                                    () ->
+                                            commitRemoteStreamBinding(
+                                                    route, candidate, command, reply, applied))
                             .whenComplete(
                                     (accepted, commitFailure) -> {
                                         if (commitFailure != null) {
@@ -4111,6 +4182,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
@@ -4121,6 +4193,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     targetNodeRid,
                     targetSpotId,
                     targetGeneration,
+                    targetNodeGeneration,
                     metadata,
                     parts,
                     timeout,
@@ -4144,6 +4217,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
@@ -4156,6 +4230,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     targetNodeRid,
                     targetSpotId,
                     targetGeneration,
+                    targetNodeGeneration,
                     metadata,
                     parts,
                     timeout,
@@ -4201,7 +4276,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             .thenCompose(CompletableFuture::failedFuture);
         }
         ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-        CompletableFuture<ZLinkBackendReceived> completion = new CompletableFuture<>();
+        CompletableFuture<ZLinkBackendReceived> completion =
+                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                        .newCancellationFuture(
+                                failure -> {
+                                    if (failure
+                                            instanceof java.util.concurrent.CancellationException)
+                                        terminal.tryWin(ZLinkTerminalWinner.Cause.CANCELLATION);
+                                });
         ZLinkBackendReceived request =
                 new ZLinkBackendReceived(
                         systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
@@ -4239,12 +4321,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     completion.completeExceptionally(failure);
                                 }
                             });
-                    completion.whenComplete(
-                            (reply, failure) -> {
-                                if (completion.isCancelled())
-                                    terminal.tryWin(ZLinkTerminalWinner.Cause.CANCELLATION);
-                                dispatched.toCompletableFuture().cancel(false);
-                            });
+                    systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                            .forwardCancellation(completion, dispatched);
+
                     return completion;
                 };
         if (operations != null) {
@@ -4264,7 +4343,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             (accepted, failure) -> {
                                 if (failure != null || !accepted) request.close();
                             });
-            registered.whenComplete((reply, failure) -> completion.cancel(false));
+            systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                    registered, completion);
             return registered;
         }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
@@ -4292,7 +4372,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return target;
     }
 
-    private record AuthorityFence(long authorityOwnerGeneration, long ownerLeaseGeneration) {}
+    private sealed interface ActorAuthority permits AuthorityFence, RemoteActorAuthority {
+        long authorityOwnerGeneration();
+
+        long ownerLeaseGeneration();
+    }
+
+    private record AuthorityFence(long authorityOwnerGeneration, long ownerLeaseGeneration)
+            implements ActorAuthority {}
+
+    private record RemoteActorAuthority(
+            long authorityOwnerGeneration, long ownerLeaseGeneration, long targetNodeGeneration)
+            implements ActorAuthority {}
 
     record NativeActorStay(
             ZLinkBackendActorRef actor,

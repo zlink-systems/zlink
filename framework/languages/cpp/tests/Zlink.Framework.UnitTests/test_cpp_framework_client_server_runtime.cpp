@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "mailbox_claim_fixture.hpp"
 #include "same_owner_claim_controls.hpp"
 #include <zlink/json.hpp>

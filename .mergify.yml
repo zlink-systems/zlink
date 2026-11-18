@@ -43,6 +43,9 @@ queue_rules:
   - name: release
     batch_size: 8
     merge_method: merge
+    # Workflows skip Windows only on mergify/merge-queue/ (main) batches, so the
+    # release queue uses its own prefix and runs the Windows checks it requires.
+    queue_branch_prefix: mergify/release-queue/
     queue_conditions:
       - base~=^release/
       - head~=^mergify/bp/

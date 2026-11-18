@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 #include "../common/bench_common.hpp"
+#include "../common/binding_wire.hpp"
 #include "ladder_payload.hpp"
 #include <zlink/codecs/protobuf.hpp>
 #include <zlink/framework/detail/ablation_ladder.hpp>
@@ -138,7 +139,7 @@ class encoder_t
             payload_t value;
             value.mutable_body ()->assign (size, '\xab');
             stamp_payload (value.mutable_body ()->data (), size, run, phase, seq);
-            body = message (encode_bench_payload (value));
+            body = encode_bench_payload_message (value);
         }
         if (_level >= 0 && _level < 2)
             return {message (request_envelope ()), std::move (body)};
@@ -286,7 +287,7 @@ std::array<zlink::message_t, 2> reply_parts (
     if constexpr (std::is_same_v<Payload, typed_payload_t>)
         echo = fw::detail::encoded_payload_to_raw (typed_serializer ().serialize (reply));
     else
-        echo = message (encode_bench_payload (reply));
+        echo = encode_bench_payload_message (reply);
     if (request) {
         fw::detail::channel_reply_writer_t writer;
         auto response = writer.reply_raw_envelope (

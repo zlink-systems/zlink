@@ -66,8 +66,9 @@ long elapsed_ms_since (std::chrono::steady_clock::time_point start_)
 // test behavior with (mostly) default values
 void reconnect_default ()
 {
+    char endpoint[MAX_SOCKET_STRING];
     void *pub = test_context_socket (ZLINK_SOCKET_PUB);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, ENDPOINT_0));
+    test_bind (pub, "tcp://127.0.0.1:*", endpoint, sizeof (endpoint));
 
     void *sub = test_context_socket (ZLINK_SOCKET_SUB);
     test_monitor_probe_t probe;
@@ -76,7 +77,7 @@ void reconnect_default ()
     int interval = 60 * 1000;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (sub, ZLINK_OPT_RECONNECT_IVL, &interval, sizeof (interval)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, ENDPOINT_0));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, endpoint));
 
     const uint64_t initial_events[] = {ZLINK_EVENT_CONNECT_DELAYED, ZLINK_EVENT_CONNECTED,
                                        ZLINK_EVENT_CONNECTION_READY};
@@ -99,8 +100,9 @@ void reconnect_default ()
 // test successful reconnect
 void reconnect_success ()
 {
+    char endpoint[MAX_SOCKET_STRING];
     void *pub = test_context_socket (ZLINK_SOCKET_PUB);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, ENDPOINT_0));
+    test_bind (pub, "tcp://127.0.0.1:*", endpoint, sizeof (endpoint));
 
     void *sub = test_context_socket (ZLINK_SOCKET_SUB);
     test_monitor_probe_t probe;
@@ -109,7 +111,7 @@ void reconnect_success ()
     int interval = 1 * 1000;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (sub, ZLINK_OPT_RECONNECT_IVL, &interval, sizeof (interval)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, ENDPOINT_0));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, endpoint));
 
     const uint64_t initial_events[] = {ZLINK_EVENT_CONNECT_DELAYED, ZLINK_EVENT_CONNECTED,
                                        ZLINK_EVENT_CONNECTION_READY};
@@ -127,7 +129,7 @@ void reconnect_success ()
     TEST_ASSERT_TRUE (test_monitor_probe_wait_no_additional (&probe, 6, SETTLE_TIME));
 
     pub = test_context_socket (ZLINK_SOCKET_PUB);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, ENDPOINT_0));
+    test_bind (pub, endpoint, endpoint, sizeof (endpoint));
 
     const uint64_t reconnect_success_events[] = {
       ZLINK_EVENT_CONNECT_DELAYED, ZLINK_EVENT_CONNECTED,        ZLINK_EVENT_CONNECTION_READY,

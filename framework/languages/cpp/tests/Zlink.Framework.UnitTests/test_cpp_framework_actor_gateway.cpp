@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/telemetry_observation.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/session_disconnect_probe_spot.hpp"
@@ -6307,7 +6307,9 @@ int duplicate_bind_callback_policy ()
         reject,
         timeout,
         no_callback,
-        factory_subtype
+        factory_subtype,
+        first_binding,
+        same_session
     };
 
     const auto run_case = [] (case_t test_case) -> int {
@@ -6329,7 +6331,8 @@ int duplicate_bind_callback_policy ()
               std::move (actor_context), observation);
         } else {
             callback_duplicate_bind_test_actor_t::callback_t callback;
-            if (test_case == case_t::accept || test_case == case_t::accept_empty) {
+            if (test_case == case_t::accept || test_case == case_t::accept_empty
+                || test_case == case_t::first_binding || test_case == case_t::same_session) {
                 callback = [test_case] (const auto &, const auto &, std::stop_token) {
                     return task_t<std::optional<std::string>> (
                       result_t<std::optional<std::string>>::success (
@@ -6415,7 +6418,8 @@ int duplicate_bind_callback_policy ()
         const auto no_op_sink = [] (std::string, stream_codec_t, const zlink::message_t &) {
             return task_t<void> (result_t<void>::success ());
         };
-        if (!gateway.replace_session_route (actor, no_op_sink, previous_route))
+        if (test_case != case_t::first_binding
+            && !gateway.replace_session_route (actor, no_op_sink, previous_route))
             return 1;
 
         zlink_builder_t builder = test::runtime_failure_builder ();
@@ -6423,9 +6427,16 @@ int duplicate_bind_callback_policy ()
         auto stream_runtime = stream_runtime_t::from (builder);
         std::mutex delay_mutex;
         delay_owner_t delays (delay_mutex);
-        const auto incoming_owner = zlink::routing_id_t::from ("incoming-session-owner");
-        const auto incoming_session = zlink::routing_id_t::from ("incoming-session");
-        const location_owner_token_t incoming_owner_token{"incoming-owner", 29};
+        const auto incoming_owner = test_case == case_t::same_session
+                                      ? previous_owner
+                                      : zlink::routing_id_t::from ("incoming-session-owner");
+        const auto incoming_session = test_case == case_t::same_session
+                                        ? previous_session
+                                        : zlink::routing_id_t::from ("incoming-session");
+        const std::uint64_t incoming_generation = test_case == case_t::same_session ? 19 : 20;
+        const location_owner_token_t incoming_owner_token =
+          test_case == case_t::same_session ? location_owner_token_t{"previous-owner", 23}
+                                            : location_owner_token_t{"incoming-owner", 29};
         const protocol::bound_session_bind_t bind{
           1,
           protocol::actor_route_fence_t{
@@ -6433,7 +6444,7 @@ int duplicate_bind_callback_policy ()
             zlink::routing_id_t::from (std::string (actor.node_rid ().value ())).to_bytes (), 11,
             13, 17},
           incoming_session.to_bytes (),
-          {protocol::bound_session_binding_state_t::active, 20}};
+          {protocol::bound_session_binding_state_t::active, incoming_generation}};
         bool terminal_submitted = false;
         std::optional<std::tuple<std::uint32_t, std::uint32_t,
                                  std::optional<protocol::stream_bind_reply_tail_t>>>
@@ -6447,8 +6458,12 @@ int duplicate_bind_callback_policy ()
         auto disconnect_entered = std::make_shared<task_completion_source_t<void>> ();
         auto release_disconnect = std::make_shared<task_completion_source_t<void>> ();
         std::optional<task_t<result_t<bool>>> disconnect;
-        const bool hold_disconnect = test_case == case_t::no_callback || test_case == case_t::reject
-                                     || test_case == case_t::factory_subtype;
+        const bool gate_free = test_case == case_t::no_callback
+                               || test_case == case_t::first_binding
+                               || test_case == case_t::same_session;
+        const bool hold_disconnect = gate_free || test_case == case_t::reject
+                                     || test_case == case_t::factory_subtype
+                                     || test_case == case_t::accept;
         if (hold_disconnect) {
             // The previous Session disconnect owns the Actor turn until explicitly released.
             disconnect.emplace (spot_runtime.run_actor_turn (
@@ -6467,9 +6482,9 @@ int duplicate_bind_callback_policy ()
         }
         auto pending = apply_bound_session_bind_async (
           gateway.weak_state (), {}, spot_state, std::move (stream_runtime), wire_actor, bind,
-          incoming_owner, 9, incoming_owner_token, std::move (submit_terminal_reply), delays,
-          std::chrono::milliseconds (25));
-        if (hold_disconnect && test_case != case_t::no_callback) {
+          incoming_owner, test_case == case_t::same_session ? 5 : 9, incoming_owner_token,
+          std::move (submit_terminal_reply), delays, std::chrono::milliseconds (25));
+        if (hold_disconnect && !gate_free) {
             const bool waited_for_gate =
               !pending.await_ready () && observation->callback_calls.load () == 0;
             release_disconnect->complete (result_t<void>::success ());
@@ -6486,7 +6501,7 @@ int duplicate_bind_callback_policy ()
         observe_task_completion (pending,
                                  [bind_finished] (const auto &) { bind_finished->set_value (); });
         auto result = finite_task_result (std::move (pending), std::chrono::milliseconds (500));
-        if (test_case == case_t::no_callback) {
+        if (gate_free) {
             const bool disconnect_still_held = !disconnect->await_ready ();
             release_disconnect->complete (result_t<void>::success ());
             const auto disconnected = finite_task_result (std::move (*disconnect));
@@ -6502,7 +6517,7 @@ int duplicate_bind_callback_policy ()
         const auto current_route = gateway.bound_session_route_async (actor).result ().value ();
         const auto route_is_incoming = current_route && current_route->session_rid
                                        && *current_route->session_rid == incoming_session
-                                       && current_route->binding_generation == 20;
+                                       && current_route->binding_generation == incoming_generation;
         const bool route_is_previous = current_route && current_route->session_rid
                                        && *current_route->session_rid == previous_session
                                        && current_route->binding_generation == 19;
@@ -6560,17 +6575,22 @@ int duplicate_bind_callback_policy ()
                         == static_cast<std::uint32_t> (protocol::request_terminal_result::ok)
                    && std::get<1> (*terminal)
                         == static_cast<std::uint32_t> (protocol::framework_error_code::none)
-                   && std::get<2> (*terminal) && std::get<2> (*terminal)->binding_generation == 20
+                   && std::get<2> (*terminal)
+                   && std::get<2> (*terminal)->binding_generation == incoming_generation
                    && std::get<2> (*terminal)->authority_owner_generation == 13
-                   && bind_result.replacement
-                   && bind_result.replacement->retired_session.retired_binding_generation == 19
+                   && ((test_case == case_t::same_session || test_case == case_t::first_binding)
+                         ? !bind_result.replacement
+                         : bind_result.replacement
+                             && bind_result.replacement->retired_session.retired_binding_generation
+                                  == 19)
                    && callback_state_matches
                  ? 0
                  : 7;
     };
 
     for (const auto test_case : {case_t::accept, case_t::accept_empty, case_t::reject,
-                                 case_t::timeout, case_t::no_callback, case_t::factory_subtype}) {
+                                 case_t::timeout, case_t::no_callback, case_t::factory_subtype,
+                                 case_t::first_binding, case_t::same_session}) {
         if (const auto result = run_case (test_case); result != 0) {
             std::cerr << "duplicate bind case=" << static_cast<int> (test_case)
                       << " failure=" << result << '\n';

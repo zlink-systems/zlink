@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include <zlink/stream_connector.hpp>
 #include <zlink/stream_e2e_client.hpp>

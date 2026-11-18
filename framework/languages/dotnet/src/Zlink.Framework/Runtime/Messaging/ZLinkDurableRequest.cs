@@ -46,6 +46,7 @@ internal static class ZLinkDurableRequest
         {
             timeProvider ??= TimeProvider.System;
             ConnectionAttempt? baseline = null;
+            ZLinkMeshPeerExpectation? baselineExpectation = null;
             var waiting = false;
             string? endpoint = null;
             while (true)
@@ -83,6 +84,8 @@ internal static class ZLinkDurableRequest
                 // Compare retained failure tokens before accepting a recovered route.
                 if (waiting)
                 {
+                    if (baselineExpectation is { } expected && route.Expectation != expected)
+                        throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
                     if (baseline is { } previous)
                     {
                         if (
@@ -105,6 +108,7 @@ internal static class ZLinkDurableRequest
                     )
                         throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
                     baseline ??= attempt;
+                    baselineExpectation ??= route.Expectation;
                     endpoint ??= route.Endpoint ?? attempt?.Endpoint;
                     waiting = true;
                     try
@@ -175,5 +179,6 @@ internal readonly record struct ZLinkPeerRouteObservation(
     Task Changed,
     ConnectionAttempt? Attempt = null,
     string? Endpoint = null,
-    IReadOnlyList<ConnectionAttempt>? Attempts = null
+    IReadOnlyList<ConnectionAttempt>? Attempts = null,
+    ZLinkMeshPeerExpectation? Expectation = null
 );

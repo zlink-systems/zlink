@@ -50,7 +50,7 @@ internal sealed class ZLinkLocationAddressResolvers
             ToSnapshot(row),
             row.SpotGeneration,
             ct => RefreshSpotAsync(key, ct),
-            () => _rows.InvalidateSpotRoute(key)
+            () => _rows.InvalidateSpotRouteAsync(key)
         );
         if (_handles is not null)
             await _handles.RegisterSpotAsync(key, handle).ConfigureAwait(false);
@@ -82,7 +82,7 @@ internal sealed class ZLinkLocationAddressResolvers
             ToSnapshot(row),
             row.MembershipEpoch,
             ct => RefreshActorAsync(key, ct),
-            () => _rows.InvalidateActorRoute(key)
+            () => _rows.InvalidateActorRouteAsync(key)
         );
         if (_handles is not null)
             await _handles.RegisterActorAsync(key, handle).ConfigureAwait(false);
@@ -184,7 +184,7 @@ internal sealed class ZLinkResolvedSpotHandle
         CancellationToken,
         ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>
     > _refresh;
-    private readonly Action? _invalidateRoute;
+    private readonly Func<ValueTask>? _invalidateRoute;
     private readonly ZLinkStateLane _lane = new();
     private ZLinkHandleAvailability _availability = ZLinkHandleAvailability.Available;
     private ulong _version;
@@ -197,7 +197,7 @@ internal sealed class ZLinkResolvedSpotHandle
             CancellationToken,
             ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>
         > refresh,
-        Action? invalidateRoute = null
+        Func<ValueTask>? invalidateRoute = null
     )
     {
         _refresh = refresh;
@@ -278,7 +278,8 @@ internal sealed class ZLinkResolvedSpotHandle
         return true;
     }
 
-    internal void InvalidateRoute() => _invalidateRoute?.Invoke();
+    internal ValueTask InvalidateRouteAsync() =>
+        _invalidateRoute?.Invoke() ?? ValueTask.CompletedTask;
 }
 
 internal enum ZLinkHandleAvailability
@@ -289,6 +290,12 @@ internal enum ZLinkHandleAvailability
 
 internal static class ZLinkSpotHandleRequestExecution
 {
+    internal static bool IsInstanceAuthorityRefusal(ZLinkFrameworkException error) =>
+        error.FrameworkFailureCode
+            is (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
+                or (int)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                or (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale;
+
     internal static async ValueTask<T> ExecuteAsync<T>(
         ZLinkResolvedSpotHandle handle,
         Func<ZLinkSpotHandleSnapshot, ValueTask<T>> operation,
@@ -306,7 +313,7 @@ internal static class ZLinkSpotHandleRequestExecution
         }
         catch (ZLinkFrameworkException error) when (IsStaleRoute(error))
         {
-            handle.InvalidateRoute();
+            await handle.InvalidateRouteAsync().ConfigureAwait(false);
             throw;
         }
     }
