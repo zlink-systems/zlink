@@ -102,7 +102,21 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         if (Volatile.Read(ref _closed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkStateLane));
 
-        var inline = TryRunInlineAsync(work, state).GetAwaiter().GetResult();
+        // An idle RunAsync turn rechecks close after its claim and fails instead of
+        // running on a closed lane. TryPost has no such recheck: see its summary.
+        var inline = TryRunInlineAsync(
+                static entry =>
+                {
+                    ObjectDisposedException.ThrowIf(
+                        Volatile.Read(ref entry.Lane._closed) != 0,
+                        entry.Lane
+                    );
+                    return entry.Work(entry.State);
+                },
+                (Lane: this, Work: work, State: state)
+            )
+            .GetAwaiter()
+            .GetResult();
         if (inline.Ran)
             return inline.Result;
 
@@ -133,7 +147,6 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
 
         try
         {
-            ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             CurrentLane.Value = this;
             return (true, ValueTask.FromResult(work(state)));
         }
@@ -209,6 +222,8 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     /// <summary>
     /// Runs an idle turn directly, or queues <paramref name="work"/> with its
     /// <paramref name="state"/> without a closure when the lane has a predecessor.
+    /// A post accepted by the entry check always runs, even if the lane closes
+    /// before its turn, because callers hand release work to it.
     /// </summary>
     internal bool TryPost<TState>(Action<TState> work, TState state)
     {

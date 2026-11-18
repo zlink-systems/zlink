@@ -54,6 +54,41 @@ public sealed class StateLaneTests
         }
     }
 
+    [Fact]
+    public async Task AcceptedPost_RunsEvenWhenCloseRacesItsInlineTurn()
+    {
+        // TryPost true hands the caller's release work to the lane, so an accepted
+        // post must run even when DisposeAsync lands between entry and the turn.
+        const int attempts = 20_000;
+        var lost = 0;
+        var accepted = 0;
+        using var start = new Barrier(2);
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            var lane = new ZLinkStateLane();
+            var ran = 0;
+            var post = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                return lane.TryPost(() => Interlocked.Exchange(ref ran, 1));
+            });
+            var close = Task.Run(async () =>
+            {
+                start.SignalAndWait();
+                await lane.DisposeAsync();
+            });
+            var posted = await post.WaitAsync(TimeSpan.FromSeconds(5));
+            await close.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!posted)
+                continue;
+            accepted++;
+            if (Volatile.Read(ref ran) == 0)
+                lost++;
+        }
+        Assert.True(accepted > 0, "no post was accepted; the race was not exercised");
+        Assert.Equal(0, lost);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
