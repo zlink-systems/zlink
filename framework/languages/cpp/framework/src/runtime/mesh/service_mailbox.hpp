@@ -81,11 +81,14 @@ class service_mailbox_application_t
         _original (std::move (original))
     {
     }
-    service_mailbox_application_t (service_mailbox_application_t &&other)
+    service_mailbox_application_t (service_mailbox_application_t &&other) noexcept (
+      std::is_nothrow_move_constructible_v<decltype (_original)>) :
+        _original (std::move (other._original))
     {
-        *this = std::move (other);
+        other.reset ();
     }
-    service_mailbox_application_t &operator= (service_mailbox_application_t &&other)
+    service_mailbox_application_t &operator= (service_mailbox_application_t &&other) noexcept (
+      std::is_nothrow_move_assignable_v<decltype (_original)>)
     {
         // The empty source is the mailbox's taken mark for an application original.
         _original = std::move (other._original);
