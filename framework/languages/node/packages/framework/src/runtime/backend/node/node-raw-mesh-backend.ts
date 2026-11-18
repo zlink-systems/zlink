@@ -2297,18 +2297,6 @@ class RawStreamSessionService implements StreamSessionService {
     };
   }
 
-  lookupActor(
-    targetNodeRid: RoutingId,
-    actorId: string,
-    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
-  ): MeshOperationId {
-    this.requireStarted();
-    return this.observe(
-      OperationKind.ActorLookup,
-      this.stateful.lookupRemoteActor(String(targetNodeRid), actorId, timeoutMs)
-    );
-  }
-
   bindActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,
