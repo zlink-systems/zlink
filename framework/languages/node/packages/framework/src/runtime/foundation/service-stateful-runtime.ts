@@ -1884,8 +1884,7 @@ export class ServiceStatefulRuntime {
     this.submitRequest(
       pending,
       targetNodeRid,
-      this.raw.peerLifecycleGeneration(targetNodeRid) ??
-        this.raw.topology.admittedPeer(targetNodeRid)?.descriptor.lifecycleGeneration,
+      this.raw.peerLifecycleGeneration(targetNodeRid),
       [encodeActorLookupHeader(pending.id, actorId)],
       timeoutMs,
       'actorLookup'
@@ -1974,7 +1973,7 @@ export class ServiceStatefulRuntime {
       pending,
       actor,
       targetNodeRid,
-      this.tryEntrySpotFence(targetNodeRid),
+      () => this.tryEntrySpotFence(targetNodeRid),
       payload,
       deadlineMs
     );
@@ -1995,7 +1994,7 @@ export class ServiceStatefulRuntime {
       pending,
       actor,
       targetNodeRid,
-      this.tryEntrySpotFence(targetNodeRid),
+      () => this.tryEntrySpotFence(targetNodeRid),
       request,
       deadlineMs,
       { request, actorFence, local }
@@ -4842,15 +4841,19 @@ export class ServiceStatefulRuntime {
 
   private async requestDurableOperation(
     targetNodeRid: string,
-    parts: readonly Buffer[],
+    parts: readonly Buffer[] | (() => readonly Buffer[]),
     correlation: bigint,
     operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind' | 'actorJoin',
     pending: PendingOperation<unknown>,
-    targetNodeGeneration: bigint | undefined
+    targetNodeGeneration: bigint | undefined | (() => bigint | undefined)
   ): Promise<readonly Buffer[]> {
     this.requireOpen();
     if (targetNodeRid === this.nodeRid) {
-      return this.requestLocalInfrastructure(parts[0]!, correlation, pending);
+      return this.requestLocalInfrastructure(
+        (typeof parts === 'function' ? parts() : parts)[0]!,
+        correlation,
+        pending
+      );
     }
     return requestDurableService(
       this.raw,
@@ -5086,7 +5089,7 @@ export class ServiceStatefulRuntime {
     pending: ServiceStatefulPendingOperation,
     actor: ServiceActorRef,
     targetNodeRid: string,
-    target: ServiceSpotRouteFence | undefined,
+    target: ServiceSpotRouteFence | undefined | (() => ServiceSpotRouteFence | undefined),
     payload: ServiceApplicationPayload | undefined,
     deadlineMs: number,
     canonical?: ServiceCanonicalActorJoinCandidate
@@ -5111,9 +5114,20 @@ export class ServiceStatefulRuntime {
         })
       );
     }
-    let parts: readonly Buffer[];
-    try {
-      parts = encodeActorJoin28({
+    const resolveTarget = typeof target === 'function' ? target : () => target;
+    const initialTarget = resolveTarget();
+    const retainedPayload =
+      initialTarget === undefined && payload !== undefined
+        ? { ...payload, payload: copyPayloadBytes(payload.payload) }
+        : payload;
+    const encode = () => {
+      const target = initialTarget ?? resolveTarget();
+      if (target === undefined)
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          'Entry Spot descriptor is unavailable.'
+        );
+      return encodeActorJoin28({
         correlation: pending.id,
         actor: {
           id: actor.actorId,
@@ -5132,23 +5146,32 @@ export class ServiceStatefulRuntime {
           expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
           expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
         },
-        ...(payload === undefined ? {} : { payload })
+        ...(retainedPayload === undefined ? {} : { payload: retainedPayload })
       }).map((frame) => Buffer.from(frame));
+    };
+    let parts: readonly Buffer[] | (() => readonly Buffer[]);
+    try {
+      parts = initialTarget === undefined ? encode : encode();
     } catch (error) {
       this.canonicalActorJoinHandoffs.delete(pending.id);
       pending.replyFailure(error);
       return;
     }
     if (targetNodeRid === this.nodeRid) {
-      this.submitRequest(
-        pending,
-        targetNodeRid,
-        target.targetNodeGeneration,
-        parts,
-        Math.max(0, Math.ceil(deadlineMs - performance.now())),
-        'actorJoin',
-        actor
-      );
+      try {
+        this.submitRequest(
+          pending,
+          targetNodeRid,
+          initialTarget!.targetNodeGeneration,
+          typeof parts === 'function' ? parts() : parts,
+          Math.max(0, Math.ceil(deadlineMs - performance.now())),
+          'actorJoin',
+          actor
+        );
+      } catch (error) {
+        this.canonicalActorJoinHandoffs.delete(pending.id);
+        pending.replyFailure(error);
+      }
       return;
     }
     void this.requestDurableOperation(
@@ -5157,7 +5180,8 @@ export class ServiceStatefulRuntime {
       pending.id,
       'actorJoin',
       pending,
-      isEntrySpotFence(target) ? undefined : target.targetNodeGeneration
+      initialTarget?.targetNodeGeneration ??
+        (typeof target === 'function' ? () => resolveTarget()?.targetNodeGeneration : undefined)
     ).then(
       (reply) => this.completeRemoteReply(pending, targetNodeRid, 'actorJoin', actor, reply),
       (error) => {
@@ -5907,12 +5931,10 @@ export class ServiceStatefulRuntime {
   }
 
   private tryEntrySpotFence(targetNodeRid: string): ServiceDirectSpotRouteFence | undefined {
-    // #4461: Entry Spot G moves to the descriptor wait; keep current selection until then.
     const targetNodeGeneration =
       targetNodeRid === this.nodeRid
         ? this.nodeGeneration
-        : (this.raw.peerLifecycleGeneration(targetNodeRid) ??
-          this.raw.topology.admittedPeer(targetNodeRid)?.descriptor.lifecycleGeneration);
+        : this.raw.peerLifecycleGeneration(targetNodeRid);
     if (targetNodeGeneration === undefined) return undefined;
     return {
       spot: {

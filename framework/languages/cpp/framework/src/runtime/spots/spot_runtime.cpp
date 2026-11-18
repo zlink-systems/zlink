@@ -7998,7 +7998,7 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
         return std::nullopt;
     const auto handoff_id = runtime::protocol::actor_join_handoff_id (prepare.relocation);
     const auto admission = _state->actor_transfer_coordinator->admission (handoff_id);
-    if (!admission || !admission->canonical_user_spot_join)
+    if (!admission || !admission->canonical_application_join)
         return std::nullopt;
     struct validation_projection_t
     {
@@ -8026,8 +8026,10 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
                                       ? _state->snapshot.routing_id->to_bytes ()
                                       : std::vector<std::uint8_t>{};
             result.matches =
-              !local_node.empty () && !target.is_entry_spot () && !target.is_instance_spot ()
-              && target.object_generation == admission->target_spot_generation
+              !local_node.empty () && !target.is_instance_spot ()
+              && (target.is_entry_spot () ? prepare.target.target_node_generation
+                                          : target.object_generation)
+                   == admission->target_spot_generation
               && prepare.object.object_id == admission->source_actor.actor_id ().value ()
               && prepare.object.object_generation == admission->source_actor.object_generation ()
               && prepare.object.expected_authority_owner_generation
@@ -9468,7 +9470,7 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
           const auto found_admission =
             target_state->actor_admissions.find (factory->second.actor_type);
           if (found_admission != target_state->actor_admissions.end ()
-              && found_admission->second.join) {
+              && (target_state->is_entry_spot () || found_admission->second.join)) {
               admission = found_admission->second;
           }
           admission_timeout =
@@ -9537,7 +9539,9 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
        completion_operation_id_high, completion_operation_id_low] {
           auto &target = *target_state;
           auto &response = outcome->response;
-          response = admission.join (target.spot_instance.get (), actor_id, request, *serializers);
+          response = target.is_entry_spot () ? spot_actor_join_result_t{true, {}}
+                                             : admission.join (target.spot_instance.get (),
+                                                               actor_id, request, *serializers);
           if (response.accepted
               && !state->actor_transfer_coordinator->try_add_admission (
                 transfer_id,
@@ -9546,9 +9550,8 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
                   .source_actor = store_actor,
                   .source_spot_id = source_spot_id,
                   .target_spot_id = target_spot_id,
-                  .canonical_user_spot_join = actor_type_from_authority_only
-                                              && !target.is_entry_spot ()
-                                              && !target.is_instance_spot (),
+                  .canonical_application_join =
+                    actor_type_from_authority_only && !target.is_instance_spot (),
                   .deadline = std::chrono::steady_clock::now () + admission_timeout,
                   .completion_operation_id_high = completion_operation_id_high,
                   .completion_operation_id_low = completion_operation_id_low,
@@ -15575,7 +15578,7 @@ spot_node_runtime_t::resolve_spot_generation (const zlink::routing_id_t &target_
 }
 
 result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
-  const runtime::protocol::spot_route_fence_t &fence) const
+  const runtime::protocol::spot_route_fence_t &fence, bool entry) const
 {
     if (fence.spot_id.empty () || fence.object_generation == 0
         || fence.target_node_routing_id.empty () || fence.target_node_generation == 0
@@ -15590,6 +15593,22 @@ result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
         return result_t<std::uint64_t>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor Join target Spot Authority Store is unavailable");
+    }
+    if (entry) {
+        const auto entry_id = resolve_entry_spot_id ();
+        const auto node = native_node ();
+        const auto owner =
+          services->get_required<runtime::location_runtime_t> ().current_owner_token ();
+        if (!entry_id || *entry_id != fence.spot_id || !node || !owner
+            || node->status ().routing_id ().to_bytes () != fence.target_node_routing_id
+            || node->status ().lifecycle_generation () != fence.target_node_generation
+            || fence.object_generation != fence.target_node_generation
+            || fence.authority_owner_generation != fence.target_node_generation
+            || owner->lease_generation <= 0
+            || static_cast<std::uint64_t> (owner->lease_generation) != fence.owner_lease_generation)
+            return result_t<std::uint64_t>::failure (framework_error_kind_t::unavailable,
+                                                     "Entry Spot descriptor fence is unavailable");
+        return result_t<std::uint64_t>::success (fence.object_generation);
     }
     runtime::live_location_reader_t *store = nullptr;
     try {

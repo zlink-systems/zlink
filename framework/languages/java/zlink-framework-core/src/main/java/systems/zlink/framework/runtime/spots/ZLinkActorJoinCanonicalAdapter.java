@@ -328,8 +328,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
     }
 
     private static void requireTargetExecution(Object targetSpot) {
-        ((DefaultSpotContext) ((systems.zlink.framework.spots.ZLinkSpot<?>) targetSpot).context())
-                .serials.requireExecution(true);
+        Objects.requireNonNull(SpotDispatchLine.from(targetSpot), "target Spot context")
+                .requireExecution();
     }
 
     @Override
@@ -571,11 +571,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                         request.relocationPayload(),
                         request.participants(),
                         request.sessionRoutes());
-        long targetSpotGeneration =
-                ((systems.zlink.framework.spots.ZLinkSpot<?>) admission.targetSpot())
-                        .context()
-                        .objectGeneration();
-        return new ZLinkSpotRetireControl.TargetProfile(profiled, targetSpotGeneration, 2);
+        SpotDispatchLine target =
+                Objects.requireNonNull(SpotDispatchLine.from(admission.targetSpot()));
+        return new ZLinkSpotRetireControl.TargetProfile(
+                profiled, target.objectGeneration(), target.spotKind());
     }
 
     CompletionStage<Void> notifyTargetJoined(
@@ -583,11 +582,16 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         ZLinkActorRuntime.PreparedTransferredActor prepared = prepared(staged);
         ZLinkActor actor = prepared.actor();
         try {
-            actors.markRelocatedActorJoined(
-                    actor,
-                    prepared.actorRef(),
-                    admission.targetSpotId(),
-                    (systems.zlink.framework.spots.ZLinkSpot<?>) admission.targetSpot());
+            SpotDispatchLine target =
+                    Objects.requireNonNull(SpotDispatchLine.from(admission.targetSpot()));
+            if (target.spotKind() == 1)
+                actors.markJoinedEntrySpot(actor, prepared.actorRef(), target.nodeRid());
+            else
+                actors.markRelocatedActorJoined(
+                        actor,
+                        prepared.actorRef(),
+                        admission.targetSpotId(),
+                        (systems.zlink.framework.spots.ZLinkSpot<?>) admission.targetSpot());
             return Objects.requireNonNull(
                     admission.joined().apply(actor), "target OnJoined callback returned null");
         } catch (RuntimeException failure) {
@@ -756,7 +760,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
 
     record PreviousMembership(String spotId, long spotGeneration) {
         PreviousMembership {
-            if (spotId == null || spotId.isBlank() || spotGeneration <= 0) {
+            if (spotId == null || spotId.isBlank() || spotGeneration == 0) {
                 throw new IllegalArgumentException("previous Actor membership is invalid");
             }
         }

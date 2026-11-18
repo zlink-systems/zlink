@@ -12,7 +12,6 @@ import systems.zlink.framework.actors.ZLinkSessionBindingIdentity;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -511,7 +510,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     if (entrySpot == null) {
                         entrySpot =
                                 (ZLinkJavaRawSpot)
-                                        createSpot(routingId() + "-entry-" + UUID.randomUUID());
+                                        createSpot(
+                                                routingId() + "-entry-" + UUID.randomUUID(),
+                                                ownerLifecycleGeneration());
                     }
                     return entrySpot;
                 });
@@ -709,24 +710,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         1,
                         actor,
                         targetSpotId,
-                        actorMembershipEpoch(actor),
-                        0,
-                        List.of()));
-    }
-
-    @Override
-    public CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
-            ZLinkBackendActorRef actor,
-            RoutingId targetNodeRid,
-            Message request,
-            Duration timeout) {
-        return CompletableFuture.completedFuture(
-                new ZLinkBackendActorJoinEntrySpotResult(
-                        ZLinkBackendRequestResult.NOT_FOUND,
-                        1,
-                        actor,
-                        targetNodeRid,
-                        entrySpot().spotId(),
                         actorMembershipEpoch(actor),
                         0,
                         List.of()));

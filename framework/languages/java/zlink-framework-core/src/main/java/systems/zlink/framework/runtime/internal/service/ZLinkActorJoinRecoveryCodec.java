@@ -265,9 +265,9 @@ public final class ZLinkActorJoinRecoveryCodec {
                             requiredText(root, FIELD_TARGET_SPOT_ID),
                             RoutingId.from(targetRid),
                             nonzeroU64(root, FIELD_TARGET_NODE_GENERATION),
-                            positiveU64(root, FIELD_TARGET_SPOT_GENERATION),
+                            nonzeroU64(root, FIELD_TARGET_SPOT_GENERATION),
                             targetAuthority,
-                            positiveU64(request, FIELD_TARGET_SPOT_AUTHORITY_OWNER_GENERATION),
+                            nonzeroU64(request, FIELD_TARGET_SPOT_AUTHORITY_OWNER_GENERATION),
                             new Coordinator(
                                     requiredText(request, FIELD_RELOCATION_COORDINATOR_OWNER_ID),
                                     nonzeroU64(
@@ -294,7 +294,7 @@ public final class ZLinkActorJoinRecoveryCodec {
                                     requestBytes.length, value.relocationContentType())
                     || nonzeroU64(request, FIELD_TARGET_NODE_GENERATION)
                             != value.targetNodeGeneration()
-                    || positiveU64(request, FIELD_TARGET_SPOT_GENERATION)
+                    || nonzeroU64(request, FIELD_TARGET_SPOT_GENERATION)
                             != value.targetSpotGeneration()
                     || nonzeroU64(request, FIELD_TARGET_AUTHORITY_OWNER_GENERATION)
                             != targetAuthority) {
@@ -419,9 +419,9 @@ public final class ZLinkActorJoinRecoveryCodec {
                 || value.actorNodeGeneration() == 0
                 || value.expectedOwnerLeaseGeneration() == 0
                 || value.targetNodeGeneration() == 0
-                || value.targetSpotGeneration() <= 0
+                || value.targetSpotGeneration() == 0
                 || value.targetAuthorityOwnerGeneration() <= 0
-                || value.targetSpotAuthorityOwnerGeneration() <= 0
+                || value.targetSpotAuthorityOwnerGeneration() == 0
                 || value.operationId().high() == 0 && value.operationId().low() == 0) {
             throw invalid("Actor Join recovery identity is invalid");
         }
