@@ -15145,6 +15145,10 @@ public sealed partial class EntrySpotActorDispatchTests
     private sealed class CommittedJoinRetryProbe
     {
         public int Attempts;
+        public int Failures = 1;
+        public Action<int>? OnAttempt;
+        public Exception Failure { get; } =
+            new InvalidOperationException("post-commit callback failed");
     }
 
     private sealed class RetryingJoinTargetSpot(
@@ -15162,8 +15166,10 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ValueTask OnJoinedActorAsync(ProbeActor actor, CancellationToken cancellationToken)
         {
-            if (Interlocked.Increment(ref probe.Attempts) == 1)
-                throw new InvalidOperationException("post-commit callback failed");
+            var attempt = Interlocked.Increment(ref probe.Attempts);
+            probe.OnAttempt?.Invoke(attempt);
+            if (attempt <= probe.Failures)
+                throw probe.Failure;
             return ValueTask.CompletedTask;
         }
 
