@@ -391,8 +391,8 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
         skipText(envelope); // Mesh name.
         skipText(envelope); // RID bytes use the same u8 length prefix.
         envelope.getLong(); // Node lifecycle generation.
-        boolean activationAbsent = emptySlot(envelope);
         boolean relocationAbsent = emptySlot(envelope);
+        boolean activationAbsent = emptySlot(envelope);
         if (envelope.position() != payload.length - 4)
             throw new IllegalStateException("trailing authority bytes");
         return operation == 0 && state == 1 && activationAbsent && relocationAbsent;

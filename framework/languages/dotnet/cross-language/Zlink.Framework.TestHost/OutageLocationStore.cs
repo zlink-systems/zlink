@@ -441,14 +441,12 @@ internal sealed class OutageLocationStore(
                 await Task.WhenAll(pending).WaitAsync(cancellationToken);
                 await WaitForHealthAsync(health, healthy: false, cancellationToken);
                 Require(
-                    _successfulWriteStarts.TryGetValue(_ownerKey, out var t0Ms),
+                    _successfulWriteStarts.TryGetValue(_ownerKey, out var writeStartMs),
                     "No successful owner lease write was observed."
                 );
-                _cutoffMs =
-                    t0Ms
-                    - ProfileMs("renewTimeoutMs")
-                    + ProfileMs("ttlMs")
-                    + 2 * ProfileMs("fencingMarginMs");
+                // Public status omits the runtime request start; bound it by the Store write start.
+                var t0Ms = writeStartMs - ProfileMs("renewTimeoutMs");
+                _cutoffMs = t0Ms + ProfileMs("ttlMs") + 2 * ProfileMs("fencingMarginMs");
                 Timing("t0", t0Ms);
                 _events.Append("outage-observation|cutoffSource=store-request-conservative-bound");
                 Timing("cutoff", _cutoffMs);
