@@ -1441,9 +1441,7 @@ public sealed partial class LocationRuntimeTests
             flaky.HoldRecoveryDescriptor = true;
             recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
             await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            using var submitted = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            while (Volatile.Read(ref flaky.ReplacementWrites) != 2)
-                await Task.Delay(1, submitted.Token);
+            await flaky.SecondReplacementWriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, spot.ExecutionStatus);
@@ -2955,6 +2953,8 @@ public sealed partial class LocationRuntimeTests
         internal TaskCompletionSource RecoveryCasHeld { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int ReplacementWrites;
+        internal TaskCompletionSource SecondReplacementWriteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal System.Collections.Concurrent.ConcurrentQueue<string> RecoveryOrder { get; } =
             new();
         internal TaskCompletionSource RecoveryDescriptorStarted { get; } =
@@ -3034,7 +3034,8 @@ public sealed partial class LocationRuntimeTests
             if (recovery)
             {
                 RecoveryOrder.Enqueue("cas");
-                Interlocked.Increment(ref ReplacementWrites);
+                if (Interlocked.Increment(ref ReplacementWrites) == 2)
+                    SecondReplacementWriteStarted.TrySetResult();
                 RecoveryCasStarted.TrySetResult();
             }
             if (recovery && FailRecoveryCasBeforeApplyOnce)

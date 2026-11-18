@@ -1,38 +1,20 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
-using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Systems.Zlink;
 using Zlink.Framework.Contracts.Errors;
+using Zlink.Framework.Contracts.Locations;
 using Zlink.Framework.LocationProvider;
 
-// Only the test host observes opaque records. All key and record decoding stays
-// in the production repository; this decorator changes delivery, not authority.
+// The test store reads only canonical fields needed by outage assertions.
 internal sealed class OutageLocationStore(
     IZLinkLocationStore inner,
     TestHostOptions options,
     bool source
 ) : IZLinkLocationStore
 {
-    private static readonly Type Repository = typeof(IZLinkActorManager).Assembly.GetType(
-        "Zlink.Framework.Runtime.Locations.ZLinkProviderLocationRepository",
-        true
-    )!;
-    private const BindingFlags Static =
-        BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-    private const BindingFlags Instance =
-        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-    private static readonly Func<byte[], object?> ReadRelocation = BindSpanDecoder(
-        "Zlink.Framework.Runtime.Locations.ZLinkCanonicalRelocationAuthorityStateCodec",
-        "TryRead"
-    );
-    private delegate bool SpanPredicate(ReadOnlySpan<byte> payload);
-    private static readonly SpanPredicate IsSteadyReady = Repository
-        .Assembly.GetType("Zlink.Framework.Runtime.Actors.ZLinkActorAuthorityPayloadCodec", true)!
-        .GetMethod("IsSteadyReady", Static)!
-        .CreateDelegate<SpanPredicate>();
     private readonly TaskCompletionSource _failed = Signal();
     private readonly TaskCompletionSource _claimed = Signal();
     private readonly TaskCompletionSource _descriptorHeld = Signal();
@@ -109,46 +91,16 @@ internal sealed class OutageLocationStore(
     private ZLinkStoreKey _actorKey;
     private ZLinkStoreKey _meshKey;
     private ZLinkStoreKey _ownerKey;
-    private object? _authorityBefore;
-    private object? _authorityRecovered;
+    private OutageCanonicalStoreReader.Authority? _authorityBefore;
+    private OutageCanonicalStoreReader.Authority? _authorityRecovered;
     private long _oldLease;
     private long _newLease;
     private OutageProbeRes? _identity;
     private string? _sourceRid;
     private bool _relocationFenceObserved;
-    private object? _stagedTarget;
 
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    private static object Call(string name, params object?[] arguments) =>
-        Repository.GetMethod(name, Static)!.Invoke(null, arguments)!;
-
-    private static object Property(object value, string name) =>
-        value.GetType().GetProperty(name, Instance)!.GetValue(value)!;
-
-    private static T Property<T>(object value, string name) => (T)Property(value, name);
-
-    private static Func<byte[], object?> BindSpanDecoder(string typeName, string methodName)
-    {
-        var method = Repository.Assembly.GetType(typeName, true)!.GetMethod(methodName, Static)!;
-        var result = method.GetParameters()[1].ParameterType.GetElementType()!;
-        return (Func<byte[], object?>)
-            typeof(OutageLocationStore)
-                .GetMethod(nameof(BindTypedDecoder), Static)!
-                .MakeGenericMethod(result)
-                .Invoke(null, [method])!;
-    }
-
-    private delegate bool SpanDecoder<T>(ReadOnlySpan<byte> payload, out T decoded);
-
-    private static Func<byte[], object?> BindTypedDecoder<T>(MethodInfo method)
-        where T : class
-    {
-        // A delegate avoids boxing ReadOnlySpan while retaining the existing codec.
-        var decode = method.CreateDelegate<SpanDecoder<T>>();
-        return bytes => decode(bytes, out var decoded) ? decoded : null;
-    }
 
     private void Require(bool condition, string message)
     {
@@ -254,19 +206,16 @@ internal sealed class OutageLocationStore(
                 before is ZLinkStoreReadResult.Found,
                 "Target NewOwner CAS lost source authority."
             );
-            var previous = Call(
-                "DecodeAuthorityMeta",
+            var previous = OutageCanonicalStoreReader.ReadAuthority(
                 ((ZLinkStoreReadResult.Found)before).Value.Bytes
             );
-            var proposed = Call("DecodeAuthorityMeta", actor.Bytes);
+            var proposed = OutageCanonicalStoreReader.ReadAuthority(actor.Bytes);
             Require(
-                Property<ulong>(previous, "ObjectGeneration")
-                    == Property<ulong>(proposed, "ObjectGeneration"),
+                previous.ObjectGeneration == proposed.ObjectGeneration,
                 "Relocation changed object generation."
             );
             Require(
-                Property<ulong>(previous, "AuthorityOwnerGeneration")
-                    != Property<ulong>(proposed, "AuthorityOwnerGeneration"),
+                previous.AuthorityOwnerGeneration != proposed.AuthorityOwnerGeneration,
                 "Target write is not NewOwner."
             );
             _authorityBefore = previous;
@@ -285,7 +234,7 @@ internal sealed class OutageLocationStore(
                     .SingleOrDefault(put => put.Key == _ownerKey);
                 if (owner is not null)
                 {
-                    var lease = Property<long>(Call("DecodeOwner", owner.Bytes), "LeaseGeneration");
+                    var lease = OutageCanonicalStoreReader.ReadOwnerLease(owner.Bytes);
                     if (lease != _oldLease && _newLease == 0)
                     {
                         _newLease = lease;
@@ -298,22 +247,15 @@ internal sealed class OutageLocationStore(
                     .SingleOrDefault(put => put.Key == _meshKey);
                 if (descriptor is not null && _descriptorConfirmedMs == 0)
                 {
-                    var descriptorType = Repository.Assembly.GetType(
-                        "Zlink.Framework.Contracts.Locations.ZLinkMeshNodeDescriptor",
-                        true
-                    )!;
-                    var record = Repository
-                        .GetMethod("DecodeDescriptor", Static)!
-                        .MakeGenericMethod(descriptorType)
-                        .Invoke(null, [descriptor.Bytes])!;
+                    var descriptorOwner = OutageCanonicalStoreReader.ReadDescriptorOwner(
+                        descriptor.Bytes
+                    );
                     Require(
-                        Property<long>(Property(record, "Descriptor"), "LeaseGeneration")
-                            == _newLease,
+                        descriptorOwner.LeaseGeneration == _newLease,
                         "Recovery descriptor did not use the recovered lease."
                     );
                     Require(
-                        Property<string>(Property(record, "Descriptor"), "OwnerId")
-                            == Property<string>(_authorityBefore!, "OwnerId"),
+                        descriptorOwner.OwnerId == _authorityBefore!.OwnerId,
                         "Recovery descriptor changed owner identity."
                     );
                     _descriptorHeld.TrySetResult();
@@ -324,26 +266,22 @@ internal sealed class OutageLocationStore(
                 }
                 if (actor is not null && _casConfirmedMs == 0)
                 {
-                    var meta = Call("DecodeAuthorityMeta", actor.Bytes);
+                    var meta = OutageCanonicalStoreReader.ReadAuthority(actor.Bytes);
                     Require(_authorityBefore is not null, "Missing steady authority observation.");
                     Require(
-                        Property<ulong>(_authorityBefore!, "ObjectGeneration")
-                            == Property<ulong>(meta, "ObjectGeneration"),
+                        _authorityBefore!.ObjectGeneration == meta.ObjectGeneration,
                         "Recovery changed object generation."
                     );
                     Require(
-                        Property<ulong>(_authorityBefore!, "AuthorityOwnerGeneration")
-                            == Property<ulong>(meta, "AuthorityOwnerGeneration"),
+                        _authorityBefore!.AuthorityOwnerGeneration == meta.AuthorityOwnerGeneration,
                         "Recovery did not Preserve authority generation."
                     );
                     Require(
-                        Property<string>(_authorityBefore!, "OwnerId")
-                            == Property<string>(meta, "OwnerId"),
+                        _authorityBefore!.OwnerId == meta.OwnerId,
                         "Recovery changed owner identity."
                     );
                     Require(
-                        Property<long>(meta, "OwnerLeaseGeneration") == _newLease
-                            && _newLease != _oldLease,
+                        meta.OwnerLeaseGeneration == _newLease && _newLease != _oldLease,
                         "Preserve did not use the recovered lease."
                     );
                     _authorityRecovered = meta;
@@ -364,27 +302,25 @@ internal sealed class OutageLocationStore(
         }
         if (source && !_recovering && _newLease != 0 && actor is not null)
         {
-            var meta = Call("DecodeAuthorityMeta", actor.Bytes);
-            var relocation = ReadRelocation(Property<byte[]>(meta, "Payload"));
+            var meta = OutageCanonicalStoreReader.ReadAuthority(actor.Bytes);
+            var relocation = OutageCanonicalStoreReader.ReadRelocation(meta.Payload);
             if (relocation is not null)
             {
-                var state = Property(relocation, "State");
+                var state = relocation;
                 Require(
-                    Property<string>(state, "SourceOwnerId")
-                        == Property<string>(_authorityBefore!, "OwnerId"),
+                    state.SourceOwnerId == _authorityBefore!.OwnerId,
                     "Relocation source changed owner identity."
                 );
                 Require(
-                    Property<string>(state, "CoordinatorOwnerId")
-                        == Property<string>(_authorityBefore!, "OwnerId"),
+                    state.CoordinatorOwnerId == _authorityBefore!.OwnerId,
                     "Relocation coordinator changed owner identity."
                 );
                 Require(
-                    Property<ulong>(state, "SourceOwnerLeaseGeneration") == (ulong)_newLease,
+                    state.SourceOwnerLeaseGeneration == (ulong)_newLease,
                     "Relocation source reused the old lease."
                 );
                 Require(
-                    Property<ulong>(state, "CoordinatorLeaseGeneration") == (ulong)_newLease,
+                    state.CoordinatorLeaseGeneration == (ulong)_newLease,
                     "Relocation coordinator reused the old lease."
                 );
                 _relocationFenceObserved = true;
@@ -454,16 +390,11 @@ internal sealed class OutageLocationStore(
         _actors = services.GetRequiredService<IZLinkActorManager>();
         _events ??= services.GetRequiredService<TestHostEventSink>();
         var client = services.GetRequiredService<IZLinkActorClient>();
-        var runtime = services.GetRequiredService<IZLinkSpotManager>();
+        var health = services.GetRequiredService<IZLinkLocationRuntimeQuery>();
         switch (command)
         {
             case "steady":
-                var codec = Repository.Assembly.GetType(
-                    "Zlink.Framework.Runtime.Locations.ZLinkAuthorityKeyCodec",
-                    true
-                )!;
-                var actorKey = codec.GetMethod("EncodeActor", Static)!.Invoke(null, [actorId]);
-                _actorKey = (ZLinkStoreKey)Call("AuthorityMetaKey", actorKey);
+                _actorKey = OutageCanonicalStoreReader.ActorKey(actorId);
                 if (!source)
                 {
                     // Public Find runs in the staged command, never inside a Store callback on the runtime path.
@@ -479,28 +410,23 @@ internal sealed class OutageLocationStore(
                 _sourceRid = _identity.NodeRid;
                 var row = await inner.ReadAsync(_actorKey, cancellationToken);
                 Require(row is ZLinkStoreReadResult.Found, "Steady actor authority is missing.");
-                _authorityBefore = Call(
-                    "DecodeAuthorityMeta",
+                _authorityBefore = OutageCanonicalStoreReader.ReadAuthority(
                     ((ZLinkStoreReadResult.Found)row).Value.Bytes
                 );
                 Require(
-                    IsSteadyReady(Property<byte[]>(_authorityBefore, "Payload")),
+                    OutageCanonicalStoreReader.IsSteadyReady(_authorityBefore.Payload),
                     "Initial actor authority is not steady Ready."
                 );
-                _oldLease = Property<long>(_authorityBefore, "OwnerLeaseGeneration");
-                _ownerKey = (ZLinkStoreKey)Call(
-                    "OwnerKey",
-                    Property<string>(_authorityBefore, "OwnerId")
-                );
-                _meshKey = (ZLinkStoreKey)Call(
-                    "MeshKey",
+                _oldLease = _authorityBefore.OwnerLeaseGeneration;
+                _ownerKey = OutageCanonicalStoreReader.OwnerKey(_authorityBefore.OwnerId);
+                _meshKey = OutageCanonicalStoreReader.MeshKey(
                     options.MeshName!,
                     RoutingId.From(_sourceRid)
                 );
                 services
                     .GetRequiredService<TestHostEventSink>()
                     .Append(
-                        $"outage-identity|instance={_identity.InstanceId}|creations={_identity.CreationCount}|lease={_oldLease}|object={Property<ulong>(_authorityBefore, "ObjectGeneration")}|authority={Property<ulong>(_authorityBefore, "AuthorityOwnerGeneration")}"
+                        $"outage-identity|instance={_identity.InstanceId}|creations={_identity.CreationCount}|lease={_oldLease}|object={_authorityBefore.ObjectGeneration}|authority={_authorityBefore.AuthorityOwnerGeneration}"
                     );
                 return;
             case "outage":
@@ -513,12 +439,18 @@ internal sealed class OutageLocationStore(
                 }
                 await _failed.Task.WaitAsync(cancellationToken);
                 await Task.WhenAll(pending).WaitAsync(cancellationToken);
+                await WaitForHealthAsync(health, healthy: false, cancellationToken);
                 Require(
                     _successfulWriteStarts.TryGetValue(_ownerKey, out var t0Ms),
                     "No successful owner lease write was observed."
                 );
-                _cutoffMs = t0Ms + ProfileMs("ttlMs") + 2 * ProfileMs("fencingMarginMs");
+                _cutoffMs =
+                    t0Ms
+                    - ProfileMs("renewTimeoutMs")
+                    + ProfileMs("ttlMs")
+                    + 2 * ProfileMs("fencingMarginMs");
                 Timing("t0", t0Ms);
+                _events.Append("outage-observation|cutoffSource=store-request-conservative-bound");
                 Timing("cutoff", _cutoffMs);
                 return;
             case "expired":
@@ -572,22 +504,8 @@ internal sealed class OutageLocationStore(
                     _descriptorRelease.Task.IsCompleted && _casRelease.Task.IsCompleted,
                     "Both recovery results must be released."
                 );
-                var locationRuntime = runtime
-                    .GetType()
-                    .GetField("_locationRuntime", Instance)!
-                    .GetValue(runtime)!;
-                while (
-                    Property(
-                        locationRuntime
-                            .GetType()
-                            .GetMethod("GetHealthSnapshot", Instance)!
-                            .Invoke(locationRuntime, null)!,
-                        "StoreOutage"
-                    )
-                        is not null
-                )
-                    await Task.Delay(10, cancellationToken);
-                var current = await ProbeAsync(client, "resumed", cancellationToken);
+                await WaitForHealthAsync(health, healthy: true, cancellationToken);
+                var current = await ObserveResumedAsync(client, actorId, cancellationToken);
                 Require(
                     current.InstanceId == _identity!.InstanceId
                         && current.CreationCount == _identity.CreationCount,
@@ -625,14 +543,18 @@ internal sealed class OutageLocationStore(
                     OutageActorObservations.Count(actorId) == 0,
                     "Staged target executed an actor handler."
                 );
-                RequireStagedFenceAbsent(
-                    runtime,
-                    actorId,
-                    Property<ulong>(_authorityBefore!, "ObjectGeneration")
+                var flow = services.GetRequiredService<TestHostMessageFlowListener>();
+                Require(
+                    flow.HasRelocationDetail(actorId, "target_restore_begin"),
+                    "Staged target restore was not observed in message flow."
                 );
+                // AuthorityPublished is private. Find, handler count and restore flow are
+                // the public observations of the held pre-commit stage.
                 services
                     .GetRequiredService<TestHostEventSink>()
-                    .Append($"outage-staged|find={_sourceRid}|handlerCount=0|fence=absent");
+                    .Append(
+                        $"outage-staged|find={_sourceRid}|handlerCount=0|fence=unobserved|AuthorityPublished=unavailable|fenceObservation=public-routing-and-handler"
+                    );
                 return;
             case "commit":
                 Require(_commitHeld.Task.IsCompleted, "No staged NewOwner CAS was observed.");
@@ -674,9 +596,8 @@ internal sealed class OutageLocationStore(
                         );
                     }
                     Require(
-                        _stagedTarget is not null
-                            && Property<bool>(_stagedTarget, "AuthorityPublished"),
-                        "Target authority was not published after NewOwner commit."
+                        OutageActorObservations.Count(actorId) == 2,
+                        "Post-commit handlers did not execute exactly twice on target."
                     );
                 }
                 return;
@@ -699,33 +620,50 @@ internal sealed class OutageLocationStore(
             .Async<OutageProbeRes>(cancellationToken)
             .AsTask();
 
-    private void RequireStagedFenceAbsent(object runtime, string actorId, ulong generation)
+    private static async Task WaitForHealthAsync(
+        IZLinkLocationRuntimeQuery query,
+        bool healthy,
+        CancellationToken cancellationToken
+    )
     {
-        // The scenario stages one relocation of one actor. Matching by incarnation keeps this
-        // check independent of whether the source records relocation state in authority (#4718).
-        var owner = Property(runtime, "StandaloneActorRelocationRuntime");
-        var attempts = (System.Collections.IEnumerable)
-            owner.GetType().GetField("_targetAttempts", Instance)!.GetValue(owner)!;
-        var matches = new List<object>();
-        foreach (var entry in attempts)
+        while (true)
         {
-            var stage = Property(Property(entry, "Value"), "Stage");
-            if (stage is null)
-                continue;
-            var participant = Property(Property(stage, "Prepare"), "Object");
+            var status = await query.GetStatusAsync(cancellationToken);
             if (
-                Property<string>(participant, "ObjectId") != actorId
-                || Property<ulong>(participant, "ObjectGeneration") != generation
+                healthy
+                    ? status.StoreHealthy && status.OwnerLeaseHealthy
+                    : !status.OwnerLeaseHealthy
             )
-                continue;
-            matches.Add(stage);
+                return;
+            await Task.Delay(10, cancellationToken);
         }
-        Require(matches.Count == 1, "Expected exactly one matching staged target attempt.");
-        _stagedTarget = matches[0];
-        Require(
-            !Property<bool>(_stagedTarget, "AuthorityPublished"),
-            "Staged target published authority before NewOwner commit."
-        );
+    }
+
+    private async Task<OutageProbeRes> ObserveResumedAsync(
+        IZLinkActorClient client,
+        string actorId,
+        CancellationToken cancellationToken
+    )
+    {
+        // Public health does not expose per-actor recovery admission. Observe it
+        // through successful dispatch; every closed-admission result must run no handler.
+        while (true)
+        {
+            var before = OutageActorObservations.Count(actorId);
+            try
+            {
+                return await ProbeAsync(client, "resumed", cancellationToken);
+            }
+            catch (ZLinkFrameworkException error)
+                when (error.Kind == ZLinkFrameworkErrorKind.ShuttingDown)
+            {
+                Require(
+                    OutageActorObservations.Count(actorId) == before,
+                    "Closed recovery admission entered the handler."
+                );
+            }
+            await Task.Delay(10, cancellationToken);
+        }
     }
 }
 

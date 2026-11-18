@@ -51,7 +51,6 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
-import systems.zlink.framework.runtime.internal.locations.CrossLanguageOutageStore;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
@@ -137,7 +136,7 @@ public final class Program {
             .setKeyPrefix(args.option("redis-key-prefix", "zlink-cross-relocation") + ":location"));
         if (args.option("outage-control-prefix", null) == null) return redis;
         return new CrossLanguageOutageStore(redis, args.require("mesh-name"), args.require("node-rid"),
-            args.option("actor-id", "cross-lang-user-spot-actor"), "user-spot-target".equals(args.mode()));
+            args.option("actor-id", "cross-lang-user-spot-actor"));
     }
 
     @Bean
