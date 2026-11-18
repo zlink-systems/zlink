@@ -14,6 +14,9 @@
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/streams/session_liveness.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/execution/serial_execution_queue.hpp"
 #include <boost/beast/websocket.hpp>
 #include "../support/loopback_tcp_endpoint.hpp"
 
@@ -1922,9 +1925,68 @@ int reply_submission_after_unbound (bool retire = true)
              : 4;
 }
 
+int stream_write_terminal_during_host_shutdown (bool success)
+{
+    using namespace zlink::framework;
+    runtime::configure_handler_coroutine_executor (1);
+    runtime::install_host_context_hooks ();
+    auto builder = test::runtime_failure_builder ();
+    builder.stream ("write-shutdown").bind ("tcp://127.0.0.1:0").register_session ("session");
+    serializer_registry_t serializers;
+    detail::bind_stream_serializers (builder, serializers);
+    auto streams = detail::stream_runtime_t::from (builder);
+    auto stream = streams.open_session ("write-shutdown");
+    task_completion_source_t<void> native_write;
+    streams.attach_transport_writer (
+      stream, [&] (const auto &, const auto &) { return native_write.task (); });
+
+    std::promise<void> worker_entered, release_worker;
+    auto released = release_worker.get_future ().share ();
+    auto scheduler = detail::capture_runtime_native_continuation_scheduler ();
+    scheduler ([&] {
+        worker_entered.set_value ();
+        released.wait ();
+    });
+    worker_entered.get_future ().wait ();
+
+    runtime::offload_executor_t workers (1);
+    auto queue = std::make_shared<runtime::serial_execution_queue_t> (workers);
+    std::optional<task_t<void>> write;
+    queue->run ("write", [&] {
+        write.emplace (stream.write_packet (message_t::from (std::string ("body"))).async ());
+    });
+    native_write.complete (
+      success ? result_t<void>::success ()
+              : result_t<void>::failure (framework_error_kind_t::unavailable, "write failed"));
+    std::thread shutdown ([] { runtime::shutdown_handler_coroutine_executor (); });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (detail::capture_runtime_native_continuation_scheduler ()
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const bool sealed = !detail::capture_runtime_native_continuation_scheduler ();
+    release_worker.set_value ();
+    shutdown.join ();
+
+    const bool completed = write->await_ready ();
+    const bool preserved =
+      completed && static_cast<bool> (write->result ()) == success
+      && (success || write->result ().error_kind () == framework_error_kind_t::unavailable);
+    streams.mark_disconnected (stream);
+    queue->close ();
+    queue->drain ();
+    queue.reset ();
+    workers.drain ();
+    return sealed && preserved ? 0 : 1;
+}
+
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--write-terminal-shutdown") {
+        if (const auto failed = stream_write_terminal_during_host_shutdown (true))
+            return failed;
+        return stream_write_terminal_during_host_shutdown (false);
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--reply-unbound")
         return reply_submission_after_unbound (false) ? 5 : reply_submission_after_unbound ();
     if (argc == 2 && std::string_view (argv[1]) == "--binding-submission-order")
