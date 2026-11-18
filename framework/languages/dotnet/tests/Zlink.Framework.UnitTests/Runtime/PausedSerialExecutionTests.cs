@@ -79,13 +79,7 @@ public sealed class PausedSerialExecutionTests
             Assert.Equal(ZLinkSerialPostAdmission.Closed, admission);
             Assert.Null(rejected);
             var failure = Assert.Throws<ZLinkFrameworkException>(() =>
-                queue.Post(
-                    _ => ValueTask.CompletedTask,
-                    0,
-                    0,
-                    false,
-                    CancellationToken.None
-                )
+                queue.Post(_ => ValueTask.CompletedTask, 0, 0, false, CancellationToken.None)
             );
             Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
             queue._applicationQueue.Remove(previous, head);
@@ -110,9 +104,7 @@ public sealed class PausedSerialExecutionTests
             await restored.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await queue.RunLifecycleAsync(_ => ValueTask.CompletedTask, CancellationToken.None);
             Assert.Equal(
-                removeHead
-                    ? new[] { selected, tail }
-                    : new[] { selected, head, tail },
+                removeHead ? new[] { selected, tail } : new[] { selected, head, tail },
                 queue._applicationQueue.ToArray()
             );
             Assert.Equal(removeHead ? 2 : 3, queue._applicationQueue.Count);
@@ -120,11 +112,7 @@ public sealed class PausedSerialExecutionTests
             Assert.False(selected.Completion.IsCompleted);
             status = ZLinkObjectExecutionStatus.Allowed;
             queue.NotifyReadiness();
-            await Task.WhenAll(
-                    head.Completion,
-                    selected.Completion,
-                    tail.Completion
-                )
+            await Task.WhenAll(head.Completion, selected.Completion, tail.Completion)
                 .WaitAsync(TimeSpan.FromSeconds(5));
             await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(removeHead ? new[] { 3, 4 } : new[] { 3, 1, 4 }, order);
@@ -237,13 +225,7 @@ public sealed class PausedSerialExecutionTests
             await queue.RunLifecycleAsync(_ => ValueTask.CompletedTask, CancellationToken.None);
             Assert.True(lockHeld, "Paused restoration must hold the mailbox admission gate.");
             var failure = Assert.Throws<ZLinkFrameworkException>(() =>
-                queue.Post(
-                    _ => ValueTask.CompletedTask,
-                    0,
-                    0,
-                    false,
-                    CancellationToken.None
-                )
+                queue.Post(_ => ValueTask.CompletedTask, 0, 0, false, CancellationToken.None)
             );
             Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
             Assert.Equal(1, queue.ApplicationPendingCount);
