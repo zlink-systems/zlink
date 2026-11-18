@@ -1640,83 +1640,83 @@ std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_req
         std::shared_ptr<task_completion_source_t<void>> admitted;
         bool registered = false;
     };
-    auto start = _lane.run_sync ([this, operations, registered_operation, &header, &request_metric,
-                                  &target_routing_id, &application_payload,
-                                  request = std::move (request), requested_correlation,
-                                  target_claimed, deadline, wait_owner, target_lifecycle_generation,
-                                  &callback, admitted = std::move (admitted),
-                                  receiver = std::move (receiver)] () mutable {
-        const auto observed_peer = _topology.peer (target_routing_id);
-        const auto *peer =
-          observed_peer
-              && (target_lifecycle_generation == 0
-                  || observed_peer->descriptor.lifecycle_generation == target_lifecycle_generation)
-            ? observed_peer.get ()
-            : nullptr;
-        if (!target_claimed && !peer && !_topology.expected_peers ()->contains (target_routing_id))
-            return std::optional<request_start_t>{};
-        auto encoded_payload = protocol::encode_application_payload_message (application_payload);
-        const auto &port = _port;
-        if (!port)
-            return std::optional<request_start_t>{};
-        request_start_t value;
-        value.admitted =
-          admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
-        value.correlation = registered_operation
-                              ? registered_operation->low
-                              : take_reply_route_id_locked (requested_correlation);
-        value.operation = registered_operation.value_or (
-          operation_id (_options.descriptor.lifecycle_generation, value.correlation));
-        std::vector<zlink::message_t> wire;
-        wire.reserve (2);
-        wire.push_back (header (value.correlation));
-        wire.push_back (std::move (encoded_payload));
-        if (request && request->operation == foundation::call_id_t{})
-            request->operation = value.operation;
-        try {
-            auto target =
-              peer && peer->ready
-                ? std::vector<std::uint8_t>{}
-                : std::vector<std::uint8_t> (target_routing_id.begin (), target_routing_id.end ());
-            value.registered =
-              registered_operation
-                ? operations->continue_operation (
-                    value.operation, std::move (callback).with_admission (value.admitted),
-                    std::move (target))
-                : operations->register_operation (
-                    value.operation, deadline, std::move (callback).with_admission (value.admitted),
-                    std::move (target), std::move (request_metric), std::move (request),
-                    wait_owner);
-            if (value.registered) {
-                auto finish = [operations, operation = value.operation,
-                               correlation = value.correlation, receiver] (auto result) {
-                    observe_request (operations, operation, correlation, std::move (result),
-                                     receiver);
-                };
-                if (!start_admitted_request (port, peer, target_routing_id, wire, deadline,
-                                             value.admitted, finish)) {
-                    std::vector<std::uint8_t> target_owner (target_routing_id.begin (),
-                                                            target_routing_id.end ());
-                    auto peer_observer = observe_request_peer_on_lane (target_owner);
-                    (void) submit_registered_request (
-                      port, std::move (peer_observer), operations, value.operation,
-                      value.correlation, std::move (target_owner), std::move (wire), {}, deadline,
-                      value.admitted->task (), value.admitted, std::move (finish), receiver,
-                      target_lifecycle_generation);
-                }
-            }
-        }
-        catch (...) {
-            // An empty callback was consumed at C1 publication, even if
-            // deadline reservation failed before registration returned.
-            if (!callback)
-                deliver_request_terminal (
-                  operations, value.operation, foundation::operation_terminal_t::transport_failed,
-                  detail::current_exception_result<zlink::message_t> (), receiver);
-            throw;
-        }
-        return std::optional<request_start_t>{std::move (value)};
-    });
+    auto start = _lane.run_sync_result (
+      [this, operations, registered_operation, &header, &request_metric, &target_routing_id,
+       &application_payload, request = std::move (request), requested_correlation, target_claimed,
+       deadline, wait_owner, target_lifecycle_generation, &callback,
+       admitted = std::move (admitted), receiver = std::move (receiver)] () mutable {
+          const auto observed_peer = _topology.peer (target_routing_id);
+          const auto *peer = observed_peer
+                                 && (target_lifecycle_generation == 0
+                                     || observed_peer->descriptor.lifecycle_generation
+                                          == target_lifecycle_generation)
+                               ? observed_peer.get ()
+                               : nullptr;
+          if (!target_claimed && !peer
+              && !_topology.expected_peers ()->contains (target_routing_id))
+              return std::optional<request_start_t>{};
+          auto encoded_payload = protocol::encode_application_payload_message (application_payload);
+          const auto &port = _port;
+          if (!port)
+              return std::optional<request_start_t>{};
+          request_start_t value;
+          value.admitted =
+            admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
+          value.correlation = registered_operation
+                                ? registered_operation->low
+                                : take_reply_route_id_locked (requested_correlation);
+          value.operation = registered_operation.value_or (
+            operation_id (_options.descriptor.lifecycle_generation, value.correlation));
+          std::vector<zlink::message_t> wire;
+          wire.reserve (2);
+          wire.push_back (header (value.correlation));
+          wire.push_back (std::move (encoded_payload));
+          if (request && request->operation == foundation::call_id_t{})
+              request->operation = value.operation;
+          try {
+              auto target = peer && peer->ready
+                              ? std::vector<std::uint8_t>{}
+                              : std::vector<std::uint8_t> (target_routing_id.begin (),
+                                                           target_routing_id.end ());
+              value.registered =
+                registered_operation
+                  ? operations->continue_operation (
+                      value.operation, std::move (callback).with_admission (value.admitted),
+                      std::move (target))
+                  : operations->register_operation (
+                      value.operation, deadline,
+                      std::move (callback).with_admission (value.admitted), std::move (target),
+                      std::move (request_metric), std::move (request), wait_owner);
+              if (value.registered) {
+                  auto finish = [operations, operation = value.operation,
+                                 correlation = value.correlation, receiver] (auto result) {
+                      observe_request (operations, operation, correlation, std::move (result),
+                                       receiver);
+                  };
+                  if (!start_admitted_request (port, peer, target_routing_id, wire, deadline,
+                                               value.admitted, finish)) {
+                      std::vector<std::uint8_t> target_owner (target_routing_id.begin (),
+                                                              target_routing_id.end ());
+                      auto peer_observer = observe_request_peer_on_lane (target_owner);
+                      (void) submit_registered_request (
+                        port, std::move (peer_observer), operations, value.operation,
+                        value.correlation, std::move (target_owner), std::move (wire), {}, deadline,
+                        value.admitted->task (), value.admitted, std::move (finish), receiver,
+                        target_lifecycle_generation);
+                  }
+              }
+          }
+          catch (...) {
+              // An empty callback was consumed at C1 publication, even if
+              // deadline reservation failed before registration returned.
+              if (!callback)
+                  deliver_request_terminal (
+                    operations, value.operation, foundation::operation_terminal_t::transport_failed,
+                    detail::current_exception_result<zlink::message_t> (), receiver);
+              throw;
+          }
+          return std::optional<request_start_t>{std::move (value)};
+      });
     if (!start)
         return {};
     if (!start->registered) {
@@ -1767,9 +1767,9 @@ raw_mesh_node_owner_t::start_send (std::span<const std::uint8_t> target_routing_
                                    bool needs_public_completion,
                                    detail::backend::raw_send_stage_trace_t trace)
 {
-    // run_sync returns only after the binding has consumed or snapshotted the parts.
-    return _lane.run_sync ([this, parts, trace = std::move (trace), needs_public_completion,
-                            &target_routing_id] () mutable {
+    // run_sync_result returns only after the binding has consumed or snapshotted the parts.
+    return _lane.run_sync_result ([this, parts, trace = std::move (trace), needs_public_completion,
+                                   &target_routing_id] () mutable {
         return start_send_on_lane (target_routing_id, parts, needs_public_completion,
                                    std::move (trace));
     });
