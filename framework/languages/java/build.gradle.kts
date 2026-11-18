@@ -147,6 +147,13 @@ subprojects {
             // exception type: a rerun replaces the uploaded result XML.
             testLogging {
                 events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                if (System.getenv("ZLINK_CI_TEST_PROGRESS") == "true") {
+                    events(
+                        org.gradle.api.tasks.testing.logging.TestLogEvent.STARTED,
+                        org.gradle.api.tasks.testing.logging.TestLogEvent.PASSED,
+                        org.gradle.api.tasks.testing.logging.TestLogEvent.SKIPPED,
+                    )
+                }
                 exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
             }
         }
