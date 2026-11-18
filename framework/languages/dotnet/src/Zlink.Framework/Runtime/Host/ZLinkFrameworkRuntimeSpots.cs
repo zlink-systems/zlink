@@ -251,6 +251,11 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
     }
 
+    internal ZLinkSpotNodeRuntime? MonitoringMeshNodeRuntime(string meshName) =>
+        _state?.SpotNodes.GetValueOrDefault(
+            ZLinkSpotNodeName.FromBoundary(meshName, nameof(meshName))
+        );
+
     /// <summary>The registered MeshNode for a physical mesh. ChannelName
     /// select-one calls (IZLinkRouteClient) submit through this node's entry
     /// spot so weight, ready and drain admission stay Core-owned (spec 11 §3).</summary>

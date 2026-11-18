@@ -14,7 +14,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"ClientServer channel '{channelName}' is not registered."
             );
 
-        var state = GetOrStartState();
+        var state = _state;
+        if (state is null)
+            return new ZLinkClientServerMonitoringState(
+                registration.HasClientServerClient,
+                registration.HasClientServerServer,
+                null,
+                null
+            );
         return AwaitStateLane(
             state.RunStateAsync(() =>
             {
