@@ -1,12 +1,14 @@
 package systems.zlink.samples.tictactoe.shared.contracts;
 
+import org.jspecify.annotations.Nullable;
+
 public record GameState(
         String roomId,
         String board,
         String status,
-        String winner,
+        @Nullable String winner,
         String nextTurn,
-        String xActorId,
-        String oActorId,
-        String lastMoveActorId,
-        Integer lastMoveCell) {}
+        @Nullable String xActorId,
+        @Nullable String oActorId,
+        @Nullable String lastMoveActorId,
+        @Nullable Integer lastMoveCell) {}
