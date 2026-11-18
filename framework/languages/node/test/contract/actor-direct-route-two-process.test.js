@@ -151,6 +151,9 @@ for (const scenario of [
         // old owner relays it over the committed Message Follow route to the new
         // owner without resubmission (01-location-runtime §7.3).
         assert.equal((await source.command('resumeDelivery')).node, nextRoutingId);
+        // A valid messageFollow notice invalidates the sender cache so the next
+        // lookup reaches the new owner directly (08-routing:505).
+        assert.equal(await source.command('actorRouteCached'), false);
         assert.equal((await source.command('ask')).node, nextRoutingId);
       }
     }
