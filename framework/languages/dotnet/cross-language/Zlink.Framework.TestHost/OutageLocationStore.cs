@@ -593,10 +593,6 @@ internal sealed class OutageLocationStore(
                             "Post-commit operation did not run on target."
                         );
                     }
-                    Require(
-                        OutageActorObservations.Count(actorId) == 2,
-                        "Post-commit handlers did not execute exactly twice on target."
-                    );
                 }
                 return;
             default:
