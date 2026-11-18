@@ -149,10 +149,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     @Override
     public ZLinkBackendStreamReceived recv() {
-        return inStateLane(this::recvOnLane);
-    }
-
-    private ZLinkBackendStreamReceived recvOnLane() {
         StreamPacket received = new StreamPacket();
         boolean transferred = false;
         try {
@@ -676,12 +672,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     }
 
     private void closeOnLane() {
-        if (!closed.compareAndSet(false, true)) {
+        if (closed.get()) {
             return;
         }
+        socket.close();
+        closed.set(true);
         receivePoller.close();
         closeMonitor();
-        socket.close();
     }
 
     private void closeMonitor() {
