@@ -6,6 +6,8 @@
 #include "api/socket/socket_message_api_internal.hpp"
 #include "sockets/common/socket_runtime.hpp"
 
+#include <mutex>
+
 SETUP_TEARDOWN_TESTCONTEXT
 
 namespace
@@ -73,6 +75,79 @@ void wait_after_first_committed_part (zlink::pipe_t *pipe_, bool more_,
     gate->changed.notify_all ();
     gate->changed.wait (lock, [&] { return gate->release; });
 }
+
+struct cancel_after_finish_observer_t
+{
+    explicit cancel_after_finish_observer_t (zlink::pipe_t *reader_) :
+        reader (reader_), pending (true), correlation_committed (false),
+        visible_before_cancel (false), publication_lock (mutex, std::defer_lock)
+    {
+    }
+
+    zlink::pipe_t *reader;
+    std::mutex mutex;
+    bool pending;
+    bool correlation_committed;
+    bool visible_before_cancel;
+    std::unique_lock<std::mutex> publication_lock;
+};
+
+bool cancel_after_finish_observer (zlink::pipe_t *, void *userdata_,
+                                  zlink::pipe_write_observer_phase_t phase_)
+{
+    cancel_after_finish_observer_t *const state =
+      static_cast<cancel_after_finish_observer_t *> (userdata_);
+    if (phase_ == zlink::pipe_write_observer_prepare) {
+        state->publication_lock.lock ();
+        return state->pending;
+    }
+    if (phase_ == zlink::pipe_write_observer_commit) {
+        if (!state->publication_lock.owns_lock ())
+            return false;
+        state->correlation_committed = true;
+        return true;
+    }
+
+    if (state->publication_lock.owns_lock ())
+        state->publication_lock.unlock ();
+    std::lock_guard<std::mutex> cancel_lock (state->mutex);
+    if (state->correlation_committed) {
+        state->pending = false;
+        state->visible_before_cancel = state->reader->check_read ();
+    }
+    return true;
+}
+}
+
+void test_request_cancel_after_observer_finish_precedes_pipe_visibility ()
+{
+    void *sender = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *receiver = test_context_socket (ZLINK_SOCKET_ROUTER);
+    contract_socket_pair_t pair (sender, receiver);
+
+    zlink::msg_t message;
+    TEST_ASSERT_SUCCESS_ERRNO (message.init_size (1));
+    *static_cast<char *> (message.data ()) = 'R';
+    cancel_after_finish_observer_t observer (pair.application[1]);
+    zlink::pipe_message_admission_t admission =
+      zlink::pipe_message_admission_invalid;
+
+    TEST_ASSERT_TRUE (pair.application[0]->write_message_observed (
+      &message, &cancel_after_finish_observer, &observer, &admission));
+    TEST_ASSERT_FALSE_MESSAGE (
+      observer.visible_before_cancel,
+      "the reader observed a committed request before its pipe flush");
+    TEST_ASSERT_FALSE (observer.pending);
+    TEST_ASSERT_EQUAL_INT (zlink::pipe_message_admission_ready, admission);
+
+    zlink::msg_t received;
+    TEST_ASSERT_TRUE (pair.application[1]->read (&received));
+    TEST_ASSERT_EQUAL_UINT64 (1, received.size ());
+    TEST_ASSERT_EQUAL_INT ('R', *static_cast<const char *> (received.data ()));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (message.close ());
+    test_context_socket_close_zero_linger (sender);
+    test_context_socket_close_zero_linger (receiver);
 }
 
 void run_peer_max_publication_during_complete_record (int sender_type_,
@@ -601,6 +676,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_pair_complete_record_keeps_peer_max_admission_snapshot);
     RUN_TEST (test_dealer_complete_record_rejects_peer_max_change_without_prefix);
+    RUN_TEST (test_request_cancel_after_observer_finish_precedes_pipe_visibility);
     RUN_TEST (test_pair_one_call_multipart_backpressure_aborts_before_concurrent_final);
     RUN_TEST (test_pair_whole_multipart_does_not_interleave_concurrent_final_records);
     return UNITY_END ();

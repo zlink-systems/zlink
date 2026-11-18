@@ -109,10 +109,11 @@ bool zlink::pipe_t::write_owner_started_message_observed (
 
     bool written = false;
     bool committed = false;
+    bool more = false;
     {
         written = admit_owner_started_write_unlocked (admission_out_);
 
-        const bool more = (msg_->flags () & msg_t::more) != 0;
+        more = (msg_->flags () & msg_t::more) != 0;
         if (written)
             written = write_message_unlocked (msg_, write_mode_,
                                                admission_out_);
@@ -120,12 +121,13 @@ bool zlink::pipe_t::write_owner_started_message_observed (
             committed = observer_ (this, observer_userdata_,
                                    pipe_write_observer_commit);
             zlink_assert (committed);
-            if (committed && !more)
-                flush_unlocked ();
         }
     }
 
     (void) observer_ (this, observer_userdata_, pipe_write_observer_finish);
+    // Drop the request-state mutex before flush so wake handling does not hold it.
+    if (written && committed && !more)
+        flush_unlocked ();
     release_lifetime_ref ();
     if (written && !committed) {
         terminate (false);
@@ -1074,9 +1076,10 @@ bool zlink::pipe_t::write_message_observed (
 
     bool written = false;
     bool committed = false;
+    bool more = false;
     {
         written = admit_write_unlocked (admission_out_);
-        const bool more = (msg_->flags () & msg_t::more) != 0;
+        more = (msg_->flags () & msg_t::more) != 0;
         if (written)
             written = write_message_unlocked (
               msg_, more ? write_mode_ : pipe_write_final, admission_out_);
@@ -1084,12 +1087,13 @@ bool zlink::pipe_t::write_message_observed (
             committed = observer_ (this, observer_userdata_,
                                    pipe_write_observer_commit);
             zlink_assert (committed);
-            if (committed && !more)
-                flush_unlocked ();
         }
     }
 
     (void) observer_ (this, observer_userdata_, pipe_write_observer_finish);
+    // Drop the request-state mutex before flush so wake handling does not hold it.
+    if (written && committed && !more)
+        flush_unlocked ();
     release_lifetime_ref ();
     if (written && !committed) {
         terminate (false);
