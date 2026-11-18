@@ -177,8 +177,17 @@ internal sealed class ZLinkSerialTurn
             else
                 resume.TrySetException(
                     new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.ShuttingDown,
-                        "The serial execution queue is closed before a yielded turn can resume."
+                        result == ZLinkSerialPostAdmission.OwnershipLost
+                            ? ZLinkFrameworkErrorKind.NotFound
+                            : ZLinkFrameworkErrorKind.ShuttingDown,
+                        result switch
+                        {
+                            ZLinkSerialPostAdmission.Sealed =>
+                                "The execution unit is sealed for relocation before a yielded turn can resume.",
+                            ZLinkSerialPostAdmission.OwnershipLost =>
+                                "The object no longer owns execution before a yielded turn can resume.",
+                            _ => "The Spot is closed before a yielded turn can resume.",
+                        }
                     )
                 );
         }
