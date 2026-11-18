@@ -118,12 +118,6 @@ internal sealed record ZLinkEnvelopeHeader(
 
     public ZLinkFlowOrigin? FlowOrigin { get; set; }
 
-    // Cross-language envelope metadata ("metadata" in the wire JSON, matching
-    // the C++/Node codecs). Omitted from the wire when absent; peers that
-    // always emit an empty object decode identically.
-    [System.Text.Json.Serialization.JsonIgnore(
-        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-    )]
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 }
 
