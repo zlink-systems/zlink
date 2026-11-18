@@ -21,7 +21,9 @@ import {
 import type { NodeConfig } from '../server/shared/config';
 class NodeProcess {
   readonly child: ChildProcess;
+  private readonly out: ReturnType<typeof createWriteStream>;
   private readonly lines: string[] = [];
+  private lastLine: { at: string; line: string } | undefined;
   private readonly changed = new EventEmitter();
   private exited = false;
   private inputFailure?: Error;
@@ -34,17 +36,21 @@ class NodeProcess {
     logDir: string,
     sequence: number
   ) {
-    const out = createWriteStream(`${logDir}/${config.id}-${sequence}.out.log`),
-      err = createWriteStream(`${logDir}/${config.id}-${sequence}.err.log`);
+    this.out = createWriteStream(`${logDir}/${config.id}-${sequence}.out.log`);
+    const err = createWriteStream(`${logDir}/${config.id}-${sequence}.err.log`);
     this.child = spawn(command, args, {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
-    this.child.stdout!.pipe(out);
+    this.child.once('spawn', () => this.logDiagnostic('process-spawn'));
+    this.child.stdout!.pipe(this.out);
     this.child.stderr!.pipe(err);
     const reader = createInterface({ input: this.child.stdout! });
     reader.on('line', (line) => {
+      const at = new Date().toISOString();
       this.lines.push(line);
+      this.lastLine = { at, line };
+      if (line.startsWith(Control.ready)) this.logDiagnostic('ready-line-received', { line }, at);
       this.changed.emit('change');
     });
     this.exit = new Promise<Error | undefined>((resolve) => {
@@ -53,7 +59,7 @@ class NodeProcess {
         this.exited = true;
         this.changed.emit('change');
         reader.close();
-        Promise.all([finished(out), finished(err)]).then(
+        Promise.all([finished(this.out), finished(err)]).then(
           () =>
             code === 0
               ? resolve(undefined)
@@ -63,7 +69,15 @@ class NodeProcess {
       });
     });
   }
+  private logDiagnostic(
+    event: string,
+    details: Record<string, string | null> = {},
+    at = new Date().toISOString()
+  ): void {
+    this.out.write(`ZLINK_E2E_DIAG ${JSON.stringify({ at, event, node: this.config.id, ...details })}\n`);
+  }
   async wait(prefix: string, timeoutMs: number): Promise<string> {
+    if (prefix.startsWith(Control.ready)) this.logDiagnostic('ready-wait-start');
     const found = this.lines.find((line) => line.startsWith(prefix));
     if (found) return found;
     return new Promise<string>((resolve, reject) => {
@@ -83,6 +97,11 @@ class NodeProcess {
       };
       const timer = setTimeout(() => {
         cleanup();
+        if (prefix.startsWith(Control.ready))
+          this.logDiagnostic('ready-timeout', {
+            lastLineAt: this.lastLine?.at ?? null,
+            lastLine: this.lastLine?.line ?? null
+          });
         reject(new Error(`${this.config.id} timeout waiting for ${prefix}`));
       }, timeoutMs);
       this.changed.on('change', check);
