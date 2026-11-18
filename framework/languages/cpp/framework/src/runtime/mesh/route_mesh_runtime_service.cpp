@@ -608,6 +608,39 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
       .sequence = sequence};
 }
 
+std::optional<mesh_node_snapshot_t>
+project_host_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
+                       const std::string &mesh_name,
+                       std::uint64_t sequence)
+{
+    if (!state->host_state)
+        return std::nullopt;
+    const auto host = state->host_state ();
+    if (host != framework_runtime_state_t::preparing && host != framework_runtime_state_t::stopped
+        && host != framework_runtime_state_t::error)
+        return std::nullopt;
+    const auto hub = state->require_hub (mesh_name);
+    mesh_node_snapshot_t snapshot;
+    {
+        std::lock_guard lock (hub->mutex);
+        snapshot = hub->last_snapshot.value_or (mesh_node_snapshot_t{});
+    }
+    snapshot.mesh_name = mesh_name;
+    snapshot.state = detail::topology_state_for_host (host, topology_state_t::starting);
+    snapshot.is_ready = false;
+    if (snapshot.channels.empty ()) {
+        for (const auto &name : hub->node->channel_names ())
+            snapshot.channels.push_back (mesh_channel_snapshot_t{
+              .channel_name = name, .is_ready = false, .ready_target_count = 0});
+    }
+    for (auto &channel : snapshot.channels)
+        channel.is_ready = false;
+    snapshot.placement.is_available = false;
+    snapshot.placement.unavailable_reason = topology_reason_t::runtime_not_ready;
+    snapshot.sequence = sequence;
+    return snapshot;
+}
+
 mesh_node_snapshot_t
 build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
                 std::string mesh_name)
@@ -618,6 +651,8 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
         std::lock_guard lock (hub->mutex);
         sequence = hub->last_snapshot ? hub->last_snapshot->sequence : 0;
     }
+    if (auto snapshot = project_host_snapshot (state, mesh_name, sequence))
+        return std::move (*snapshot);
     auto &topology = hub->node->native_node ().transport ().topology ();
     const auto descriptor = topology.local_descriptor ();
     const auto peers = topology.peers ();
@@ -637,6 +672,8 @@ build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> sta
                       std::uint64_t sequence)
 {
     const auto hub = state->require_hub (mesh_name);
+    if (auto snapshot = project_host_snapshot (state, mesh_name, sequence))
+        co_return std::move (*snapshot);
     auto &topology = hub->node->native_node ().transport ().topology ();
     auto [descriptor, peers, not_required] = co_await topology.monitoring_snapshot_async ();
     auto [names, actor_limit, spot_limit] = co_await hub->node->monitoring_configuration_async ();

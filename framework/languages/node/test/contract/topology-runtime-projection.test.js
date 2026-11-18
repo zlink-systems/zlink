@@ -1329,3 +1329,107 @@ for (const kind of ['ClientServer', 'Fanout']) test(`${kind} failed first read d
   assert.equal(first.sequence, 1n);
   assert.notEqual(first.state, framework.ZLinkTopologyState.Stopped);
 });
+
+test('registered RouteMesh status spans native creation and teardown with one sequence', async () => {
+  let node;
+  let hostState = framework.ZLinkFrameworkRuntimeState.Preparing;
+  const runtime = new internal.ZLinkRouteMeshRuntimeCoordinator({
+    meshNames: ['game'],
+    meshOptions: new Map([['game', { meshChannels: { events: { server: true } } }]]),
+    meshNode: () => node,
+    hostState: () => hostState,
+    admission: new internal.ZLinkRuntimeAdmissionGate(),
+    publishRetiring: async () => {},
+    rollbackRetiring: async () => {},
+    publishDraining: async () => {},
+    publishHostDraining: async () => {},
+    drainResources: async () => {},
+    cleanupHostResources: async () => {},
+    forceStopResources: async () => {}
+  });
+  const before = runtime.snapshot('game');
+  assert.equal(before.state, framework.ZLinkTopologyState.Starting);
+  assert.equal(before.isReady, false);
+  assert.equal(before.channels[0].isReady, false);
+  assert.equal(before.channels[0].readyTargetCount, 0);
+  assert.equal(runtime.snapshot('game'), before);
+  const events = runtime.observe('game')[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.sequence, before.sequence);
+  node = {
+    status: () => ({ state: internal.MeshNodeRuntimeState.Preparing }),
+    peers: () => [],
+    peerChannels: () => ({ names: [], weights: [] })
+  };
+  runtime.hostStateChanged();
+  assert.equal(runtime.snapshot('game').state, framework.ZLinkTopologyState.Starting);
+  assert.equal(runtime.snapshot('game').isReady, false);
+  node.status = () => ({ state: internal.MeshNodeRuntimeState.Serving });
+  hostState = framework.ZLinkFrameworkRuntimeState.Serving;
+  runtime.markServing();
+  assert.equal(runtime.snapshot('game').isReady, true);
+  runtime.stopObservers();
+  node = undefined;
+  const stopped = runtime.snapshot('game');
+  assert.equal(stopped.state, framework.ZLinkTopologyState.Stopped);
+  assert.equal(stopped.isReady, false);
+  await events.return();
+  const terminal = runtime.observe('game')[Symbol.asyncIterator]();
+  assert.equal((await terminal.next()).value.status.sequence, stopped.sequence);
+  await terminal.return();
+  assert.throws(() => runtime.snapshot('missing'));
+});
+
+for (const kind of ['ClientServer', 'Fanout'])
+  test(`${kind} registered status precedes the channel manager`, async () => {
+    let manager;
+    let state = framework.ZLinkFrameworkRuntimeState.Preparing;
+    const registration = {
+      channels: new Map([['events', kind === 'ClientServer' ? { client: {} } : { subscriber: {} }]])
+    };
+    const runtime = new internal[`ZLink${kind}RuntimeProjection`](
+      () => manager,
+      () => state,
+      registration
+    );
+    const initial = runtime.snapshot('events');
+    assert.equal(initial.state, framework.ZLinkTopologyState.Starting);
+    assert.equal(initial.isReady, false);
+    assert.equal(runtime.snapshot('events'), initial);
+    const events = runtime.observe('events')[Symbol.asyncIterator]();
+    assert.equal((await events.next()).value.status.sequence, initial.sequence);
+    let subscribed = 0;
+    manager = {
+      clientServerTopology: () => ({
+        localRole: 'client',
+        descriptors: [{ serverRoutingId: 'server', state: 'serving', weight: 1 }]
+      }),
+      fanoutTopology: () => ({
+        descriptors: [{ publisherRoutingId: 'publisher', state: 'serving' }]
+      }),
+      observeClientServerTopology: () => {
+        subscribed++;
+        return () => {};
+      },
+      observeFanoutTopology: () => {
+        subscribed++;
+        return () => {};
+      }
+    };
+    runtime.hostStateChanged();
+    assert.equal(runtime.snapshot('events').state, framework.ZLinkTopologyState.Starting);
+    assert.equal(runtime.snapshot('events').isReady, false);
+    assert.equal(subscribed, 1);
+    state = framework.ZLinkFrameworkRuntimeState.Serving;
+    runtime.hostStateChanged();
+    assert.equal(runtime.snapshot('events').isReady, true);
+    runtime.stopObservers();
+    manager = undefined;
+    const terminal = runtime.snapshot('events');
+    assert.equal(terminal.state, framework.ZLinkTopologyState.Stopped);
+    assert.equal(terminal.isReady, false);
+    await events.return();
+    const stopped = runtime.observe('events')[Symbol.asyncIterator]();
+    assert.equal((await stopped.next()).value.status.sequence, terminal.sequence);
+    await stopped.return();
+    assert.throws(() => runtime.snapshot('missing'));
+  });

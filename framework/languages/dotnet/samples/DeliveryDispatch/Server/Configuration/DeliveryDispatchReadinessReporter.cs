@@ -63,21 +63,13 @@ public sealed class DeliveryDispatchReadinessReporter(
             for (var index = pending.Count - 1; index >= 0; index--)
             {
                 var report = pending[index];
-                try
+                var status = routeMesh.GetStatus(report.MeshName);
+                if (
+                    !status.IsReady
+                    || status.Peers.Count(peer => peer.State == ZLinkPeerState.Ready)
+                        < report.RequiredReadyPeers
+                )
                 {
-                    var status = routeMesh.GetStatus(report.MeshName);
-                    if (
-                        !status.IsReady
-                        || status.Peers.Count(peer => peer.State == ZLinkPeerState.Ready)
-                            < report.RequiredReadyPeers
-                    )
-                    {
-                        continue;
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                    // Framework startup has not published this mesh status yet.
                     continue;
                 }
 

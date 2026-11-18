@@ -46,20 +46,11 @@ internal sealed class GameQuestSpotRouteReadinessReporter(
             for (var index = pending.Count - 1; index >= 0; index--)
             {
                 var report = pending[index];
-                try
-                {
-                    var status = routeMesh.GetStatus(report.MeshName);
-                    if (
-                        !status.IsReady
-                        || !status.Peers.Any(peer => peer.State == ZLinkPeerState.Ready)
-                    )
-                        continue;
-                }
-                catch (InvalidOperationException)
-                {
-                    // The public runtime status becomes available during Framework startup.
+                var status = routeMesh.GetStatus(report.MeshName);
+                if (
+                    !status.IsReady || !status.Peers.Any(peer => peer.State == ZLinkPeerState.Ready)
+                )
                     continue;
-                }
 
                 logger.LogInformation(
                     "gamequest-ready kind=spot-route node={NodeId} mesh={MeshName}",
