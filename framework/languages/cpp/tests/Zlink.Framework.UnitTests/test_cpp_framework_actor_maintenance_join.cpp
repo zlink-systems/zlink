@@ -701,11 +701,12 @@ class entry_t final : public fw::entry_spot_t<actor_t>
         _context.handlers ().add_actor_send<&entry_t::view> ();
         _context.handlers ().add_actor_send<&entry_t::record> ();
     }
-    void record (actor_t &, fw::message_context_t &, const record_t &request)
+    void record (actor_t &actor, fw::message_context_t &, const record_t &request)
     {
         {
             std::lock_guard lock (observations->mutex);
-            observations->recorded.push_back (request.value);
+            observations->recorded.push_back (request.value == instance_probe ? actor.instance
+                                                                              : request.value);
         }
         observations->changed.notify_all ();
     }
@@ -1447,12 +1448,24 @@ TEST (ActorDirectRequest, CachedIdReachesRecreatedActorOnTheSameOwner)
     ASSERT_TRUE (current.value ());
     ASSERT_NE (previous.value ()->object_generation (), current.value ()->object_generation ());
     ASSERT_EQ (previous.value ()->node_rid ().value (), current.value ()->node_rid ().value ());
+    ASSERT_TRUE (
+      client.send (fw::actor_id_t (actor_id), record_t{instance_probe}).async ().result ());
+    {
+        std::unique_lock lock (evidence->mutex);
+        ASSERT_TRUE (evidence->changed.wait_for (lock, wait_budget,
+                                                 [&] { return !evidence->recorded.empty (); }));
+        EXPECT_NE (evidence->recorded.front (), first.value ().value);
+    }
     const auto second = client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
                           .timeout (wait_budget)
                           .async<probe_t> ()
                           .result ();
     ASSERT_TRUE (second);
     EXPECT_NE (first.value ().value, second.value ().value);
+    {
+        std::lock_guard lock (evidence->mutex);
+        EXPECT_EQ (evidence->recorded.front (), second.value ().value);
+    }
 }
 
 TEST (UserSpotCreation, ExistingReadyDoesNotRequireNewCapacity)
