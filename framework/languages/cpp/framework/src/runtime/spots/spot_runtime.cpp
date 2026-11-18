@@ -14383,12 +14383,14 @@ task_t<void> run_actor_handler_turn_task (
   std::string actor_key)
 {
     runtime::actor_execution_scope_t actor_scope (std::move (actor_key), target.context->spot_id);
+    target.context->enter_callback ();
     try {
         outcome->emplace (co_await work (*target.actor, cancellation));
     }
     catch (...) {
         outcome->emplace (detail::current_exception_result<bool> ());
     }
+    target.context->leave_callback ();
     co_return;
 }
 
@@ -14443,16 +14445,39 @@ task_t<result_t<bool>> spot_node_runtime_t::run_actor_turn (
                                            "Actor handler-turn target is not registered");
 
     const auto actor_context = target->context;
+    if (!actor_context->admit ())
+        co_return detail::result_access_t::failure<bool> (actor_context->admission_error ());
+    const auto executor = actor_context->spot_serial_executor;
+    if (!executor)
+        co_return result_t<bool>::failure (framework_error_kind_t::not_found,
+                                           "Actor handler-turn executor is unavailable");
+    const auto key = actor_key (target->actor_ref);
     auto outcome = std::make_shared<std::optional<result_t<bool>>> ();
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
+    const auto submitted = executor->execute_actor_lifecycle (
+      key, "actor-handler-turn",
+      [target = std::move (*target), work = std::move (work), cancellation, outcome, completion,
+       key] (auto complete) mutable {
+          callback_context_scope_t callback_scope (target.context.get ());
+          auto running = std::make_shared<task_t<void>> (run_actor_handler_turn_task (
+            std::move (target), std::move (work), cancellation, outcome, std::move (key)));
+          detail::observe_task_completion (
+            *running, [running, complete, completion] (const result_t<void> &result) mutable {
+                complete ([result, completion] {
+                    completion->complete (result);
+                    result.value ();
+                });
+            });
+      },
+      [completion] {
+          completion->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                         "Actor handler-turn gate is closed"));
+      });
+    if (!submitted)
+        co_return result_t<bool>::failure (framework_error_kind_t::shutting_down,
+                                           "Actor handler-turn queue is closed");
     try {
-        co_await actor_context->run_serial_task (
-          "actor-handler-turn",
-          [target = std::move (*target), work = std::move (work), cancellation,
-           outcome] () mutable -> task_t<void> {
-              auto key = actor_key (target.actor_ref);
-              return run_actor_handler_turn_task (std::move (target), std::move (work),
-                                                  cancellation, outcome, std::move (key));
-          });
+        co_await completion->task ();
     }
     catch (...) {
         co_return detail::current_exception_result<bool> ();

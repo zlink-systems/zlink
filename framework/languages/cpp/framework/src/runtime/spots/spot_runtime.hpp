@@ -892,6 +892,57 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
           std::move (options));
     }
 
+    bool execute_actor_lifecycle (const std::string &actor_id,
+                                  std::string name,
+                                  queue_t::async_work_t work,
+                                  std::function<void ()> rejected)
+    {
+        runtime::serial_work_options_t options;
+        options.lane = runtime::serial_work_lane_t::lifecycle;
+        options.holds_application_while_waiting = true;
+        options.completion = [rejected] (result_t<void> result) {
+            if (!result)
+                rejected ();
+        };
+        const auto gate = uses_spot_execution_gate () ? _spot_queue : queue_ptr_t{};
+        auto callback_name = name;
+        return execute_actor (
+          actor_id, std::move (name),
+          [gate, name = std::move (callback_name), work = std::move (work),
+           rejected] (auto actor_complete) mutable {
+              if (!gate) {
+                  work (std::move (actor_complete));
+                  return;
+              }
+              runtime::serial_work_options_t callback_options;
+              callback_options.lane = runtime::serial_work_lane_t::lifecycle;
+              callback_options.holds_application_while_waiting = true;
+              callback_options.completion = [actor_complete, rejected] (result_t<void> result) {
+                  if (!result) {
+                      rejected ();
+                      actor_complete ([] {});
+                  }
+              };
+              const auto posted = gate->try_post_async (
+                std::move (name),
+                [work = std::move (work), actor_complete] (auto spot_complete) mutable {
+                    work ([spot_complete, actor_complete] (std::function<void ()> finish) {
+                        spot_complete ([finish = std::move (finish), actor_complete] {
+                            if (finish)
+                                finish ();
+                            actor_complete ([] {});
+                        });
+                    });
+                },
+                std::move (callback_options));
+              if (!posted) {
+                  rejected ();
+                  actor_complete ([] {});
+              }
+          },
+          std::move (options), false, rejected);
+    }
+
     bool actor_queue_closed (const std::string &actor_id) const noexcept
     {
         const auto executor = find_actor_executor_snapshot (actor_id);
