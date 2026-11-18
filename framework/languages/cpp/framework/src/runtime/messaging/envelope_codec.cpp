@@ -276,8 +276,8 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
               1
               + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (
                 entry.ByteSizeLong ());
-            if (entry_size
-                > protocol::metadataBytes - std::min (encoded_size, protocol::metadataBytes)) {
+            if (entry_size > protocol::metadataBytes
+                               - std::min<std::uint64_t> (encoded_size, protocol::metadataBytes)) {
                 if (metadata_invalid)
                     *metadata_invalid = true;
                 return result_t<void>::failure (framework_error_kind_t::protocol_error,
