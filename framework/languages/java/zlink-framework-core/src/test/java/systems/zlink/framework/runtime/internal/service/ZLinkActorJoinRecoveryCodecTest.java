@@ -6,9 +6,13 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 
+import java.time.Duration;
 import java.util.HexFormat;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 final class ZLinkActorJoinRecoveryCodecTest {
     private static final String NODE_ZLJR_FROZEN_HEX =
@@ -103,8 +107,88 @@ final class ZLinkActorJoinRecoveryCodecTest {
         assertArrayEquals(recovery.reply(), decoded.reply());
     }
 
+    @Test
+    void entryLifecycleGenerationPreservesAllUnsignedBitsThroughRecovery() {
+        var recovery = recovery(null, new byte[0], Long.MIN_VALUE, Long.MIN_VALUE);
+        var decoded =
+                ZLinkActorJoinRecoveryCodec.decodeSavedWork(
+                                ZLinkActorJoinRecoveryCodec.encodeSavedWork(recovery))
+                        .orElseThrow();
+        assertEquals(Long.MIN_VALUE, decoded.targetSpotGeneration());
+        assertEquals(Long.MIN_VALUE, decoded.targetSpotAuthorityOwnerGeneration());
+    }
+
+    @Test
+    void entryRelocationProfilesPreserveDescriptorLifecycleBits() {
+        UUID relocationId = UUID.randomUUID();
+        var node = RoutingId.from("entry-target");
+        var goal =
+                new ZLinkActorJoinRelocationPort.Goal(
+                        relocationId,
+                        new ZLinkActorJoinOperationId(1, 2),
+                        new ZLinkBackendActorRef(RoutingId.from("source"), "actor", 1),
+                        "player",
+                        "entry",
+                        Long.MIN_VALUE,
+                        node,
+                        Long.MIN_VALUE,
+                        Long.MIN_VALUE,
+                        1,
+                        new byte[0],
+                        null,
+                        0,
+                        "application/json",
+                        new byte[0],
+                        null);
+        assertEquals(Long.MIN_VALUE, goal.targetSpotGeneration());
+        var admission =
+                new ZLinkActorJoinRelocationPort.CanonicalAdmission(
+                        relocationId,
+                        "actor",
+                        "player",
+                        1,
+                        RoutingId.from("source"),
+                        1,
+                        1,
+                        1,
+                        "entry",
+                        Long.MIN_VALUE,
+                        node,
+                        Long.MIN_VALUE,
+                        Long.MIN_VALUE,
+                        1,
+                        new Object(),
+                        actor -> CompletableFuture.completedFuture(null),
+                        "application/json",
+                        new byte[0],
+                        Duration.ofSeconds(1));
+        assertEquals(Long.MIN_VALUE, admission.targetSpotAuthorityOwnerGeneration());
+    }
+
+    @Test
+    void missingEntryTargetFenceIsRejected() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        ZLinkActorJoinRecoveryCodec.encodeSavedWork(
+                                recovery(null, new byte[0], 0, 29)));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        ZLinkActorJoinRecoveryCodec.encodeSavedWork(
+                                recovery(null, new byte[0], 23, 0)));
+    }
+
     private static ZLinkActorJoinRecoveryCodec.Recovery recovery(
             String replyContentType, byte[] reply) {
+        return recovery(replyContentType, reply, 23, 29);
+    }
+
+    private static ZLinkActorJoinRecoveryCodec.Recovery recovery(
+            String replyContentType,
+            byte[] reply,
+            long targetSpotGeneration,
+            long targetSpotAuthorityOwnerGeneration) {
         return new ZLinkActorJoinRecoveryCodec.Recovery(
                 "actor-a",
                 "sample.Actor",
@@ -121,9 +205,9 @@ final class ZLinkActorJoinRecoveryCodecTest {
                 "target-spot",
                 RoutingId.from("dst"),
                 19,
-                23,
+                targetSpotGeneration,
                 12,
-                29,
+                targetSpotAuthorityOwnerGeneration,
                 new ZLinkActorJoinRecoveryCodec.Coordinator(
                         "owner-a", 17, RoutingId.from("src"), 13, "store-v1"),
                 new ZLinkActorJoinOperationId(31, 37),

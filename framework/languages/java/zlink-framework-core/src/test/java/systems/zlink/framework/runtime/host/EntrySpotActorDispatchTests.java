@@ -26,7 +26,6 @@ import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
@@ -2080,15 +2079,6 @@ final class EntrySpotActorDispatchTests {
                 RoutingId targetNodeRid,
                 String targetSpotId,
                 List<Message> parts,
-                Duration timeout) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
-                ZLinkBackendActorRef actor,
-                RoutingId targetNodeRid,
-                Message request,
                 Duration timeout) {
             throw new UnsupportedOperationException();
         }

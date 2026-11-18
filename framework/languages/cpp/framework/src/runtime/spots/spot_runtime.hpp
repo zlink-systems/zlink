@@ -2112,7 +2112,8 @@ class spot_node_runtime_t
     // admit_remote_actor_to_spot. The transport deliberately does not own
     // these authority decisions.
     result_t<std::uint64_t>
-    resolve_wire_actor_join_target (const runtime::protocol::spot_route_fence_t &fence) const;
+    resolve_wire_actor_join_target (const runtime::protocol::spot_route_fence_t &fence,
+                                    bool entry = false) const;
     std::vector<spot_context_t> active_contexts () const;
     // Empty success means no handler matched; an admitted handler owns the returned task.
     result_t<std::optional<task_t<zlink::message_t>>>

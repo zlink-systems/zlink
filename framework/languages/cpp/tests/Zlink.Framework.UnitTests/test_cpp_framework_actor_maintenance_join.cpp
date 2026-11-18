@@ -741,7 +741,10 @@ class entry_t final : public fw::entry_spot_t<actor_t>
     }
     void move (actor_t &actor, fw::message_context_t &, const move_t &request)
     {
-        actor.context ().join_spot (fw::spot_id_t (request.target)).defer ();
+        if (request.target == entry_target)
+            actor.context ().join_entry_spot ().defer ();
+        else
+            actor.context ().join_spot (fw::spot_id_t (request.target)).defer ();
     }
     fw::task_t<fw::actor_create_response_t> on_create_actor (actor_t &,
                                                              const fw::message_t &) override
@@ -764,8 +767,11 @@ class entry_t final : public fw::entry_spot_t<actor_t>
     }
     fw::task_t<void> on_leave_actor (actor_t &) override
     {
-        std::lock_guard lock (observations->mutex);
-        ++observations->entry_left;
+        {
+            std::lock_guard lock (observations->mutex);
+            ++observations->entry_left;
+        }
+        observations->changed.notify_all ();
         co_return;
     }
 
@@ -5256,6 +5262,41 @@ TEST (ActorMaintenanceJoin, PublicEntryJoinCompletionPrecedesFirstCommand)
     const auto *accepted = std::get_if<fw::actor_join_accepted_t> (&evidence.completions.back ());
     ASSERT_NE (accepted, nullptr);
     EXPECT_TRUE (accepted->operation_id_high != 0 || accepted->operation_id_low != 0);
+}
+
+TEST (ActorMaintenanceJoin, RemoteEntryJoinMovesExistingActorToCompatibleNode)
+{
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    release_callbacks_t release{evidence};
+    configure (source, evidence_owner, first_rid, store, relocations);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
+      0);
+    configure (target, evidence_owner, second_rid, store, relocations);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+    ASSERT_TRUE (move_to (services.get_required<fw::actor_client_t> (), evidence, entry_target, 1));
+    std::unique_lock lock (evidence.mutex);
+    ASSERT_TRUE (
+      evidence.changed.wait_for (lock, wait_budget, [&] { return evidence.entry_left == 1; }));
+    ASSERT_EQ (evidence.completions.size (), 1u);
+    const auto *accepted = std::get_if<fw::actor_join_accepted_t> (&evidence.completions.back ());
+    ASSERT_NE (accepted, nullptr);
+    EXPECT_EQ (accepted->actor.node_rid ().value (), second_rid);
+    EXPECT_EQ (evidence.creation_callbacks, 1);
+    EXPECT_EQ (evidence.entry_joined, 1);
+    EXPECT_EQ (evidence.entry_left, 1);
 }
 
 // A Store write is visible before its caller receives the result. Exercise that
