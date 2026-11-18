@@ -385,7 +385,7 @@ export class ZLinkEntrySpotActivation {
   }
 
   executeActor<T>(actorId: string, operation: () => Promise<T>): Promise<T> {
-    return this.spotSerialExecutor.executeActor(actorId, operation);
+    return this.spotSerialExecutor.executeActorLifecycle(actorId, operation);
   }
 
   discardActor(actorId: string, error: unknown): void {
