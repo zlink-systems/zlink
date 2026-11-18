@@ -7,6 +7,162 @@ public sealed class PausedSerialExecutionTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
+    public async Task DestroyedActorResumesStartedTurnButRejectsNewPayload(
+        bool shared,
+        bool lifecycle
+    )
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var actor = new ZLinkActorRuntimeState("destroy-during-yield");
+        var record = new ActorExecutionRecord(actor);
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            applicationStartAllowed: item =>
+                item.ExecutionStatus != ZLinkObjectExecutionStatus.Paused,
+            sharedGate: shared
+        );
+        var suspended = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var completeIo = new TaskCompletionSource();
+        var resumed = false;
+        async ValueTask Handle(CancellationToken ct)
+        {
+            var turn = ZLinkSerialTurn.Current!;
+            turn.Item.AcceptedState = record;
+            suspended.TrySetResult();
+            await turn.YieldFrameworkCallAsync(_ => new ValueTask(completeIo.Task), ct);
+            Assert.Same(turn, ZLinkSerialTurn.Current);
+            resumed = true;
+        }
+        Task running;
+        if (lifecycle)
+            running = queue.RunLifecycleAsync(Handle, CancellationToken.None).AsTask();
+        else
+        {
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                queue.TryPostApplicationWithAdmission(
+                    Handle,
+                    0,
+                    0,
+                    false,
+                    out var item,
+                    executionState: record
+                )
+            );
+            running = item.Completion;
+        }
+        try
+        {
+            await suspended.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            actor.ClearAfterDestroy();
+            Assert.Equal(ZLinkObjectExecutionStatus.Stopped, actor.ExecutionStatus);
+            completeIo.TrySetResult();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(resumed);
+            var newPayloadRan = false;
+            queue.TryPostApplicationWithAdmission(
+                _ =>
+                {
+                    newPayloadRan = true;
+                    return ValueTask.CompletedTask;
+                },
+                0,
+                0,
+                false,
+                out var next,
+                executionState: record
+            );
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                next.Completion.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.False(newPayloadRan);
+            await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            completeIo.TrySetResult();
+            await actor.InvalidateRuntimeGenerationAfterDispatchesAsync();
+        }
+    }
+
+    private sealed class ActorExecutionRecord(ZLinkActorRuntimeState actor)
+        : IZLinkObjectExecutionRecord
+    {
+        public ZLinkObjectExecutionStatus ExecutionStatus => actor.ExecutionStatus;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LifecycleYieldResumeWaitsForLocationRecovery(bool shared)
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var status = ZLinkObjectExecutionStatus.Allowed;
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            applicationStartAllowed: item =>
+                item.ExecutionStatus != ZLinkObjectExecutionStatus.Paused,
+            sharedGate: shared,
+            executionAllowed: () => status
+        );
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var paused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completeIo = new TaskCompletionSource();
+        var resumed = false;
+        queue.GateOperation = operation =>
+        {
+            if (operation == ZLinkSerialGateOperation.PausedRestored)
+                paused.TrySetResult();
+        };
+        var running = queue
+            .RunLifecycleAsync(
+                async ct =>
+                {
+                    started.TrySetResult();
+                    await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                        _ => new ValueTask(completeIo.Task),
+                        ct
+                    );
+                    resumed = true;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            status = ZLinkObjectExecutionStatus.Paused;
+            completeIo.TrySetResult();
+            await paused.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(resumed);
+            Assert.False(running.IsCompleted);
+            status = ZLinkObjectExecutionStatus.Allowed;
+            queue.NotifyReadiness();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(resumed);
+        }
+        finally
+        {
+            queue.GateOperation = null;
+            status = ZLinkObjectExecutionStatus.Allowed;
+            completeIo.TrySetResult();
+            queue.NotifyReadiness();
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
     public async Task RestorePrependsAfterPredecessorRemoval(bool shared, bool removeHead)
     {
         using var errors = new ZLinkRuntimeErrorSink();
@@ -416,7 +572,16 @@ public sealed class PausedSerialExecutionTests
                 var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                     running.WaitAsync(TimeSpan.FromSeconds(5))
                 );
-                Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+                Assert.Equal(
+                    terminal == 2
+                        ? ZLinkFrameworkErrorKind.NotFound
+                        : ZLinkFrameworkErrorKind.ShuttingDown,
+                    error.Kind
+                );
+                Assert.Contains(
+                    terminal == 2 ? "no longer owns execution" : "Spot is closed",
+                    error.Message
+                );
                 Assert.Equal(0, resumed);
             }
             if (terminal == 1)
@@ -563,7 +728,6 @@ public sealed class PausedSerialExecutionTests
             if (seal)
             {
                 await queue.SealRelocationAsync(CancellationToken.None);
-                status = ZLinkObjectExecutionStatus.OwnershipLost;
             }
             else
                 queue.Complete();
@@ -572,6 +736,8 @@ public sealed class PausedSerialExecutionTests
                 running.WaitAsync(TimeSpan.FromSeconds(5))
             );
             Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+            Assert.Contains(seal ? "sealed for relocation" : "Spot is closed", error.Message);
+            Assert.DoesNotContain("queue is closed", error.Message);
             Assert.False(resumed);
             await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
         }
