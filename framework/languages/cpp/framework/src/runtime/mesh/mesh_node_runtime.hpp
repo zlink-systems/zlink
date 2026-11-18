@@ -354,11 +354,13 @@ class mesh_node_runtime_t
                                                         std::string actor_id,
                                                         std::uint64_t object_generation,
                                                         std::uint64_t authority_owner_generation);
-    task_t<actor_join_reply_t>
-    join_application_actor_to_entry_spot (actor_ref_t actor,
-                                          node_rid_t target_node,
-                                          zlink::message_t request,
-                                          std::chrono::milliseconds timeout);
+    task_t<actor_join_reply_t> join_application_actor_to_entry_spot (
+      actor_ref_t actor,
+      mesh_node_descriptor_t target,
+      zlink::message_t request,
+      std::chrono::milliseconds timeout,
+      std::optional<zlink::routing_id_t> bound_session_node_rid = {},
+      std::optional<zlink::routing_id_t> bound_session_rid = {});
     task_t<result_t<void>>
     submit_application_actor_entry_spot_join (actor_ref_t actor,
                                               node_rid_t target_node,

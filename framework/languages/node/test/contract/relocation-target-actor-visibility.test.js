@@ -270,7 +270,16 @@ for (const [changedVersion, departed] of [
       authorityOwnerGeneration: 12n,
       ownerLeaseGeneration: 1n
     };
+    let prefixAdmissions = 0;
     const runtime = new ZLinkHostServiceRelocationRuntime({
+      actorTransfer: {
+        admitRelocationPrefix(actor, generation, packets) {
+          assert.strictEqual(actor, manager.getState(actorId).actor);
+          assert.equal(generation, 7n);
+          assert.deepEqual(packets, []);
+          prefixAdmissions++;
+        }
+      },
       invalidateActorRoute: (id) => resolver.invalidateActorRoute(id),
       observeActorAuthorityVersion: (id, version) =>
         resolver.observeActorAuthorityVersion(id, version),
@@ -319,6 +328,7 @@ for (const [changedVersion, departed] of [
       await probe();
       const stage = {
         ...materialized,
+        finalize: Promise.resolve(),
         phase: 'ready',
         releaseActivation() {},
         releaseJoinAdmission() {},
@@ -339,6 +349,7 @@ for (const [changedVersion, departed] of [
       await runtime.finalizeTargetStage('play', 'move', stage).catch((error) => {
         throw error.cause ?? error;
       });
+      assert.equal(prefixAdmissions, 1, 'an empty saved journal still installs target admission');
       assert.equal(await manager.findActor(actorId), manager.getState(actorId).actor);
       assert.equal(activation.resolveJoinedActor(actorId), manager.getState(actorId).actor);
       assert.equal(admission.get('move').parked.length, 0);

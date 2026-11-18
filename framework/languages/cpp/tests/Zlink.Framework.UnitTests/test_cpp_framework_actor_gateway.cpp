@@ -6312,7 +6312,7 @@ int duplicate_bind_callback_policy ()
         same_session
     };
 
-    const auto run_case = [] (case_t test_case) -> int {
+    const auto run_case = [] (case_t test_case, user_spot_execution_mode_t execution_mode) -> int {
         auto gateway_state = std::make_shared<actor_gateway_state_t> ();
         actor_gateway_runtime_t gateway (gateway_state);
         const auto actor = test_actor_ref ("actor-owner", "player", "duplicate-bind-actor", 7);
@@ -6362,14 +6362,15 @@ int duplicate_bind_callback_policy ()
         spot_context->spot_id = spot_name;
         spot_context->spot_name = std::string (spot_name);
         spot_context->spot_instance = std::make_shared<int> (1);
-        spot_context->execution_mode = user_spot_execution_mode_t::per_actor;
+        spot_context->execution_mode = execution_mode;
+        const auto policy = execution_mode == user_spot_execution_mode_t::spot_wide
+                              ? runtime::serial_lane_policy_t::spot_wide ()
+                              : runtime::serial_lane_policy_t::per_actor_spot ();
         spot_context->serial_executor =
           std::make_shared<runtime::offload_executor_t> (1, "duplicate-bind-actor");
         spot_context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
           *spot_context->serial_executor, runtime::serial_execution_queue_options_t{},
-          runtime::serial_execution_queue_t::error_handler_t{},
-          runtime::serial_lane_policy_t::per_actor_spot ());
-        observation->expected_serial_queue = spot_context->serial_queue.get ();
+          runtime::serial_execution_queue_t::error_handler_t{}, policy);
         spot_node_builder_t actor_builder;
         if (test_case == case_t::no_callback || test_case == case_t::factory_subtype) {
             actor_builder
@@ -6393,6 +6394,12 @@ int duplicate_bind_callback_policy ()
         auto spot_state = spot_runtime.weak_state ().lock ();
         spot_state->monitoring = test::runtime_failure_monitoring ();
         const std::string actor_key = "player:duplicate-bind-actor";
+        spot_context->spot_serial_executor = std::make_shared<spot_serial_executor_t> (
+          spot_context->serial_executor, spot_state->lane, policy, spot_context->serial_queue);
+        observation->expected_serial_queue =
+          execution_mode == user_spot_execution_mode_t::spot_wide
+            ? spot_context->serial_queue.get ()
+            : spot_context->spot_serial_executor->actor_executor (actor_key)->queue ().get ();
         auto &factory = spot_state->actor_factories.at ("player");
         spot_state->actor_instances.emplace (
           actor_key, factory.create_context_instance (gateway.actor_context (actor)));
@@ -6508,8 +6515,13 @@ int duplicate_bind_callback_policy ()
             // Drain the bind on RED too, before destroying its reply captures and timer owner.
             if (!result)
                 (void) bind_finished_result.wait_for (std::chrono::milliseconds (500));
-            if (!disconnect_still_held || !disconnected || !*disconnected)
+            if (!disconnect_still_held || !disconnected || !*disconnected) {
+                std::cerr << "Actor lifecycle held=" << disconnect_still_held
+                          << " terminal=" << static_cast<bool> (disconnected)
+                          << " success=" << (disconnected && static_cast<bool> (*disconnected))
+                          << '\n';
                 return 10;
+            }
         }
         if (!result || !*result)
             return 3;
@@ -6534,11 +6546,35 @@ int duplicate_bind_callback_policy ()
                      : 4;
         }
         if (test_case == case_t::timeout) {
+            auto actor_started = std::make_shared<std::promise<void>> ();
+            auto actor_started_result = actor_started->get_future ();
+            auto spot_started = std::make_shared<std::promise<void>> ();
+            auto spot_started_result = spot_started->get_future ();
+            const auto actor_posted = spot_context->spot_serial_executor->execute_actor (
+              actor_key, "duplicate-bind-next-actor", [actor_started] (auto complete) {
+                  complete ([actor_started] { actor_started->set_value (); });
+              });
+            const auto spot_posted = spot_context->spot_serial_executor->execute_spot (
+              "duplicate-bind-other-spot", [spot_started] { spot_started->set_value (); });
+            const auto actor_waited = actor_started_result.wait_for (std::chrono::milliseconds (10))
+                                      == std::future_status::timeout;
+            if (execution_mode == user_spot_execution_mode_t::per_actor)
+                spot_started_result.wait ();
+            const auto spot_status = spot_started_result.wait_for (std::chrono::milliseconds (10));
+            const auto spot_scope_matches = execution_mode == user_spot_execution_mode_t::spot_wide
+                                              ? spot_status == std::future_status::timeout
+                                              : spot_status == std::future_status::ready;
             release_decision->complete (
               result_t<std::optional<std::string>>::success (std::nullopt));
             if (callback_completed_result.wait_for (std::chrono::milliseconds (500))
                 != std::future_status::ready)
                 return 5;
+            if (!actor_posted || !spot_posted || !actor_waited || !spot_scope_matches
+                || actor_started_result.wait_for (std::chrono::milliseconds (500))
+                     != std::future_status::ready
+                || spot_started_result.wait_for (std::chrono::milliseconds (500))
+                     != std::future_status::ready)
+                return 11;
             const auto after_late_accept =
               gateway.bound_session_route_async (actor).result ().value ();
             return bind_result.terminal_result
@@ -6588,13 +6624,17 @@ int duplicate_bind_callback_policy ()
                  : 7;
     };
 
-    for (const auto test_case : {case_t::accept, case_t::accept_empty, case_t::reject,
-                                 case_t::timeout, case_t::no_callback, case_t::factory_subtype,
-                                 case_t::first_binding, case_t::same_session}) {
-        if (const auto result = run_case (test_case); result != 0) {
-            std::cerr << "duplicate bind case=" << static_cast<int> (test_case)
-                      << " failure=" << result << '\n';
-            return result;
+    for (const auto execution_mode :
+         {user_spot_execution_mode_t::spot_wide, user_spot_execution_mode_t::per_actor}) {
+        for (const auto test_case : {case_t::accept, case_t::accept_empty, case_t::reject,
+                                     case_t::timeout, case_t::no_callback, case_t::factory_subtype,
+                                     case_t::first_binding, case_t::same_session}) {
+            if (const auto result = run_case (test_case, execution_mode); result != 0) {
+                std::cerr << "duplicate bind case=" << static_cast<int> (test_case)
+                          << " mode=" << static_cast<int> (execution_mode) << " failure=" << result
+                          << '\n';
+                return result;
+            }
         }
     }
     return 0;

@@ -3175,7 +3175,10 @@ public sealed partial class EntrySpotActorDispatchTests
         ProbeActor Actor,
         ZLinkActorRuntimeState State,
         RoutingId SessionNode
-    )> CreateDuplicateBindFixtureAsync(TimeSpan? callbackTimeout = null)
+    )> CreateDuplicateBindFixtureAsync(
+        TimeSpan? callbackTimeout = null,
+        ZLinkUserSpotExecutionMode? userSpotMode = null
+    )
     {
         var node = new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
@@ -3186,7 +3189,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 "session-owner",
                 71
             ),
-            sessionReplacementCallbackTimeout: callbackTimeout
+            sessionReplacementCallbackTimeout: callbackTimeout,
+            userSpotType: userSpotMode is null ? null : typeof(JoinTargetSpot),
+            userSpotExecutionMode: userSpotMode ?? ZLinkUserSpotExecutionMode.SpotWide
         );
         var actor = RegisterProbeActor(runtime, actorRef);
         var state = runtime.GetOrCreateActorState(actorRef.ActorId);
@@ -3226,6 +3231,103 @@ public sealed partial class EntrySpotActorDispatchTests
             (result, code, message) => replies.Add((result, code, message)),
             cancellationToken
         );
+
+    [Theory]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide)]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor)]
+    public async Task RemoteSessionBind_CallbackRetainsItsExecutionGateAcrossAwait(
+        ZLinkUserSpotExecutionMode mode
+    )
+    {
+        var (runtime, _, actorRef, actor, state, sessionNode) =
+            await CreateDuplicateBindFixtureAsync(userSpotMode: mode);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var siblingEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+        Task? binding = null;
+        Task? sibling = null;
+        IZLinkCurrentSpotActivation? callbackActivation = null;
+        IZLinkCurrentSpotActivation? continuationActivation = null;
+        ZLinkSerialWorkLane? callbackLane = null;
+        try
+        {
+            var created = await runtime.CreateAsync<JoinTargetSpot>();
+            var activation = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                value => value.SpotId == created.Spot.SpotId
+            );
+            await activation.JoinActorAsync(actor, ZLinkMessage.Empty, CancellationToken.None);
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            actor.DuplicateBindCallback = async (_, _, _) =>
+            {
+                Assert.True(state.OwnsCurrentDispatch);
+                callbackActivation = ZLinkSpotAmbientContext.CurrentOrDefault;
+                callbackLane = ZLinkSerialTurn.Current?.Item.Lane;
+                entered.TrySetResult();
+                await release.Task;
+                Assert.True(state.OwnsCurrentDispatch);
+                continuationActivation = ZLinkSpotAmbientContext.CurrentOrDefault;
+                return null;
+            };
+            binding = BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            sibling = activation
+                ._serial.ExecuteAsync(
+                    (_, _) =>
+                    {
+                        siblingEntered.TrySetResult();
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            if (mode == ZLinkUserSpotExecutionMode.SpotWide)
+            {
+                await Assert.ThrowsAsync<TimeoutException>(() =>
+                    siblingEntered.Task.WaitAsync(TimeSpan.FromMilliseconds(100))
+                );
+            }
+            else
+            {
+                await siblingEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            Assert.Same(activation, callbackActivation);
+            Assert.Equal(ZLinkSerialWorkLane.Lifecycle, callbackLane);
+            Assert.False(binding.IsCompleted);
+            Assert.True(state.TryGetBoundSession(out var current));
+            Assert.Equal(RoutingId.From("session-current"), current.SessionRid);
+            release.TrySetResult();
+            await Task.WhenAll(binding, sibling).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Same(activation, continuationActivation);
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+        }
+        finally
+        {
+            release.TrySetResult();
+            if (binding is not null)
+                await binding;
+            if (sibling is not null)
+                await sibling;
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
 
     [Theory]
     [InlineData("first")]
@@ -15146,6 +15248,10 @@ public sealed partial class EntrySpotActorDispatchTests
     private sealed class CommittedJoinRetryProbe
     {
         public int Attempts;
+        public int Failures = 1;
+        public Action<int>? OnAttempt;
+        public Exception Failure { get; } =
+            new InvalidOperationException("post-commit callback failed");
     }
 
     private sealed class RetryingJoinTargetSpot(
@@ -15163,8 +15269,10 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ValueTask OnJoinedActorAsync(ProbeActor actor, CancellationToken cancellationToken)
         {
-            if (Interlocked.Increment(ref probe.Attempts) == 1)
-                throw new InvalidOperationException("post-commit callback failed");
+            var attempt = Interlocked.Increment(ref probe.Attempts);
+            probe.OnAttempt?.Invoke(attempt);
+            if (attempt <= probe.Failures)
+                throw probe.Failure;
             return ValueTask.CompletedTask;
         }
 

@@ -2468,14 +2468,11 @@ int main (int argc, char **argv)
     if (!runtime.dispatch_disconnected (session, stream)) {
         return 9;
     }
-    const auto log = runtime.serial_log (stream);
-    if (log.size () != 3 || log[0] != "connected" || log[1] != "packet:move"
-        || log[2] != "disconnected") {
-        return 10;
-    }
-    if (session.events.size () != 3 || session.events[1] != "packet:move:payload"
+    if (session.events.size () != 3 || session.events[0] != "connected:client-stream:1"
+        || session.events[1] != "packet:move:payload"
+        || session.events[2] != "disconnected:client-stream:1"
         || runtime.written_headers (stream).size () != 1) {
-        return 11;
+        return 10;
     }
 
     auto reentrant_stream = runtime.open_session ("client-stream");

@@ -30,7 +30,6 @@ import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -1572,15 +1571,6 @@ final class ZLinkActorClientRuntimeTest {
                 RoutingId targetNodeRid,
                 String targetSpotId,
                 List<Message> parts,
-                Duration timeout) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
-                ZLinkBackendActorRef actor,
-                RoutingId targetNodeRid,
-                Message request,
                 Duration timeout) {
             throw new UnsupportedOperationException();
         }

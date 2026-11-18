@@ -236,8 +236,9 @@ class envelope_codec_t
     decode_header (std::span<const std::byte> bytes,
                    bool capture_flow = true,
                    std::optional<envelope_header_t> *rejection_context = nullptr) const;
-    // Text views remain valid until the next header decode on the same thread; do not keep them
-    // across a co_await.
+    // Text views borrow the encoded header bytes and remain valid while those bytes do. A copied
+    // header_text_t owns its text; do not retain an uncopied view past the input lifetime or a
+    // co_await.
     result_t<envelope_header_t>
     decode_header_view (const zlink::message_t &message,
                         bool capture_flow = true,

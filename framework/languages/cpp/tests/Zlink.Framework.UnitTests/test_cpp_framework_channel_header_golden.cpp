@@ -110,6 +110,32 @@ int main ()
                 all_passed = false;
                 continue;
             }
+            const auto message = zlink::message_t::from (bytes);
+            const auto viewed = codec.decode_header_view (message, capture_flow);
+            if (!viewed || !same_header (viewed.value (), expected)) {
+                std::cerr << "valid fixture failed: " << name
+                          << " tracing=" << (capture_flow ? "on" : "off") << " view decode\n";
+                all_passed = false;
+                continue;
+            }
+            const auto input_begin = reinterpret_cast<std::uintptr_t> (message.data ());
+            const auto input_end = input_begin + message.size ();
+            const auto check_borrow = [&] (const auto &text) {
+                if (text.empty ())
+                    return true;
+                const auto begin = reinterpret_cast<std::uintptr_t> (text.data ());
+                return begin >= input_begin && begin + text.size () <= input_end;
+            };
+            if (!check_borrow (viewed.value ().channel_name)
+                || !check_borrow (viewed.value ().message_name)
+                || !check_borrow (viewed.value ().content_type)
+                || (!viewed.value ().correlation_id.empty ()
+                    && !check_borrow (viewed.value ().correlation_id))
+                || (viewed.value ().deadline && !check_borrow (*viewed.value ().deadline))) {
+                std::cerr << "valid fixture failed: " << name
+                          << " view did not borrow retained envelope header\n";
+                all_passed = false;
+            }
             if (fixture.value ("encode", true)) {
                 try {
                     const auto encoded_message = codec.encode_header (wire_header);
@@ -136,15 +162,29 @@ int main ()
         const auto name = fixture.at ("name").get<std::string> ();
         const auto bytes = from_hex (fixture.at ("hex").get<std::string> ());
         for (const bool capture_flow : tracing_modes (fixture)) {
+            std::optional<envelope_header_t> rejected_owned;
             const auto decoded = codec.decode_header (
               std::span<const std::byte> (reinterpret_cast<const std::byte *> (bytes.data ()),
                                           bytes.size ()),
-              capture_flow);
+              capture_flow, &rejected_owned);
             if (decoded
                 || decoded.error_kind ()
                      != zlink::framework::framework_error_kind_t::protocol_error) {
                 std::cerr << "reject fixture failed: " << name
                           << " tracing=" << (capture_flow ? "on" : "off") << "\n";
+                all_passed = false;
+            }
+            std::optional<envelope_header_t> rejected_view;
+            const auto viewed = codec.decode_header_view (zlink::message_t::from (bytes),
+                                                          capture_flow, &rejected_view);
+            if (viewed || viewed.error_kind () != decoded.error_kind ()
+                || std::string_view (viewed.error ()->what ())
+                     != std::string_view (decoded.error ()->what ())
+                || rejected_owned.has_value () != rejected_view.has_value ()
+                || (rejected_owned && !same_header (*rejected_owned, *rejected_view))) {
+                std::cerr << "reject fixture failed: " << name
+                          << " view/owned rejection differs tracing="
+                          << (capture_flow ? "on" : "off") << "\n";
                 all_passed = false;
             }
         }

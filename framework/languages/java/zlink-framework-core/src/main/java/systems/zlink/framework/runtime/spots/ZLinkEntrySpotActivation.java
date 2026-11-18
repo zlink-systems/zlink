@@ -278,7 +278,10 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
     }
 
     CompletionStage<ZLinkSpotActorJoinResult> admitCanonicalActorJoin(
-            ZLinkActorSpotRoutePackets.TransferRequest request, RoutingId sourcePeerRid) {
+            ZLinkActorSpotRoutePackets.TransferRequest request,
+            RoutingId sourcePeerRid,
+            systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec.ActorJoin28
+                    canonicalJoin) {
         return host.actorAdmissions()
                 .prepareCanonicalRoutedActor(
                         request,
@@ -286,9 +289,13 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                         sourcePeerRid,
                         backendSpot.spotId(),
                         entrySpot,
-                        null,
-                        "application/octet-stream",
-                        new byte[0],
+                        canonicalJoin,
+                        canonicalJoin.payload() == null
+                                ? "application/octet-stream"
+                                : canonicalJoin.payload().contentType(),
+                        canonicalJoin.payload() == null
+                                ? new byte[0]
+                                : canonicalJoin.payload().payload(),
                         actor -> host.notifySpotActorLifecycle(entrySpot, actor, true),
                         actorId ->
                                 CompletableFuture.completedFuture(

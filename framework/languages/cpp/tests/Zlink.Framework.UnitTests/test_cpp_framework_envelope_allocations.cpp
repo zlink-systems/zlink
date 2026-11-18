@@ -169,6 +169,34 @@ TEST (EnvelopeAllocations, CounterDetectsAnOwningStringCopy)
     ::operator delete (probe);
 }
 
+TEST (EnvelopeAllocations, ViewDecodeBorrowsHeaderStringsWithoutAllocating)
+{
+    msg::envelope_codec_t codec;
+    msg::envelope_header_t header;
+    header.channel_name = std::string (128, 'c');
+    header.message_name = std::string (128, 'm');
+    header.content_type = "application/" + std::string (128, 't');
+    header.correlation_id = std::string (32, 'a');
+    header.deadline = std::string (96, 'd');
+    auto wire = codec.encode_header (header);
+    auto decoded = codec.decode_header_view (wire, false);
+    ASSERT_TRUE (decoded);
+    EXPECT_EQ (decoded.value ().channel_name, header.channel_name);
+    EXPECT_EQ (decoded.value ().message_name, header.message_name);
+    EXPECT_EQ (decoded.value ().content_type, header.content_type);
+    EXPECT_EQ (decoded.value ().correlation_id, header.correlation_id);
+    EXPECT_EQ (decoded.value ().deadline, header.deadline);
+
+    // Mesh receive passes a rejection slot; an accepted header must not be copied into it.
+    std::optional<decltype (decoded)> measured;
+    std::optional<msg::envelope_header_t> rejected;
+    EXPECT_EQ (count_allocations (
+                 [&] { measured.emplace (codec.decode_header_view (wire, false, &rejected)); }),
+               0u);
+    ASSERT_TRUE (*measured);
+    EXPECT_FALSE (rejected.has_value ());
+}
+
 TEST (EnvelopeAllocations, TypedAndErasedEncodingPreservesHeaders)
 {
     fw::serializer_registry_t serializers;
