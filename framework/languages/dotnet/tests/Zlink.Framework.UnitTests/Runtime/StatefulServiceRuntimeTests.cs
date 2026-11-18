@@ -3532,6 +3532,13 @@ public sealed partial class StatefulServiceRuntimeTests
     [Fact]
     public async Task RemoteUserSpotCreateAndCloseUseGenerationFencedTerminalOperations()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                nameof(RemoteUserSpotCreateAndCloseUseGenerationFencedTerminalOperations)
+            )
+        )
+            return;
         await using var native = Systems.Zlink.Zlink.CreateContext();
         var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
         var time = new ControllableTimeProvider();
