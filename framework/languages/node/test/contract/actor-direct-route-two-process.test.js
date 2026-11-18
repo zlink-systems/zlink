@@ -152,7 +152,15 @@ for (const scenario of [
         // owner without resubmission (01-location-runtime §7.3).
         assert.equal((await source.command('resumeDelivery')).node, nextRoutingId);
         // A valid messageFollow notice invalidates the sender cache so the next
-        // lookup reaches the new owner directly (08-routing:505).
+        // lookup reaches the new owner directly (08-routing:505). The notice is a
+        // one-way command with no order against the relayed reply, so observe its
+        // arrival rather than the cache state at the reply.
+        const invalidateDeadline = Date.now() + 5_000;
+        while (
+          (await source.command('actorRouteCached')) !== false &&
+          Date.now() < invalidateDeadline
+        )
+          await new Promise((resolve) => setTimeout(resolve, 20));
         assert.equal(await source.command('actorRouteCached'), false);
         assert.equal((await source.command('ask')).node, nextRoutingId);
       }
