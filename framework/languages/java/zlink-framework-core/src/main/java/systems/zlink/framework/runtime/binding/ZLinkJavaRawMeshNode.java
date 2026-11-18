@@ -600,7 +600,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (transportStateLane.isOnLane()) return submission.get();
         var flow = ZLinkFlowContext.current();
         if (!ZLinkBlockingCalls.isRuntimeExecutionContext()) {
-            return transportStateLane.awaitTurn(() -> ZLinkFlowContext.call(flow, submission));
+            return transportStateLane.awaitResult(() -> ZLinkFlowContext.call(flow, submission));
         }
         return transportStateLane
                 .runAsync(() -> ZLinkFlowContext.call(flow, submission))

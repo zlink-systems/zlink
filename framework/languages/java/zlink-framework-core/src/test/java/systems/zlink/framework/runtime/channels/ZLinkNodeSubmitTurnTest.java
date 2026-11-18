@@ -332,6 +332,85 @@ final class ZLinkNodeSubmitTurnTest {
     }
 
     @Test
+    void contendedSourceSubmissionsDrainTogetherAndFinishBindingBeforeReturning() throws Exception {
+        var sourceExecutor = new HeldExecutor();
+        var onExecutor = new ThreadLocal<Boolean>();
+        var sourceOwner =
+                new ZLinkStateLane(
+                        command ->
+                                sourceExecutor.execute(
+                                        () -> {
+                                            onExecutor.set(true);
+                                            try {
+                                                command.run();
+                                            } finally {
+                                                onExecutor.remove();
+                                            }
+                                        }));
+        var hold = new CompletableFuture<Void>();
+        var bindingOrder = new java.util.concurrent.CopyOnWriteArrayList<Integer>();
+        var bindingExecutionContexts = new java.util.concurrent.CopyOnWriteArrayList<Boolean>();
+        var completions = new AtomicInteger();
+        try (Fixture f = new Fixture(null, false, sourceOwner);
+                var callers = Executors.newFixedThreadPool(8)) {
+            NodeProbe node = new NodeProbe(sourceOwner);
+            node.onNodeBinding =
+                    () -> {
+                        assertSame(sourceOwner, ZLinkStateLane.current());
+                        bindingExecutionContexts.add(Boolean.TRUE.equals(onExecutor.get()));
+                        bindingOrder.add(Integer.valueOf(node.metadata.get().get("sequence")));
+                    };
+            f.runtime.registerSpotRouterNode(CHANNEL, node.node);
+            assertTrue(sourceOwner.tryPost(() -> hold));
+            sourceExecutor.pending.remove().run();
+            var submitted = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+            try {
+                for (int index = 0; index < 8; index++) {
+                    int sequence = index;
+                    submitted.add(
+                            callers.submit(
+                                    () -> {
+                                        var call =
+                                                f.send()
+                                                        .metadata(
+                                                                "sequence",
+                                                                Integer.toString(sequence));
+                                        var result = call.submit();
+                                        assertTrue(
+                                                bindingOrder.contains(sequence),
+                                                "the caller must observe its binding attempt before return");
+                                        result.whenComplete(
+                                                        (value, failure) ->
+                                                                completions.incrementAndGet())
+                                                .toCompletableFuture()
+                                                .join();
+                                    }));
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (ZLinkStateLaneTestAccess.queuedTurnCount(sourceOwner) < index + 1
+                            && System.nanoTime() < deadline) Thread.yield();
+                    assertEquals(index + 1, ZLinkStateLaneTestAccess.queuedTurnCount(sourceOwner));
+                    assertFalse(submitted.getLast().isDone());
+                }
+                hold.complete(null);
+                sourceExecutor.release();
+                for (var result : submitted) result.get(5, TimeUnit.SECONDS);
+                assertEquals(java.util.stream.IntStream.range(0, 8).boxed().toList(), bindingOrder);
+                assertEquals(8, completions.get(), "each caller completes once");
+                assertEquals(8, node.nodeSends.get());
+                assertEquals(
+                        java.util.Collections.nCopies(8, true),
+                        bindingExecutionContexts,
+                        "queued source work must progress on the owner executor");
+            } finally {
+                hold.complete(null);
+                sourceExecutor.release();
+                callers.shutdown();
+                assertTrue(callers.awaitTermination(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
     void busyRegistryLaneFinishesFirstBindingAttemptBeforeSubmitReturns() throws Exception {
         for (boolean request : new boolean[] {false, true}) {
             try (Fixture f = new Fixture();
