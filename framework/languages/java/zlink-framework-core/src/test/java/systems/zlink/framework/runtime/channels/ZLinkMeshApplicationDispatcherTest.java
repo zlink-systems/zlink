@@ -149,6 +149,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         NodeHandler.received = new CompletableFuture<>();
         ChannelHandler.received = new CompletableFuture<>();
         ChannelRouteHandler.received = new CompletableFuture<>();
+        ChannelRouteHandler.metadata = new CompletableFuture<>();
         NodeHandler.metadata = new CompletableFuture<>();
         NodeHandler.contentType = new CompletableFuture<>();
         ChannelHandler.metadata = new CompletableFuture<>();
@@ -357,6 +358,30 @@ final class ZLinkMeshApplicationDispatcherTest {
         assertEquals(
                 "channel-route-value@source-node@play",
                 ChannelRouteHandler.received.get(2, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void channelRouteSendHandlerReadsMetadataFromServiceFrameWhenHeaderIsEmpty() throws Exception {
+        MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+        mesh.listen("inproc://mesh-dispatch-channel-route-frame-metadata");
+        mesh.channelName("play")
+                .server()
+                .addRouteSendHandler(ChannelRouteHandler.class, String.class);
+        ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
+
+        dispatcher.accept(
+                recordWithFrameMetadata(
+                        RecordKind.CHANNEL_SEND,
+                        "play",
+                        "frame-metadata",
+                        Map.of("trace-id", "from-service-frame")));
+
+        assertEquals(
+                "frame-metadata@source-node@play",
+                ChannelRouteHandler.received.get(2, TimeUnit.SECONDS));
+        assertEquals(
+                Map.of("trace-id", "from-service-frame"),
+                ChannelRouteHandler.metadata.get(2, TimeUnit.SECONDS));
     }
 
     @Test
@@ -1333,6 +1358,50 @@ final class ZLinkMeshApplicationDispatcherTest {
                 null);
     }
 
+    private static ZLinkMeshDispatchRecord recordWithFrameMetadata(
+            RecordKind kind, String channelName, String value, Map<String, String> metadata) {
+        RoutingId source = RoutingId.from("source-node");
+        ReadyRecord owner = new ReadyRecord(OwnerKind.NODE, 1, null, null);
+        ReceiveRecord receive =
+                new ReceiveRecord(
+                        kind,
+                        1,
+                        source,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        channelName,
+                        null,
+                        null,
+                        ZLinkApplicationMetadata.copyOf(metadata).encode(),
+                        0,
+                        0,
+                        0,
+                        2);
+        return new ZLinkMeshDispatchRecord(
+                owner,
+                receive,
+                ZLinkChannelEnvelope.encode(
+                        new ZLinkChannelEnvelope.Header(
+                                ZLinkChannelEnvelope.KIND_COMMAND,
+                                channelName,
+                                "String",
+                                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                Map.of(),
+                                null,
+                                null),
+                        Message.from(value.getBytes(StandardCharsets.UTF_8))),
+                null);
+    }
+
     private static ZLinkMeshDispatchRecord recordWithFlow() {
         RoutingId source = RoutingId.from("source-node");
         ReadyRecord owner = new ReadyRecord(OwnerKind.NODE, 1, null, null);
@@ -1536,6 +1605,7 @@ final class ZLinkMeshApplicationDispatcherTest {
 
     public static final class ChannelRouteHandler implements ZLinkRouteSendHandler<String> {
         private static CompletableFuture<String> received;
+        private static CompletableFuture<Map<String, String>> metadata;
 
         @Override
         public CompletionStage<Void> handle(String message, ZLinkRouteMessageContext context) {
@@ -1545,6 +1615,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                             + context.sourceNodeRid()
                             + "@"
                             + context.channelName().orElse(""));
+            metadata.complete(context.metadata());
             return CompletableFuture.completedFuture(null);
         }
     }
