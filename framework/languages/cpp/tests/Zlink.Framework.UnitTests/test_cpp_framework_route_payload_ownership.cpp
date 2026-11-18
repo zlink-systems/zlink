@@ -1481,11 +1481,12 @@ TEST (RoutePayloadOwnership, ApplicationDispatcherConsumesTheDecodedHeader)
       spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers));
     ASSERT_TRUE (decoded);
     ASSERT_TRUE (decoded.value ());
+    auto owned_header = *decoded.value ();
     // A consumer of the parsed header must never consult its wire frame again.
     parts[0] = zlink::message_t::from (std::string ("invalid header"));
     detail::mesh_record_dispatcher_t dispatcher (provider, serializers, handlers, filters);
     ASSERT_TRUE (
-      dispatcher.dispatch (record, std::move (parts), std::move (*decoded.value ())).result ());
+      dispatcher.dispatch (record, std::move (parts), std::move (owned_header)).result ());
     EXPECT_GT (handler.references, 0);
 }
 

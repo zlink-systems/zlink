@@ -517,7 +517,7 @@ int main ()
     gate.require (tree_contains (include_root, "route_mesh_channel_runtime_options_t"),
                   "CPP-G0-ROUTEMESH-001", "route-mesh runtime options surface is missing");
 
-    /* CPP-G0-FLOW-001 — flow correlation fields and generated header wire codec. */
+    /* CPP-G0-FLOW-001 — flow correlation fields and the single header parser/encoder. */
     gate.require (dispatch_events.find ("flow_id") != std::string::npos, "CPP-G0-FLOW-001",
                   "internal message flow record lacks flow_id");
     gate.require (execution_hpp.find ("flow_origin_t") != std::string::npos, "CPP-G0-FLOW-001",
@@ -527,7 +527,7 @@ int main ()
     const auto codec_source = root / "framework/src";
     const bool has_generated_header_codec =
       tree_contains (codec_source, "channel-header-v1.pb.h")
-      && tree_contains (codec_source, "ParseFromArray")
+      && tree_contains (codec_source, "parse_channel_header_view")
       && (tree_contains (codec_source, "SerializeToArray")
           || (tree_contains (codec_source, "ByteSizeLong")
               && tree_contains (codec_source, "GetCachedSize")

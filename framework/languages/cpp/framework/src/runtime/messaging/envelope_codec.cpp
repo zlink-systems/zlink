@@ -191,9 +191,8 @@ bool valid_string (std::string_view value) noexcept
     return value.find ('\0') == std::string_view::npos && valid_utf8 (value);
 }
 
-// The generated protobuf parser validates UTF-8 for every `string` field.
-// The Framework validator still checks its additional string constraint here.
-bool valid_proto_string (std::string_view value) noexcept
+// Wire parsing checks UTF-8; rejection context also excludes strings containing NUL.
+bool valid_nul_free_string (std::string_view value) noexcept
 {
     return value.find ('\0') == std::string_view::npos;
 }
@@ -223,64 +222,41 @@ struct header_presence_t
 
 result_t<void> validate_protocol_header (const envelope_header_t &header,
                                          bool capture_flow,
-                                         const channel_header_proto_t *proto = nullptr,
-                                         bool parser_validated_utf8 = false,
+                                         std::string_view content_type,
+                                         const std::string *flow_id_override = nullptr,
+                                         std::optional<flow_origin_t> flow_origin_override = {},
                                          bool *metadata_invalid = nullptr,
                                          const header_presence_t *presence = nullptr)
 {
     if (metadata_invalid)
         *metadata_invalid = false;
-    const auto channel_name =
-      proto ? std::string_view (proto->channel_name ()) : std::string_view (header.channel_name);
-    const auto message_name =
-      proto ? std::string_view (proto->message_name ()) : std::string_view (header.message_name);
-    const auto content_type =
-      proto ? std::string_view (proto->content_type ()) : std::string_view (header.content_type);
-    const auto correlation_id = proto ? std::string_view (proto->correlation_id ())
-                                      : std::string_view (header.correlation_id);
-    const auto valid_text = [parser_validated_utf8] (std::string_view value) {
-        return parser_validated_utf8 ? valid_proto_string (value) : valid_string (value);
-    };
+    const auto valid_text = [] (std::string_view value) { return valid_string (value); };
     const auto valid_optional = [&valid_text] (bool present, std::string_view value) {
         return !present || valid_text (value);
     };
     if (header.kind < message_kind_t::request || header.kind > message_kind_t::error)
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "ZLink envelope header kind is invalid");
-    const auto has_deadline = proto      ? proto->has_deadline ()
-                              : presence ? presence->deadline
-                                         : header.deadline.has_value ();
-    const auto has_error_code = proto      ? proto->has_error_code ()
-                                : presence ? presence->error_code
-                                           : header.error_code.has_value ();
-    const auto has_error_message = proto      ? proto->has_error_message ()
-                                   : presence ? presence->error_message
-                                              : header.error_message.has_value ();
-    const auto has_source = proto      ? proto->has_source ()
-                            : presence ? presence->source
-                                       : header.source.has_value ();
-    const auto has_topic = proto      ? proto->has_topic ()
-                           : presence ? presence->topic
-                                      : header.topic.has_value ();
-    if (!valid_text (channel_name) || !valid_text (message_name) || !valid_text (content_type)
-        || !valid_optional (has_deadline, proto             ? std::string_view (proto->deadline ())
-                                          : header.deadline ? std::string_view (*header.deadline)
-                                                            : std::string_view{})
-        || !valid_optional (has_error_code, proto ? std::string_view (proto->error_code ())
-                                                  : header.error_code.value_or (""))
-        || !valid_optional (has_error_message, proto ? std::string_view (proto->error_message ())
-                                                     : header.error_message.value_or (""))
-        || !valid_optional (has_source, proto ? std::string_view (proto->source ())
-                                              : header.source.value_or (""))
-        || !valid_optional (has_topic, proto ? std::string_view (proto->topic ())
-                                             : header.topic.value_or ("")))
+    const auto has_deadline = presence ? presence->deadline : header.deadline.has_value ();
+    const auto has_error_code = presence ? presence->error_code : header.error_code.has_value ();
+    const auto has_error_message =
+      presence ? presence->error_message : header.error_message.has_value ();
+    const auto has_source = presence ? presence->source : header.source.has_value ();
+    const auto has_topic = presence ? presence->topic : header.topic.has_value ();
+    if (!valid_text (header.channel_name) || !valid_text (header.message_name)
+        || !valid_text (content_type)
+        || !valid_optional (has_deadline, header.deadline ? std::string_view (*header.deadline)
+                                                          : std::string_view{})
+        || !valid_optional (has_error_code, header.error_code.value_or (""))
+        || !valid_optional (has_error_message, header.error_message.value_or (""))
+        || !valid_optional (has_source, header.source.value_or (""))
+        || !valid_optional (has_topic, header.topic.value_or ("")))
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "ZLink envelope header string is invalid");
     std::size_t encoded_metadata_size = 0;
     const auto validate_metadata_entry = [&] (std::string_view key, std::string_view value,
                                               std::size_t entry_size) -> result_t<void> {
-        if (key.empty () || !(parser_validated_utf8 ? valid_proto_string (key) : valid_string (key))
-            || !(parser_validated_utf8 ? valid_proto_string (value) : valid_string (value))) {
+        if (key.empty () || !valid_string (key) || !valid_string (value)) {
             if (metadata_invalid)
                 *metadata_invalid = true;
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
@@ -297,63 +273,38 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
         encoded_metadata_size += entry_size;
         return result_t<void>::success ();
     };
-    if (proto) {
-        for (int index = 0; index < proto->metadata_size (); ++index) {
-            const auto &entry = proto->metadata (index);
-            for (int previous = 0; previous < index; ++previous) {
-                if (proto->metadata (previous).key () == entry.key ()) {
-                    if (metadata_invalid)
-                        *metadata_invalid = true;
-                    return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                                    "ZLink envelope metadata key is duplicated");
-                }
-            }
-            const auto entry_size =
-              1
-              + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (
-                entry.ByteSizeLong ());
-            auto valid = validate_metadata_entry (entry.key (), entry.value (), entry_size);
-            if (!valid)
-                return valid;
-        }
-    } else {
-        if (presence && presence->metadata_duplicate) {
-            if (metadata_invalid)
-                *metadata_invalid = true;
-            return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                            "ZLink envelope metadata key is duplicated");
-        }
-        for (const auto &[key, value] : header.metadata) {
-            const auto nested_size =
-              1 + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (key.size ()) + 1
-              + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (value.size ());
-            const auto entry_size =
-              1 + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (nested_size);
-            auto valid = validate_metadata_entry (key, value, presence ? 0 : entry_size);
-            if (!valid)
-                return valid;
-        }
-        if (presence && presence->metadata_encoded_size > protocol::metadataBytes) {
-            if (metadata_invalid)
-                *metadata_invalid = true;
-            return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                            "ZLink envelope metadata exceeds 1024 bytes");
-        }
+    if (presence && presence->metadata_duplicate) {
+        if (metadata_invalid)
+            *metadata_invalid = true;
+        return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                        "ZLink envelope metadata key is duplicated");
+    }
+    for (const auto &[key, value] : header.metadata) {
+        const auto nested_size =
+          1 + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (key.size ()) + 1
+          + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (value.size ());
+        const auto entry_size =
+          1 + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (nested_size);
+        auto valid = validate_metadata_entry (key, value, presence ? 0 : entry_size);
+        if (!valid)
+            return valid;
+    }
+    if (presence && presence->metadata_encoded_size > protocol::metadataBytes) {
+        if (metadata_invalid)
+            *metadata_invalid = true;
+        return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                        "ZLink envelope metadata exceeds 1024 bytes");
     }
     if (capture_flow) {
-        const bool has_flow_id = proto      ? proto->has_flow_id ()
-                                 : presence ? presence->flow_id
-                                            : header.flow_id.has_value ();
-        const bool has_flow_origin = proto      ? proto->has_flow_origin ()
-                                     : presence ? presence->flow_origin
-                                                : header.flow_origin.has_value ();
-        const auto flow_id = proto            ? std::string_view (proto->flow_id ())
+        const bool has_flow_id =
+          presence ? presence->flow_id : (flow_id_override || header.flow_id.has_value ());
+        const bool has_flow_origin =
+          presence ? presence->flow_origin : (flow_origin_override || header.flow_origin);
+        const auto flow_id = flow_id_override ? std::string_view (*flow_id_override)
                              : header.flow_id ? std::string_view (*header.flow_id)
                                               : std::string_view{};
-        const auto flow_origin = proto ? static_cast<std::uint8_t> (proto->flow_origin ())
-                                 : header.flow_origin
-                                   ? static_cast<std::uint8_t> (*header.flow_origin)
-                                   : std::uint8_t{};
+        const auto flow_origin = static_cast<std::uint8_t> (flow_origin_override.value_or (
+          header.flow_origin.value_or (static_cast<flow_origin_t> (0))));
         if (has_flow_id != has_flow_origin)
             return result_t<void>::failure (
               framework_error_kind_t::protocol_error,
@@ -365,10 +316,9 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "ZLink envelope flow origin is invalid");
     }
-    const bool has_correlation_id = proto      ? proto->has_correlation_id ()
-                                    : presence ? presence->correlation_id
-                                               : !header.correlation_id.empty ();
-    if (has_correlation_id && !valid_correlation_id (correlation_id))
+    const bool has_correlation_id =
+      presence ? presence->correlation_id : !header.correlation_id.empty ();
+    if (has_correlation_id && !valid_correlation_id (header.correlation_id))
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "ZLink envelope correlationId must be 1..64 byte ASCII");
     return result_t<void>::success ();
@@ -535,13 +485,6 @@ channel_header_proto_t &channel_header_encode_scratch ()
     return value;
 }
 
-channel_header_proto_t &channel_header_scratch ()
-{
-    thread_local channel_header_proto_t value;
-    value.Clear ();
-    return value;
-}
-
 void to_proto (channel_header_proto_t &proto,
                const envelope_header_t &header,
                std::string_view content_type,
@@ -614,132 +557,50 @@ decode_header_bytes (std::span<const std::byte> bytes,
     if (bytes.size () > static_cast<std::size_t> (std::numeric_limits<int>::max ()))
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
                                                      "ZLink envelope header is too large");
-    if (view_text) {
-        envelope_header_t header{.content_type = {}};
-        header.kind = static_cast<message_kind_t> (0);
-        header_presence_t presence;
-        if (!parse_channel_header_view (bytes, capture_flow, header, presence))
-            return result_t<envelope_header_t>::failure (
-              framework_error_kind_t::protocol_error, "ZLink envelope header protobuf is invalid");
-        bool metadata_invalid = false;
-        auto valid = validate_protocol_header (header, capture_flow, nullptr, true,
-                                               &metadata_invalid, &presence);
-        if (!valid) {
-            if (rejection_context) {
-                if (!valid_proto_string (header.channel_name))
-                    header.channel_name.clear ();
-                if (!valid_proto_string (header.message_name))
-                    header.message_name.clear ();
-                if (!valid_proto_string (header.content_type))
-                    header.content_type.clear ();
-                if (!valid_correlation_id (header.correlation_id))
-                    header.correlation_id.clear ();
-                if (!header.deadline || !valid_proto_string (*header.deadline))
-                    header.deadline.reset ();
-                if (header.error_code && !valid_proto_string (*header.error_code))
-                    header.error_code.reset ();
-                if (header.error_message && !valid_proto_string (*header.error_message))
-                    header.error_message.reset ();
-                if (header.source && !valid_proto_string (*header.source))
-                    header.source.reset ();
-                if (header.topic && !valid_proto_string (*header.topic))
-                    header.topic.reset ();
-                if (!metadata_invalid) {
-                    header.flow_id.reset ();
-                    header.flow_origin.reset ();
-                }
-                header.metadata.clear ();
-                *rejection_context = header;
-            }
-            return result_t<envelope_header_t>::failure (valid.error_kind (),
-                                                         valid.error ()->what ());
-        }
-        if (!capture_flow) {
-            header.flow_id.reset ();
-            header.flow_origin.reset ();
-        }
-        return result_t<envelope_header_t>::success (std::move (header));
-    }
-    auto &proto = channel_header_scratch ();
-    if (!proto.ParseFromArray (bytes.data (), static_cast<int> (bytes.size ())))
+    envelope_header_t header{.content_type = {}};
+    header.kind = static_cast<message_kind_t> (0);
+    header_presence_t presence;
+    if (!parse_channel_header_view (bytes, capture_flow, header, presence))
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
                                                      "ZLink envelope header protobuf is invalid");
-
-    envelope_header_t header{.content_type = {}};
-    header.kind = static_cast<message_kind_t> (proto.kind ());
-    header.channel_name = header_text_t::view (proto.channel_name ());
-    header.message_name = header_text_t::view (proto.message_name ());
-    header.content_type = header_text_t::view (proto.content_type ());
-    if (proto.has_correlation_id ())
-        header.correlation_id = header_text_t::view (proto.correlation_id ());
-    if (proto.has_deadline ())
-        header.deadline = header_text_t::view (proto.deadline ());
-    if (capture_flow) {
-        if (proto.has_flow_origin ())
-            header.flow_origin = static_cast<flow_origin_t> (proto.flow_origin ());
+    if (!view_text) {
+        header.channel_name = std::string (header.channel_name);
+        header.message_name = std::string (header.message_name);
+        header.content_type = std::string (header.content_type);
+        header.correlation_id = std::string (header.correlation_id);
+        if (header.deadline)
+            header.deadline = std::string (*header.deadline);
     }
-
     bool metadata_invalid = false;
-    auto valid = validate_protocol_header (header, capture_flow, &proto, true, &metadata_invalid);
+    auto valid = validate_protocol_header (header, capture_flow, header.content_type, nullptr, {},
+                                           &metadata_invalid, &presence);
     if (!valid) {
         if (rejection_context) {
-            if (!valid_proto_string (proto.channel_name ()))
+            if (!valid_nul_free_string (header.channel_name))
                 header.channel_name.clear ();
-            if (!valid_proto_string (proto.message_name ()))
+            if (!valid_nul_free_string (header.message_name))
                 header.message_name.clear ();
-            if (!valid_proto_string (proto.content_type ()))
+            if (!valid_nul_free_string (header.content_type))
                 header.content_type.clear ();
-            if (!valid_correlation_id (proto.correlation_id ()))
+            if (!valid_correlation_id (header.correlation_id))
                 header.correlation_id.clear ();
-            if (proto.has_deadline () && valid_proto_string (proto.deadline ()))
-                header.deadline = header_text_t::view (proto.deadline ());
-            else
+            if (!header.deadline || !valid_nul_free_string (*header.deadline))
                 header.deadline.reset ();
-            if (proto.has_error_code () && valid_proto_string (proto.error_code ()))
-                header.error_code = proto.error_code ();
-            if (proto.has_error_message () && valid_proto_string (proto.error_message ()))
-                header.error_message = proto.error_message ();
-            if (proto.has_source () && valid_proto_string (proto.source ()))
-                header.source = proto.source ();
-            if (proto.has_topic () && valid_proto_string (proto.topic ()))
-                header.topic = proto.topic ();
+            if (header.error_code && !valid_nul_free_string (*header.error_code))
+                header.error_code.reset ();
+            if (header.error_message && !valid_nul_free_string (*header.error_message))
+                header.error_message.reset ();
+            if (header.source && !valid_nul_free_string (*header.source))
+                header.source.reset ();
+            if (header.topic && !valid_nul_free_string (*header.topic))
+                header.topic.reset ();
             if (!metadata_invalid) {
                 header.flow_id.reset ();
                 header.flow_origin.reset ();
-            } else if (capture_flow && proto.has_flow_id ()) {
-                header.flow_id = proto.flow_id ();
             }
-            *rejection_context = header;
+            *rejection_context = std::move (header);
         }
         return result_t<envelope_header_t>::failure (valid.error_kind (), valid.error ()->what ());
-    }
-    if (!view_text) {
-        // Keep parser capacity for the next frame; the returned header owns the
-        // fields that outlive this decode.
-        header.channel_name = std::string (proto.channel_name ());
-        header.message_name = std::string (proto.message_name ());
-        header.content_type = std::string (proto.content_type ());
-        if (proto.has_correlation_id ())
-            header.correlation_id = std::string (proto.correlation_id ());
-        if (proto.has_deadline ())
-            header.deadline = header_text_t (std::string (proto.deadline ()));
-    }
-    if (proto.has_error_code ())
-        header.error_code = std::move (*proto.mutable_error_code ());
-    if (proto.has_error_message ())
-        header.error_message = std::move (*proto.mutable_error_message ());
-    if (proto.has_source ())
-        header.source = std::move (*proto.mutable_source ());
-    if (proto.has_topic ())
-        header.topic = std::move (*proto.mutable_topic ());
-    if (capture_flow && proto.has_flow_id ())
-        header.flow_id = std::move (*proto.mutable_flow_id ());
-    if (rejection_context && !view_text)
-        *rejection_context = header;
-    for (int index = 0; index < proto.metadata_size (); ++index) {
-        auto *entry = proto.mutable_metadata (index);
-        header.metadata.emplace (std::move (*entry->mutable_key ()),
-                                 std::move (*entry->mutable_value ()));
     }
     if (!capture_flow) {
         header.flow_id.reset ();
@@ -794,7 +655,7 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
     const auto [flow_id, origin] = validate_outgoing_header (header);
     auto &proto = channel_header_encode_scratch ();
     to_proto (proto, header, content_type, flow_id, origin);
-    auto valid = validate_protocol_header (header, true, &proto);
+    auto valid = validate_protocol_header (header, true, content_type, flow_id, origin);
     if (!valid)
         throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
     return serialize_header (proto);
@@ -818,7 +679,7 @@ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_paylo
     header.flow_origin = origin;
     channel_header_proto_t proto;
     to_proto (proto, header, type->content_type, flow_id, origin);
-    auto valid = validate_protocol_header (header, true, &proto);
+    auto valid = validate_protocol_header (header, true, type->content_type, flow_id, origin);
     if (!valid)
         throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
     auto state = std::make_shared<std::pair<channel_header_proto_t, zlink::message_t>> (

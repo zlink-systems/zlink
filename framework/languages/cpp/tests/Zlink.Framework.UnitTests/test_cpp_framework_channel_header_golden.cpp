@@ -100,10 +100,14 @@ int main ()
                 expected.flow_id.reset ();
                 expected.flow_origin.reset ();
             }
-            const auto decoded = codec.decode_header (
-              std::span<const std::byte> (reinterpret_cast<const std::byte *> (bytes.data ()),
-                                          bytes.size ()),
-              capture_flow);
+            // The owned result must remain valid after its source buffer is destroyed.
+            const auto decoded = [&] {
+                const auto owned_bytes = bytes;
+                return codec.decode_header (
+                  std::span<const std::byte> (
+                    reinterpret_cast<const std::byte *> (owned_bytes.data ()), owned_bytes.size ()),
+                  capture_flow);
+            }();
             if (!decoded || !same_header (decoded.value (), expected)) {
                 std::cerr << "valid fixture failed: " << name
                           << " tracing=" << (capture_flow ? "on" : "off") << " decode\n";
@@ -175,8 +179,9 @@ int main ()
                 all_passed = false;
             }
             std::optional<envelope_header_t> rejected_view;
-            const auto viewed = codec.decode_header_view (zlink::message_t::from (bytes),
-                                                          capture_flow, &rejected_view);
+            const auto rejection_message = zlink::message_t::from (bytes);
+            const auto viewed =
+              codec.decode_header_view (rejection_message, capture_flow, &rejected_view);
             if (viewed || viewed.error_kind () != decoded.error_kind ()
                 || std::string_view (viewed.error ()->what ())
                      != std::string_view (decoded.error ()->what ())
