@@ -65,9 +65,11 @@ final class ZLinkCommittedActorLocalIngressTest {
     private static final Map<String, CompletableFuture<ZLinkActorJoinCompletion>> PAIR_COMPLETIONS =
             new ConcurrentHashMap<>();
     private static final List<Integer> RECEIVED = new CopyOnWriteArrayList<>();
+    private static CompletableFuture<Long> sentIncarnation;
 
     @Test
     void cachedIdRequestReachesRecreatedActorOnTheSameOwner() throws Exception {
+        sentIncarnation = new CompletableFuture<>();
         var locations = new ZLinkInMemoryLocationStore();
         try (var runtime =
                 start(
@@ -120,6 +122,13 @@ final class ZLinkCommittedActorLocalIngressTest {
                 assertNotEquals(previous.objectGeneration(), current.objectGeneration());
                 assertEquals(previous.nodeRid(), current.nodeRid());
                 assertSame(cached, routes.resolveActor(ACTOR).toCompletableFuture().join());
+                client.sendToActor(ACTOR, new IncarnationNotice())
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                assertEquals(
+                        current.objectGeneration(),
+                        sentIncarnation.get(WAIT_SECONDS, TimeUnit.SECONDS));
                 assertEquals(
                         Long.toString(current.objectGeneration()),
                         client.requestToActor(ACTOR, new IncarnationProbe())
@@ -714,6 +723,7 @@ final class ZLinkCommittedActorLocalIngressTest {
             context.handlers().addHandler(JoinHandler.class);
             context.handlers().addHandler(SourceProbeHandler.class);
             context.handlers().addHandler(IncarnationProbeHandler.class);
+            context.handlers().addHandler(IncarnationNoticeHandler.class);
         }
 
         @Override
@@ -771,6 +781,18 @@ final class ZLinkCommittedActorLocalIngressTest {
     public record SourceProbe() {}
 
     public record IncarnationProbe() {}
+
+    public record IncarnationNotice() {}
+
+    public static final class IncarnationNoticeHandler
+            implements ZLinkEntrySpotActorSendHandler<Lobby, Player, IncarnationNotice> {
+        @Override
+        public CompletionStage<Void> handle(
+                Lobby spot, Player actor, ZLinkMessageContext context, IncarnationNotice message) {
+            sentIncarnation.complete(actor.context().objectGeneration());
+            return CompletableFuture.completedFuture(null);
+        }
+    }
 
     public static final class IncarnationProbeHandler
             implements ZLinkEntrySpotActorRequestHandler<Lobby, Player, IncarnationProbe, String> {
