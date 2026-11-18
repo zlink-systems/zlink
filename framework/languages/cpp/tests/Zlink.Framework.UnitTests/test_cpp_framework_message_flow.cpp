@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // Verifies the message-flow tracing feature: dispatch_diagnostics_options_t::
 // message_flow now actually gates a structured, correlation-id-keyed log stream

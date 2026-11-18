@@ -831,6 +831,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                         address.targetNodeRid(),
                         address.spotId(),
                         address.spotGeneration(),
+                        address.targetNodeGeneration(),
                         address.authorityOwnerGeneration(),
                         address.ownerLeaseGeneration(),
                         requestParts,

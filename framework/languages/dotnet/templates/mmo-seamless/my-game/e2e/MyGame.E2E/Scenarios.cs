@@ -119,19 +119,13 @@ internal static class Scenarios
         var unchanged = await client.StateAsync(ct);
         SameState(before, unchanged, "step-too-large rejection");
 
-        var firstResponse = client.WaitForMoveAsync(1, ct);
-        var budgetResponse = client.WaitForRejectionAsync("move-budget", ct);
-        await client.SendMoveAsync(2, 1, ct);
-        await client.SendMoveAsync(ZonePositionDomain.MaxStep, 2, ct);
-        var first = await firstResponse;
+        var first = await client.MoveWithBudgetRetryAsync(2, 1, ct);
         Require(first.X == 296 && first.Sequence == 1, "The first server-calculated move was incorrect.");
-        var budget = await budgetResponse;
-        Require(budget.Reason == "move-budget" && budget.RetryAfterMs > 0,
-            "Move budget rejection did not include a positive server retry delay.");
-        var afterBudgetReject = await client.StateAsync(ct);
-        SameState(first, afterBudgetReject, "move-budget rejection");
-        await Task.Delay(TimeSpan.FromMilliseconds(budget.RetryAfterMs), ct);
         var after = await client.MoveWithBudgetRetryAsync(ZonePositionDomain.MaxStep, 2, ct);
+        var stale = await client.MoveRejectedAsync(ZonePositionDomain.MaxStep, 2, ct);
+        Require(stale.Reason == "stale-sequence" && stale.RetryAfterMs == 0,
+            "Accepted movement sequence was not rejected as stale.");
+        SameState(after, await client.StateAsync(ct), "stale-sequence rejection");
         SameActor(identity, await client.SessionAsync(ct));
         Require(
             after.ZoneId == "zone-4" && after.NodeId == "zoneB" && after.X == 306,

@@ -7,7 +7,6 @@ const { NestFactory } = require('@nestjs/core');
 const n = require('@zlink-systems/nestjs');
 const f = require('@zlink-systems/framework');
 const locations = require('@zlink-systems/framework-locations-redis');
-const { createClient } = require('redis');
 const { logs } = require('@opentelemetry/api-logs');
 const { LoggerProvider, SimpleLogRecordProcessor } = require('@opentelemetry/sdk-logs');
 const fs = require('node:fs');
@@ -37,7 +36,7 @@ if (process.env.ZLINK_TEST_FLOW_FILE) {
   });
 }
 
-const redisUrl = process.env.ZLINK_TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
+const { testRedisUrl: redisUrl, connectTestRedis } = require('./helpers/test-redis');
 const timeoutMs = 10_000;
 
 for (const remoteIngress of [false, true]) {
@@ -46,15 +45,8 @@ for (const remoteIngress of [false, true]) {
     { timeout: 60_000 },
     async (t) => {
       const hostClock = fixedRidHostClock(t);
-      const redis = createClient({ url: redisUrl, socket: { reconnectStrategy: false } });
-      redis.on('error', () => {});
-      try {
-        await redis.connect();
-      } catch (error) {
-        if (redis.isOpen) redis.disconnect();
-        t.skip(`Redis is unavailable at ${redisUrl}: ${error.message}`);
-        return;
-      }
+      const redis = await connectTestRedis(t);
+      if (redis === undefined) return;
       const prefix = `entry-rejected-join:${randomUUID()}:`;
       const apps = [];
       t.after(async () => {

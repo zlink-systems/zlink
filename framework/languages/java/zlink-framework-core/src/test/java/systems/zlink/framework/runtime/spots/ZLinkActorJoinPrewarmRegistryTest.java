@@ -27,6 +27,138 @@ final class ZLinkActorJoinPrewarmRegistryTest {
     private static final long OBJECT_GENERATION = 7L;
 
     @Test
+    void cutoffInsideRegistrationStartsDiscardWithoutReenteringTheRegistryOwner() {
+        for (var mode : systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode.values()) {
+            try (var fixture =
+                    new systems.zlink.framework.runtime.locations.ZLinkLocationStoreOutageTest
+                            .Fixture(false, true)) {
+                var queue =
+                        new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                                Runnable::run,
+                                systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+                var serials =
+                        new ZLinkSpotSerialExecutor(
+                                queue, Runnable::run, Runnable::run, mode, false);
+                var registry = new ZLinkActorJoinPrewarmRegistry();
+                var id = UUID.randomUUID();
+                var execution =
+                        fixture.runtime.executionAsync(
+                                () -> null,
+                                () -> true,
+                                ignored ->
+                                        java.util.concurrent.CompletableFuture.completedFuture(
+                                                null),
+                                () -> null,
+                                () ->
+                                        serials.discardApplications()
+                                                .thenCompose(ignored -> registry.discard(id)));
+                queue.executionPolicy(execution);
+                execution.ready().toCompletableFuture().join();
+                fixture.failRenewal();
+                fixture.now.set(fixture.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+                assertThrows(
+                        systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                        () ->
+                                registry.register(
+                                        id,
+                                        ACTOR_ID,
+                                        OBJECT_GENERATION,
+                                        () -> serials.requireExecution(true),
+                                        ignored -> {}));
+                execution.discardAsync().toCompletableFuture().join();
+                assertTrue(registry.isEmpty());
+                serials.closeAsync().toCompletableFuture().join();
+            }
+        }
+    }
+
+    @Test
+    void registrationAfterTheDiscardTurnUsesTheExistingExecutionOwnerInBothModes() {
+        for (var mode : systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode.values()) {
+            try (var fixture =
+                    new systems.zlink.framework.runtime.locations.ZLinkLocationStoreOutageTest
+                            .Fixture(false, true)) {
+                var queue =
+                        new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                                Runnable::run,
+                                systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+                var serials =
+                        new ZLinkSpotSerialExecutor(
+                                queue, Runnable::run, Runnable::run, mode, false);
+                var execution = fixture.runtime.execution(() -> true, () -> {});
+                queue.executionPolicy(execution);
+                var registry = new ZLinkActorJoinPrewarmRegistry();
+                var id = UUID.randomUUID();
+                execution.discardAsync().toCompletableFuture().join();
+                registry.discard(id).toCompletableFuture().join();
+                assertThrows(
+                        systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                        () ->
+                                registry.register(
+                                        id,
+                                        ACTOR_ID,
+                                        OBJECT_GENERATION,
+                                        () -> serials.requireExecution(true),
+                                        ignored -> {}));
+                assertTrue(registry.isEmpty());
+                serials.closeAsync().toCompletableFuture().join();
+            }
+        }
+    }
+
+    @Test
+    void discardWaitsForTheAcceptedTargetTerminalAndPropagatesCleanupFailure() throws Exception {
+        for (boolean fail : new boolean[] {false, true}) {
+            var registry = new ZLinkActorJoinPrewarmRegistry();
+            UUID id = UUID.randomUUID();
+            var aborts = new java.util.concurrent.atomic.AtomicInteger();
+            var aborted = new java.util.concurrent.CompletableFuture<Void>();
+            var terminal = new java.util.concurrent.CompletableFuture<Void>();
+            registry.register(id, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+            registry.begin(
+                            id,
+                            terminal,
+                            () -> {
+                                aborts.incrementAndGet();
+                                aborted.complete(null);
+                            })
+                    .toCompletableFuture()
+                    .join();
+            var discarded = registry.discard(id).toCompletableFuture();
+            aborted.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(1, aborts.get());
+            assertFalse(discarded.isDone(), "accepted target still owns its Store publication");
+            assertTrue(registry.find(id).isPresent());
+            registry.releaseAsync(id).toCompletableFuture().join();
+            if (fail) {
+                var failure = new IllegalStateException("target cleanup failed");
+                terminal.completeExceptionally(failure);
+                assertSame(
+                        failure,
+                        assertThrows(
+                                        java.util.concurrent.CompletionException.class,
+                                        discarded::join)
+                                .getCause());
+            } else {
+                terminal.complete(null);
+                discarded.join();
+            }
+            assertTrue(registry.isEmpty());
+        }
+    }
+
+    @Test
+    void discardReleasesAnAdmissionThatHasNoAcceptedTargetOwner() {
+        List<UUID> released = new ArrayList<>();
+        var registry = new ZLinkActorJoinPrewarmRegistry(released::add);
+        UUID id = UUID.randomUUID();
+        registry.register(id, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        registry.discard(id).toCompletableFuture().join();
+        assertTrue(registry.isEmpty());
+        assertEquals(List.of(id), released);
+    }
+
+    @Test
     void journalFactoryRunsOnlyAfterTheIngressOwnerAccepts() {
         var registry = new ZLinkActorJoinPrewarmRegistry();
         var evaluations = new java.util.concurrent.atomic.AtomicInteger();

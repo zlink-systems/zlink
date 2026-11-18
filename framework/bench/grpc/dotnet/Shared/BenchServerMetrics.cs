@@ -32,6 +32,16 @@ public sealed class BenchServerMetrics
         Record(payload.Body.Span, includeLatency: true);
     }
 
+    public void Record(BenchGameMessage payload)
+    {
+        Record(payload, includeLatency: true);
+    }
+
+    public void Record(BenchTypedPayload payload)
+    {
+        Record(payload.Body, includeLatency: true);
+    }
+
     public void Record(ReadOnlySpan<byte> payload)
     {
         Record(payload, includeLatency: true);
@@ -40,6 +50,16 @@ public sealed class BenchServerMetrics
     public void RecordReceived(BenchPayload payload)
     {
         Record(payload.Body.Span, includeLatency: false);
+    }
+
+    public void RecordReceived(BenchGameMessage payload)
+    {
+        Record(payload, includeLatency: false);
+    }
+
+    public void RecordReceived(BenchTypedPayload payload)
+    {
+        Record(payload.Body, includeLatency: false);
     }
 
     public void RecordReceived(ReadOnlySpan<byte> payload)
@@ -56,6 +76,24 @@ public sealed class BenchServerMetrics
         var latency =
             active && includeLatency
                 ? Math.Max(0, BenchMetricHeaders.NowNs() - header.SentTimestampNs)
+                : 0;
+        lock (_gate)
+        {
+            _allPhaseMessages++;
+            if (!active)
+                return;
+            _activeMessages++;
+            if (includeLatency)
+                _latencyNs.Add(latency);
+        }
+    }
+
+    private void Record(BenchGameMessage payload, bool includeLatency)
+    {
+        var active = payload.Phase == (long)BenchPhase.Active && payload.SentNs > 0;
+        var latency =
+            active && includeLatency
+                ? Math.Max(0, BenchGamePayloads.TimestampNow() - payload.SentNs)
                 : 0;
         lock (_gate)
         {

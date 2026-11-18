@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/channels/channel_outbound_exchange.hpp"
 #include "runtime/backend/raw_dealer_port.hpp"
@@ -1010,7 +1010,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                                                          "channel request failed");
             }
 
-            auto reply_header = envelope.decode_header (native_reply, false);
+            auto reply_header = envelope.decode_header_view (native_reply, false);
             if (!reply_header) {
                 co_return result_t<zlink::message_t>::failure (
                   reply_header.error_kind (), reply_header.error ()

@@ -115,24 +115,64 @@ test('overdue request management visit is not deferred by a fixed lower bound', 
   owner.close();
   await rejected;
 });
-test('1000 deadline expirations use bounded owner visits', async (t) => {
-  const owner = new RequestRuntime();
+test('same-deadline expirations do not add owner visits per request', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const timers = [];
+  t.mock.method(globalThis, 'setTimeout', (callback) => {
+    const timer = { callback, ref() {}, unref() {}, hasRef() { return true; } };
+    timers.push(timer);
+    return timer;
+  });
   const expire = OperationRegistry.prototype.expire;
-  let visits = 0;
+  const visits = [];
+  let nextTimer = 0;
   t.mock.method(OperationRegistry.prototype, 'expire', function (...args) {
-    visits++;
+    visits[visits.length - 1]++;
     return expire.apply(this, args);
   });
-  const pending = Array.from({ length: 1000 }, () =>
-    owner
-      .request(40, undefined, (entry) => waitRequestReply(new Promise(() => {}), 'HWM', entry))
-      .catch((error) => error)
+  const measure = async (count, deadline) => {
+    const owner = new RequestRuntime();
+    visits.push(0);
+    let terminals = 0;
+    const pending = Array.from({ length: count }, () =>
+      owner
+        .request(40, undefined, (entry) => waitRequestReply(new Promise(() => {}), 'HWM', entry))
+        .then(
+          (value) => {
+            terminals++;
+            return value;
+          },
+          (error) => {
+            terminals++;
+            return error;
+          }
+        )
+    );
+    assert.equal(owner.registry.size, count);
+    now = deadline;
+    while (owner.registry.size > 0) {
+      const scheduled = timers[nextTimer++];
+      assert.ok(scheduled, 'pending entries retain a scheduled management visit');
+      scheduled.callback();
+    }
+    const results = await Promise.all(pending);
+    assert.equal(terminals, count, 'each request publishes one terminal result');
+    assert.ok(
+      results.every((error) => error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded)
+    );
+    assert.equal(owner.registry.size, 0);
+    const ownerVisits = visits.at(-1);
+    owner.close();
+    return ownerVisits;
+  };
+
+  const visitsFor1000 = await measure(1000, 40);
+  const visitsFor2000 = await measure(2000, 80);
+  assert.equal(visitsFor2000, visitsFor1000, 'doubling entries does not add owner visits');
+  t.diagnostic(
+    `same deadline expirations: visits at 1000=${visitsFor1000}, at 2000=${visitsFor2000}`
   );
-  const errors = await Promise.all(pending);
-  assert.ok(errors.every((error) => error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded));
-  assert.ok(visits > 0 && visits < 32, `management visits: ${visits}`);
-  t.diagnostic(`1000 expirations: management visits=${visits}`);
-  owner.close();
 });
 for (const admittedBeforeDeadline of [false, true])
   test(`readiness and HWM register once (admitted=${admittedBeforeDeadline})`, async (t) => {

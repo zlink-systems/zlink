@@ -28,6 +28,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartV
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
@@ -58,7 +59,7 @@ public final class ZLinkRequestCallerAllocationTest {
 
     @Test
     void countsOneThousandPublicTypedRequestsForEachTerminal() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     public static void main(String[] args) throws Exception {

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/mesh/receive_path_probe.hpp"
@@ -352,7 +352,7 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
             discarded.reserve (failed->claimed_messages);
             for (std::size_t index = 0; index != failed->claimed_messages; ++index)
                 if (auto *slot = slot_locked ({claim, index}))
-                    discarded.push_back (transfer_locked (*slot));
+                    discarded.push_back (std::move (*slot));
             lock.unlock ();
             release (*failed);
         };
@@ -412,15 +412,6 @@ bool service_mailbox_t::next_locked (const claim_handle_t &handle)
     return !has_original (*previous);
 }
 
-service_mailbox_record_t service_mailbox_t::transfer_locked (service_mailbox_record_t &slot)
-{
-    // Moving out leaves the slot without parts or application: the taken mark. The
-    // slot's claim credit moves with the original.
-    auto transferred = std::move (slot);
-    slot.application.reset ();
-    return transferred;
-}
-
 std::optional<std::vector<std::vector<service_mailbox_record_t>>>
 service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
                                const cut_admits_t &admits,
@@ -448,12 +439,12 @@ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
         // unclaimed records leave the FIFO now.
         for (auto slot = queue.records.begin (); slot != queue.unclaimed; ++slot)
             if (has_original (*slot))
-                records.push_back (transfer_locked (*slot));
+                records.push_back (std::move (*slot));
         for (auto slot = queue.unclaimed; slot != queue.records.end (); ++slot) {
             const auto bytes = retained_bytes (*slot);
             source.bytes -= bytes;
             --source.messages;
-            records.push_back (transfer_locked (*slot));
+            records.push_back (std::move (*slot));
         }
         queue.records.erase (queue.unclaimed, queue.records.end ());
         queue.unclaimed = queue.records.end ();
@@ -470,7 +461,7 @@ std::optional<service_mailbox_record_t> service_mailbox_t::take (const claim_han
     auto *slot = slot_locked (handle);
     if (!slot || !next_locked (handle))
         return std::nullopt;
-    return transfer_locked (*slot);
+    return std::move (*slot);
 }
 
 std::size_t service_mailbox_t::retained_bytes (const service_mailbox_record_t &record)
@@ -500,7 +491,7 @@ bool service_mailbox_t::release (service_mailbox_claim_t &claim)
         ++settled;
         auto &slot = *claim.records[index];
         if (has_original (slot))
-            discarded.push_back (transfer_locked (slot));
+            discarded.push_back (std::move (slot));
     }
     if (settled == 0)
         return false;

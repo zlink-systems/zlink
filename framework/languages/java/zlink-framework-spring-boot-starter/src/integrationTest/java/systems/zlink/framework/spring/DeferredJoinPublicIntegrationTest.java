@@ -1,7 +1,6 @@
 package systems.zlink.framework.spring;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -19,6 +18,8 @@ import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.testsupport.ZLinkHostServing;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -42,8 +43,7 @@ public class DeferredJoinPublicIntegrationTest {
     @ParameterizedTest
     @ValueSource(longs = {0, 1500})
     void typedDeferredJoinAcrossHosts(long restoreDelayMs) throws Exception {
-        String redis = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(redis != null && !redis.isBlank(), "Redis integration endpoint is required");
+        ZLinkTestRedis.endpoint();
         completion.set(null);
         completed = new CountDownLatch(1);
         joined = new CountDownLatch(1);
@@ -54,6 +54,8 @@ public class DeferredJoinPublicIntegrationTest {
                 var target = host("target", prefix)) {
             var s = source.getBean(ZLinkFrameworkRuntime.class);
             var t = target.getBean(ZLinkFrameworkRuntime.class);
+            ZLinkHostServing.await(s);
+            ZLinkHostServing.await(t);
             awaitPeer(s, "target");
             awaitPeer(t, "source");
             var room =
@@ -166,7 +168,7 @@ public class DeferredJoinPublicIntegrationTest {
         ZLinkRedisLocationStore locations(Environment e) {
             return new ZLinkRedisLocationStore(
                     new ZLinkRedisLocationOptions()
-                            .setConnectionString(System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT"))
+                            .setConnectionString(ZLinkTestRedis.endpoint())
                             .setKeyPrefix(e.getRequiredProperty("repro.prefix") + "locations:"));
         }
 
@@ -174,7 +176,7 @@ public class DeferredJoinPublicIntegrationTest {
         ZLinkRedisRelocationStore relocations(Environment e) {
             return new ZLinkRedisRelocationStore(
                     new ZLinkRedisRelocationOptions()
-                            .setConnectionString(System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT"))
+                            .setConnectionString(ZLinkTestRedis.endpoint())
                             .setKeyPrefix(e.getRequiredProperty("repro.prefix") + "relocation:"));
         }
 
@@ -183,6 +185,9 @@ public class DeferredJoinPublicIntegrationTest {
                 Environment e, ZLinkRedisLocationStore l, ZLinkRedisRelocationStore r) {
             return o -> {
                 o.setDefaultRequestTimeout(Duration.ofSeconds(1));
+                // Fixed-RID hosts wait 3·margin before the first claim (MeshNode §3.3). This
+                // case checks Deferred Join, not that wait, as core RuntimeTestSupport does.
+                o.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
                 o.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 o.addLocationStore(l);
                 o.addRelocationStore(r);

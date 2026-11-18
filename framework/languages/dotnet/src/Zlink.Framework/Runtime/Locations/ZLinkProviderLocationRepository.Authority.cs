@@ -133,11 +133,14 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         ValidateAuthorityKey(key);
         var stored = await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false);
-        return stored is null
+        ZLinkAuthorityReadResult result = stored is null
             ? new ZLinkAuthorityReadResult.Missing(
                 await ReadStoreNowAsync(cancellationToken).ConfigureAwait(false)
             )
             : new ZLinkAuthorityReadResult.Found(stored.Snapshot);
+        if (AuthorityObservedAsync is { } observed)
+            await observed(key, stored?.Snapshot.StoreVersion).ConfigureAwait(false);
+        return result;
     }
 
     public async ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
@@ -491,6 +494,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                         current.Snapshot.OwnerLeaseGeneration
                     )
                 );
+            if (AuthorityObservedAsync is { } observed)
+                await observed(key, meta is null ? null : applied.PutVersions[metaKey].Value)
+                    .ConfigureAwait(false);
             return meta is null
                 ? new ZLinkAuthorityCompareExchangeResult.Deleted(
                     applied.PutVersions.Values.Single().Value,
@@ -760,17 +766,40 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
     }
 
+    public ValueTask<bool> CleanupDiscardedAuthorityAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot discarded,
+        ZLinkLocationOwnerToken owner,
+        CancellationToken cancellationToken = default
+    ) =>
+        ZLinkAuthorityCleanup.CleanupDiscardedAsync(
+            this,
+            async (snapshot, ct) =>
+            {
+                var current = await ReadAuthorityRecordAsync(key, ct).ConfigureAwait(false);
+                if (current is null || current.Snapshot.StoreVersion != snapshot.StoreVersion)
+                    return false;
+                return await TryReclaimStaleAuthorityAsync(current, ct, discarded: true)
+                        .ConfigureAwait(false) == StaleAuthorityReclaimResult.Reclaimed;
+            },
+            key,
+            discarded,
+            owner,
+            cancellationToken
+        );
+
     private async ValueTask<StaleAuthorityReclaimResult> TryReclaimStaleAuthorityAsync(
         StoredAuthority current,
         CancellationToken cancellationToken,
         ZLinkAuthorityKey? creationKey = null,
         byte? creationRelocationPolicy = null,
         Action? noteTakeover = null,
-        ZLinkLocationOwnerToken? requiredOwner = null
+        ZLinkLocationOwnerToken? requiredOwner = null,
+        bool discarded = false
     )
     {
         var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
-        if (active && creationKey is null)
+        if (active && creationKey is null && !discarded)
             return StaleAuthorityReclaimResult.NotReclaimable;
 
         // Relocation authority retains its own recovery protocol.
@@ -814,7 +843,10 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             if (ownerLive)
                 return StaleAuthorityReclaimResult.OwnerLive;
-            if (creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
+            if (
+                !discarded
+                && creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy
+            )
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
@@ -825,52 +857,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                 );
         }
         IReadOnlyList<StoredAuthority> members = [];
-        string? endedUserSpotId = null;
-        if (active)
-        {
-            if (current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot)
-            {
-                if (
-                    !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                        current.Snapshot.Payload.Span,
-                        out var spot
-                    )
-                    || spot.State != ZLinkUserSpotAuthorityState.Ready
-                )
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        "User Spot is not steady Ready."
-                    );
-                endedUserSpotId = spot.SpotId;
-            }
-            else if (
-                current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
-                && (
-                    !ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                        current.Snapshot.Payload.Span,
-                        out var spot
-                    )
-                    || spot.State != ZLinkInstanceSpotAuthorityState.Ready
-                    || spot.ActivationRecovery is not null
-                )
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "Instance Spot is not steady Ready."
-                );
-            else if (
-                current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.Actor
-                && !ZLinkActorAuthorityPayloadCodec.IsSteadyReady(current.Snapshot.Payload.Span)
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "Actor is not steady Ready.",
-                    ZLinkRetryAdvice.RetryAfterStateChange
-                );
-        }
+        var endedUserSpotId = active
+            ? ZLinkAuthorityCleanup.RequireSteadyReady(current.Snapshot)
+            : null;
         if (active && !ownerLive)
             _ownerLeaseReleaseWait.Observe(current.Key.Value, currentOwner);
-        if (endedUserSpotId is not null)
+        if (endedUserSpotId is not null && !discarded)
             members = await ReadEndedUserSpotMembersAsync(
                     endedUserSpotId,
                     current.Snapshot.ObjectGeneration,
@@ -4420,9 +4412,14 @@ internal sealed partial class ZLinkProviderLocationRepository
             if (current is null)
                 return new ZLinkObjectCommitResult.Stale();
             if (!MatchesReservation(current, reservation))
+            {
+                if (current.Meta.ReservedCreation is null && AuthorityObservedAsync is { } observed)
+                    await observed(reservation.Key, current.Snapshot.StoreVersion)
+                        .ConfigureAwait(false);
                 return current.Meta.ReservedCreation is null
                     ? new ZLinkObjectCommitResult.AlreadyCommitted(current.Snapshot)
                     : new ZLinkObjectCommitResult.Stale();
+            }
             var target = await ReadEligibleTargetAsync(
                     reservation.TargetDescriptor,
                     reservation.TargetNodeLifecycleGeneration,
@@ -4505,6 +4502,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                 continue;
             }
             var applied = (ZLinkStoreWriteResult.Applied)result;
+            if (AuthorityObservedAsync is { } committedObserver)
+                await committedObserver(
+                        reservation.Key,
+                        applied.PutVersions[AuthorityMetaKey(reservation.Key)].Value
+                    )
+                    .ConfigureAwait(false);
             return new ZLinkObjectCommitResult.Committed(
                 Snapshot(
                     meta,
@@ -5395,8 +5398,7 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     // ListAuthoritiesAsync's `prefix` parameter (IZLinkLocationRepository)
     // is the pre-existing "zla1:a:"/"zla1:s:" kind marker every caller
-    // passes (ZLinkLocationObjectQuery, ZLinkRelocationStartupRecovery,
-    // ZLinkInstanceSpotActivationTarget) -- translated here to the
+    // passes (ZLinkLocationObjectQuery, ZLinkInstanceSpotActivationTarget) -- translated here to the
     // canonical preimage's kind segment for the real opaque-record scan.
     // An empty prefix (scan everything) passes through unchanged.
     private static string AuthorityMetaPrefix(string prefix) =>

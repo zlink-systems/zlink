@@ -145,6 +145,7 @@ final class ZLinkInstanceRouteCacheTest {
                                 target,
                                 spot,
                                 generation,
+                                targetNodeGeneration,
                                 authority,
                                 lease,
                                 parts,

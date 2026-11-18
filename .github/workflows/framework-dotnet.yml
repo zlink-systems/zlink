@@ -83,6 +83,7 @@ env:
   FRAMEWORK_UNIT_TESTS: framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj
   FRAMEWORK_CONTRACT_TESTS: framework/languages/dotnet/tests/Zlink.Framework.ContractTests/Zlink.Framework.ContractTests.csproj
   STREAM_CONNECTOR_TESTS: framework/languages/dotnet/tests/Systems.Zlink.Stream.Connector.Tests/Systems.Zlink.Stream.Connector.Tests.csproj
+  REDIS_LOCATION_TESTS: framework/languages/dotnet/tests/Zlink.Framework.Locations.Redis.Tests/Zlink.Framework.Locations.Redis.Tests.csproj
   ZLinkFrameworkTargetFrameworks: net8.0;net10.0
 
 # One run per ref: a newer push to the same branch/PR cancels the run still in
@@ -264,6 +265,11 @@ jobs:
       - name: Build framework solution (Release)
         run: dotnet build ${{ env.FRAMEWORK_SOLUTION }} -c Release --no-restore
 
+      # Redis-backed tests fail instead of skipping once the job provides Redis (#4542).
+      - name: Start Redis for Redis-backed tests
+        if: ${{ startsWith(matrix.target.name, 'linux-') }}
+        uses: ./.github/actions/test-redis
+
       - name: Run framework unit tests (Debug, net8.0)
         run: bash scripts/ci/dotnet-test.sh ${{ env.FRAMEWORK_UNIT_TESTS }} Debug net8.0
 
@@ -272,6 +278,10 @@ jobs:
 
       - name: Run stream connector tests (Debug, net8.0)
         run: bash scripts/ci/dotnet-test.sh ${{ env.STREAM_CONNECTOR_TESTS }} Debug net8.0
+
+      - name: Run Redis Location Store tests (Debug, net8.0)
+        if: ${{ startsWith(matrix.target.name, 'linux-') }}
+        run: bash scripts/ci/dotnet-test.sh ${{ env.REDIS_LOCATION_TESTS }} Debug net8.0
 
       - name: Run framework unit tests (Release, net10.0)
         run: bash scripts/ci/dotnet-test.sh ${{ env.FRAMEWORK_UNIT_TESTS }} Release net10.0
@@ -292,6 +302,10 @@ jobs:
           path: ${{ runner.temp }}/zlink-test-results/**
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Stop Redis for Redis-backed tests
+        if: always() && env.ZLINK_TEST_REDIS_CONTAINER != ''
+        run: docker rm -f "${ZLINK_TEST_REDIS_CONTAINER}"
 
   framework-dotnet-gate:
     if: ${{ always() && !cancelled() && (inputs.skip_tests || needs.framework-dotnet.result == 'success') }}

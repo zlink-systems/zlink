@@ -28,6 +28,10 @@ if [ "$package" = cpp ]; then
     || { echo "run-template: no build stage in $game/Dockerfile" >&2; exit 1; }
 fi
 
+if [ "$package" = node ] && [ "${ZLINK_DEBUG_FRAMEWORK_RELOCATION:-}" = 1 ]; then
+  sed -i '/^FROM .* AS node$/a ENV ZLINK_DEBUG_FRAMEWORK_RELOCATION=1' "$game/Dockerfile"
+fi
+
 if [ "$TEMPLATE_SOURCE" = local ]; then
   binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/$package/VERSION")"
   python3 "$repo_root/scripts/templates/use-local-packages.py" \

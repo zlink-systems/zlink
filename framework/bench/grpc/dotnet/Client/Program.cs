@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Google.Protobuf;
+using Grpc.Core;
 using Grpc.Net.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -16,8 +17,11 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Dispatch;
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Spots;
+using Systems.Zlink.Framework.Runtime.Protocol;
 #endif
 
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
@@ -152,6 +156,26 @@ internal interface IBenchTransport : IAsyncDisposable
     Task DriveAsync(Task pending) => pending;
 }
 
+internal interface IBenchGameJsonTransport
+{
+    BenchGameMessage CreateGamePayload(
+        int payloadSize,
+        uint runId,
+        BenchPhase phase,
+        ulong sequence
+    );
+    ValueTask<BenchGameMessage> RequestGameAsync(
+        int stream,
+        BenchGameMessage payload,
+        CancellationToken cancellationToken
+    );
+    ValueTask SendGameAsync(
+        int stream,
+        BenchGameMessage payload,
+        CancellationToken cancellationToken
+    );
+}
+
 internal static class BenchTransport
 {
     public static async Task<IBenchTransport> CreateAsync(BenchOptions options)
@@ -167,12 +191,15 @@ internal static class BenchTransport
                 frameworkTarget: Environment.GetEnvironmentVariable("ZLINK_DOTNET_RAW_TARGET")
                     == "framework"
             ),
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             "zlink-framework-dotnet"
-                when Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_CLIENT") == "raw" =>
+                when Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_CLIENT") == "raw"
+                    && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") is not "L5_7" =>
                 new RawBenchTransport(options, frameworkTarget: true),
 #endif
+            "zlink-dotnet-json" => new RawBenchTransport(options),
             "zlink-framework-dotnet" => await FrameworkBenchTransport.CreateAsync(options),
+            "zlink-framework-dotnet-json" => await FrameworkBenchTransport.CreateAsync(options),
             _ => throw new InvalidOperationException(
                 $"Unknown implementation {options.Implementation}."
             ),
@@ -286,16 +313,20 @@ internal sealed class GrpcBenchTransport : IBenchTransport
     }
 }
 
-internal sealed class FrameworkBenchTransport : IBenchTransport
+internal sealed class FrameworkBenchTransport : IBenchTransport, IBenchGameJsonTransport
 {
     private static readonly RoutingId Target = RoutingId.From("bench-server");
     private readonly IHost host;
     private readonly IZLinkRouteClient client;
+    private readonly bool typedJson;
+    private readonly bool gameJson;
 
-    private FrameworkBenchTransport(IHost host, IZLinkRouteClient client)
+    private FrameworkBenchTransport(IHost host, IZLinkRouteClient client, bool typedJson, bool gameJson)
     {
         this.host = host;
         this.client = client;
+        this.typedJson = typedJson;
+        this.gameJson = gameJson;
     }
 
     public bool Ready { get; private set; }
@@ -304,10 +335,20 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
+        if (gameJson)
+        {
+            var game = BenchGamePayloads.Create(1, BenchPhase.Warmup, 0, 1024);
+            var reply = await RequestGameAsync(0, game, cancellationToken);
+            if (!BenchGamePayloads.HasExpectedStamp(reply, 1, BenchPhase.Warmup, 0))
+                throw new InvalidOperationException(
+                    "Framework JSON target probe returned an invalid payload."
+                );
+            return;
+        }
         var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
-        var reply = await RequestAsync(0, payload, cancellationToken);
+        var protobufReply = await RequestAsync(0, payload, cancellationToken);
         if (
-            !BenchMetricHeaders.TryDecode(reply, out var header)
+            !BenchMetricHeaders.TryDecode(protobufReply, out var header)
             || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0)
         )
             throw new InvalidOperationException(
@@ -317,6 +358,7 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
 
     public static async Task<FrameworkBenchTransport> CreateAsync(BenchOptions options)
     {
+        var typedJson = Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L5_7";
         var builder = Host.CreateApplicationBuilder(Array.Empty<string>());
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
@@ -325,7 +367,8 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
         );
         builder.Services.AddZLinkFramework(framework =>
         {
-            framework.Codecs.Use(ZLinkProtobufCodec.Default);
+            if (!typedJson)
+                framework.Codecs.Use(ZLinkProtobufCodec.Default);
             if (BenchDiagnostics.FlowTraceEnabled)
                 framework.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             var mesh = framework
@@ -333,12 +376,34 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingId(RoutingId.From($"bench-source-{Environment.ProcessId}"));
             mesh.PeerConnections.Connect(Target, options.TargetEndpoint);
+            if (typedJson)
+            {
+                mesh.AddRouteRequestHandler<
+                    FrameworkTypedEchoHandler,
+                    BenchTypedPayload,
+                    BenchTypedPayload
+                >(
+                        "BenchTypedPayload"
+                    )
+                    .AddRouteSendHandler<FrameworkTypedCommandHandler, BenchTypedPayload>(
+                        "BenchTypedPayload"
+                    );
+            }
+            else
+            {
+                mesh.AddRouteRequestHandler<FrameworkEchoHandler, BenchPayload, BenchPayload>(
+                        "BenchPayload"
+                    )
+                    .AddRouteSendHandler<FrameworkCommandHandler, BenchPayload>("BenchPayload");
+            }
         });
         var host = builder.Build();
         await host.StartAsync();
         return new FrameworkBenchTransport(
             host,
-            host.Services.GetRequiredService<IZLinkRouteClient>()
+            host.Services.GetRequiredService<IZLinkRouteClient>(),
+            typedJson,
+            options.Implementation == "zlink-framework-dotnet-json"
         );
     }
 
@@ -351,22 +416,81 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
                 return;
     }
 
-    public Zlink.Framework.Contracts.Channels.ZLinkRequest<BenchPayload> SubmitRequest(
+    public FrameworkRequestSubmission SubmitRequest(
         BenchPayload payload,
         CancellationToken cancellationToken
-    ) => client.RequestToNode("bench", Target, payload).Async<BenchPayload>(cancellationToken);
+    )
+    {
+        if (!typedJson)
+        {
+            var request = client.RequestToNode("bench", Target, payload)
+                .Async<BenchPayload>(cancellationToken);
+            return new FrameworkRequestSubmission(request.AsTask(), request.Admitted.AsTask());
+        }
+
+        var typedRequest = client
+            .RequestToNode("bench", Target, new BenchTypedPayload(payload.Body.ToByteArray()))
+            .Async<BenchTypedPayload>(cancellationToken);
+        return new FrameworkRequestSubmission(
+            ConvertTypedReplyAsync(typedRequest),
+            typedRequest.Admitted.AsTask()
+        );
+    }
+
+    private static async Task<BenchPayload> ConvertTypedReplyAsync(
+        Zlink.Framework.Contracts.Channels.ZLinkRequest<BenchTypedPayload> request
+    )
+    {
+        var reply = await request;
+        return new BenchPayload { Body = ByteString.CopyFrom(reply.Body) };
+    }
+
+    public Zlink.Framework.Contracts.Channels.ZLinkRequest<BenchGameMessage> SubmitGameRequest(
+        BenchGameMessage payload,
+        CancellationToken cancellationToken
+    ) => client.RequestToNode("bench", Target, payload).Async<BenchGameMessage>(cancellationToken);
 
     public async ValueTask<BenchPayload> RequestAsync(
         int stream,
         BenchPayload payload,
         CancellationToken cancellationToken
-    ) => await SubmitRequest(payload, cancellationToken);
+    ) => await SubmitRequest(payload, cancellationToken).Reply;
 
     public async ValueTask SendAsync(
         int stream,
         BenchPayload payload,
         CancellationToken cancellationToken
-    ) => await client.SendToNode("bench", Target, payload).Async();
+    )
+    {
+        if (typedJson)
+            await client
+                .SendToNode("bench", Target, new BenchTypedPayload(payload.Body.ToByteArray()))
+                .Async();
+        else
+            await client.SendToNode("bench", Target, payload).Async();
+    }
+
+    public BenchGameMessage CreateGamePayload(
+        int payloadSize,
+        uint runId,
+        BenchPhase phase,
+        ulong sequence
+    ) => BenchGamePayloads.Create(runId, phase, sequence, payloadSize);
+
+    public async ValueTask<BenchGameMessage> RequestGameAsync(
+        int stream,
+        BenchGameMessage payload,
+        CancellationToken cancellationToken
+    ) => await SubmitGameRequest(payload, cancellationToken);
+
+    public async ValueTask SendGameAsync(
+        int stream,
+        BenchGameMessage payload,
+        CancellationToken cancellationToken
+    )
+    {
+        await client.SendToNode("bench", Target, payload).Async();
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -375,24 +499,89 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
     }
 }
 
-internal sealed class RawBenchTransport : IBenchTransport
+internal sealed record FrameworkRequestSubmission(Task<BenchPayload> Reply, Task Admitted);
+
+internal sealed class FrameworkEchoHandler
+    : IZLinkRouteRequestHandler<BenchPayload, BenchPayload>
+{
+    public ValueTask<BenchPayload> HandleAsync(
+        BenchPayload request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        return ValueTask.FromResult(request);
+    }
+}
+
+internal sealed class FrameworkCommandHandler
+    : IZLinkRouteSendHandler<BenchPayload>
+{
+    public ValueTask HandleAsync(
+        BenchPayload message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class FrameworkTypedEchoHandler
+    : IZLinkRouteRequestHandler<BenchTypedPayload, BenchTypedPayload>
+{
+    public ValueTask<BenchTypedPayload> HandleAsync(
+        BenchTypedPayload request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        return ValueTask.FromResult(request);
+    }
+}
+
+internal sealed class FrameworkTypedCommandHandler
+    : IZLinkRouteSendHandler<BenchTypedPayload>
+{
+    public ValueTask HandleAsync(
+        BenchTypedPayload message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class RawBenchTransport : IBenchTransport, IBenchGameJsonTransport
 {
     private readonly IContext context;
+    private readonly bool gameJson;
     private readonly RawBenchSocket? request;
     private readonly RawBenchSocket[] commands;
     private readonly bool frameworkTarget;
     private readonly bool encodeEnvelopeHeaders;
+    private readonly bool encodeServiceWire;
+    private readonly bool encodeTypedPayload;
+    private long nextServiceCorrelation;
     private readonly TimeSpan requestTimeout;
     private readonly CancellationTokenSource completionStopping = new();
     private Thread? completionThread;
 
     public RawBenchTransport(BenchOptions options, bool frameworkTarget = false)
     {
+        gameJson = options.Implementation == "zlink-dotnet-json";
         context = Systems.Zlink.Zlink.CreateContext();
         this.frameworkTarget = frameworkTarget;
         encodeEnvelopeHeaders =
             frameworkTarget
-            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L2";
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") is "L2" or "L3" or "L4";
+        encodeServiceWire =
+            frameworkTarget
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") is "L3" or "L4";
+        encodeTypedPayload =
+            frameworkTarget
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L4";
         requestTimeout = options.Timeout;
         if (options.Scenario == "send-saturation")
         {
@@ -435,7 +624,7 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     private Message CreateSendHeader(bool isRequest, TimeSpan? timeout = null)
     {
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
         if (
             encodeEnvelopeHeaders
         )
@@ -466,6 +655,22 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
+        if (gameJson)
+        {
+            var game = BenchGamePayloads.Create(1, BenchPhase.Warmup, 0, 1024);
+            if (commands.Length > 0)
+            {
+                await DriveAsync(SendGameAsync(0, game, cancellationToken).AsTask());
+                return;
+            }
+            var gameRequest = RequestGameAsync(0, game, cancellationToken).AsTask();
+            await DriveAsync(gameRequest);
+            if (!BenchGamePayloads.HasExpectedStamp(await gameRequest, 1, BenchPhase.Warmup, 0))
+                throw new InvalidOperationException(
+                    "Raw JSON target probe returned an invalid payload."
+                );
+            return;
+        }
         var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
         if (commands.Length > 0)
         {
@@ -486,9 +691,45 @@ internal sealed class RawBenchTransport : IBenchTransport
         int stream,
         BenchPayload payload,
         CancellationToken cancellationToken
+    ) => await SubmitRequest(payload, cancellationToken).Reply;
+
+    public BenchGameMessage CreateGamePayload(
+        int payloadSize,
+        uint runId,
+        BenchPhase phase,
+        ulong sequence
+    ) => BenchGamePayloads.Create(runId, phase, sequence, payloadSize);
+
+    public async ValueTask<BenchGameMessage> RequestGameAsync(
+        int stream,
+        BenchGameMessage payload,
+        CancellationToken cancellationToken
+    ) => await SubmitGameRequest(payload, cancellationToken).Reply;
+
+    public RawGameRequestSubmission SubmitGameRequest(
+        BenchGameMessage payload,
+        CancellationToken cancellationToken
     )
     {
-        return await SubmitRequest(payload, cancellationToken).Reply;
+        Message? header = null;
+        Message? body = null;
+        try
+        {
+            header = Message.From(RawEnvelopeHeaders.JsonRequest);
+            body = EncodeGamePayload(payload);
+            var submission = request!.SubmitRequest(header, body, cancellationToken);
+            return new RawGameRequestSubmission(
+                submission.Result,
+                submission.Admitted,
+                DecodeGameReplyAsync(submission.Reply, header, body)
+            );
+        }
+        catch
+        {
+            body?.Dispose();
+            header?.Dispose();
+            throw;
+        }
     }
 
     public RawRequestSubmission SubmitRequest(
@@ -500,13 +741,50 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = CreateSendHeader(isRequest: true, timeout: requestTimeout);
-            body = EncodeRawPayload(payload);
+            var payloadParts = CreatePayloadParts(payload, isRequest: true);
+            header = payloadParts[0];
+            body = payloadParts[1];
+            ulong serviceCorrelation = 0;
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
+            if (encodeServiceWire)
+            {
+                serviceCorrelation = NextServiceCorrelation();
+                var serviceHeader = ZLinkServiceWireCodec.EncodeApplicationMessage(
+                    ServiceWireConstants.Command.ChannelRequest,
+                    serviceCorrelation,
+                    "bench",
+                    hasMetadata: false
+                );
+                Message servicePayload;
+                try
+                {
+                    servicePayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                        payloadParts
+                    );
+                }
+                catch
+                {
+                    serviceHeader.Dispose();
+                    throw;
+                }
+                header.Dispose();
+                body.Dispose();
+                header = serviceHeader;
+                body = servicePayload;
+            }
+#endif
             RequestSubmission submission = request!.SubmitRequest(header, body, cancellationToken);
             return new RawRequestSubmission(
                 submission.Result,
                 submission.Admitted,
-                DecodeRawReplyAsync(submission.Reply, header, body)
+                DecodeRawReplyAsync(
+                    submission.Reply,
+                    header,
+                    body,
+                    encodeEnvelopeHeaders,
+                    serviceCorrelation,
+                    encodeTypedPayload
+                )
             );
         }
         catch
@@ -540,8 +818,58 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = CreateSendHeader(isRequest: false);
-            body = EncodeRawPayload(payload);
+            var payloadParts = CreatePayloadParts(payload, isRequest: false);
+            header = payloadParts[0];
+            body = payloadParts[1];
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
+            if (encodeServiceWire)
+            {
+                var serviceHeader = ZLinkServiceWireCodec.EncodeApplicationMessage(
+                    ServiceWireConstants.Command.ChannelSend,
+                    0,
+                    "bench",
+                    hasMetadata: false
+                );
+                Message servicePayload;
+                try
+                {
+                    servicePayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                        payloadParts
+                    );
+                }
+                catch
+                {
+                    serviceHeader.Dispose();
+                    throw;
+                }
+                header.Dispose();
+                body.Dispose();
+                header = serviceHeader;
+                body = servicePayload;
+            }
+#endif
+            await commands[stream % commands.Length]
+                .SubmitSendAsync(header, body, cancellationToken);
+        }
+        finally
+        {
+            body?.Dispose();
+            header?.Dispose();
+        }
+    }
+
+    public async ValueTask SendGameAsync(
+        int stream,
+        BenchGameMessage payload,
+        CancellationToken cancellationToken
+    )
+    {
+        Message? header = null;
+        Message? body = null;
+        try
+        {
+            header = Message.From(RawEnvelopeHeaders.JsonRequest);
+            body = EncodeGamePayload(payload);
             await commands[stream % commands.Length]
                 .SubmitSendAsync(header, body, cancellationToken);
         }
@@ -574,6 +902,31 @@ internal sealed class RawBenchTransport : IBenchTransport
         }
     }
 
+    private IReadOnlyList<Message> CreatePayloadParts(BenchPayload payload, bool isRequest)
+    {
+#if ZLINK_DOTNET_LADDER_L4
+        if (encodeTypedPayload)
+        {
+            var envelope = ZLinkClientCallCodec.CreateEnvelope(
+                isRequest ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
+                "bench",
+                "BenchTypedPayload",
+                isRequest ? requestTimeout : null
+            );
+            return ZLinkClientCallCodec.EncodeEnvelopeParts(
+                envelope,
+                new BenchTypedPayload(payload.Body.ToByteArray()),
+                null
+            );
+        }
+#endif
+        return
+        [
+            CreateSendHeader(isRequest, isRequest ? requestTimeout : null),
+            EncodeRawPayload(payload),
+        ];
+    }
+
     private static Message EncodeRawPayload(BenchPayload payload)
     {
         var body = Message.Allocate(payload.CalculateSize());
@@ -589,10 +942,21 @@ internal sealed class RawBenchTransport : IBenchTransport
         }
     }
 
+    private static Message EncodeGamePayload(BenchGameMessage payload)
+    {
+        var bytes = BenchGamePayloads.EncodeStandard(payload);
+        var body = Message.Allocate(bytes.Length);
+        bytes.CopyTo(body.AsSpan());
+        return body;
+    }
+
     private static async Task<BenchPayload> DecodeRawReplyAsync(
         Task<IReadOnlyList<Message>> replyTask,
         Message header,
-        Message body
+        Message body,
+        bool decodeEnvelopeHeader,
+        ulong serviceCorrelation,
+        bool typedPayload
     )
     {
         IReadOnlyList<Message>? parts = null;
@@ -601,6 +965,52 @@ internal sealed class RawBenchTransport : IBenchTransport
             parts = await replyTask;
             if (parts.Count == 0)
                 throw new InvalidOperationException("Raw request returned no reply parts.");
+#if ZLINK_DOTNET_LADDER_L2
+            if (decodeEnvelopeHeader && serviceCorrelation == 0)
+                _ = ZLinkEnvelopeCodec.DecodeHeader(parts[0]);
+#endif
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
+            if (serviceCorrelation != 0)
+            {
+                if (
+                    parts.Count != 2
+                    || !ZLinkServiceWireCodec.TryDecodeReply(
+                        parts[0].AsReadOnlySpan(),
+                        out var serviceReply,
+                        out _
+                    )
+                    || serviceReply.Correlation != serviceCorrelation
+                    || serviceReply.TerminalResult != 0
+                    || serviceReply.FailureCode != 0
+                    || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                        parts[1],
+                        out var replyParts
+                    )
+                )
+                    throw new InvalidOperationException("Service wire reply was invalid.");
+                if (replyParts.Count != 2)
+                    throw new InvalidOperationException("Service wire reply payload was invalid.");
+                var replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
+#if ZLINK_DOTNET_LADDER_L4
+                if (typedPayload)
+                {
+                    if (
+                        replyHeader.Kind != ZLinkMessageKind.Response
+                        || replyHeader.ContentType != ZLinkEnvelopeCodec.DefaultContentType
+                    )
+                        throw new InvalidOperationException("Typed JSON reply envelope was invalid.");
+                    var typedReply = (BenchTypedPayload)ZLinkEnvelopeCodec.DecodeBody(
+                            replyParts,
+                            typeof(BenchTypedPayload),
+                            replyHeader.ContentType,
+                            null
+                        )!;
+                    return new BenchPayload { Body = ByteString.CopyFrom(typedReply.Body) };
+                }
+#endif
+                return RawWire.Decode(replyParts.GetSpan(1));
+            }
+#endif
             return RawWire.Decode(
                 parts.Count == 1 ? parts[0].AsReadOnlySpan() : parts[^1].AsReadOnlySpan()
             );
@@ -614,12 +1024,46 @@ internal sealed class RawBenchTransport : IBenchTransport
             header.Dispose();
         }
     }
+
+    private static async Task<BenchGameMessage> DecodeGameReplyAsync(
+        Task<IReadOnlyList<Message>> replyTask,
+        Message header,
+        Message body
+    )
+    {
+        IReadOnlyList<Message>? parts = null;
+        try
+        {
+            parts = await replyTask;
+            if (parts.Count == 0)
+                throw new InvalidOperationException("Raw JSON request returned no reply parts.");
+            return BenchGamePayloads.DecodeStandard(parts[^1].AsReadOnlySpan());
+        }
+        finally
+        {
+            if (parts is not null)
+                foreach (var part in parts)
+                    part.Dispose();
+            body.Dispose();
+            header.Dispose();
+        }
+    }
+
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
+    private ulong NextServiceCorrelation() => checked((ulong)Interlocked.Increment(ref nextServiceCorrelation));
+#endif
 }
 
 internal readonly record struct RawRequestSubmission(
     SubmitResult Result,
     Task Admitted,
     Task<BenchPayload> Reply
+);
+
+internal readonly record struct RawGameRequestSubmission(
+    SubmitResult Result,
+    Task Admitted,
+    Task<BenchGameMessage> Reply
 );
 
 internal sealed class RawBenchSocket : IDisposable
@@ -710,10 +1154,7 @@ internal sealed class RawBenchSocket : IDisposable
         CancellationToken cancellationToken
     )
     {
-        SendSubmission submission = Send()
-            .Message(header)
-            .Message(body)
-            .Async(cancellationToken);
+        SendSubmission submission = Send().Message(header).Message(body).Async(cancellationToken);
         if (submission.Result == SubmitResult.Backpressured)
             return new ValueTask(submission.Admitted);
         if (submission.Result != SubmitResult.Ok)
@@ -731,6 +1172,8 @@ internal sealed class RawBenchSocket : IDisposable
 
 internal sealed class SourceMetrics(int sampleLimit)
 {
+    private static readonly bool TraceErrors =
+        Environment.GetEnvironmentVariable("ZLINK_BENCH_TRACE_ERRORS") == "1";
     private const int ErrorKindLimit = 8;
     private const int ErrorMessageLimit = 200;
     private readonly object gate = new();
@@ -784,7 +1227,7 @@ internal sealed class SourceMetrics(int sampleLimit)
         Complete(started, success, error, Stopwatch.GetTimestamp());
     }
 
-    internal void Complete(long started, bool success, Exception? error, long now)
+    internal void Complete(long started, bool success, Exception? error, long now, ulong? sequence = null)
     {
         var elapsed = (long)((now - started) * 1_000_000.0 / Stopwatch.Frequency);
         lock (gate)
@@ -800,7 +1243,25 @@ internal sealed class SourceMetrics(int sampleLimit)
             {
                 errors++;
                 if (error is not null)
+                {
                     RecordError(error);
+                    if (TraceErrors)
+                        Console.Error.WriteLine(JsonSerializer.Serialize(new
+                        {
+                            diagnostic = "bench-request-error",
+                            sequence,
+                            phase = Phase.ToString(),
+                            boundary = now < activeDeadline ? "window" : "drain",
+                            timestamp = now,
+                            deadline = activeDeadline,
+                            utc = DateTimeOffset.UtcNow,
+                            type = error.GetType().FullName,
+                            statusCode = (error as RpcException)?.StatusCode.ToString(),
+                            message = error.Message,
+                            detail = (error as RpcException)?.Status.Detail,
+                            inner = error.InnerException?.ToString(),
+                        }));
+                }
             }
             if (now < activeDeadline)
             {
@@ -1010,7 +1471,11 @@ internal sealed record StreamDescription(int count, int? inFlightPerStream, stri
                 null,
                 ".NET dedicated thread per logical stream; no application in-flight cap"
             ),
-            "send-saturation" => new(submitConcurrency, 1, ".NET dedicated thread per logical stream"),
+            "send-saturation" => new(
+                submitConcurrency,
+                1,
+                ".NET dedicated thread per logical stream"
+            ),
             _ => throw new InvalidOperationException($"Unknown pattern {pattern}."),
         };
 }
@@ -1258,7 +1723,10 @@ internal sealed record BenchResult(
 {
     public string Pattern => Scenario[(Implementation.Length + 1)..];
     public string Implementation =>
-        Scenario.StartsWith("zlink-framework-dotnet-", StringComparison.Ordinal)
+        Scenario.StartsWith("zlink-framework-dotnet-json-", StringComparison.Ordinal)
+            ? "zlink-framework-dotnet-json"
+        : Scenario.StartsWith("zlink-dotnet-json-", StringComparison.Ordinal) ? "zlink-dotnet-json"
+        : Scenario.StartsWith("zlink-framework-dotnet-", StringComparison.Ordinal)
             ? "zlink-framework-dotnet"
         : Scenario.StartsWith("zlink-dotnet-", StringComparison.Ordinal) ? "zlink-dotnet"
         : "grpc-dotnet";
@@ -1348,8 +1816,24 @@ internal sealed record BenchOptions(
 
     public void Validate()
     {
-        if (Implementation is not ("grpc-dotnet" or "zlink-dotnet" or "zlink-framework-dotnet"))
+        if (
+            Implementation
+            is not (
+                "grpc-dotnet"
+                or "zlink-dotnet"
+                or "zlink-framework-dotnet"
+                or "zlink-dotnet-json"
+                or "zlink-framework-dotnet-json"
+            )
+        )
             throw new InvalidOperationException("Unknown implementation.");
+        if (
+            (Implementation is "zlink-dotnet-json" or "zlink-framework-dotnet-json")
+            && PayloadSize is not (1024 or 4096)
+        )
+            throw new InvalidOperationException(
+                $"{Implementation} supports payload sizes 1024 and 4096 only; received {PayloadSize}."
+            );
         if (
             Scenario
             is not (
@@ -1379,7 +1863,7 @@ internal sealed record BenchOptions(
             ValidateHttp(TargetEndpoint, nameof(TargetEndpoint));
         else
             ValidateTcp(TargetEndpoint, nameof(TargetEndpoint));
-        if (Implementation == "zlink-dotnet")
+        if (Implementation is "zlink-dotnet" or "zlink-dotnet-json")
         {
             if (TargetCommandEndpoint is null)
                 throw new InvalidOperationException("Raw target command endpoint is required.");

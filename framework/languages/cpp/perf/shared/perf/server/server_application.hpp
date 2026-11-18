@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 // Perf spec §6.3, §16: what every role process shares. The application-owned admin endpoints (`/perf/ready`,

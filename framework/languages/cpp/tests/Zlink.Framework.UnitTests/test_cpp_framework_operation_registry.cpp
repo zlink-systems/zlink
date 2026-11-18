@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "allocation_counter.hpp"
@@ -1010,6 +1010,55 @@ int main (int argc, char **argv)
         return 0;
     }
     zlink::framework::completion_owner_t owner;
+    {
+        injected_now = foundation::operation_registry_t::clock_t::now ();
+        injected_step = {};
+        foundation::operation_registry_t continuation_registry (&read_injected_clock);
+        unsigned original = 0;
+        bool capture_released = false;
+        struct callback_capture_t
+        {
+            foundation::operation_registry_t &owner;
+            bool &released;
+            ~callback_capture_t ()
+            {
+                // Capture destruction may inspect its owner and must run outside its gate.
+                assert (owner.size () == 1);
+                released = true;
+            }
+        };
+        auto capture =
+          std::make_shared<callback_capture_t> (continuation_registry, capture_released);
+        std::atomic_uint continued{0};
+        const foundation::call_id_t operation{4543, 1};
+        const auto deadline = injected_now + std::chrono::milliseconds (100);
+        assert (continuation_registry.register_operation (
+          operation, deadline, [capture, &original] (auto, auto) { ++original; }));
+        capture.reset ();
+        const auto visit = continuation_registry.next_deadline ();
+        assert (
+          continuation_registry.continue_operation (operation, [&continued] (auto terminal, auto) {
+              assert (terminal == foundation::operation_terminal_t::timed_out);
+              ++continued;
+          }));
+        assert (capture_released);
+        assert (continuation_registry.deadline (operation) == deadline);
+        assert (continuation_registry.size () == 1);
+        assert (continuation_registry.index_size () == 1);
+        assert (continuation_registry.next_deadline () == visit);
+        injected_now = deadline + std::chrono::milliseconds (1);
+        foundation::operation_registry_t::callback_t late = [] (auto, auto) { assert (false); };
+        assert (!continuation_registry.continue_operation (operation, std::move (late)));
+        assert (late);
+        assert (wait_until ([&] { return continued.load () == 1; }));
+        assert (original == 0);
+        assert (continuation_registry.size () == 0);
+        assert (!continuation_registry.continue_operation (operation, std::move (late)));
+    }
+    injected_now = {};
+    injected_step = {};
+    clock_reads = 0;
+
     verify_completion_outlives_deadline_index ();
     verify_completion_callbacks_use_dispatcher ();
     verify_shutdown_waits_for_callback_capture_destruction ();
@@ -1052,7 +1101,11 @@ int main (int argc, char **argv)
     foundation::operation_registry_t registry;
     const auto now = foundation::operation_registry_t::clock_t::now ();
     {
-        foundation::operation_registry_t ordered;
+        // The scan budget reads the registry clock. A fixed injected clock keeps one expire
+        // within budget on a slow or loaded build, as the deadline test above does (#4096).
+        injected_now = now;
+        injected_step = {};
+        foundation::operation_registry_t ordered (&read_injected_clock);
         std::array<bool, 128> active{};
         for (std::size_t index = 0; index < active.size (); ++index)
             assert (ordered.register_operation (id (static_cast<std::uint8_t> (index + 1)),

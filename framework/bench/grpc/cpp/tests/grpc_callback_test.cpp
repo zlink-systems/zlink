@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #define main bench_server_entry
 #include "../grpc/bench_grpc_cpp_server.cpp"
 #undef main

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.file.Files;
 import java.util.Map;
@@ -33,7 +34,7 @@ public final class ZLinkOneWayEnvelopeCleanupTest {
 
     @Test
     void cleanupDoesNotCreateNativeMessages() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     @Test

@@ -9,7 +9,7 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class LocationRuntimeTests
+public sealed partial class LocationRuntimeTests
 {
     [Theory]
     [InlineData(false)]
@@ -237,17 +237,23 @@ public sealed class LocationRuntimeTests
                     ? Task.CompletedTask
                     : Execute(async ct =>
                     {
-                        entered.TrySetResult();
                         if (boundary == 2)
                         {
-                            await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                            // The turn must be suspended before the test starts recovery; signalling first lets
+                            // release complete before the yield and the handler finishes on the fast path.
+                            var yielded = ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
                                 _ => new ValueTask(release.Task),
                                 ct
                             );
+                            entered.TrySetResult();
+                            await yielded;
                             Interlocked.Increment(ref calls);
                         }
                         else
+                        {
+                            entered.TrySetResult();
                             await release.Task;
+                        }
                     });
             if (boundary != 1)
                 await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -298,17 +304,10 @@ public sealed class LocationRuntimeTests
             await recovery.WaitAsync(TimeSpan.FromSeconds(5));
             if (discard)
             {
-                if (target is 0 or 3)
-                {
-                    var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                        pending.WaitAsync(TimeSpan.FromSeconds(5))
-                    );
-                    Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
-                }
-                else
-                    await Assert.ThrowsAsync<TaskCanceledException>(() =>
-                        pending.WaitAsync(TimeSpan.FromSeconds(5))
-                    );
+                var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                    pending.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
                 Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
                 Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
                 Assert.Equal(0, calls);
@@ -2104,6 +2103,21 @@ public sealed class LocationRuntimeTests
     internal sealed class OutageLeaseStore(IZLinkLocationRepository inner)
         : ZLinkLocationStoreTestDouble
     {
+        internal Func<ValueTask>? AfterMembershipCommit;
+        internal Func<ValueTask>? BeforeAuthorityRead;
+        internal int DiscardedCleanupCalls;
+
+        public override ValueTask<bool> CleanupDiscardedAuthorityAsync(
+            ZLinkAuthorityKey key,
+            ZLinkAuthoritySnapshot discarded,
+            ZLinkLocationOwnerToken owner,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Interlocked.Increment(ref DiscardedCleanupCalls);
+            return inner.CleanupDiscardedAuthorityAsync(key, discarded, owner, cancellationToken);
+        }
+
         internal Func<ValueTask>? BeforeRecoveryCas;
         internal ZLinkMeshNodeDescriptor? RecoveryDescriptor;
         internal int MeshListReads;
@@ -2172,10 +2186,15 @@ public sealed class LocationRuntimeTests
             return inner.ListMeshNodesAsync(meshName, page, cancellationToken);
         }
 
-        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+        public override async ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
             ZLinkAuthorityKey key,
             CancellationToken cancellationToken = default
-        ) => inner.ReadAuthorityAsync(key, cancellationToken);
+        )
+        {
+            if (BeforeAuthorityRead is { } before)
+                await before();
+            return await inner.ReadAuthorityAsync(key, cancellationToken);
+        }
 
         public override async ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
             ZLinkAuthorityKey key,
@@ -2212,6 +2231,16 @@ public sealed class LocationRuntimeTests
                 mutation,
                 cancellationToken
             );
+            if (
+                mutation is ZLinkAuthorityMutation.Put membershipPut
+                && ZLinkActorAuthorityPayloadCodec.TryDecode(
+                    membershipPut.Payload.Span,
+                    out var membership
+                )
+                && membership.CurrentSpotKind == ZLinkSpotKind.User
+                && AfterMembershipCommit is { } afterMembership
+            )
+                await afterMembership();
             if (
                 recovery
                 && HoldRecoveryCas

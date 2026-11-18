@@ -7,7 +7,7 @@ import jdk.jfr.consumer.RecordingFile;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.file.Files;
 import java.util.concurrent.CancellationException;
@@ -26,7 +26,7 @@ public final class ZLinkCompletionCaptureAllocationTest {
 
     @Test
     void cancellationCapturesOnlyItsForwardingTargets() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     private static <T, U> void reference(

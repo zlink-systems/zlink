@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate } = require('node:timers/promises');
+const { runWithApplicationJobPermit, releaseApplicationJobPermitBeforeHandler } =
+  require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 const framework = require('../../packages/framework/dist/internal');
 const {
   ApplicationJobQueue,
@@ -74,6 +76,101 @@ function fixture() {
 }
 
 for (const kind of ['spot', 'actor']) {
+  for (const [terminal, scheduling] of [
+    ['cancel', 'default'], ['cancel', 'yield'],
+    ['deadline', 'default'], ['deadline', 'yield']
+  ]) {
+    test(`accepted local ${kind} reacquires admission after ${terminal} before running (${scheduling})`, async t => {
+      let now = performance.now();
+      if (scheduling === 'yield') t.mock.method(performance, 'now', () => now);
+      const f = fixture();
+      const serial = kind === 'spot'
+        ? new framework.ZLinkSpotSerialTurnExecutor()
+        : new framework.ZLinkActorSerialExecutor('actor', 'spot');
+      let finish;
+      let started;
+      const entered = new Promise(resolve => { started = resolve; });
+      const running = serial.execute(async () => {
+        started();
+        await new Promise(resolve => { finish = resolve; });
+      });
+      await entered;
+      const calls = [];
+      let accepted;
+      let occupied;
+      let admitted;
+      const atMailbox = new Promise(resolve => { admitted = resolve; });
+      // Hold only target execution; admission and caller completion use the runtime owners.
+      f.runtime.submitLocalRequest = async ingress => {
+        const lease = ingress.applicationJobOwner.takeInitial('application');
+        lease.detachForHandlerTurn();
+        try {
+          accepted = runWithApplicationJobPermit(lease, () => serial.execute(() => {
+            releaseApplicationJobPermitBeforeHandler();
+            calls.push('accepted');
+          }));
+          ingress.onAdmitted?.();
+          await accepted;
+        } finally {
+          lease.close();
+        }
+      };
+      try {
+        const pending = f.request(kind, admitted);
+        let atPublication;
+        pending.mapCaller(value => value, error => {
+          atPublication = f.queue.snapshot();
+          return error;
+        });
+        const rejected = assert.rejects(pending.promise);
+        await atMailbox;
+        assert.ok(accepted);
+        assert.equal(f.queue.snapshot().permitsInUse, 1n);
+        if (terminal === 'cancel') f.runtime.operations.cancel(pending.id);
+        else f.runtime.expireOperations(performance.now() + 1001, Infinity);
+        await rejected;
+        assert.equal(atPublication.permitsInUse, 0n);
+        assert.equal(atPublication.capacityWaiters, 0n);
+        occupied = await f.queue.acquire(undefined, 'remote');
+        const acquire = f.queue.acquire.bind(f.queue);
+        let registered;
+        const reacquiring = new Promise(resolve => { registered = resolve; });
+        // acquire registers its waiter synchronously, before returning its Promise.
+        t.mock.method(f.queue, 'acquire', (signal, origin) => {
+          const pending = acquire(signal, origin);
+          registered();
+          return pending;
+        });
+        const following = serial.execute(() => calls.push('following'));
+        // Cross the default scheduler budget without a wall-clock wait.
+        now += 10;
+        finish();
+        await running;
+        await reacquiring;
+        assert.equal(f.queue.acquire.mock.callCount(), 1);
+        assert.equal(f.queue.acquire.mock.calls[0].arguments[1], 'local');
+        assert.deepEqual(calls, []);
+        assert.equal(f.queue.snapshot().capacityWaiters, 1n);
+        occupied.releaseAfterInternalProcessing();
+        await Promise.all([accepted, following]);
+        assert.deepEqual(calls, ['accepted', 'following']);
+        assert.equal(f.queue.snapshot().permitsInUse, 0n);
+        assert.equal(f.queue.snapshot().capacityWaiters, 0n);
+      } finally {
+        occupied?.releaseAfterInternalProcessing();
+        finish();
+        await running;
+        await accepted;
+        f.runtime.close();
+        f.raw.close();
+        if (kind === 'spot') {
+          serial.closeAdmission();
+          await serial.whenIdle();
+        } else await serial.close();
+      }
+    });
+  }
+
   test(`local ${kind} public admission ends at mailbox acceptance before reply`, async () => {
     const f = fixture();
     let operation;
@@ -169,6 +266,11 @@ for (const kind of ['spot', 'actor']) {
       const occupied = await f.queue.acquire(undefined, 'remote');
       try {
         const pending = f.request(kind);
+        let atPublication;
+        pending.mapCaller(value => value, error => {
+          atPublication = f.queue.snapshot();
+          return error;
+        });
         const rejected = assert.rejects(pending.promise, terminal === 'deadline'
           ? error => error instanceof framework.ZLinkFrameworkException &&
             error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
@@ -182,6 +284,8 @@ for (const kind of ['spot', 'actor']) {
           f.runtime.close();
         }
         await rejected;
+        assert.equal(atPublication.capacityWaiters, 0n);
+        assert.equal(atPublication.permitsInUse, 1n);
         await setImmediate();
         assert.equal(f.runtime.pendingOperationCount, 0);
         assert.equal(f.queue.snapshot().capacityWaiters, 0n);
@@ -192,6 +296,32 @@ for (const kind of ['spot', 'actor']) {
         occupied.releaseAfterInternalProcessing();
       }
       assert.equal(f.queue.snapshot().permitsInUse, 0n);
+    });
+  }
+
+  for (const terminal of ['deadline', 'cancel', 'shutdown']) {
+    test(`queued local ${kind} returns its permit before ${terminal} publication`, async () => {
+      const f = fixture();
+      try {
+        const pending = f.request(kind);
+        let atPublication;
+        pending.mapCaller(value => value, error => {
+          atPublication = f.queue.snapshot();
+          return error;
+        });
+        const rejected = assert.rejects(pending.promise);
+        await setImmediate();
+        assert.equal(f.queue.snapshot().permitsInUse, 1n);
+        if (terminal === 'deadline') f.runtime.expireOperations(performance.now() + 1001, Infinity);
+        else if (terminal === 'cancel') f.runtime.operations.cancel(pending.id);
+        else f.runtime.close();
+        await rejected;
+        assert.equal(atPublication.permitsInUse, 0n);
+        assert.equal(atPublication.capacityWaiters, 0n);
+      } finally {
+        f.runtime.close();
+        f.raw.close();
+      }
     });
   }
 
@@ -229,6 +359,39 @@ for (const kind of ['spot', 'actor']) {
       f.raw.close();
     }
   });
+}
+
+for (const waiting of [false, true]) {
+  for (const terminal of ['cancel', 'deadline']) {
+    test(`raw local request cleans admission before ${terminal} (waiting=${waiting})`, async () => {
+      const f = fixture();
+      const occupied = waiting ? await f.queue.acquire(undefined, 'remote') : undefined;
+      const stop = new AbortController();
+      try {
+        const pending = f.raw.requestToNode('local', {
+          packetName: 'Request', contentType: 'application/json', payload: Buffer.from('{}')
+        }, 1000);
+        pending.setSignal(stop.signal);
+        let atPublication;
+        pending.mapCaller(value => value, error => {
+          atPublication = f.queue.snapshot();
+          return error;
+        });
+        const rejected = assert.rejects(pending.promise);
+        if (!waiting) await setImmediate();
+        assert.equal(f.queue.snapshot().capacityWaiters, waiting ? 1n : 0n);
+        if (terminal === 'cancel') stop.abort(new Error('caller cancelled'));
+        else f.raw.expireOperations(performance.now() + 1001, Infinity);
+        await rejected;
+        assert.equal(atPublication.capacityWaiters, 0n);
+        assert.equal(atPublication.permitsInUse, waiting ? 1n : 0n);
+      } finally {
+        occupied?.releaseAfterInternalProcessing();
+        f.runtime.close();
+        f.raw.close();
+      }
+    });
+  }
 }
 
 function deliverFixtureCompletion(work, operation, receiver) {

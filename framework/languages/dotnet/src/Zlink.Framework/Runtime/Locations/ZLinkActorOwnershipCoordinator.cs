@@ -362,7 +362,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         CurrentSpotGeneration = spotGeneration,
                     },
                 expectedActorRef: expectedActorRef,
-                cancellationToken: cancellationToken
+                cancellationToken: cancellationToken,
+                settleMembership: true
             )
             .ConfigureAwait(false);
     }
@@ -1466,7 +1467,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         ZLinkActorId actorId,
         Func<ZLinkActorAuthorityPayload, ZLinkActorAuthorityPayload> mutate,
         ActorRef? expectedActorRef,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool settleMembership = false
     )
     {
         var canonical = actorId;
@@ -1590,19 +1592,33 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 if (ReferenceEquals(attempt.Proposed, payload))
                     return;
 
-                var result = await runtime
-                    .Store.CompareExchangeAuthorityAsync(
-                        authorityKey,
-                        attempt.Snapshot.StoreVersion,
-                        new ZLinkAuthorityMutation.Put(
-                            EncodeAuthorityPayload(attempt.Snapshot.Payload, attempt.Proposed),
-                            ZLinkAuthorityGenerationTransition.Preserve,
-                            TargetOwner: null,
-                            TargetAllocation: null
-                        ),
-                        cancellationToken
+                ZLinkAuthorityCompareExchangeResult result;
+                try
+                {
+                    result = await runtime
+                        .Store.CompareExchangeAuthorityAsync(
+                            authorityKey,
+                            attempt.Snapshot.StoreVersion,
+                            new ZLinkAuthorityMutation.Put(
+                                EncodeAuthorityPayload(attempt.Snapshot.Payload, attempt.Proposed),
+                                ZLinkAuthorityGenerationTransition.Preserve,
+                                TargetOwner: null,
+                                TargetAllocation: null
+                            ),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+                catch (Exception error)
+                    when (settleMembership
+                        && ZLinkLocationStoreFailure.IsIndeterminate(error, CancellationToken.None)
                     )
-                    .ConfigureAwait(false);
+                {
+                    var confirmed = await ConfirmMembershipAsync(attempt).ConfigureAwait(false);
+                    if (confirmed is null)
+                        throw;
+                    result = new ZLinkAuthorityCompareExchangeResult.Stored(confirmed);
+                }
                 if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
                 {
                     await _lane
@@ -1651,6 +1667,72 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         finally
         {
             tracked.WriteGate.Release();
+        }
+
+        async ValueTask<ZLinkAuthoritySnapshot?> ConfirmMembershipAsync(RenewAttempt attempt)
+        {
+            for (; ; )
+            {
+                var renewed = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                void OnRenewed(ZLinkOwnerLeaseRenewal _) => renewed.TrySetResult();
+                runtime.OwnerLeaseRenewed += OnRenewed;
+                try
+                {
+                    try
+                    {
+                        var read = await runtime
+                            .Store.ReadAuthorityAsync(
+                                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value),
+                                _reconciliationStop.Token
+                            )
+                            .ConfigureAwait(false);
+                        if (read is ZLinkAuthorityReadResult.Found found)
+                        {
+                            var snapshot = found.Snapshot;
+                            if (snapshot.StoreVersion == attempt.Snapshot.StoreVersion)
+                                return null;
+                            if (
+                                snapshot.ObjectGeneration == attempt.Snapshot.ObjectGeneration
+                                && snapshot.AuthorityOwnerGeneration
+                                    == attempt.Snapshot.AuthorityOwnerGeneration
+                                && snapshot.OwnerId == attempt.Snapshot.OwnerId
+                                && snapshot.OwnerLeaseGeneration
+                                    == attempt.Snapshot.OwnerLeaseGeneration
+                                && snapshot.Allocation == attempt.Snapshot.Allocation
+                                && snapshot.Payload.Span.SequenceEqual(
+                                    EncodeAuthorityPayload(
+                                        attempt.Snapshot.Payload,
+                                        attempt.Proposed
+                                    ).Span
+                                )
+                            )
+                                return snapshot;
+                        }
+                        runtime.NotifyAuthorityOwnershipLost(
+                            ZLinkLocationKind.Actor,
+                            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value)
+                        );
+                        return null;
+                    }
+                    catch (Exception error)
+                        when (ZLinkLocationStoreFailure.IsIndeterminate(
+                                error,
+                                _reconciliationStop.Token
+                            )
+                        )
+                    {
+                        await renewed
+                            .Task.WaitAsync(_reconciliationStop.Token)
+                            .ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    runtime.OwnerLeaseRenewed -= OnRenewed;
+                }
+            }
         }
     }
 
@@ -1856,13 +1938,30 @@ internal sealed class ZLinkActorOwnershipCoordinator(
 
     internal ValueTask<ZLinkAuthoritySnapshot?> ReadPreservedAuthorityAsync(
         ZLinkActorRuntimeState actor
-    ) =>
-        _lane.RunAsync(() =>
+    )
+    {
+        var generation = actor.NativeActorRef?.Generation;
+        return _lane.RunAsync(() =>
             _actors.TryGetValue(actor.RuntimeActorId, out var tracked)
-            && actor.NativeActorRef?.Generation == tracked.PreservedSnapshot?.ObjectGeneration
-                ? tracked.PreservedSnapshot
+            && generation == tracked.Snapshot.ObjectGeneration
+                ? tracked.PreservedSnapshot ?? tracked.Snapshot
                 : null
         );
+    }
+
+    internal ValueTask ForgetTrackedAsync(
+        ZLinkActorRuntimeState actor,
+        ZLinkAuthoritySnapshot discarded
+    ) =>
+        _lane.RunAsync(() =>
+        {
+            if (
+                _actors.TryGetValue(actor.RuntimeActorId, out var tracked)
+                && tracked.Snapshot.ObjectGeneration == discarded.ObjectGeneration
+                && tracked.Snapshot.AuthorityOwnerGeneration == discarded.AuthorityOwnerGeneration
+            )
+                _actors.Remove(actor.RuntimeActorId);
+        });
 
     internal ValueTask UpdateTrackedSnapshotAsync(
         ZLinkActorId actorId,

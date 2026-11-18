@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include "runtime/locations/location_runtime.hpp"
@@ -149,10 +149,42 @@ struct location_runtime_test_access_t
         return runtime._lane
           ->run_checked ([&] {
               return std::count_if (
-                runtime._descriptor_publications.begin (), runtime._descriptor_publications.end (),
+                runtime._repository_operations->begin (), runtime._repository_operations->end (),
                 [] (const auto &pending) { return !pending->drained.task ().await_ready (); });
           })
           .get ();
+    }
+
+    static bool cleanup_submitted (location_runtime_t &runtime,
+                                   std::chrono::milliseconds timeout,
+                                   std::function<void ()> advance = {})
+    {
+        const auto deadline = std::chrono::steady_clock::now () + timeout;
+        for (;;) {
+            if (advance)
+                advance ();
+            const bool settled = runtime._lane->run_sync ([&] {
+                bool found = false;
+                for (const auto &operation : *runtime._repository_operations) {
+                    const auto cleanup =
+                      std::dynamic_pointer_cast<location_runtime_t::discarded_authority_t> (
+                        operation);
+                    if (!cleanup)
+                        continue;
+                    found = true;
+                    if (!cleanup->settled.await_ready ()
+                        || (!cleanup->drained.task ().await_ready ()
+                            && (!cleanup->pending || !cleanup->pending->await_ready ())))
+                        return false;
+                }
+                return found;
+            });
+            if (settled)
+                return true;
+            if (std::chrono::steady_clock::now () >= deadline)
+                return false;
+            std::this_thread::yield ();
+        }
     }
 
     static state_lane_t &lane (location_runtime_t &runtime) { return *runtime._lane; }

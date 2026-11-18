@@ -79,6 +79,11 @@ public static class BenchMetricHeaders
         return TryDecode(payload.Body.Span, out header);
     }
 
+    public static bool TryDecode(BenchTypedPayload payload, out BenchMetricHeader header)
+    {
+        return TryDecode(payload.Body, out header);
+    }
+
     public static bool IsExpected(
         BenchMetricHeader header,
         uint runId,

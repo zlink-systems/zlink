@@ -22,7 +22,15 @@ public sealed class StreamDisconnectProgressTests
         builder.Services.AddSingleton<IZLinkBackendAdapterFactory>(
             services => new ObservingBackendFactory(
                 new ZLinkDotNetBackendAdapterFactory(services.GetService<ILoggerFactory>()),
-                state
+                () => Interlocked.Increment(ref state.StreamMonitorOpenCount),
+                monitorEvent =>
+                {
+                    if (monitorEvent.NativeEvent == ZLinkSocketNativeEventType.Disconnected)
+                    {
+                        Interlocked.Increment(ref state.PhysicalDisconnectCount);
+                        state.PhysicalDisconnected.TrySetResult();
+                    }
+                }
             )
         );
         builder.Services.AddZLinkFramework(options =>
@@ -130,18 +138,20 @@ public sealed class ProgressState
 
 internal sealed class ObservingBackendFactory(
     IZLinkBackendAdapterFactory original,
-    ProgressState state
+    Action onOpened,
+    Action<ZLinkBackendSocketMonitorEvent> onEvent
 ) : IZLinkBackendAdapterFactory
 {
     public IZLinkBackendRuntimeContext CreateRuntimeContext() => original.CreateRuntimeContext();
 
     public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() =>
-        new ObservingMonitoringAdapter(original.CreateMonitoringAdapter(), state);
+        new ObservingMonitoringAdapter(original.CreateMonitoringAdapter(), onOpened, onEvent);
 }
 
 internal sealed class ObservingMonitoringAdapter(
     IZLinkMonitoringBackendAdapter original,
-    ProgressState state
+    Action onOpened,
+    Action<ZLinkBackendSocketMonitorEvent> onEvent
 ) : IZLinkMonitoringBackendAdapter
 {
     public IZLinkBackendSocketMonitor OpenSocketMonitor(IAsyncDisposable socket)
@@ -149,14 +159,14 @@ internal sealed class ObservingMonitoringAdapter(
         var monitor = original.OpenSocketMonitor(socket);
         if (socket is not IZLinkBackendStreamSocket)
             return monitor;
-        Interlocked.Increment(ref state.StreamMonitorOpenCount);
-        return new ObservingStreamMonitor(monitor, state);
+        onOpened();
+        return new ObservingStreamMonitor(monitor, onEvent);
     }
 }
 
 internal sealed class ObservingStreamMonitor(
     IZLinkBackendSocketMonitor original,
-    ProgressState state
+    Action<ZLinkBackendSocketMonitorEvent> onEvent
 ) : IZLinkBackendSocketMonitor
 {
     public IZLinkBackendSocketPoller CreateReceivePoller() => original.CreateReceivePoller();
@@ -166,11 +176,8 @@ internal sealed class ObservingStreamMonitor(
         // The default wrapper calls its existing native monitor's public Recv
         // exactly once. Preserve the received value and exception unchanged.
         var received = original.TryRecv(out monitorEvent);
-        if (received && monitorEvent.NativeEvent == ZLinkSocketNativeEventType.Disconnected)
-        {
-            Interlocked.Increment(ref state.PhysicalDisconnectCount);
-            state.PhysicalDisconnected.TrySetResult();
-        }
+        if (received)
+            onEvent(monitorEvent);
         return received;
     }
 

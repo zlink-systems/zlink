@@ -591,7 +591,7 @@ private class QuestDomain {
                     now,
                 )
             if (event.decodePayload().publish) {
-                progressNotifications += QuestProgressNotify(event.playerId, null, next)
+                progressNotifications += QuestProgressNotify(event.playerId, next)
             }
         }
         if (
@@ -625,7 +625,7 @@ private class QuestDomain {
                     now,
                 )
             if (event.decodePayload().publish) {
-                completedNotifications += QuestCompletedNotify(event.playerId, null, next, true)
+                completedNotifications += QuestCompletedNotify(event.playerId, next, true)
             }
         }
     }
@@ -683,7 +683,7 @@ private class QuestDomain {
                 now,
             )
         if (event.decodePayload().publish) {
-            completedNotifications += QuestCompletedNotify(event.playerId, null, next, true)
+            completedNotifications += QuestCompletedNotify(event.playerId, next, true)
         }
     }
 }

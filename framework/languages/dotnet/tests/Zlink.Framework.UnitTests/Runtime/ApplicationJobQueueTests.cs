@@ -10,6 +10,57 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class ApplicationJobQueueContractTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalLifetimeReturnsGrantBeforeDestinationPublication(bool endedBeforeGrant)
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var destination = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blocked = destination
+            .RunAsync(
+                (Func<ValueTask>)(
+                    async () =>
+                    {
+                        entered.TrySetResult();
+                        await finish.Task;
+                    }
+                )
+            )
+            .AsTask();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        using var lifetime = new CancellationTokenSource();
+        if (endedBeforeGrant)
+            lifetime.Cancel();
+        ZLinkApplicationJobQueueLease? published = null;
+        var acquisition = queue.AcquireAndPostAsync(
+            CancellationToken.None,
+            destination,
+            lease => published = lease,
+            ZLinkApplicationJobOrigin.Local,
+            lifetime.Token
+        );
+        try
+        {
+            if (!endedBeforeGrant)
+                lifetime.Cancel();
+            Assert.Null(published);
+            Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+            Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        }
+        finally
+        {
+            finish.TrySetResult();
+            await blocked.WaitAsync(TimeSpan.FromSeconds(5));
+            await acquisition.WaitAsync(TimeSpan.FromSeconds(5));
+            published?.Dispose();
+        }
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(true, true)]

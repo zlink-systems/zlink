@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -556,30 +558,62 @@ internal abstract partial class ZLinkSpotActivation
                 .ConfigureAwait(false);
         else
             await _membershipPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        ZLinkSpotActivation? previousActivation;
+        Task<(
+            ZLinkSpotActivation? PreviousActivation,
+            ExceptionDispatchInfo? CallerFailure
+        )> publication;
         try
         {
-            if (PerActorShellRelocationPlan is not null)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"SPOT '{SpotId}' no longer accepts Actor membership after relocation publication.",
-                    ZLinkRetryAdvice.RetryAfterStateChange
-                );
-            previousActivation = await _runtime
-                .CommitActorToSpotAsync(
-                    this,
-                    actor,
-                    async ct =>
-                    {
-                        if (ZLinkSerialTurn.Current is { } authorityTurn)
-                            await authorityTurn
-                                .YieldFrameworkCallAsync(WriteAuthorityAsync, ct)
-                                .ConfigureAwait(false);
-                        else
-                            await WriteAuthorityAsync(ct).ConfigureAwait(false);
+            publication = await _lane
+                .RunAsync(() =>
+                {
+                    EnsureContextOperationAllowed();
+                    if (PerActorShellRelocationPlan is not null)
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            $"SPOT '{SpotId}' no longer accepts Actor membership after relocation publication.",
+                            ZLinkRetryAdvice.RetryAfterStateChange
+                        );
+                    var operation = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                        Task.Run(CommitMembershipAsync)
+                    );
+                    _membershipPublication = operation;
+                    return operation;
+                })
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            _membershipPublicationGate.Release();
+            throw;
+        }
+        var outcome = ZLinkSerialTurn.Current is { } turn
+            ? await turn.YieldFrameworkCallAsync(
+                    _ => new ValueTask<(
+                        ZLinkSpotActivation? PreviousActivation,
+                        ExceptionDispatchInfo? CallerFailure
+                    )>(publication),
+                    cancellationToken
+                )
+                .ConfigureAwait(false)
+            : await publication.ConfigureAwait(false);
 
-                        async ValueTask WriteAuthorityAsync(CancellationToken writeToken)
+        async Task<(
+            ZLinkSpotActivation? PreviousActivation,
+            ExceptionDispatchInfo? CallerFailure
+        )> CommitMembershipAsync()
+        {
+            try
+            {
+                StopToken.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
+                var previous = await _runtime
+                    .CommitActorToSpotAsync(
+                        this,
+                        actor,
+                        async ct =>
                         {
+                            StopToken.ThrowIfCancellationRequested();
                             if (_runtime.LocationLifecycle is not { } locations)
                                 return;
                             await locations
@@ -587,7 +621,7 @@ internal abstract partial class ZLinkSpotActivation
                                     actor.Context.ActorId,
                                     SpotId,
                                     ObjectGeneration,
-                                    writeToken,
+                                    ct,
                                     new ActorRef(
                                         actor.Context.ActorId,
                                         actor.Context.ObjectGeneration,
@@ -599,22 +633,33 @@ internal abstract partial class ZLinkSpotActivation
                             _runtime.LogActorHandoff(
                                 $"location_committed actor={actor.Context.ActorId} spot={SpotId}"
                             );
-                        }
-                    },
-                    () =>
-                    {
-                        _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor));
-                        _actors.Add(actor);
-                    },
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            _membershipPublicationGate.Release();
+                        },
+                        () =>
+                            AwaitStateLane(
+                                _lane.RunAsync(() =>
+                                {
+                                    _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor));
+                                    _actors.Add(actor);
+                                })
+                            ),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                return (previous, null);
+            }
+            catch (Exception error)
+                when (ZLinkLocationStoreFailure.IsIndeterminate(error, CancellationToken.None))
+            {
+                return (null, ExceptionDispatchInfo.Capture(error));
+            }
+            finally
+            {
+                _membershipPublicationGate.Release();
+            }
         }
 
+        outcome.CallerFailure?.Throw();
+        var previousActivation = outcome.PreviousActivation;
         if (ReferenceEquals(previousActivation, this))
             return;
 
@@ -632,7 +677,7 @@ internal abstract partial class ZLinkSpotActivation
                 .ConfigureAwait(false);
     }
 
-    private static async ValueTask RetryCommittedMembershipCallbackAsync(
+    private async ValueTask RetryCommittedMembershipCallbackAsync(
         Func<CancellationToken, ValueTask> callback,
         CancellationToken cancellationToken,
         DateTimeOffset? absoluteDeadline
@@ -644,6 +689,7 @@ internal abstract partial class ZLinkSpotActivation
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            StopToken.ThrowIfCancellationRequested();
             if (localDeadline is { } deadline && deadline <= Stopwatch.GetElapsedTime(0))
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DeadlineExceeded,
@@ -684,7 +730,9 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor));
+        AwaitStateLane(
+            _lane.RunAsync(() => _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor)))
+        );
         _actors.Add(actor);
         return await _runtime
             .JoinActorToSpotAsync(this, actor, cancellationToken)
@@ -718,7 +766,7 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        _actorsLeavingForEntrySpot.Add(RuntimeActorId(actor));
+        AwaitStateLane(_lane.RunAsync(() => _actorsLeavingForEntrySpot.Add(RuntimeActorId(actor))));
         try
         {
             ValueTask<ZLinkActorJoinResult> JoinEntryAsync(CancellationToken ct)
@@ -737,7 +785,9 @@ internal abstract partial class ZLinkSpotActivation
         }
         catch
         {
-            _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor));
+            AwaitStateLane(
+                _lane.RunAsync(() => _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor)))
+            );
             throw;
         }
     }
@@ -840,7 +890,11 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        if (_actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor)))
+        if (
+            AwaitStateLane(
+                _lane.RunAsync(() => _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor)))
+            )
+        )
             return;
 
         if (

@@ -23,7 +23,7 @@ import java.util.function.BiConsumer;
 
 final class ZLinkCompletionBridgeTest {
     @Test
-    void forwardedCancellationObservesThePublishedCallerCancellation() {
+    void forwardedCancellationFinishesBeforeCallerPublication() {
         for (int terminal = 0; terminal < 3; terminal++) {
             var cleanup = new AtomicInteger();
             var caller =
@@ -31,11 +31,11 @@ final class ZLinkCompletionBridgeTest {
                             (completed, error) -> cleanup.incrementAndGet());
             var waiter = new CompletableFuture<Void>();
             ZLinkCompletionBridge.forwardCancellation(caller, waiter);
-            var observed = waiter.handle((value, error) -> caller.isCancelled());
+            var observed = caller.handle((value, error) -> waiter.isCancelled());
             if (terminal == 0) caller.cancel(false);
             else if (terminal == 1) caller.completeExceptionally(new CancellationException());
             else caller.obtrudeException(new CancellationException());
-            assertTrue(observed.join(), "forward after publication; terminal=" + terminal);
+            assertTrue(observed.join(), "forward before publication; terminal=" + terminal);
             assertEquals(1, cleanup.get());
         }
     }

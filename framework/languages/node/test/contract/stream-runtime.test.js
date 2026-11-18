@@ -1,3 +1,5 @@
+const { ZLinkActorSerialExecutor } = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
+const { acceptSessionBindingControl, sessionBindingControlPorts } = require('./fixtures/session-binding-control');
 const { rawMeshFixture } = require('./fixtures/raw-mesh-binding');
 const { createRelayMeshHost } = require('./fixtures/relay-host');
 const { createMeshHost } = require('./fixtures/mesh-host');
@@ -24,6 +26,24 @@ const {
   ZLinkBackendResultError
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const {
+  resolveActorIngress
+} = require('../../packages/framework/dist/runtime/spots/spot-actor-ingress-admission');
+
+function dispatchEntryIngress(
+  host, origin, actorId, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef
+) {
+  const admitted = resolveActorIngress(
+    { origin, actorId, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef },
+    true,
+    {
+      membership: host.entryActorRuntime.actorIngressMembership,
+      resolveActor: (id) => host.entryActorRuntime.resolveActor(id)
+    }
+  );
+  assert.equal(admitted.kind, 'follow');
+  return admitted.terminal;
+}
 const {
   createSessionDispatchContext
 } = require('../../packages/framework/dist/runtime/streams/session-context');
@@ -415,6 +435,7 @@ test('managed stream heartbeat awaits the asynchronous binding terminal', async 
 
 test('clearing an Actor packet target preserves Session relocation terminal ownership', () => {
   const relay = new ZLinkBoundSessionRelay({
+    currentOwner: () => undefined,
     routeTransport: {},
     streamBindingRuntime: () => ({}),
     meshRouters: {},
@@ -2810,6 +2831,7 @@ test('actor response compression reaches local, native, and remote bound-session
     }
   };
   const relay = new ZLinkRemoteBoundSessionRelay({
+    currentOwner: () => undefined,
     routeTransport: {
       async submit(routerChannelId, targetNodeRid, packetName, payload) {
         remoteTargets.push({ routerChannelId, targetNodeRid, packetName });
@@ -3125,6 +3147,7 @@ test('routed bound-session receive does not regress a newer ownership generation
   const rebound = [];
   const delivered = [];
   const relay = new ZLinkRemoteBoundSessionRelay({
+    currentOwner: () => undefined,
     async updateRemoteActorPacketTarget(_actorId, target) {
       if (target === 'old') await oldTargetUpdate;
     },
@@ -4527,6 +4550,7 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
   const ingressResults = [];
   let serviceIngress;
   const raw = {
+    ...sessionBindingControlPorts(),
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
@@ -4675,6 +4699,7 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
   const serviceRuntime = withTestSessionOwners(
     new ServiceStatefulRuntime(
       {
+        ...sessionBindingControlPorts(),
         observePeerRoute: () => ({ generation: 1n, ready: true }),
         observePeerRouteChanged: () => () => {},
         observePeerConnectionIntentRemoved() {
@@ -4857,6 +4882,7 @@ test('command 36 refused as not current is traced with the closed flow vocabular
   const serviceRuntime = withTestSessionOwners(
     new ServiceStatefulRuntime(
       {
+        ...sessionBindingControlPorts(),
         observePeerRoute: () => ({ generation: 1n, ready: true }),
         observePeerRouteChanged: () => () => {},
         observePeerConnectionIntentRemoved() {
@@ -4952,6 +4978,15 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
   const actorId = 'actor-command36-authenticated-source';
   const { runtime: raw, records } = rawMeshFixture({
     descriptor: testServiceNodeDescriptor('session-owner', 4n),
+    onMailboxReady(domain) {
+      const claim = raw.mailbox.tryClaim(domain, 1, Number.MAX_SAFE_INTEGER);
+      assert.ok(claim);
+      try {
+        acceptSessionBindingControl(claim.records[0]);
+      } finally {
+        raw.mailbox.release(claim);
+      }
+    },
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
   }, { submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }) });
   for (const [peer, generation, route] of [['source', 4n, 1n], ['target', 5n, 2n]]) {
@@ -5036,6 +5071,7 @@ test('source and target command 36 push reach the client before command 44', asy
   const serviceRuntime = withTestSessionOwners(
     new ServiceStatefulRuntime(
       {
+        ...sessionBindingControlPorts(),
         observePeerRoute: () => ({ generation: 1n, ready: true }),
         observePeerRouteChanged: () => () => {},
         observePeerConnectionIntentRemoved() {
@@ -5146,7 +5182,7 @@ test('source and target command 36 push reach the client before command 44', asy
   serviceRuntime.close();
 });
 
-test('relocation target binding republish delivers the post-Join bound-session push exactly once', async () => {
+test('relocation target binding republish delivers the post-Join bound-session push exactly once', async (t) => {
   const relocationBehavior = JSON.parse(
     fs.readFileSync(
       path.resolve(__dirname, '../../../../runtime/conformance/relocation-behavior-v1.json'),
@@ -5192,7 +5228,9 @@ test('relocation target binding republish delivers the post-Join bound-session p
   targetState.rememberMeshName('callback.mesh');
   targetState.setNativeActorRef({ nodeRid: 'target', actorId, generation: 5n });
   targetState.setLocationGeneration(12n);
-  targetState.setOwnerLeaseGeneration(14n);
+  targetHost.locationOwner.runtime = {
+    currentOwnerToken: { ownerId: 'target-owner', leaseGeneration: 14n }
+  };
   // The relocation delivers the binding it carried; its seal stays with the relocation.
   targetState.installBoundSessionBinding({
     routerChannelId: 'session.route',
@@ -5268,11 +5306,15 @@ test('relocation target binding republish delivers the post-Join bound-session p
       });
     }
   }
+  const bindingExecutor = new ZLinkActorSerialExecutor(actorId, undefined);
+  t.after(() => bindingExecutor.close());
   const callbackManager = new framework.DefaultZLinkSpotManager({
+    executeEntryActor: (_meshName, _actorId, operation) => bindingExecutor.execute(operation),
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [CallbackSpot],
     entrySpotCallbacks: { async onLeaveActor() {} }
   });
+  targetHost.setSpotManager(callbackManager);
   await callbackManager.getOrCreate('callback.mesh', CallbackSpot, 'callback-spot');
   const callbackActor = {
     actorId,
@@ -5590,6 +5632,7 @@ test('concurrent identical ownership terminals commit once while push submits du
   };
   routeAggregate.attach(streamRuntime);
   const relay = new ZLinkRemoteBoundSessionRelay({
+    currentOwner: () => undefined,
     routeTransport: {},
     streamBindingRuntime: () => streamRuntime,
     actorManager: () => undefined,
@@ -5701,6 +5744,7 @@ test('concurrent identical abort terminals reopen once after push submits during
   };
   routeAggregate.attach(streamRuntime);
   const relay = new ZLinkRemoteBoundSessionRelay({
+    currentOwner: () => undefined,
     routeTransport: {},
     streamBindingRuntime: () => streamRuntime,
     actorManager: () => undefined,
@@ -6721,20 +6765,28 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
   assert.equal(state.boundSession, undefined);
 });
 
-test('Actor binding owner turn uses the three-value Actor fence independently of local cleanup ownership', async () => {
+test('Actor binding owner turn uses the three-value Actor fence independently of local cleanup ownership', async (t) => {
   const meshName = 'binding-owner-turn';
   const actor = { nodeRid: 'actor-node', actorId: 'actor-owner-turn', generation: 7n };
   const state = new framework.ZLinkActorRuntimeState(actor.actorId);
   state.rememberMeshName(meshName);
   state.setNativeActorRef(actor);
   state.setLocationGeneration(9n);
-  state.setOwnerLeaseGeneration(10n);
   assert.equal(state.ownsLocation, false);
   let localRetireCalls = 0;
   const { host, meshRuntime, relay } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration()
   });
+  const bindingExecutor = new ZLinkActorSerialExecutor(actor.actorId, undefined);
+  t.after(() => bindingExecutor.close());
+  host.setSpotManager(new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner,
+    executeEntryActor: (_meshName, _actorId, operation) => bindingExecutor.execute(operation)
+  }));
   host.setActorManager({ getState: () => state });
+  host.locationOwner.runtime = {
+    currentOwnerToken: { ownerId: 'actor-owner', leaseGeneration: 10n }
+  };
   Object.assign(meshRuntime, {
     meshNode: () => ({
       status: () => ({ routingId: actor.nodeRid, lifecycleGeneration: 5n }),
@@ -6802,7 +6854,10 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   );
   assert.equal(state.boundSessionBindingGeneration, 100n);
   assert.equal(state.boundSession.sessionOwnerNodeGeneration, 3n);
-  assert.equal(state.ownerLeaseGeneration, 10n);
+  assert.equal(
+    host.locationOwner.currentRuntime.currentOwnerToken.leaseGeneration,
+    10n
+  );
   assert.deepEqual(failures, []);
 
   await host.dispatchMeshRecord(
@@ -6868,6 +6923,7 @@ test('bound-session replacement accepts an authenticated notice despite a stale 
   const serviceRuntime = withTestSessionOwners(
     new ServiceStatefulRuntime(
       {
+        ...sessionBindingControlPorts(),
         observePeerRoute: () => ({ generation: 1n, ready: true }),
         observePeerRouteChanged: () => () => {},
         observePeerConnectionIntentRemoved() {
@@ -7683,9 +7739,7 @@ test('service-wire relocation replaces a learned source packet route before the 
   targetAdmission.register('play.route');
   Object.assign(targetHostMesh, {
     async dispatchEntryActorPacket(origin, actorId, parts, response, bound, ref) {
-      const result = await targetHost.entryActorRuntime.routePacket(actorId, parts, response, bound, ref, origin);
-      assert.equal(result.handled, true);
-      return result.response;
+      return dispatchEntryIngress(targetHost, origin, actorId, parts, response, bound, ref);
     },
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('target') })
@@ -7698,6 +7752,23 @@ test('service-wire relocation replaces a learned source packet route before the 
   });
   const targetRequestSequences = [];
   targetHost.setSpotManager({
+    get actorIngressMembership() {
+      return {
+        resolveOwner: () => ({
+          nativeActorRef: {
+            actorId: targetRef.actorId,
+            generation: targetRef.objectGeneration,
+            nodeRid: targetRef.nodeRid
+          },
+          meshName: targetRef.meshName,
+          spotId: targetState.spotId
+        }),
+        dispatchToOwner: (spotId, delivery) => this.dispatchRoutedActorPacket(
+          delivery.origin, spotId, delivery.actorId, delivery.parts, delivery.returnResponse,
+          delivery.remoteBoundSessionTarget, delivery.fallbackActorRef
+        )
+      };
+    },
     async dispatchRoutedActorPacket(
       _origin,
       spotId,
@@ -8027,6 +8098,15 @@ test('runtime host completes local bound actor request without native SessionRel
     hasActiveSpot(spotId) {
       return spotId === 'play-node';
     },
+    get actorIngressMembership() {
+      return {
+        resolveOwner: () => ({ nativeActorRef: actorRef, meshName: 'play.route', spotId: state.spotId }),
+        dispatchToOwner: (spotId, delivery) => this.dispatchRoutedActorPacket(
+          delivery.origin, spotId, delivery.actorId, delivery.parts, delivery.returnResponse,
+          delivery.remoteBoundSessionTarget, delivery.fallbackActorRef
+        )
+      };
+    },
     async dispatchRoutedActorPacket(_origin, spotId, actorId, parts, returnResponse) {
       dispatches.push({
         spotId,
@@ -8043,9 +8123,7 @@ test('runtime host completes local bound actor request without native SessionRel
   });
 
   host.spotNodeRuntime.dispatchEntryActorPacket = async (origin, actorId, parts, response, bound, ref) => {
-    const result = await host.entryActorRuntime.routePacket(actorId, parts, response, bound, ref, origin);
-    assert.equal(result.handled, true);
-    return result.response;
+    return dispatchEntryIngress(host, origin, actorId, parts, response, bound, ref);
   };
 
   const context = host.streamBindingRuntime.createSessionContext(stream);
@@ -9724,6 +9802,7 @@ function readyPoller() {
     waitForReadable() {
       return new Promise((resolve) => setImmediate(() => resolve(true)));
     },
+    wake() {},
     markDrained() {},
     dispose() {}
   };

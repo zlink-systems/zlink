@@ -202,7 +202,7 @@ test('SourceRequestOwner uses received RID bytes instead of its display string',
     );
     return { ownerId: 'owner', leaseGeneration: 3n, nodeRid: rid, nodeGeneration: generation };
   });
-  const ingress = { sourceRoutingId: 'display', sourceRoute: Buffer.from('ff00', 'hex') };
+  const ingress = { sourceRoutingId: 'display', sourceNodeGeneration: 5n, sourceRoute: Buffer.from('ff00', 'hex') };
   assert.equal(
     await runtime.prepareDispatch({ ingress, stateful: {} }, new AbortController().signal),
     true
@@ -257,6 +257,7 @@ test('Spot and Actor source preparation adds no per-record dispatch closures', (
     runtime.enqueueApplicationFrame(
       {
         sourceRoutingId: 'sender',
+        sourceNodeGeneration: 5n,
         parts: [Buffer.from('header')],
         applicationJobOwner: { takeInitial: () => ({ close() {} }) }
       },
@@ -326,6 +327,7 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
       command: M6bServiceWireCommand.actorRequest,
       flags: 0,
       sourceRoutingId: 'sender',
+      sourceNodeGeneration: 5n,
       requestSequence: 1n,
       applicationJobOwner: { takeInitial: () => ({ close() {} }) },
       parts: [
@@ -381,7 +383,10 @@ for (const asynchronous of [false, true]) {
         assert.equal(generation, source.nodeGeneration);
         return asynchronous ? Promise.resolve(source) : source;
       });
-      const ingress = { sourceRoutingId: source.nodeRid };
+      const ingress = {
+        sourceRoutingId: source.nodeRid,
+        ...(local ? {} : { sourceNodeGeneration: source.nodeGeneration })
+      };
       assert.equal(
         await runtime.prepareDispatch({ ingress, stateful: {} }, new AbortController().signal),
         true

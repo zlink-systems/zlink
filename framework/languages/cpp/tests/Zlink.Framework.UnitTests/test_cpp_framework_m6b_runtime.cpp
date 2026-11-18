@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "mailbox_claim_fixture.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
@@ -42,7 +42,6 @@
 #include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
-#include "runtime/timers/async_delay.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -79,6 +78,34 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+
+
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#include <zlink/socket/api.h>
+namespace
+{
+std::atomic_bool count_request_submissions{false};
+std::atomic_int request_submissions{0};
+}
+extern "C" zlink_submit_result_t zlink_request (void *socket,
+                                                const zlink_routing_id_t *target,
+                                                zlink_msg_t *parts,
+                                                size_t part_count,
+                                                zlink_send_flags_t flags,
+                                                uint32_t timeout_ms,
+                                                void *context,
+                                                zlink_completion_id_t *completion)
+{
+    using request_fn_t = decltype (&zlink_request);
+    static const auto request = reinterpret_cast<request_fn_t> (dlsym (RTLD_NEXT, "zlink_request"));
+    if (!request)
+        std::abort ();
+    if (count_request_submissions.load (std::memory_order_acquire))
+        request_submissions.fetch_add (1, std::memory_order_relaxed);
+    return request (socket, target, parts, part_count, flags, timeout_ms, context, completion);
+}
+#endif
 
 using zlink::framework::test::begin_reserved_object;
 
@@ -627,6 +654,153 @@ void verify_message_follow_unsubscribe_waits_for_capture_destruction ()
     assert (final_unsubscribe_status == std::future_status::ready);
 }
 
+
+void verify_actor_client_authority_generation (bool invalidated)
+{
+    using namespace zlink::framework;
+    auto store = std::make_shared<counting_location_repository_t> ();
+    const auto owner =
+      std::get<owner_lease_claimed_t> (
+        store->claim_owner_lease ("actor-generation-owner", 30s).result ().value ())
+        .token;
+    auto context = std::make_shared<zlink::context_t> ();
+    const auto make_runtime = [&] (std::string rid) {
+        auto state =
+          zlink::framework::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> (
+            "actor-send-route-mesh");
+        state->listen_endpoint = "tcp://127.0.0.1:0";
+        state->routing_id = zlink::routing_id_t::from (std::move (rid));
+        state->core_context = context;
+        return std::make_shared<detail::mesh_node_runtime_t> (state);
+    };
+    auto source = make_runtime ("actor-generation-source");
+    auto target = make_runtime ("actor-generation-target");
+    source->start ().result ().value ();
+    target->start ().result ().value ();
+    const auto source_status = source->status ();
+    const auto target_status = target->status ();
+    source->connect_peer (target_status.routing_id (), target_status.local_endpoint (),
+                          target_status.lifecycle_generation ());
+    target->connect_peer (source_status.routing_id (), source_status.local_endpoint (),
+                          source_status.lifecycle_generation ());
+    const auto connect_deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!source->has_admitted_peer (target_status.routing_id (),
+                                        target_status.lifecycle_generation ())
+            || !target->has_admitted_peer (source_status.routing_id (),
+                                           source_status.lifecycle_generation ()))
+           && std::chrono::steady_clock::now () < connect_deadline) {
+        (void) await_task (
+          source->native_node ().transport ().pump_one (std::chrono::steady_clock::now ()));
+        (void) await_task (
+          target->native_node ().transport ().pump_one (std::chrono::steady_clock::now ()));
+    }
+    assert (source->has_admitted_peer (target_status.routing_id (),
+                                       target_status.lifecycle_generation ()));
+    assert (target->has_admitted_peer (source_status.routing_id (),
+                                       source_status.lifecycle_generation ()));
+    const auto generation =
+      target_status.lifecycle_generation () == std::numeric_limits<std::uint64_t>::max ()
+        ? 1
+        : std::numeric_limits<std::uint64_t>::max ();
+    source->expect_peer (target_status.routing_id (), target_status.local_endpoint (), generation,
+                         "default");
+    const auto publish_target = [&] (const detail::mesh_node_runtime_t &runtime,
+                                     const location_owner_token_t &owner) {
+        const auto status = runtime.status ();
+        mesh_node_descriptor_t node{
+          .mesh_name = "actor-send-route-mesh",
+          .rid = status.routing_id (),
+          .lifecycle_generation = generation,
+          .descriptor_revision = 1,
+          .endpoint = status.local_endpoint (),
+          .application_version = 1,
+          .object_capabilities = {{.object_kind = placement_object_kind_t::actor,
+                                   .stable_type = "route-probe"}},
+          .object_role = object_role_t::server,
+          .capacity = {.actors = {.limit = 8}},
+          .state = framework_runtime_state_t::serving,
+          .security_identity = "actor-send-route-test",
+          .owner_id = owner.owner_id,
+          .lease_generation = owner.lease_generation};
+        assert (store->update_mesh_node (std::move (node), location_write_intent_t::new_claim)
+                  .result ()
+                  .value ()
+                  .status
+                == location_write_status_t::stored);
+    };
+
+    publish_target (*target, owner);
+    const object_creation_key_t key{placement_object_kind_t::actor, "actor-generation-probe"};
+    const object_creation_target_t placement{
+      "actor-send-route-mesh", node_rid_t::from_string (target_status.routing_id ().to_string ()),
+      generation, owner};
+    const auto reserved =
+      std::get<object_reserved_t> (store
+                                     ->reserve ({.key = key,
+                                                 .intent = {.stable_type = "route-probe"},
+                                                 .target = placement,
+                                                 .capacity_bundle = {.actor_slots = 1}})
+                                     .result ()
+                                     .value ());
+    const auto payload =
+      runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
+        .stable_type = "route-probe",
+        .actor_id = key.global_id,
+        .current_spot_id = target->native_node ().entry_spot ().spot_id (),
+        .current_spot_generation = target_status.lifecycle_generation (),
+        .current_spot_kind = runtime::actor_authority_spot_kind_t::entry,
+        .owner_id = owner.owner_id,
+        .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+        .mesh_name = placement.mesh_name,
+        .node_rid = placement.node_rid,
+        .node_generation = generation});
+    assert (std::holds_alternative<object_committed_t> (
+      store->commit ({key, reserved.fence, payload}).result ().value ()));
+    location_options_t options;
+    options.owner_lease_fencing_margin = 1s;
+    runtime::live_location_reader_t locations (*store, options);
+    serializer_registry_t serializers;
+    auto client = runtime::make_actor_client (locations, serializers, {source}, {}, options);
+#if !defined(_WIN32)
+    request_submissions.store (0);
+    count_request_submissions.store (true);
+#endif
+    actor_request_call_t request (*client, actor_id_t (key.global_id), "AuthorityGeneration",
+                                  message_t::from (std::string ("request")));
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    auto pending = request.timeout (2s).async<std::string> ();
+    const auto registration_deadline = std::chrono::steady_clock::now () + 250ms;
+    while (source->native_node ().transport ().pending_operation_count () == 0
+           && std::chrono::steady_clock::now () < registration_deadline)
+        std::this_thread::yield ();
+    assert (source->native_node ().transport ().pending_operation_count () == 1);
+#if !defined(_WIN32)
+    assert (request_submissions.load () == 0);
+#endif
+    if (invalidated)
+        source->forget_peer (target_status.routing_id (), target_status.local_endpoint ());
+    else
+        assert (await_task (source->native_node ().transport ().expire_requests (deadline + 1s))
+                == 1);
+    const auto result = pending.result ();
+    assert (!result);
+    assert (result.error_kind ()
+            == (invalidated ? framework_error_kind_t::unavailable
+                            : framework_error_kind_t::deadline_exceeded));
+    if (invalidated)
+        assert (std::chrono::steady_clock::now () < deadline);
+#if !defined(_WIN32)
+    assert (request_submissions.load () == 0);
+    count_request_submissions.store (false);
+#endif
+    assert (source->has_admitted_peer (target_status.routing_id (),
+                                       target_status.lifecycle_generation ()));
+    assert (!target->native_node ().transport ().mailbox ().try_claim (
+      mesh::service_mailbox_domain_t::application, 1, 4096));
+    source->stop ();
+    target->stop ();
+}
+
 void verify_actor_calls_keep_selected_route_until_follow_notice ()
 {
     using namespace zlink::framework;
@@ -641,8 +815,6 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
         store->claim_owner_lease ("actor-send-new-owner", 30s).result ().value ())
         .token;
 
-    std::mutex delay_mutex;
-    detail::delay_owner_t delays (delay_mutex);
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_runtime = [core_context] (std::string rid) {
         auto state = zlink::framework::test::runtime_failure_fixture<
@@ -803,8 +975,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     serializer_registry_t serializers;
     old_target->bind_serializers (serializers);
     new_target->bind_serializers (serializers);
-    auto client = runtime::make_actor_client (live_locations, serializers, {source}, {},
-                                              location_options, delays);
+    auto client =
+      runtime::make_actor_client (live_locations, serializers, {source}, {}, location_options);
 
     const auto collect_actor_sends = [] (detail::mesh_node_runtime_t &target,
                                          std::chrono::milliseconds budget,
@@ -846,8 +1018,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     // A second application scope can resolve the same singleton MeshNode
     // after this client has already cached A. Its notice registration cannot
     // replace the first client's exact-fence invalidation subscription.
-    auto second_client = runtime::make_actor_client (live_locations, serializers, {source}, {},
-                                                     location_options, delays);
+    auto second_client =
+      runtime::make_actor_client (live_locations, serializers, {source}, {}, location_options);
 
     const auto new_actor = detail::actor_ref_access_t::make (
       new_placement.node_rid, "route-probe", key.global_id, committed.ready.object_generation);
@@ -5800,16 +5972,16 @@ void verify_location_store_accepted_record_authority ()
 
     const auto resolver = stateful::make_location_store_authority_resolver (store);
     const auto resolved =
-      resolver (
-        {.target = {stateful::object_kind_t::actor, "actor-authority",
-                    committed.ready.object_generation, committed.ready.authority_owner_generation,
-                    "m6b-mesh", "raw-target"},
-         .source_node_routing_id = bytes ("raw-source"),
-         .source_node_generation = 1,
-         .target_node_routing_id = bytes ("raw-target"),
-         .target_node_generation = 1,
-         .source_kind = protocol::frozen_source_kind_t::node,
-         .requested_authority_owner_generation = committed.ready.authority_owner_generation})
+      resolver ({.target = {stateful::object_kind_t::actor, "actor-authority",
+                            committed.ready.object_generation,
+                            committed.ready.authority_owner_generation, "m6b-mesh", "raw-target"},
+                 .source_node_routing_id = bytes ("raw-source"),
+                 .source_node_generation = 1,
+                 .target_node_routing_id = bytes ("raw-target"),
+                 .target_node_generation = 1,
+                 .source_kind = protocol::frozen_source_kind_t::node,
+                 .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+                 .requested_object_generation = committed.ready.object_generation})
         .result ()
         .value ();
     assert (resolved);
@@ -5822,21 +5994,21 @@ void verify_location_store_accepted_record_authority ()
     // A bound-session query carries the session triple next to the owning
     // Actor identity so resolvers can fence-check the binding.
     const auto resolved_bound =
-      resolver (
-        {.target = {stateful::object_kind_t::actor, "actor-authority",
-                    committed.ready.object_generation, committed.ready.authority_owner_generation,
-                    "m6b-mesh", "raw-target"},
-         .source_node_routing_id = bytes ("raw-source"),
-         .source_node_generation = 1,
-         .target_node_routing_id = bytes ("raw-target"),
-         .target_node_generation = 1,
-         .source_kind = protocol::frozen_source_kind_t::bound_session,
-         .source_actor =
-           std::make_pair (std::string ("actor-authority"), committed.ready.object_generation),
-         .source_session_routing_id = bytes ("sess-1"),
-         .source_binding_generation = 5,
-         .source_session_sequence = 9,
-         .requested_authority_owner_generation = committed.ready.authority_owner_generation})
+      resolver ({.target = {stateful::object_kind_t::actor, "actor-authority",
+                            committed.ready.object_generation,
+                            committed.ready.authority_owner_generation, "m6b-mesh", "raw-target"},
+                 .source_node_routing_id = bytes ("raw-source"),
+                 .source_node_generation = 1,
+                 .target_node_routing_id = bytes ("raw-target"),
+                 .target_node_generation = 1,
+                 .source_kind = protocol::frozen_source_kind_t::bound_session,
+                 .source_actor = std::make_pair (std::string ("actor-authority"),
+                                                 committed.ready.object_generation),
+                 .source_session_routing_id = bytes ("sess-1"),
+                 .source_binding_generation = 5,
+                 .source_session_sequence = 9,
+                 .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+                 .requested_object_generation = committed.ready.object_generation})
         .result ()
         .value ();
     assert (resolved_bound);
@@ -5853,8 +6025,18 @@ void verify_location_store_accepted_record_authority ()
       .target_node_routing_id = bytes ("raw-target"),
       .target_node_generation = 1,
       .source_kind = protocol::frozen_source_kind_t::node,
-      .requested_authority_owner_generation = committed.ready.authority_owner_generation};
+      .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+      .requested_object_generation = committed.ready.object_generation};
     assert (!resolver (stale).result ().value ());
+
+    auto previous_incarnation = stale;
+    previous_incarnation.source_node_generation = 1;
+    previous_incarnation.requested_object_generation = committed.ready.object_generation + 1;
+    ++previous_incarnation.requested_authority_owner_generation;
+    assert (resolver (previous_incarnation).result ().value ());
+    auto same_incarnation_wrong_owner = previous_incarnation;
+    same_incarnation_wrong_owner.requested_object_generation = committed.ready.object_generation;
+    assert (!resolver (same_incarnation_wrong_owner).result ().value ());
 
     for (const auto kind :
          {placement_object_kind_t::user_spot, placement_object_kind_t::instance_spot}) {
@@ -9751,6 +9933,11 @@ void verify_forwarded_request_return_dispatches_without_source_operation ()
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 3 && std::string_view (argv[1]) == "--actor-authority-generation") {
+        zlink::framework::runtime::install_host_context_hooks ();
+        verify_actor_client_authority_generation (std::string_view (argv[2]) == "invalidated");
+        return 0;
+    }
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--message-follow-capture-lifetime") {
@@ -9855,6 +10042,8 @@ int main (int argc, char **argv)
         return 1;
     verify_actor_create_does_not_replay_after_reciprocal_handover ();
     verify_message_follow_invalidation_subscriptions_are_lifetime_safe ();
+    verify_actor_client_authority_generation (false);
+    verify_actor_client_authority_generation (true);
     verify_actor_calls_keep_selected_route_until_follow_notice ();
     verify_session_relocation_gateway_commit_is_atomic ();
     verify_mesh_node_role_is_available_before_local_descriptor_publish ();

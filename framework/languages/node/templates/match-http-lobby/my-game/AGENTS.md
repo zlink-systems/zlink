@@ -1,5 +1,28 @@
 # MyGame development guide
 
+## Rules for AI
+
+`server/lobby` is an HTTP lobby that holds no game state; every other server process is a stateful ZLink node. Before writing code, decide which kind you are editing.
+
+- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
+- While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
+- Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
+- Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
+- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
+- Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
+- Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
+- Keep game rules as synchronous domain code with no ZLink or database calls. Reach the database only through capability ports named after game events (`loadPlayer`, `commitRound`), never a generic CRUD repository. Keep the domain model (rounds, hands, wallets) separate from message DTOs and database rows, converting once at the handler and adapter boundary. Do not add pass-through layers or a service layer outside Spots and Actors.
+- Decide what remains in the database if the process dies now, and how startup cleans it up. Retry only on the "being removed" reply; return other failures to the caller.
+- Do not block, sleep, retry or raise timeouts in handlers; ZLink waits for remote connections. Report ZLink defects with a minimal repro instead of compensating in game code.
+- Send money or reward results only after the database commit.
+- One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
+
+The HTTP lobby may read and write the database per request, but it holds no game state and changes game state only by sending requests to game nodes.
+
+Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/node/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+
 ## Project overview
 
 This Node.js 22 (TypeScript, NestJS) project is an action/FPS server example with an HTTP matchmaking lobby and server-authoritative duel rooms. A client requests a match over HTTP, receives a Room ID and a Session endpoint, and then connects over STREAM to move and shoot in the Room. It runs an HTTP Lobby node, a Session gateway for connections, Match nodes A and B that host the Rooms, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.32.0`.
@@ -158,7 +181,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `e2e/runner.ts` at node startup and logs for each node.
 
-Settings files are `lobby.json`, `matchA.json`, `matchB.json`, and `session.json`. `NodeProcess` in `e2e/runner.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`.
+Settings files are `lobby.json`, `matchA.json`, `matchB.json`, and `session.json`. `NodeProcess` in `e2e/runner.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
 
 ### Diagnostic levels
 
@@ -233,7 +256,7 @@ The body follows the issue template of the ZLink repository. Copy the following 
 
 Reduce the reproduction to the minimal code or commands that keep only the failing public call, not this whole project. Paste only the first failing log section and the step before it; attach the full log as a file when it is needed. State when startup failed before flow recording.
 
-> **Issues are public.** Remove license keys, tokens, internal host names, and personal data from logs and settings before filing.
+> **Issues are public.** Remove tokens, internal host names, and personal data from logs and settings before filing.
 
 ### Filing procedure
 

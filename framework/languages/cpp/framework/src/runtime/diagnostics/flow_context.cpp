@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MPL-2.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include <zlink/framework/detail/binary_text_codec.hpp>
 

@@ -219,6 +219,7 @@ export class ZLinkActorTransferRuntime {
       actorId,
       requireSourceObjectGeneration(actorId, state)
     );
+    this.options.spotManager()?.captureSourceActorPacketPrefix(actor);
   }
 
   /** Relocation activation owns admission; handler terminals are observed independently. */
@@ -247,7 +248,7 @@ export class ZLinkActorTransferRuntime {
 
   async completeDeferredActorHandoff(
     actor: ZLinkActor,
-    target: ZLinkSpotRouteTarget,
+    _target: ZLinkSpotRouteTarget,
     _targetActorRef: ActorRef
   ): Promise<void> {
     const actorId = actor.context.actorId;
@@ -258,7 +259,7 @@ export class ZLinkActorTransferRuntime {
     }
     const admitted = this.options.actorHandoff.admitDeferredPrefix(
       actorId,
-      (drain) => manager.admitRoutedActorPacketPrefix(target.spotId, actorId, drain),
+      (drain) => manager.admitSourceActorPacketPrefix(actorId, drain),
       this.options.prepareApplicationJob
     );
     void this.observeHandoffReplay(admitted.terminal);
@@ -712,6 +713,7 @@ export class ZLinkActorTransferRuntime {
   ): Promise<ZLinkRemoteBoundSessionTarget | undefined> {
     const target = state.boundSession;
     const actorRef = state.nativeActorRef;
+    const owner = this.options.currentOwner();
     if (
       target === undefined ||
       actorRef === undefined ||
@@ -722,8 +724,7 @@ export class ZLinkActorTransferRuntime {
       target.sessionOwnerLeaseGeneration === undefined ||
       state.locationGeneration === undefined ||
       state.locationGeneration < 0n ||
-      state.ownerLeaseGeneration === undefined ||
-      state.ownerLeaseGeneration <= 0n
+      owner === undefined
     ) {
       throw new Error(
         `Actor '${actor.context.actorId}' Session route cannot be sealed without its exact source fence.`
@@ -752,7 +753,8 @@ export class ZLinkActorTransferRuntime {
       !routingIdsEqual(local.routingId, actorRef.nodeRid) ||
       authority.objectGeneration !== actorRef.generation ||
       authority.authorityOwnerGeneration !== state.locationGeneration ||
-      authority.ownerLeaseGeneration !== state.ownerLeaseGeneration ||
+      authority.ownerId !== owner.ownerId ||
+      authority.ownerLeaseGeneration !== owner.leaseGeneration ||
       !routingIdsEqual(authority.allocation.descriptor.rid, actorRef.nodeRid) ||
       authority.allocation.descriptorLifecycleGeneration !== local.lifecycleGeneration ||
       (target.sessionNodeRid !== undefined &&
@@ -1007,7 +1009,6 @@ export class ZLinkActorTransferRuntime {
       value.allocation.descriptorLifecycleGeneration === local.lifecycleGeneration;
     const adopt = (value: ZLinkAuthoritySnapshot): ZLinkAuthoritySnapshot => {
       state.setLocationGeneration(value.authorityOwnerGeneration);
-      state.setOwnerLeaseGeneration(value.ownerLeaseGeneration);
       state.setJoinedSpot(spotId, state.spot, membershipEpoch, spotGeneration);
       state.markLocationOwned();
       return value;
@@ -1212,7 +1213,6 @@ export class ZLinkActorTransferRuntime {
       authority.allocation.descriptorLifecycleGeneration === ownerNodeGeneration
     ) {
       state.setLocationGeneration(authority.authorityOwnerGeneration);
-      state.setOwnerLeaseGeneration(authority.ownerLeaseGeneration);
       state.setJoinedSpot(spotId, state.spot, membershipEpoch, spotGeneration);
       await this.installNativeActorPacketTarget(state, spotId, spotGeneration, node);
       return;
@@ -1240,9 +1240,6 @@ export class ZLinkActorTransferRuntime {
     }
     if (claim.generation !== undefined) {
       state.setLocationGeneration(claim.generation);
-    }
-    if (claim.claimed !== undefined) {
-      state.setOwnerLeaseGeneration(claim.claimed.leaseGeneration);
     }
     state.setJoinedSpot(spotId, state.spot, membershipEpoch, spotGeneration);
     state.markLocationOwned();
@@ -1285,7 +1282,7 @@ export class ZLinkActorTransferRuntime {
       actorRef,
       generation,
       sealedSession,
-      state.ownerLeaseGeneration
+      this.options.currentOwner()?.leaseGeneration
     );
   }
 

@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
+# Optional controls: SOURCE_CPUS and TARGET_CPUS (taskset CPU lists).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_common.sh
 source "${ROOT_DIR}/../runner_common.sh"
-bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet" \
+bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet,zlink-dotnet-json,zlink-framework-dotnet-json" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 
 CONFIGURATION=Release
 BENCH_TARGET_ROOT="${BENCH_TARGET_ROOT:-${ROOT_DIR}}"
-target_process_prefix=()
-source_process_prefix=()
-if [[ -n "${TARGET_CPUS:-}" ]]; then
-  target_process_prefix=(taskset -c "${TARGET_CPUS}")
-fi
-if [[ -n "${SOURCE_CPUS:-}" ]]; then
-  source_process_prefix=(taskset -c "${SOURCE_CPUS}")
-fi
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
   "${ROOT_DIR}/build.sh"
@@ -37,11 +30,11 @@ for run in $(seq 1 "${RUNS}"); do
         trigger_url="http://127.0.0.1:5200"
         source_stats_url="http://127.0.0.1:5201"
         ;;
-      zlink-dotnet)
+      zlink-dotnet|zlink-dotnet-json)
         trigger_url="http://127.0.0.1:5205"
         source_stats_url="http://127.0.0.1:5206"
         ;;
-      zlink-framework-dotnet)
+      zlink-framework-dotnet|zlink-framework-dotnet-json)
         trigger_url="http://127.0.0.1:5212"
         source_stats_url="http://127.0.0.1:5213"
         ;;
@@ -54,14 +47,14 @@ for run in $(seq 1 "${RUNS}"); do
         target_project="${BENCH_TARGET_ROOT}/GrpcServer/WithGrpcBench.GrpcServer.csproj"
         target_args=(--url "${target_endpoint}" --metrics-url "${target_stats_url}")
         ;;
-      zlink-dotnet)
+      zlink-dotnet|zlink-dotnet-json)
         target_endpoint="tcp://127.0.0.1:5207"
         target_command_endpoint="tcp://127.0.0.1:5208"
         target_stats_url="http://127.0.0.1:5209"
         target_project="${BENCH_TARGET_ROOT}/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj"
         target_args=(--endpoint "${target_endpoint}" --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
         ;;
-      zlink-framework-dotnet)
+      zlink-framework-dotnet|zlink-framework-dotnet-json)
         target_endpoint="tcp://127.0.0.1:5214"
         target_command_endpoint=""
         target_stats_url="http://127.0.0.1:5215"
@@ -69,6 +62,9 @@ for run in $(seq 1 "${RUNS}"); do
         target_args=(--endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
         ;;
     esac
+    if [[ "${target_impl}" == *-json ]]; then
+      target_args+=(--game-json)
+    fi
     if [[ "${impl}" == zlink-dotnet && "${target_impl}" == zlink-framework-dotnet ]]; then
       target_command_endpoint="${target_endpoint}"
     fi
@@ -88,7 +84,11 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_file="${cell_dir}/target-stats.json"
         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
 
-        setsid "${target_process_prefix[@]}" dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+        target_process=(dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}")
+        if [[ -n "${TARGET_CPUS:-}" ]]; then
+          target_process=(taskset -c "${TARGET_CPUS}" "${target_process[@]}")
+        fi
+        setsid "${target_process[@]}" >"${target_log}" 2>&1 &
         b_pid=$!
         wait_for_stats "${target_stats_url}" 0
 
@@ -106,7 +106,11 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${target_command_endpoint}" ]]; then
           source_args+=(--target-command-endpoint "${target_command_endpoint}")
         fi
-        setsid "${source_process_prefix[@]}" dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+        source_process=(dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}")
+        if [[ -n "${SOURCE_CPUS:-}" ]]; then
+          source_process=(taskset -c "${SOURCE_CPUS}" "${source_process[@]}")
+        fi
+        setsid "${source_process[@]}" >"${source_log}" 2>&1 &
         a_pid=$!
         wait_for_stats "${source_stats_url}" 1
 

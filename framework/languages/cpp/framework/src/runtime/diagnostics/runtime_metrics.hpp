@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MPL-2.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include "runtime/diagnostics/monitoring_runtime.hpp"

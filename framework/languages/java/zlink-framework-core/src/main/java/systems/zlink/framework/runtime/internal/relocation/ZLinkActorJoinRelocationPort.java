@@ -24,6 +24,8 @@ public interface ZLinkActorJoinRelocationPort {
 
     void admit(Admission admission);
 
+    CompletionStage<Void> discardTargetJoins(Object targetSpot);
+
     default void admitCanonical(CanonicalAdmission admission) {
         throw new UnsupportedOperationException(
                 "canonical Actor Join recovery admission is unavailable");

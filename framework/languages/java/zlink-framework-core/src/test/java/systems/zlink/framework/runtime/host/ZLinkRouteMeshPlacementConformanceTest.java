@@ -16,6 +16,7 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -43,6 +44,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -135,14 +137,15 @@ final class ZLinkRouteMeshPlacementConformanceTest {
                         new ZLinkProviderLocationRepository(
                                 store, monotonicNanos::get, fencingMargin));
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
-                        options,
-                        new ZLinkJavaBackendAdapterFactory(),
-                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
-                                .reflection(),
-                        null,
-                        new ZLinkFrameworkRuntimeTestAccess.Construction()
-                                .locationStores(registeredStores))) {
+                        ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                                options,
+                                new ZLinkJavaBackendAdapterFactory(),
+                                systems.zlink.framework.runtime.internal.handlers
+                                        .ZLinkHandlerActivator.reflection(),
+                                null,
+                                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                        .locationStores(registeredStores));
+                var readiness = new MeshReadiness(runtime, scenario)) {
             List<CompletableFuture<?>> held = new ArrayList<>();
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
             monotonicNanos.set(fencingMargin.multipliedBy(3).toNanos());
@@ -150,6 +153,7 @@ final class ZLinkRouteMeshPlacementConformanceTest {
                     ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
                             .toCompletableFuture()
                             .join());
+            readiness.await();
             String lastActorId = null;
             String lastSpotId = null;
             int objectIndex = 0;
@@ -266,6 +270,74 @@ final class ZLinkRouteMeshPlacementConformanceTest {
             releaseGates();
             for (CompletableFuture<?> operation : held) {
                 operation.get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static final class MeshReadiness implements AutoCloseable {
+        private final List<ReadyObservation> observations = new ArrayList<>();
+
+        MeshReadiness(ZLinkFrameworkRuntime runtime, JsonNode scenario) {
+            for (JsonNode node : scenario.path("meshNodes")) {
+                observations.add(
+                        new ReadyObservation(
+                                node.path("meshName").asText(),
+                                runtime.routeMeshRuntime()
+                                        .observe(node.path("meshName").asText(), 8)));
+            }
+        }
+
+        void await() throws Exception {
+            for (ReadyObservation observation : observations) {
+                observation.ready.get(10, TimeUnit.SECONDS);
+            }
+        }
+
+        @Override
+        public void close() {
+            observations.forEach(ReadyObservation::close);
+        }
+    }
+
+    private static final class ReadyObservation
+            implements Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>, AutoCloseable {
+        private final String meshName;
+        private final CompletableFuture<Void> ready = new CompletableFuture<>();
+        private Flow.Subscription subscription;
+
+        ReadyObservation(
+                String meshName,
+                Flow.Publisher<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> publisher) {
+            this.meshName = meshName;
+            publisher.subscribe(this);
+        }
+
+        @Override
+        public void onSubscribe(Flow.Subscription subscription) {
+            this.subscription = subscription;
+            subscription.request(Long.MAX_VALUE);
+        }
+
+        @Override
+        public void onNext(ZLinkObservedStatus<ZLinkMeshNodeSnapshot> value) {
+            if (meshName.equals(value.status().meshName())
+                    && value.status().state() == ZLinkTopologyState.READY) {
+                ready.complete(null);
+            }
+        }
+
+        @Override
+        public void onError(Throwable failure) {
+            ready.completeExceptionally(failure);
+        }
+
+        @Override
+        public void onComplete() {}
+
+        @Override
+        public void close() {
+            if (subscription != null) {
+                subscription.cancel();
             }
         }
     }

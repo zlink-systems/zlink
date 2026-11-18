@@ -23,6 +23,7 @@ export interface ZLinkMeshCompletion {
   readonly terminalResult: number;
   readonly failureErrno: number;
   readonly failureMessage?: string;
+  readonly cause?: unknown;
   readonly operationKind: number;
   readonly kindData: ReceiveKindData | null;
   readonly parts: Message[];
@@ -331,6 +332,7 @@ function retainCompletion(record: ReceiveRecord): ZLinkMeshCompletion {
   return {
     terminalResult: record.terminalResult,
     failureErrno: record.failureErrno,
+    ...(record.cause === undefined ? {} : { cause: record.cause }),
     ...(record.failureMessage === undefined ? {} : { failureMessage: record.failureMessage }),
     operationKind: record.operationKind,
     kindData: record.kindData,

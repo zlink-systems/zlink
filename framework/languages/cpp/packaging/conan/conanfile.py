@@ -22,7 +22,10 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
     "nlohmann_json/3.11.3",
     "openssl/[>=3.0 <4]",
     "lz4/1.9.4",
-    "protobuf/5.27.0",
+    # gRPC 1.84.0 and vcpkg baseline 2ec0f1747d both resolve these (#4077); vcpkg has
+    # protobuf 6.33.4, the nearest version to this one in the same series.
+    "protobuf/6.33.5",
+    "abseil/20260107.1",
     # 1.3.15 builds its async client with Conan's libuv, but its requirement does
     # not propagate libuv headers to consumers of async_redis.h. Require the same
     # compatible range directly so CMakeDeps exposes those headers to Framework.
@@ -35,7 +38,7 @@ class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
     version = "0.32.0"
     package_type = "static-library"
-    license = "zlink License 1.0"
+    license = "Elastic-2.0"
     homepage = "https://github.com/zlink-systems/zlink"
     description = "C++ framework, HTTP client and stream connector for zlink"
     settings = "os", "arch", "compiler", "build_type"
@@ -67,7 +70,7 @@ class ZlinkFrameworkConan(ConanFile):
         for dependency in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(dependency, transitive_headers=True, transitive_libs=True)
         if self.options.with_etcd:
-            self.requires("grpc/1.69.0", transitive_headers=False, transitive_libs=True)
+            self.requires("grpc/1.84.0", transitive_headers=False, transitive_libs=True)
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):

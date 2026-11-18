@@ -38,8 +38,10 @@ public final class ZLinkSessionFenceTestHost implements AutoCloseable {
         try (Message message = Message.from("create")) {
             actor = actors.createActor("actor", snapshot.objectGeneration(), message);
         }
-        actors.rememberActorAuthority(actor, authority, snapshot.ownerLeaseGeneration());
-        sessions.observeActorAuthority(actor, authority, snapshot.ownerLeaseGeneration());
+        actors.rememberActorAuthority(
+                actor, authority, snapshot.ownerLeaseGeneration(), actors.localNodeGeneration());
+        sessions.observeActorAuthority(
+                actor, authority, snapshot.ownerLeaseGeneration(), actors.localNodeGeneration());
         sessionNode
                 .observePeerAdmissionExpectation(
                         actor.nodeRid(),
@@ -122,7 +124,7 @@ public final class ZLinkSessionFenceTestHost implements AutoCloseable {
     }
 
     public void recoverActorLease(long lease) {
-        actors.rememberActorAuthority(actor, authority, lease);
+        actors.rememberActorAuthority(actor, authority, lease, actors.localNodeGeneration());
     }
 
     public ZLinkInternalSpotNode.BoundSessionRoute replaceActorBinding() {
@@ -159,7 +161,7 @@ public final class ZLinkSessionFenceTestHost implements AutoCloseable {
     }
 
     public void assertActorRecoveryKeepsBindingAndSequence(long lease) {
-        actors.rememberActorAuthority(actor, authority, lease);
+        actors.rememberActorAuthority(actor, authority, lease, actors.localNodeGeneration());
         actors.installRelocatingActorBoundSession(actorFence(lease), session)
                 .toCompletableFuture()
                 .join();
@@ -353,7 +355,10 @@ public final class ZLinkSessionFenceTestHost implements AutoCloseable {
     public ZLinkBackendActorRef addRemoteActor(String id, ZLinkAuthoritySnapshot snapshot) {
         var remote = new ZLinkBackendActorRef(actor.nodeRid(), id, snapshot.objectGeneration());
         sessions.observeActorAuthority(
-                remote, snapshot.authorityOwnerGeneration(), snapshot.ownerLeaseGeneration());
+                remote,
+                snapshot.authorityOwnerGeneration(),
+                snapshot.ownerLeaseGeneration(),
+                actors.localNodeGeneration());
         sessions.publishStreamSession(
                 session.sessionRid(), remote, 8, 2, stream, snapshot.authorityOwnerGeneration());
         return remote;

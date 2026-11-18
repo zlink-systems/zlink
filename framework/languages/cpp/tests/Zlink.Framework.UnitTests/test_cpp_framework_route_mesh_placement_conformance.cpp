@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // Consumes framework/runtime/conformance/route-mesh-placement-v1.json through the public host:
 // RouteMesh placement counts come from the reporting MeshNode's activation records, and
 // IsAvailable follows runtime monitoring §5 and MeshNode §5.1.
