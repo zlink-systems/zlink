@@ -66,9 +66,9 @@ public interface ZLinkActorJoinRelocationPort {
             requestContentType = Objects.requireNonNull(requestContentType, "requestContentType");
             rawRequest = Objects.requireNonNull(rawRequest, "rawRequest").clone();
             if (relocationId.equals(new UUID(0L, 0L))
-                    || targetSpotGeneration <= 0
+                    || targetSpotGeneration == 0
                     || targetNodeGeneration == 0
-                    || targetSpotAuthorityOwnerGeneration <= 0
+                    || targetSpotAuthorityOwnerGeneration == 0
                     || targetOwnerLeaseGeneration <= 0
                     || advertisedReceiveChunkLimitBytes < 0
                     || requestContentType.isBlank()) {
@@ -127,9 +127,9 @@ public interface ZLinkActorJoinRelocationPort {
                     || sourceAuthorityOwnerGeneration <= 0
                     || sourceOwnerLeaseGeneration <= 0
                     || targetSpotId.isBlank()
-                    || targetSpotGeneration <= 0
+                    || targetSpotGeneration == 0
                     || targetNodeGeneration == 0
-                    || targetSpotAuthorityOwnerGeneration <= 0
+                    || targetSpotAuthorityOwnerGeneration == 0
                     || targetOwnerLeaseGeneration <= 0
                     || requestContentType.isBlank()
                     || timeout == null

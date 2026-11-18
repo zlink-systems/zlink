@@ -52,7 +52,7 @@ export function admitServiceRequest(
   start: (remainingMs: number, finished: () => void) => void,
   failed: (error: unknown) => void,
   operationKind = 'Request',
-  targetNodeGeneration?: bigint
+  targetNodeGeneration?: bigint | (() => bigint | undefined)
 ): void {
   let baseline: PeerRouteObservation | undefined;
   let submitted = false;
@@ -104,7 +104,10 @@ export function admitServiceRequest(
     }
     try {
       const remaining = remainingRequestTimeout(operationKind, pending.deadlineMs)!;
-      const observation = port.observePeerRoute(target, targetNodeGeneration);
+      const generation =
+        typeof targetNodeGeneration === 'function' ? targetNodeGeneration() : targetNodeGeneration;
+      if (typeof targetNodeGeneration === 'function' && generation === undefined) return false;
+      const observation = port.observePeerRoute(target, generation);
       const attempts =
         baseline !== undefined || !observation.ready
           ? observation.connectionAttempts?.filter(
@@ -189,13 +192,13 @@ export function admitServiceRequest(
 export function requestDurableService(
   port: DurableServiceRequestPort,
   target: string,
-  parts: readonly Uint8Array[],
+  parts: readonly Uint8Array[] | (() => readonly Uint8Array[]),
   pending: PendingOperation<unknown>,
   operationKind: string,
   signal?: AbortSignal,
   onSubmitted?: (signal: AbortSignal) => Promise<void>,
   onAdmitted?: () => void,
-  targetNodeGeneration?: bigint
+  targetNodeGeneration?: bigint | (() => bigint | undefined)
 ): Promise<readonly Buffer[]> {
   const stop = new AbortController();
   const cancellation = AbortSignal.any([
@@ -223,7 +226,7 @@ export function requestDurableService(
       (remaining, finished) => {
         const reply = port.requestService(
           target,
-          parts,
+          typeof parts === 'function' ? parts() : parts,
           remaining,
           onAdmitted,
           pending,
