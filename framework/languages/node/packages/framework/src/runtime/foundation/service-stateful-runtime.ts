@@ -1884,8 +1884,6 @@ export class ServiceStatefulRuntime {
     this.submitRequest(
       pending,
       targetNodeRid,
-      // #4462: lookup keeps its current target selection until the stream route comes from
-      // Location Store authority.
       this.raw.peerLifecycleGeneration(targetNodeRid) ??
         this.raw.topology.admittedPeer(targetNodeRid)?.descriptor.lifecycleGeneration,
       [encodeActorLookupHeader(pending.id, actorId)],
@@ -2189,8 +2187,7 @@ export class ServiceStatefulRuntime {
               this.retiredSessionDeliveries.set(sessionDeliveryKey(current.binding), current);
             }
             // Publish the exact Location authority used by command 38 in the
-            // same Session-owner completion turn as the binding route. Actor
-            // lookup only carries a peer-lifecycle fallback for owner lease.
+            // same Session-owner completion turn as the binding route.
             this.rememberActorRoute({
               ...bindingActorFence,
               authorityOwnerGeneration: result.streamBinding.authorityOwnerGeneration
@@ -5480,17 +5477,6 @@ export class ServiceStatefulRuntime {
     let kindData: ReceiveKindData | undefined;
     if (tail?.kind === 'actorLookup') {
       const resolvedActor = { ...tail.actor, nodeRid: targetNodeRid };
-      // #4462: remote lookup reply has no node/lease generation; replaced by Location Store authority.
-      const generation =
-        this.raw.topology.admittedPeer(targetNodeRid)?.descriptor.lifecycleGeneration;
-      if (generation === undefined)
-        throw new Error(`Node '${targetNodeRid}' has no admitted lifecycle generation.`);
-      this.rememberActorRoute({
-        actor: resolvedActor,
-        targetNodeGeneration: generation,
-        authorityOwnerGeneration: tail.authorityOwnerGeneration,
-        ownerLeaseGeneration: generation
-      });
       kindData = {
         kind: 'actorLookupCompletion',
         location: {
