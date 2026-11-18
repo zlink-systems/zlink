@@ -420,7 +420,7 @@ internal sealed class UserSpotProbeHandler(TestHostEventSink sink)
     {
         _ = context;
         cancellationToken.ThrowIfCancellationRequested();
-        OutageActorObservations.Enter(actor.ActorId);
+        OutageActorObservations.Enter(actor.ActorId, request.Marker);
         var nodeRid = spot.Context.NodeRid.ToString();
         sink.Append($"user-spot-probe-served|nodeRid={nodeRid}|actor={actor.ActorId}");
         return ValueTask.FromResult(

@@ -581,16 +581,20 @@ internal sealed class OutageLocationStore(
                     );
                     for (var index = 0; index < 2; index++)
                     {
+                        var marker = $"outage-completed-{index}";
                         var response = await client
-                            .RequestToActor(
-                                actorId,
-                                new UserSpotProbeReq($"outage-completed-{index}")
-                            )
+                            .RequestToActor(actorId, new UserSpotProbeReq(marker))
                             .Timeout(TimeSpan.FromSeconds(5))
                             .Async<UserSpotProbeRes>(cancellationToken);
                         Require(
-                            response.NodeRid == found.NodeRid.ToString(),
+                            response.NodeRid == found.NodeRid.ToString()
+                                && response.Marker == marker,
                             "Post-commit operation did not run on target."
+                        );
+                        // Source host probes also reach this target; count this request only.
+                        Require(
+                            OutageActorObservations.Count(actorId, marker) == 1,
+                            "Post-commit request did not execute exactly once on target."
                         );
                     }
                 }
@@ -725,14 +729,22 @@ internal static class OutageActorObservations
 {
     private static readonly ConcurrentDictionary<string, int> Creations = new();
     private static readonly ConcurrentDictionary<string, int> Handlers = new();
+    private static readonly ConcurrentDictionary<(string ActorId, string Marker), int> Requests =
+        new();
 
     internal static int Created(string actorId) =>
         Creations.AddOrUpdate(actorId, 1, (_, count) => count + 1);
 
     internal static int Count(string actorId) => Handlers.GetValueOrDefault(actorId);
 
-    internal static int Enter(string actorId) =>
-        Handlers.AddOrUpdate(actorId, 1, (_, count) => count + 1);
+    internal static int Count(string actorId, string marker) =>
+        Requests.GetValueOrDefault((actorId, marker));
+
+    internal static int Enter(string actorId, string marker)
+    {
+        Requests.AddOrUpdate((actorId, marker), 1, (_, count) => count + 1);
+        return Handlers.AddOrUpdate(actorId, 1, (_, count) => count + 1);
+    }
 }
 
 internal sealed record OutageProbeReq(string Marker);
@@ -769,7 +781,7 @@ internal sealed class OutageProbeHandler
                 spot.Context.NodeRid.ToString(),
                 actor.InstanceId,
                 actor.CreationCount,
-                OutageActorObservations.Enter(actor.ActorId),
+                OutageActorObservations.Enter(actor.ActorId, request.Marker),
                 request.Marker
             )
         );
