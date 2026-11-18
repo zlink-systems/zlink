@@ -13,6 +13,7 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -272,6 +273,48 @@ TEST (EnvelopeEncoding, ChangedValuesAndInvalidHeadersCannotReusePreviousBytes)
     EXPECT_EQ (recovered_header.value ().channel_name, "cache-values");
 }
 
+TEST (EnvelopeDecoding, MissingOptionalFieldsKeepTheirDefaults)
+{
+    const std::string bytes = "\x08\x03\x12\x01"
+                              "c"
+                              "\x1a\x01"
+                              "m"
+                              "\x22\x01"
+                              "x";
+    const auto decoded = msg::envelope_codec_t{}.decode_header (
+      std::span<const std::byte> (reinterpret_cast<const std::byte *> (bytes.data ()),
+                                  bytes.size ()),
+      false);
+    ASSERT_TRUE (decoded);
+    EXPECT_EQ (decoded.value ().kind, msg::message_kind_t::command);
+    EXPECT_EQ (decoded.value ().channel_name, "c");
+    EXPECT_EQ (decoded.value ().message_name, "m");
+    EXPECT_EQ (decoded.value ().content_type, "x");
+    EXPECT_TRUE (decoded.value ().correlation_id.empty ());
+    EXPECT_FALSE (decoded.value ().deadline.has_value ());
+    EXPECT_FALSE (decoded.value ().error_code.has_value ());
+    EXPECT_FALSE (decoded.value ().error_message.has_value ());
+    EXPECT_FALSE (decoded.value ().flow_id.has_value ());
+    EXPECT_FALSE (decoded.value ().flow_origin.has_value ());
+    EXPECT_FALSE (decoded.value ().source.has_value ());
+    EXPECT_FALSE (decoded.value ().topic.has_value ());
+    EXPECT_TRUE (decoded.value ().metadata.empty ());
+}
+
+TEST (EnvelopeDecoding, UnknownProtobufFieldsDoNotChangeHeader)
+{
+    const std::array<std::byte, 13> bytes{
+      std::byte{0x08}, std::byte{0x03}, std::byte{0x12}, std::byte{0x01}, std::byte{'c'},
+      std::byte{0x1a}, std::byte{0x01}, std::byte{'m'},  std::byte{0x22}, std::byte{0x01},
+      std::byte{'x'},  std::byte{0x78}, std::byte{0x01}};
+    const auto decoded = msg::envelope_codec_t{}.decode_header (bytes, false);
+    ASSERT_TRUE (decoded);
+    EXPECT_EQ (decoded.value ().kind, msg::message_kind_t::command);
+    EXPECT_EQ (decoded.value ().channel_name, "c");
+    EXPECT_EQ (decoded.value ().message_name, "m");
+    EXPECT_EQ (decoded.value ().content_type, "x");
+}
+
 TEST (EnvelopeAllocations, HeaderEncodeAndDecodeMessageAllocations)
 {
     msg::envelope_codec_t codec;
@@ -366,6 +409,214 @@ void expect_same_header (const msg::envelope_header_t &actual,
     EXPECT_EQ (actual.metadata, expected.metadata);
     EXPECT_EQ (actual.flow_id, expected.flow_id);
     EXPECT_EQ (actual.flow_origin, expected.flow_origin);
+}
+
+TEST (EnvelopeAllocations, CanonicalHeaderDecodeAddsNoStorageBeyondHeaderOwnership)
+{
+    msg::envelope_codec_t codec;
+    const msg::envelope_header_t header{
+      .channel_name = "c", .message_name = "m", .content_type = "x/y"};
+    const auto wire = codec.encode_header (header);
+    ASSERT_TRUE (codec.decode_header (wire, false));
+    using decoded_t = decltype (codec.decode_header (wire, false));
+    std::optional<decoded_t> decoded;
+    const auto allocations =
+      count_allocations ([&] { decoded.emplace (codec.decode_header (wire, false)); });
+    ASSERT_TRUE (*decoded);
+    EXPECT_EQ (decoded->value ().channel_name, "c");
+    EXPECT_EQ (decoded->value ().message_name, "m");
+    EXPECT_EQ (decoded->value ().content_type, "x/y");
+    std::printf ("canonical protobuf header decode allocations: %zu\n", allocations);
+    EXPECT_EQ (allocations, 0u);
+}
+
+TEST (EnvelopeL2Cost, SynchronousSendBorrowsNamesUntilEncodingFinishes)
+{
+    fw::serializer_registry_t serializers;
+    serializers.add<payload_t> (
+      [] (const payload_t &) { return fw::encoded_payload_t::from_string ("7"); },
+      [] (const fw::encoded_payload_t &) { return payload_t{}; }, "application/json");
+    for (const bool long_names : {false, true}) {
+        const std::string channel = long_names ? std::string (48, 'c') : "bench";
+        const std::string packet = long_names ? std::string (48, 'm') : "BenchPayload";
+        const auto target = zlink::routing_id_t::from ("n");
+        const std::map<std::string, std::string> metadata;
+        fw::dispatch_options_t options;
+        options.message_flow (fw::message_flow_log_mode_t::off);
+        msg::client_call_codec_t calls;
+        msg::envelope_codec_t codec;
+        auto serialize = [&] {
+            return serializers.get<payload_t> ().serialize_with_content_type (payload_t{});
+        };
+        auto reference = [&] {
+            auto serialized = serialize ();
+            const msg::envelope_header_t header{.kind = msg::message_kind_t::command,
+                                                .channel_name = msg::header_text_t::view (channel),
+                                                .message_name = msg::header_text_t::view (packet),
+                                                .content_type =
+                                                  std::move (serialized.content_type)};
+            return codec.encode_raw_body_parts (
+              header, fw::detail::encoded_payload_to_raw (std::move (serialized.payload)));
+        };
+        auto send = [&] {
+            return calls.encode_node_send_parts (channel, packet, target, metadata, options,
+                                                 serializers,
+                                                 [&] (auto &) { return serialize (); });
+        };
+        (void) reference ();
+        (void) send ();
+        std::optional<msg::message_parts_t> expected;
+        const auto baseline = count_allocations ([&] { expected.emplace (reference ()); });
+        std::optional<msg::message_parts_t> actual;
+        const auto allocations = count_allocations ([&] { actual.emplace (send ()); });
+        std::printf ("synchronous send %s allocations: actual=%zu reference=%zu\n",
+                     long_names ? "long" : "short", allocations, baseline);
+        EXPECT_EQ (allocations, baseline);
+        EXPECT_EQ (allocations, 2u);
+        ASSERT_TRUE (actual);
+        EXPECT_EQ ((*actual)[0].to_string (), (*expected)[0].to_string ());
+        EXPECT_EQ ((*actual)[1].to_string (), "7");
+    }
+}
+
+TEST (EnvelopeL2Cost, CompletionBorrowsNativeAndSpanBackedHeaderText)
+{
+    fw::serializer_registry_t serializers;
+    serializers.add<payload_t> (
+      [] (const payload_t &) { return fw::encoded_payload_t::from_string ("7"); },
+      [] (const fw::encoded_payload_t &body) {
+          if (std::string_view (reinterpret_cast<const char *> (body.bytes ().data ()),
+                                body.bytes ().size ())
+              != "7")
+              throw fw::framework_exception_t (fw::framework_error_kind_t::protocol_error,
+                                               "bad body");
+          return payload_t{};
+      },
+      "application/json");
+    const msg::envelope_header_t header{.kind = msg::message_kind_t::response,
+                                        .channel_name = std::string (48, 'c'),
+                                        .message_name = std::string (48, 'm'),
+                                        .correlation_id = std::string (64, 'i')};
+    const auto parts =
+      msg::envelope_codec_t{}.encode_raw_body_parts (header, zlink::message_t::from ("7"));
+    const std::array<std::span<const std::byte>, 2> spans{parts.part_bytes (0),
+                                                          parts.part_bytes (1)};
+    const auto borrowed = msg::message_parts_t::borrow (spans);
+    msg::client_call_codec_t calls;
+    const std::string empty = "empty";
+    const std::string error = "error";
+    const std::string operation = "request";
+    const auto baseline = count_allocations ([&] {
+        const auto view = msg::envelope_codec_t{}.decode_header_view (parts, false);
+        EXPECT_TRUE (view);
+    });
+    for (const auto *reply : {&parts, &borrowed}) {
+        ASSERT_TRUE (
+          calls.decode_envelope_reply<payload_t> (*reply, serializers, empty, error, operation));
+        std::optional<fw::result_t<payload_t>> decoded;
+        const auto allocations = count_allocations ([&] {
+            decoded.emplace (calls.decode_envelope_reply<payload_t> (*reply, serializers, empty,
+                                                                     error, operation));
+        });
+        std::printf ("completion %s allocations: actual=%zu header-view=%zu\n",
+                     reply == &parts ? "native" : "span", allocations, baseline);
+        ASSERT_TRUE (*decoded);
+        EXPECT_EQ (decoded->value ().value, 7);
+        EXPECT_EQ (allocations, baseline);
+        EXPECT_EQ (allocations, 4u);
+    }
+}
+
+TEST (EnvelopeL2Cost, RequestTargetAndResponseCosts)
+{
+    msg::client_call_codec_t calls;
+    msg::envelope_codec_t codec;
+    msg::envelope_header_t header{.channel_name = "bench",
+                                  .message_name = "BenchPayload",
+                                  .correlation_id = "42",
+                                  .deadline = "2026-11-14T00:00:00Z"};
+    auto type = std::make_shared<const fw::detail::request_type_plan_t> (
+      fw::detail::request_type_plan_t{header.content_type});
+    auto outbound = header;
+    std::optional<msg::message_parts_t> request;
+    const auto request_allocations = count_allocations ([&] {
+        request.emplace (calls.encode_payload_parts (
+          std::move (outbound), fw::encoded_payload_t::from_string ("7"), type));
+    });
+    ASSERT_TRUE (request);
+    std::optional<fw::result_t<msg::envelope_header_t>> received;
+    const auto target_allocations =
+      count_allocations ([&] { received.emplace (codec.decode_header_view (*request, false)); });
+    ASSERT_TRUE (*received);
+    fw::detail::channel_reply_writer_t writer;
+    auto make_response = [&] {
+        return writer.reply_raw_envelope (
+          writer.create_reply_header (msg::message_kind_t::response, "bench", received->value ()),
+          zlink::message_t::from ("7"));
+    };
+    (void) make_response ();
+    std::optional<msg::message_parts_t> response;
+    const auto response_allocations =
+      count_allocations ([&] { response.emplace (make_response ()); });
+    ASSERT_TRUE (response);
+    auto decoded_response = codec.decode_header (*response, false);
+    ASSERT_TRUE (decoded_response);
+    EXPECT_EQ (decoded_response.value ().correlation_id, "42");
+    std::printf ("request-target-response allocations: request=%zu target=%zu response=%zu\n",
+                 request_allocations, target_allocations, response_allocations);
+    EXPECT_EQ (request_allocations, 2u);
+    EXPECT_EQ (target_allocations, 2u);
+    EXPECT_EQ (response_allocations, 1u);
+}
+
+struct protobuf_request_payload_t
+{
+    static constexpr const char *packet_name =
+      "protobuf-request-payload-with-a-long-production-packet-name";
+    int value = 7;
+};
+
+TEST (EnvelopeL2Cost, ProductionNodeRequestKeepsNamesAndCompletes)
+{
+    fw::serializer_registry_t serializers;
+    serializers.add<protobuf_request_payload_t> (
+      [] (const protobuf_request_payload_t &) { return fw::encoded_payload_t::from_string ("7"); },
+      [] (const fw::encoded_payload_t &) { return protobuf_request_payload_t{}; },
+      "application/json");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    const std::string channel = "protobuf-request-channel-with-a-long-production-name";
+    const auto target = zlink::routing_id_t::from ("n");
+    unsigned received = 0;
+    auto completed =
+      [] (msg::message_parts_t parts) -> fw::request_task_t<fw::result_t<msg::message_parts_t>> {
+        co_return fw::result_t<msg::message_parts_t>::success (std::move (parts));
+    };
+    runtime.bind_mesh_node_transport (
+      channel, {}, [&] (const auto &, auto parts, auto, auto receiver) {
+          const auto decoded = msg::envelope_codec_t{}.decode_header_view (parts, false);
+          ASSERT_TRUE (decoded);
+          EXPECT_EQ (decoded.value ().channel_name, channel);
+          EXPECT_EQ (decoded.value ().message_name, protobuf_request_payload_t::packet_name);
+          EXPECT_EQ (decoded.value ().content_type, "application/json");
+          EXPECT_EQ (decoded.value ().kind, msg::message_kind_t::request);
+          EXPECT_TRUE (decoded.value ().deadline);
+          EXPECT_FALSE (decoded.value ().correlation_id.empty ());
+          ++received;
+          fw::detail::channel_reply_writer_t writer;
+          auto reply = writer.reply_raw_envelope (
+            writer.create_reply_header (msg::message_kind_t::response, channel, decoded.value ()),
+            zlink::message_t::from ("7"));
+          receiver.observe (completed (std::move (reply)));
+      });
+    auto client = builder.route_client (serializers);
+    const auto result = client.request_to_node (channel, target, protobuf_request_payload_t{})
+                          .async<protobuf_request_payload_t> ()
+                          .result ();
+    ASSERT_TRUE (result);
+    EXPECT_EQ (result.value ().value, 7);
+    EXPECT_EQ (received, 1u);
 }
 
 TEST (EnvelopeAllocations, ReplyInitializesOnlyItsFinalFields)

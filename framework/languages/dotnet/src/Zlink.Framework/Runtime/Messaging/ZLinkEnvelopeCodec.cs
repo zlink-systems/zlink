@@ -178,13 +178,10 @@ internal static class ZLinkEnvelopeCodec
     public static Message EncodeHeader(ZLinkEnvelopeHeader header, string contentType)
     {
         var flow = ZLinkFlowContext.Current;
-        var withFlow = header;
-        if (header.FlowId is null && flow?.FlowId is { } flowId)
-            withFlow = withFlow with { FlowId = flowId };
-        if (header.FlowOrigin is null && flow?.Origin is { } flowOrigin)
-            withFlow = withFlow with { FlowOrigin = flowOrigin };
-        ValidateProtocolHeader(withFlow, true);
-        var protobuf = ToProto(withFlow, contentType);
+        var flowId = header.FlowId ?? flow?.FlowId;
+        var flowOrigin = header.FlowOrigin ?? flow?.Origin;
+        ValidateProtocolHeader(header, true, validateUnicode: true, flowId, flowOrigin);
+        var protobuf = ToProto(header, contentType, flowId, flowOrigin);
         var message = Message.Allocate(protobuf.CalculateSize());
         try
         {
@@ -345,12 +342,22 @@ internal static class ZLinkEnvelopeCodec
             );
         }
 
-        var header = FromProto(proto, out var deadlineInvalid, out var metadataHasDuplicate);
-        ValidateProtocolHeader(header, validateFlow, deadlineInvalid, metadataHasDuplicate);
-        return ValidateDecodedFlow(header, validateFlow);
+        var header = FromProto(proto, validateFlow, out var metadataHasDuplicate);
+        ValidateProtocolHeader(
+            header,
+            validateFlow,
+            validateUnicode: false,
+            metadataHasDuplicate: metadataHasDuplicate
+        );
+        return header;
     }
 
-    private static ProtoChannelHeader ToProto(ZLinkEnvelopeHeader header, string contentType)
+    private static ProtoChannelHeader ToProto(
+        ZLinkEnvelopeHeader header,
+        string contentType,
+        string? flowId,
+        ZLinkFlowOrigin? flowOrigin
+    )
     {
         var proto = new ProtoChannelHeader
         {
@@ -361,22 +368,16 @@ internal static class ZLinkEnvelopeCodec
         };
         if (header.CorrelationId is not null)
             proto.CorrelationId = header.CorrelationId;
-        var deadline =
-            header.DeadlineText is { } deadlineText
-            && header.Deadline is { } deadlineValue
-            && TryParseHeaderDeadline(deadlineText, out var parsedDeadline)
-            && deadlineValue.EqualsExact(parsedDeadline)
-                ? deadlineText
-                : FormatHeaderDeadline(header.Deadline);
+        var deadline = header.DeadlineText ?? FormatHeaderDeadline(header.Deadline);
         if (deadline is not null)
             proto.Deadline = deadline;
         if (header.ErrorCode is not null)
             proto.ErrorCode = header.ErrorCode;
         if (header.ErrorMessage is not null)
             proto.ErrorMessage = header.ErrorMessage;
-        if (header.FlowId is not null)
-            proto.FlowId = header.FlowId;
-        if (header.FlowOrigin is { } origin)
+        if (flowId is not null)
+            proto.FlowId = flowId;
+        if (flowOrigin is { } origin)
             proto.FlowOrigin = (ProtoFlowOrigin)(int)origin;
         if (header.Source is not null)
             proto.Source = header.Source;
@@ -399,21 +400,11 @@ internal static class ZLinkEnvelopeCodec
 
     private static ZLinkEnvelopeHeader FromProto(
         ProtoChannelHeader proto,
-        out bool deadlineInvalid,
+        bool validateFlow,
         out bool metadataHasDuplicate
     )
     {
-        DateTimeOffset? deadline = null;
-        string? deadlineText = null;
-        deadlineInvalid = false;
-        if (proto.HasDeadline)
-        {
-            deadlineText = proto.Deadline;
-            if (!TryParseHeaderDeadline(deadlineText, out var parsed))
-                deadlineInvalid = true;
-            else
-                deadline = parsed;
-        }
+        var deadlineText = proto.HasDeadline ? proto.Deadline : null;
 
         var metadata =
             proto.Metadata.Count == 0
@@ -431,7 +422,7 @@ internal static class ZLinkEnvelopeCodec
             proto.MessageName,
             proto.ContentType,
             proto.HasCorrelationId ? proto.CorrelationId : null,
-            deadline,
+            null,
             proto.HasTopic ? proto.Topic : null,
             proto.HasErrorCode ? proto.ErrorCode : null,
             proto.HasErrorMessage ? proto.ErrorMessage : null,
@@ -439,8 +430,9 @@ internal static class ZLinkEnvelopeCodec
         )
         {
             DeadlineText = deadlineText,
-            FlowId = proto.HasFlowId ? proto.FlowId : null,
-            FlowOrigin = proto.HasFlowOrigin ? (ZLinkFlowOrigin)(int)proto.FlowOrigin : null,
+            FlowId = validateFlow && proto.HasFlowId ? proto.FlowId : null,
+            FlowOrigin =
+                validateFlow && proto.HasFlowOrigin ? (ZLinkFlowOrigin)(int)proto.FlowOrigin : null,
             Metadata = metadata,
         };
         return header;
@@ -450,25 +442,32 @@ internal static class ZLinkEnvelopeCodec
     {
         if (value is null)
             return null;
-        var formatted = value.Value.ToString(
-            "O",
-            System.Globalization.CultureInfo.InvariantCulture
-        );
-        var suffix = formatted[^1] == 'Z' ? 1 : 6;
-        var offsetStart = formatted.Length - suffix;
-        var dot = formatted.IndexOf('.', StringComparison.Ordinal);
+        Span<char> formatted = stackalloc char[33];
+        if (
+            !value.Value.TryFormat(
+                formatted,
+                out var written,
+                "O",
+                System.Globalization.CultureInfo.InvariantCulture
+            )
+        )
+            throw new InvalidOperationException("Could not format the envelope deadline.");
+        var result = formatted[..written];
+        var suffix = result[^1] == 'Z' ? 1 : 6;
+        var offsetStart = result.Length - suffix;
+        var dot = result.IndexOf('.');
         if (dot < 0 || dot > offsetStart)
-            return formatted;
+            return new string(result);
         var end = offsetStart;
-        while (end > dot + 1 && formatted[end - 1] == '0')
+        while (end > dot + 1 && result[end - 1] == '0')
             end--;
         if (end == dot + 1)
             end = dot;
-        return formatted[..end] + formatted[offsetStart..];
+        Span<char> trimmed = stackalloc char[33];
+        result[..end].CopyTo(trimmed);
+        result[offsetStart..].CopyTo(trimmed[end..]);
+        return new string(trimmed[..(end + result.Length - offsetStart)]);
     }
-
-    private static bool TryParseHeaderDeadline(string value, out DateTimeOffset deadline) =>
-        JsonSerializer.SerializeToElement(value).TryGetDateTimeOffset(out deadline);
 
     public static ZLinkEnvelopeHeader DecodeHeader(
         IReadOnlyList<Message> parts,
@@ -486,37 +485,6 @@ internal static class ZLinkEnvelopeCodec
     {
         EnsurePart(parts, 0, "header");
         return DecodeHeader(parts.GetSpan(0), validateFlow);
-    }
-
-    internal static ulong MeasureApplicationPayloadBytes(IReadOnlyList<Message> parts)
-    {
-        var firstApplicationPart = 0;
-        if (parts.Count != 0 && IsEnvelopeHeader(parts[0]))
-            firstApplicationPart = 1;
-
-        var total = 0UL;
-        for (var index = firstApplicationPart; index < parts.Count; index++)
-        {
-            var size = (ulong)Math.Max(parts[index].Size, 0);
-            if (size > ulong.MaxValue - total)
-                return ulong.MaxValue;
-            total += size;
-        }
-        return total;
-    }
-
-    private static bool IsEnvelopeHeader(Message message)
-    {
-        var bytes = message.AsReadOnlySpan();
-        try
-        {
-            _ = DecodeHeader(bytes, validateFlow: true);
-            return true;
-        }
-        catch (ZLinkEnvelopeProtocolException)
-        {
-            return false;
-        }
     }
 
     public static ZLinkEnvelopeProtocolException MissingHeader() =>
@@ -707,26 +675,26 @@ internal static class ZLinkEnvelopeCodec
     private static void ValidateProtocolHeader(
         ZLinkEnvelopeHeader header,
         bool validateFlow,
-        bool deadlineInvalid = false,
+        bool validateUnicode = false,
+        string? flowId = null,
+        ZLinkFlowOrigin? flowOrigin = null,
         bool metadataHasDuplicate = false
     )
     {
-        var flowId = header.FlowId;
-        var flowOrigin = header.FlowOrigin;
-        if (deadlineInvalid)
-            throw new ZLinkEnvelopeProtocolException(header, "ZLink envelope deadline is invalid.");
+        flowId ??= header.FlowId;
+        flowOrigin ??= header.FlowOrigin;
         if (metadataHasDuplicate)
             throw new ZLinkEnvelopeProtocolException(header, "duplicate envelope metadata key");
-        ValidateHeaderString(header, header.ChannelName);
-        ValidateHeaderString(header, header.MessageName);
-        ValidateHeaderString(header, header.ContentType);
-        ValidateHeaderString(header, header.CorrelationId);
-        ValidateHeaderString(header, header.DeadlineText);
-        ValidateHeaderString(header, header.Topic);
-        ValidateHeaderString(header, header.ErrorCode);
-        ValidateHeaderString(header, header.ErrorMessage);
-        ValidateHeaderString(header, header.Source);
-        ValidateHeaderString(header, flowId);
+        ValidateHeaderString(header, header.ChannelName, validateUnicode);
+        ValidateHeaderString(header, header.MessageName, validateUnicode);
+        ValidateHeaderString(header, header.ContentType, validateUnicode);
+        ValidateHeaderString(header, header.CorrelationId, validateUnicode);
+        ValidateHeaderString(header, header.DeadlineText, validateUnicode);
+        ValidateHeaderString(header, header.Topic, validateUnicode);
+        ValidateHeaderString(header, header.ErrorCode, validateUnicode);
+        ValidateHeaderString(header, header.ErrorMessage, validateUnicode);
+        ValidateHeaderString(header, header.Source, validateUnicode);
+        ValidateHeaderString(header, flowId, validateUnicode);
         if (header.Metadata is { Count: > 0 } metadata)
         {
             foreach (var (key, value) in metadata)
@@ -736,12 +704,28 @@ internal static class ZLinkEnvelopeCodec
                         header,
                         "ZLink envelope metadata keys must be non-empty."
                     );
-                ValidateHeaderString(header, key);
-                ValidateHeaderString(header, value);
+                ValidateHeaderString(header, key, validateUnicode);
+                ValidateHeaderString(header, value, validateUnicode);
             }
-            var size =
-                ToProto(header, header.ContentType).CalculateSize()
-                - ToProto(header with { Metadata = null }, header.ContentType).CalculateSize();
+            var size = 0;
+            foreach (var (key, value) in metadata)
+            {
+                var keyBytes = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(key);
+                var valueBytes = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(value);
+                var entryBodySize =
+                    CodedOutputStream.ComputeTagSize(1)
+                    + CodedOutputStream.ComputeLengthSize(keyBytes)
+                    + keyBytes
+                    + CodedOutputStream.ComputeTagSize(2)
+                    + CodedOutputStream.ComputeLengthSize(valueBytes)
+                    + valueBytes;
+                size = checked(
+                    size
+                    + CodedOutputStream.ComputeTagSize(13)
+                    + CodedOutputStream.ComputeLengthSize(entryBodySize)
+                    + entryBodySize
+                );
+            }
             if (size > ServiceWireConstants.MetadataBytes)
                 throw new ZLinkEnvelopeProtocolException(
                     header,
@@ -754,15 +738,15 @@ internal static class ZLinkEnvelopeCodec
                 "ZLink envelope message kind is invalid."
             );
 
-        if (flowOrigin is { } providedOrigin && !IsValidFlowOrigin(providedOrigin))
+        if (header.CorrelationId is not null && !CanCorrelateReply(header))
             throw new ZLinkEnvelopeProtocolException(
                 header,
-                "ZLink envelope flow origin is invalid."
+                "ZLink envelope correlation id must be 1..64 ASCII characters."
             );
 
         var hasFlowId = flowId is not null;
         var hasFlowOrigin = flowOrigin is not null;
-        if (hasFlowId != hasFlowOrigin)
+        if (validateFlow && hasFlowId != hasFlowOrigin)
             throw new ZLinkEnvelopeProtocolException(
                 header,
                 "ZLink envelope flow id and origin must be present together."
@@ -770,65 +754,46 @@ internal static class ZLinkEnvelopeCodec
 
         if (validateFlow)
         {
+            if (flowOrigin is { } providedOrigin && !IsValidFlowOrigin(providedOrigin))
+                throw new ZLinkEnvelopeProtocolException(
+                    header,
+                    "ZLink envelope flow origin is invalid."
+                );
             if (hasFlowId && !ZlinkStreamFlowId.IsValid(flowId))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
                     "ZLink envelope flow id must be UUIDv7."
                 );
         }
-
-        if (header.Kind == ZLinkMessageKind.Error)
-        {
-            if (string.IsNullOrWhiteSpace(header.ErrorCode))
-                throw new ZLinkEnvelopeProtocolException(
-                    header,
-                    "ZLink Error envelope requires a non-empty error code."
-                );
-        }
-        else if (header.ErrorCode is not null || header.ErrorMessage is not null)
-        {
-            throw new ZLinkEnvelopeProtocolException(
-                header,
-                "ZLink envelope error fields are valid only for Error messages."
-            );
-        }
     }
 
-    private static void ValidateHeaderString(ZLinkEnvelopeHeader header, string? value)
+    private static void ValidateHeaderString(
+        ZLinkEnvelopeHeader header,
+        string? value,
+        bool validateUnicode
+    )
     {
         if (value is null)
             return;
-        try
+        if (validateUnicode)
         {
-            _ = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(value);
-        }
-        catch (EncoderFallbackException)
-        {
-            throw new ZLinkEnvelopeProtocolException(
-                header,
-                "ZLink envelope strings must contain valid Unicode."
-            );
+            try
+            {
+                _ = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(value);
+            }
+            catch (EncoderFallbackException)
+            {
+                throw new ZLinkEnvelopeProtocolException(
+                    header,
+                    "ZLink envelope strings must contain valid Unicode."
+                );
+            }
         }
         if (value.Contains('\0'))
             throw new ZLinkEnvelopeProtocolException(
                 header,
                 "ZLink envelope strings must not contain NUL."
             );
-    }
-
-    private static ZLinkEnvelopeHeader ValidateDecodedFlow(
-        ZLinkEnvelopeHeader header,
-        bool validateFlow
-    )
-    {
-        if (validateFlow)
-            return header;
-
-        // Spec 27 section 4: Off ingress does not retain observation-only
-        // fields where a later forwarder or reply encoder could copy them.
-        header.FlowId = null;
-        header.FlowOrigin = null;
-        return header;
     }
 
     private static ZLinkEnvelopeHeader InvalidProtocolHeader() =>

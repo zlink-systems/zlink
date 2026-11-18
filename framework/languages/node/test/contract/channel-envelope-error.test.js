@@ -751,7 +751,7 @@ test('channel envelope keeps an absolute deadline established before payload enc
   }
 });
 
-test('channel header rejects correlation values that do not match the message kind', () => {
+test('channel header decodes correlation independently of message kind', () => {
   const commandWithCorrelation = readable([
     encodeChannelHeader({
       kind: 3,
@@ -778,14 +778,23 @@ test('channel header rejects correlation values that do not match the message ki
     }),
     Buffer.from('{}')
   ]);
-  assert.throws(
-    () => envelope.decodeChannelHeader(commandWithCorrelation),
-    /must not contain correlationId/
-  );
-  assert.throws(
-    () => envelope.decodeChannelHeader(requestWithoutCorrelation),
-    /requires correlationId/
-  );
+  assert.equal(envelope.decodeChannelHeader(commandWithCorrelation).correlationId, 'unexpected');
+  assert.equal(envelope.decodeChannelHeader(requestWithoutCorrelation).correlationId, null);
+});
+
+test('decoded metadata is an immutable snapshot of protobuf header entries', () => {
+  const bytes = encodeChannelHeader({
+    kind: 3,
+    channelName: 'api',
+    messageName: 'Notice',
+    contentType: 'application/json',
+    metadata: { tenant: 'north', zone: 'west' }
+  });
+  const decoded = envelope.decodeChannelHeader(readable([bytes]));
+  bytes.fill(0);
+  assert.deepEqual({ ...decoded.metadata }, { tenant: 'north', zone: 'west' });
+  assert.equal(Object.isFrozen(decoded.metadata), true);
+  assert.throws(() => { decoded.metadata.tenant = 'south'; }, TypeError);
 });
 
 test('channel header treats nullable flow fields as absent', () => {

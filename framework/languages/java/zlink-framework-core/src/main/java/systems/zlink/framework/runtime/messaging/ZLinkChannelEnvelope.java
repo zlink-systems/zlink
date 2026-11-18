@@ -83,9 +83,7 @@ public final class ZLinkChannelEnvelope {
         }
     }
 
-    /**
-     * Kept as the registration value type; generated protobuf encoding needs no prepared strings.
-     */
+    /** Keeps prepared UTF-8 protobuf values for the channel header writer. */
     public static final class PreparedNames {
         private final String channelName;
         private final String messageName;
@@ -243,6 +241,7 @@ public final class ZLinkChannelEnvelope {
             PreparedNames contentNames) {
         validateFlowPair(header.flowId(), header.flowOrigin());
         validateMetadata(header.metadata());
+        validateEncodingStrings(header);
         var builder = ChannelHeader.newBuilder().setKindValue(header.kind());
         if (channelNames != null && Objects.equals(channelNames.channelName, header.channelName()))
             builder.setChannelNameBytes(channelNames.channelNameBytes);
@@ -346,20 +345,17 @@ public final class ZLinkChannelEnvelope {
     }
 
     private static Header fromProto(ChannelHeader proto, boolean captureFlow) {
-        if (proto.getKindValue() < KIND_REQUEST || proto.getKindValue() > KIND_ERROR)
-            throw protocolError("ZLink envelope kind is invalid", null);
         Map<String, String> metadata = new HashMap<>();
         for (MetadataEntry entry : proto.getMetadataList()) {
-            if (entry.getKey().isEmpty()) {
-                throw protocolError("ZLink envelope metadata key is required", null);
-            }
             if (metadata.putIfAbsent(entry.getKey(), entry.getValue()) != null)
                 throw protocolError("duplicate envelope metadata key", null);
         }
-        String flowId = proto.hasFlowId() ? proto.getFlowId() : null;
+        boolean hasFlowId = captureFlow && proto.hasFlowId();
+        boolean hasFlowOrigin = captureFlow && proto.hasFlowOrigin();
+        String flowId = hasFlowId ? proto.getFlowId() : null;
         ZLinkFlowOrigin origin =
-                proto.hasFlowOrigin() ? flowOriginFromWire(proto.getFlowOriginValue()) : null;
-        Header validated =
+                hasFlowOrigin ? flowOriginFromWire(proto.getFlowOriginValue()) : null;
+        Header header =
                 new Header(
                         proto.getKindValue(),
                         proto.getChannelName(),
@@ -374,28 +370,16 @@ public final class ZLinkChannelEnvelope {
                         metadata,
                         flowId,
                         origin);
-        validateHeader(validated);
-        if (metadataSize(proto) > MAX_METADATA_BYTES)
-            throw protocolError("ZLink envelope metadata exceeds 1024 encoded bytes", null);
-        return captureFlow
-                ? validated
-                : new Header(
-                        validated.kind(),
-                        validated.channelName(),
-                        validated.messageName(),
-                        validated.contentType(),
-                        validated.correlationId(),
-                        validated.deadline(),
-                        validated.topic(),
-                        validated.errorCode(),
-                        validated.errorMessage(),
-                        validated.source(),
-                        validated.metadata(),
-                        null,
-                        null);
+        validateHeader(header, captureFlow, hasFlowId, hasFlowOrigin, metadataSize(proto));
+        return header;
     }
 
-    private static void validateHeader(Header header) {
+    private static void validateHeader(
+            Header header,
+            boolean captureFlow,
+            boolean hasFlowId,
+            boolean hasFlowOrigin,
+            int encodedMetadataBytes) {
         if (header.kind() < KIND_REQUEST || header.kind() > KIND_ERROR)
             throw protocolError("ZLink envelope kind is invalid", null);
         requireString("channelName", header.channelName());
@@ -410,7 +394,9 @@ public final class ZLinkChannelEnvelope {
         if (header.correlationId() != null && !header.canCorrelateReply())
             throw protocolError("ZLink envelope correlationId must be 1..64 byte ASCII", null);
         validateMetadata(header.metadata());
-        validateFlowPair(header.flowId(), header.flowOrigin());
+        if (encodedMetadataBytes > MAX_METADATA_BYTES)
+            throw protocolError("ZLink envelope metadata exceeds 1024 encoded bytes", null);
+        if (captureFlow) validateFlow(header, hasFlowId, hasFlowOrigin);
     }
 
     private static void validateMetadata(Map<String, String> metadata) {
@@ -419,6 +405,41 @@ public final class ZLinkChannelEnvelope {
                 throw protocolError("ZLink envelope metadata key is required", null);
             requireString("metadata key", entry.getKey());
             requireString("metadata value", entry.getValue());
+        }
+    }
+
+    private static void validateEncodingStrings(Header header) {
+        requireEncodableString(header.channelName());
+        requireEncodableString(header.messageName());
+        requireEncodableString(header.contentType());
+        requireEncodableString(header.correlationId());
+        requireEncodableString(header.deadline());
+        requireEncodableString(header.topic());
+        requireEncodableString(header.errorCode());
+        requireEncodableString(header.errorMessage());
+        requireEncodableString(header.source());
+        requireEncodableString(header.flowId());
+        for (var entry : header.metadata().entrySet()) {
+            requireWellFormedUtf16(entry.getKey());
+            requireWellFormedUtf16(entry.getValue());
+        }
+    }
+
+    private static void requireEncodableString(String value) {
+        requireString("header", value);
+        requireWellFormedUtf16(value);
+    }
+
+    private static void requireWellFormedUtf16(String value) {
+        if (value == null) return;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (Character.isHighSurrogate(c)) {
+                if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i)))
+                    throw protocolError("ZLink envelope string must be valid UTF-8", null);
+            } else if (Character.isLowSurrogate(c)) {
+                throw protocolError("ZLink envelope string must be valid UTF-8", null);
+            }
         }
     }
 
@@ -432,18 +453,22 @@ public final class ZLinkChannelEnvelope {
         }
     }
 
+    private static void validateFlow(Header header, boolean hasFlowId, boolean hasFlowOrigin) {
+        if (hasFlowId != hasFlowOrigin)
+            throw protocolError("ZLink envelope flow id and origin must be present together", null);
+        if (hasFlowOrigin && header.flowOrigin() == null)
+            throw protocolError("ZLink envelope flow origin is invalid", null);
+        if (header.flowId() != null) {
+            requireString("flowId", header.flowId());
+            if (!ZLinkFlowContext.isValidFlowId(header.flowId()))
+                throw protocolError("ZLink envelope flow id must be UUIDv7", null);
+        }
+    }
+
     private static void requireString(String field, String value) {
         if (value == null) return;
         if (value.indexOf('\0') >= 0)
             throw protocolError("ZLink envelope " + field + " must not contain NUL", null);
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (Character.isHighSurrogate(c)) {
-                if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i)))
-                    throw protocolError("ZLink envelope " + field + " must be valid UTF-8", null);
-            } else if (Character.isLowSurrogate(c))
-                throw protocolError("ZLink envelope " + field + " must be valid UTF-8", null);
-        }
     }
 
     private static int metadataSize(ChannelHeader header) {

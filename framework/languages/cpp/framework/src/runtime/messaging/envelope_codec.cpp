@@ -7,6 +7,7 @@
 
 #include <channel-header-v1.pb.h>
 #include <service_wire_constants.hpp>
+#include <google/protobuf/wire_format_lite.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -158,15 +159,6 @@ message_parts_t envelope_codec_t::encode_parts (const envelope_header_t &header,
 namespace
 {
 
-bool valid_error_code (std::string_view value) noexcept
-{
-    return value == "NotFound" || value == "not_found" || value == "already_exists"
-           || value == "type_mismatch" || value == "not_configured" || value == "rejected"
-           || value == "unavailable" || value == "deadline_exceeded" || value == "shutting_down"
-           || value == "protocol_error" || value == "invalid_operation" || value == "data_lost"
-           || value == "internal_failure";
-}
-
 bool valid_utf8 (std::string_view text) noexcept
 {
     for (std::size_t index = 0; index < text.size ();) {
@@ -280,7 +272,10 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
                                                     "ZLink envelope metadata key is duplicated");
                 }
             }
-            const auto entry_size = entry.ByteSizeLong ();
+            const auto entry_size =
+              1
+              + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (
+                entry.ByteSizeLong ());
             if (entry_size
                 > protocol::metadataBytes - std::min (encoded_size, protocol::metadataBytes)) {
                 if (metadata_invalid)
@@ -297,34 +292,33 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
                                                 "ZLink envelope metadata key/value is invalid");
         }
     }
-    if (!correlation_id.empty () && !valid_correlation_id (correlation_id))
+    if (capture_flow) {
+        const bool has_flow_id = proto ? proto->has_flow_id () : header.flow_id.has_value ();
+        const bool has_flow_origin =
+          proto ? proto->has_flow_origin () : header.flow_origin.has_value ();
+        const auto flow_id = proto            ? std::string_view (proto->flow_id ())
+                             : header.flow_id ? std::string_view (*header.flow_id)
+                                              : std::string_view{};
+        const auto flow_origin = proto ? static_cast<std::uint8_t> (proto->flow_origin ())
+                                 : header.flow_origin
+                                   ? static_cast<std::uint8_t> (*header.flow_origin)
+                                   : std::uint8_t{};
+        if (has_flow_id != has_flow_origin)
+            return result_t<void>::failure (
+              framework_error_kind_t::protocol_error,
+              "ZLink envelope flow id and origin must be present together");
+        if (has_flow_id && !flow_id_t::is_valid (flow_id))
+            return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                            "ZLink envelope flow id must be UUIDv7");
+        if (has_flow_origin && (flow_origin < 1 || flow_origin > 4))
+            return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                            "ZLink envelope flow origin is invalid");
+    }
+    const bool has_correlation_id =
+      proto ? proto->has_correlation_id () : !header.correlation_id.empty ();
+    if (has_correlation_id && !valid_correlation_id (correlation_id))
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "ZLink envelope correlationId must be 1..64 byte ASCII");
-    const bool has_flow_id = proto ? proto->has_flow_id () : header.flow_id.has_value ();
-    const bool has_flow_origin =
-      proto ? proto->has_flow_origin () : header.flow_origin.has_value ();
-    const auto flow_id = proto            ? std::string_view (proto->flow_id ())
-                         : header.flow_id ? std::string_view (*header.flow_id)
-                                          : std::string_view{};
-    const auto flow_origin = proto ? static_cast<std::uint8_t> (proto->flow_origin ())
-                             : header.flow_origin ? static_cast<std::uint8_t> (*header.flow_origin)
-                                                  : std::uint8_t{};
-    if (has_flow_id != has_flow_origin)
-        return result_t<void>::failure (
-          framework_error_kind_t::protocol_error,
-          "ZLink envelope flow id and origin must be present together");
-    if (capture_flow && has_flow_id && !flow_id_t::is_valid (flow_id))
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "ZLink envelope flow id must be UUIDv7");
-    if (capture_flow && has_flow_origin && (flow_origin < 1 || flow_origin > 4))
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "ZLink envelope flow origin is invalid");
-    const auto error_code = proto               ? std::string_view (proto->error_code ())
-                            : header.error_code ? std::string_view (*header.error_code)
-                                                : std::string_view{};
-    if (header.kind == message_kind_t::error && (!has_error_code || !valid_error_code (error_code)))
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "ZLink error envelope requires a recognized errorCode");
     return result_t<void>::success ();
 }
 
