@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // The Subscriber role of §10.11: automatic Classic fanout with no endpoint and no subscribe(topic), so this subscriber receives
 // every topic.

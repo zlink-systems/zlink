@@ -207,6 +207,7 @@ final class ZLinkActorDispatchSerialsTest {
                         .getCause());
         admission.join();
         var queue = target.claimActorQueue("actor-1").toCompletableFuture().join().relocationLane();
+        queue.awaitQuiescence().toCompletableFuture().join();
         var seal = queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
         queue.commitRelocation(seal).toCompletableFuture().join().orElseThrow();
         var rejectedAdmission = new CompletableFuture<Void>();

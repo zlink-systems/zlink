@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSeria
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -52,7 +53,7 @@ public final class ZLinkTypedNativeRequestAllocationTest {
 
     @Test
     void countsActualTypedNativeRequestsForReplyAndCancellation() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     public static void main(String[] args) throws Exception {

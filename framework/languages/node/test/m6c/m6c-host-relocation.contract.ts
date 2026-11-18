@@ -281,7 +281,6 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
       nodeRid: 'source-node'
     },
     locationGeneration: 11n,
-    ownerLeaseGeneration: 3n,
     get boundSession() {
       return remoteTarget;
     },
@@ -311,6 +310,7 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
     storeNow: new Date()
   };
   const runtime = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 3n }),
     spotManager: () => ({
       async dispatchRoutedActorPacket(_origin: 'local' | 'remote') {
         return { handled: true };
@@ -2732,8 +2732,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         spotId: options.canonicalRecovery === true ? 'entry-spot-estimate' : 'source-room',
         spotMembershipEpoch: 8n,
         nativeActorRef: { actorId, generation: 5n, nodeRid: 'source' },
-        locationGeneration: 11n,
-        ownerLeaseGeneration: 3n
+        locationGeneration: 11n
       };
   if (options.realSourceCapture) {
     sourceState.rememberMeshName('mesh-a');
@@ -2745,7 +2744,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     sourceState.setNativeActorRef({ actorId, generation: 5n, nodeRid: 'source' });
     sourceState.setJoinedSpot('source-room', undefined, 8n, 4n);
     sourceState.setLocationGeneration(11n);
-    sourceState.setOwnerLeaseGeneration(3n);
   }
   const packets = ['B1', 'B2', 'D1'].map((label, index) => actorJoinHandoffPacket(index, label));
   let releaseAccepted = () => {};
@@ -2862,7 +2860,12 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     assert.notEqual(activation, undefined);
     return resolveActorIngress({ actorId, parts: [] } as never, false, {
       resolveActor: () => sourceActor as never,
-      hasDepartedActor: (id) => activation!.hasDepartedActor(id)
+      membership: {
+        resolveOwner: () =>
+          activation!.hasDepartedActor(actorId)
+            ? {}
+            : { nativeActorRef: sourceState.nativeActorRef, meshName: activation!.meshName }
+      }
     }).kind;
   };
   const membership = {
@@ -3849,31 +3852,23 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           assert.ok(events.includes('source:removed'));
           return undefined;
         },
-        async onDisconnectActor() {},
-        routeBeforeLocal: (delivery) => {
-          const captured = sourceHandoff.capture(
-            delivery.origin,
-            delivery.actorId,
-            delivery.parts,
-            delivery.returnResponse,
-            delivery.remoteBoundSessionTarget,
-            delivery.fallbackActorRef
-          );
-          return captured === undefined ? undefined : { handled: true, response: captured };
-        }
+        async onDisconnectActor() {}
       });
       try {
-        return await dispatch.dispatch(
+        const result = await dispatch.admitDelivery(
           undefined,
-          'remote',
-          actorId,
-          parts,
-          true,
-          undefined,
-          withFollowContext
-            ? attachActorMessageFollowContext(sourceActorRef as never, context)
-            : (sourceActorRef as never)
+          {
+            origin: 'remote',
+            actorId,
+            parts,
+            returnResponse: true,
+            fallbackActorRef: withFollowContext
+              ? attachActorMessageFollowContext(sourceActorRef as never, context)
+              : (sourceActorRef as never)
+          },
+          sourceHandoff
         );
+        return 'terminal' in result ? await result.terminal : result.response;
       } finally {
         parts.forEach((part) => part.close());
       }

@@ -51,7 +51,7 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
             var reply =
                     fixture.node
                             .requestCanonicalRelocationPrepare(
-                                    LOCAL, command(40), Duration.ofSeconds(2), admitted)
+                                    LOCAL, command(40), Duration.ofSeconds(2), admitted, 1)
                             .toCompletableFuture();
             assertTrue(admitted.isDone(), "physical acceptance must precede READY");
             admitted.get(1, TimeUnit.SECONDS);
@@ -72,7 +72,7 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
             var reply =
                     fixture.node
                             .requestCanonicalRelocationPrepare(
-                                    LOCAL, command(40), Duration.ofMillis(20), admitted)
+                                    LOCAL, command(40), Duration.ofMillis(20), admitted, 1)
                             .toCompletableFuture();
             admitted.get(1, TimeUnit.SECONDS);
             var failure =
@@ -92,7 +92,7 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
             var reply =
                     fixture.node
                             .requestCanonicalRelocationPrepare(
-                                    REMOTE, command(40), Duration.ofSeconds(2), admitted)
+                                    REMOTE, command(40), Duration.ofSeconds(2), admitted, 1)
                             .toCompletableFuture();
             reply.whenComplete(
                     (value, failure) -> {
@@ -125,7 +125,7 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
             var reply =
                     fixture.node
                             .requestCanonicalRelocationPrepare(
-                                    REMOTE, command(40), Duration.ofMillis(20), admitted)
+                                    REMOTE, command(40), Duration.ofMillis(20), admitted, 1)
                             .toCompletableFuture();
             var failure =
                     assertThrows(ExecutionException.class, () -> reply.get(1, TimeUnit.SECONDS));

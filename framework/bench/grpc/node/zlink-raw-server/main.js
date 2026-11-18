@@ -16,29 +16,55 @@
 const zlink = require('@zlink-systems/zlink');
 const { argValue, argInt } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
-const { RESPONSE_ENVELOPE, ROUTING_IDS, encodeBenchPayloadMessage, decodeBenchPayloadBody } =
-  require('../shared/raw-wire');
+const {
+  RESPONSE_ENVELOPE,
+  ROUTING_IDS,
+  encodeBenchPayloadMessage,
+  decodeBenchPayloadBody
+} = require('../shared/raw-wire');
+const rawJsonWire = require('../shared/raw-json-wire');
+const gamePayload = require('../shared/game-payload');
 
 const argv = process.argv.slice(2);
 const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5227');
 const commandEndpoint = argValue(argv, '--command-endpoint', 'tcp://127.0.0.1:5228');
 const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5229');
 const batch = argInt(argv, '--recv-batch', 256);
-
+const jsonBody = argv.includes('--json-body');
 const metrics = new BenchServerMetrics();
+const decodeBody = jsonBody ? rawJsonWire.decodeGameMessage : decodeBenchPayloadBody;
+const encodeBody = jsonBody ? rawJsonWire.encodeGameMessage : encodeBenchPayloadMessage;
+const responseEnvelope = jsonBody ? rawJsonWire.RESPONSE_ENVELOPE : RESPONSE_ENVELOPE;
+const recordRequestBody = jsonBody
+  ? metrics.recordGamePayload.bind(metrics)
+  : metrics.record.bind(metrics);
+const recordCommandBody = jsonBody
+  ? (body) => {
+      gamePayload.itemCountForSize(
+        body.items?.length === 16 ? 1024 : body.items?.length === 88 ? 4096 : 0,
+        'zlink-node-json'
+      );
+      metrics.recordGamePayload(body);
+    }
+  : metrics.record.bind(metrics);
+
 const ctx = zlink.createContext();
 const requestRouter = zlink.createRouterSocket(ctx);
 const commandRouter = zlink.createRouterSocket(ctx);
 
-requestRouter.setRoutingId(zlink.RoutingId.from(Buffer.from(ROUTING_IDS.rawRequestServer, 'ascii')));
-commandRouter.setRoutingId(zlink.RoutingId.from(Buffer.from(ROUTING_IDS.rawCommandServer, 'ascii')));
+requestRouter.setRoutingId(
+  zlink.RoutingId.from(Buffer.from(ROUTING_IDS.rawRequestServer, 'ascii'))
+);
+commandRouter.setRoutingId(
+  zlink.RoutingId.from(Buffer.from(ROUTING_IDS.rawCommandServer, 'ascii'))
+);
 requestRouter.options.mandatory = true;
 commandRouter.options.mandatory = true;
 requestRouter.bind(endpoint);
 commandRouter.bind(commandEndpoint);
 
 startStatsServer(metricsUrl, metrics, {
-  implementation: 'zlink-node',
+  implementation: jsonBody ? 'zlink-node-json' : 'zlink-node',
   socket: 'ROUTER<->ROUTER',
   endpoint,
   commandEndpoint
@@ -76,14 +102,13 @@ function pumpRequests() {
     handled += 1;
     try {
       const part = bodyPart(requestReceived);
-      const body = part === null ? null : decodeBenchPayloadBody(part.data());
+      const body = part === null ? null : decodeBody(part.data());
       if (body === null) throw new Error('invalid raw protobuf payload');
-      metrics.record(body);
-      const reply = encodeBenchPayloadMessage(body);
-      const operation = requestReceived.replyToken !== null
-        ? requestReceived.reply()
-        : requestReceived.send();
-      operation.message(RESPONSE_ENVELOPE).message(reply).submit();
+      recordRequestBody(body);
+      const reply = encodeBody(body);
+      const operation =
+        requestReceived.replyToken !== null ? requestReceived.reply() : requestReceived.send();
+      operation.message(responseEnvelope).message(reply).submit();
     } catch (error) {
       metrics.recordError();
       console.error(`raw request loop failed: ${error.message}`);
@@ -107,9 +132,9 @@ function pumpCommands() {
     handled += 1;
     try {
       const part = bodyPart(commandReceived);
-      const body = part === null ? null : decodeBenchPayloadBody(part.data());
+      const body = part === null ? null : decodeBody(part.data());
       if (body === null) throw new Error('invalid raw protobuf payload');
-      metrics.record(body);
+      recordCommandBody(body);
     } catch (error) {
       metrics.recordError();
       console.error(`raw command loop failed: ${error.message}`);

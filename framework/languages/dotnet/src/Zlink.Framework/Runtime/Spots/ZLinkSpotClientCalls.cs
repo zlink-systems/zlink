@@ -1,4 +1,3 @@
-using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -365,10 +364,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             }
             catch (ZLinkFrameworkException error)
                 when (_instanceIntent
-                    && error.FrameworkFailureCode
-                        is (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
-                            or (int)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                            or (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
+                    && ZLinkSpotHandleRequestExecution.IsInstanceAuthorityRefusal(error)
                 )
             {
                 // §9 re-resolves authority within the original logical request deadline.

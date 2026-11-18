@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 // The Spot process of §10.3 and §10.4 (Object Server, no driver): User Spots that answer a request with a typed echo

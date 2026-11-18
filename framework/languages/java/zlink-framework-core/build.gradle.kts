@@ -2,8 +2,14 @@ import java.io.File
 
 plugins {
     `java-library`
+    `java-test-fixtures`
     `maven-publish`
 }
+
+// Test fixtures are shared by this repository's test source sets only, not published.
+val javaComponent = components["java"] as AdhocComponentWithVariants
+javaComponent.withVariantsFromConfiguration(configurations["testFixturesApiElements"]) { skip() }
+javaComponent.withVariantsFromConfiguration(configurations["testFixturesRuntimeElements"]) { skip() }
 
 description = "ZLink Framework Java core contracts, runtime, handler scanner, and backend adapter"
 
@@ -28,58 +34,6 @@ sourceSets {
     named("integrationTest") {
         compileClasspath += sourceSets.test.get().output
     }
-
-    val m5Foundation by creating {
-        java.setSrcDirs(listOf(
-            "src/main/java",
-            "../../../runtime/protocol/generated/jvm"
-        ))
-        java.include(
-            "systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java",
-            "systems/zlink/framework/runtime/internal/service/**",
-            "ServiceWireConstants.java"
-        )
-        // This source set intentionally compiles only the isolated service
-        // foundation, so the main module descriptor would export packages
-        // that are outside this partial compilation.
-        java.exclude("module-info.java")
-        compileClasspath += main.output + configurations.compileClasspath.get()
-        runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath.get()
-    }
-
-    val m5FoundationTest by creating {
-        java.setSrcDirs(listOf("src/test/java"))
-        java.include(
-            "systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePortContractTest.java",
-            "systems/zlink/framework/runtime/internal/service/**"
-        )
-        compileClasspath += m5Foundation.output + main.output +
-            configurations.testCompileClasspath.get()
-        runtimeClasspath += output + compileClasspath +
-            configurations.testRuntimeClasspath.get()
-    }
-
-    configurations.named(m5FoundationTest.implementationConfigurationName) {
-        extendsFrom(configurations.testImplementation.get())
-    }
-    configurations.named(m5FoundationTest.runtimeOnlyConfigurationName) {
-        extendsFrom(configurations.testRuntimeOnly.get())
-    }
-
-tasks.register<Test>("m5FoundationTest") {
-        description = "Runs the isolated RouteMesh v11 JVM M5 foundation contract."
-        group = LifecycleBasePlugin.VERIFICATION_GROUP
-        testClassesDirs = m5FoundationTest.output.classesDirs
-        classpath = m5FoundationTest.runtimeClasspath
-        useJUnitPlatform()
-    }
-}
-
-tasks.named<JavaCompile>("compileM5FoundationJava") {
-    // Gradle otherwise auto-adds the main descriptor even when the partial
-    // source set excludes it.
-    modularity.inferModulePath.set(false)
-    exclude("module-info.java")
 }
 
 val verifyPublicContractModuleBoundary by tasks.registering {
@@ -240,12 +194,17 @@ tasks.named("test") {
 }
 
 dependencies {
+    testFixturesImplementation("io.lettuce:lettuce-core:7.6.0.RELEASE")
+    testFixturesImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")
     add("integrationTestImplementation", project(":zlink-framework-locations-redis"))
+    add("integrationTestImplementation", project(":zlink-stream-connector"))
     api(project(":zlink-framework-json-internal"))
     implementation(project(":zlink-framework-binding-internal"))
     api(project(":zlink-framework-provider-abstractions"))
     api(zlinkLibs.zlink.bindings)
-    compileOnlyApi("org.jspecify:jspecify:1.0.0")
+    // Typed JSON reads @Nullable by reflection, which drops annotations whose class is absent
+    // at runtime, so applications and tests get JSpecify on both classpaths (spec 05 5).
+    api("org.jspecify:jspecify:1.0.0")
     api("io.netty:netty-buffer:4.1.100.Final")
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     implementation("org.lz4:lz4-java:1.8.0")
@@ -255,4 +214,8 @@ dependencies {
 // Shared observability contract; the fixture remains outside language source trees.
 tasks.named<ProcessResources>("processTestResources") {
     from(rootProject.file("../../runtime/protocol/fixtures/runtime-metrics-v1.json"))
+}
+
+tasks.named<Test>("integrationTest") {
+    inputs.property("redisEndpoint", System.getenv("ZLINK_REDIS_TEST_ENDPOINT") ?: "")
 }

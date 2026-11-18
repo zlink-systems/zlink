@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -317,6 +318,11 @@ final class InstanceSpotRuntimeIntegrationTest {
         verifyCloseFailure(CloseScenario.COMMIT_APPLIED_READ_FAILURE);
     }
 
+    @Test
+    void sameOwnerSuccessorAdmissionWaitsOnOwnerQueueBeforePublication() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_SUCCESSOR_WRITE);
+    }
+
     private enum CloseScenario {
         RELEASE,
         COMMIT,
@@ -330,6 +336,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         CREATING_RELEASED,
         CREATING_REPLACED,
         CREATING_RETAINED,
+        CREATING_SUCCESSOR_WRITE,
         CREATING_CAPTURED_ADMISSION,
         CREATING_ADMISSION_BEFORE_CLOSE,
         CREATING_ADMISSION_AFTER_CLOSE,
@@ -345,8 +352,10 @@ final class InstanceSpotRuntimeIntegrationTest {
 
     private void verifyCloseFailure(CloseScenario failureStage, boolean lateInstanceIntent)
             throws Exception {
+        boolean successorWrite = failureStage == CloseScenario.CREATING_SUCCESSOR_WRITE;
         boolean creating =
-                failureStage == CloseScenario.CREATING
+                successorWrite
+                        || failureStage == CloseScenario.CREATING
                         || failureStage == CloseScenario.CREATING_RETAINED
                         || failureStage == CloseScenario.CREATING_CAPTURED_ADMISSION
                         || failureStage == CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE
@@ -362,6 +371,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         boolean capturedAdmission = failureStage == CloseScenario.CREATING_CAPTURED_ADMISSION;
         boolean retainedBoundary =
                 failureStage == CloseScenario.CREATING_RETAINED
+                        || successorWrite
                         || capturedAdmission
                         || admissionBoundary;
         boolean replacedBoundary = failureStage == CloseScenario.CREATING_REPLACED;
@@ -412,6 +422,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
         if (retainedBoundary || sealedBoundary || replacedBoundary) {
             EchoInstanceSpot.retainedCalls.clear();
+            EchoInstanceSpot.afterCloseCalls.clear();
         }
         CompletableFuture<String> diagnostic = new CompletableFuture<>();
         java.util.logging.Logger diagnosticLogger =
@@ -553,8 +564,10 @@ final class InstanceSpotRuntimeIntegrationTest {
                         return;
                     }
                     if (retainedBoundary || sealedBoundary) {
-                        if (retainedBoundary && !admissionBoundary && !capturedAdmission)
-                            SourceEntrySpot.afterCloseStart.complete(null);
+                        if (retainedBoundary
+                                && !admissionBoundary
+                                && !capturedAdmission
+                                && !successorWrite) SourceEntrySpot.afterCloseStart.complete(null);
                         SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
                         try (var boundary =
                                 new RetainedAdmissionBoundary(target, backend, spotId)) {
@@ -611,6 +624,79 @@ final class InstanceSpotRuntimeIntegrationTest {
                             boundary.resumeAdmission.complete(null);
                             boundary.admitted.get(5, TimeUnit.SECONDS);
                             assertEquals(0, boundary.releases.get());
+                            if (successorWrite) {
+                                long predecessor =
+                                        EchoInstanceSpot.latestContext.objectGeneration();
+                                store.holdNextAuthorityPutAfterApply.set(true);
+                                backend.existingAdmissionTaken = new CompletableFuture<>();
+                                boundary.resumeClose.complete(null);
+                                store.closingApplied.get(5, TimeUnit.SECONDS);
+                                var found =
+                                        assertInstanceOf(
+                                                systems.zlink.framework.locationprovider
+                                                        .ZLinkStoreReadFound.class,
+                                                store.read(
+                                                                new systems.zlink.framework
+                                                                        .locationprovider
+                                                                        .ZLinkStoreKey(
+                                                                        store.authorityKey),
+                                                                () -> false)
+                                                        .toCompletableFuture()
+                                                        .get(5, TimeUnit.SECONDS));
+                                var record =
+                                        new com.fasterxml.jackson.databind.ObjectMapper()
+                                                .readTree(found.value().bytes());
+                                long successor = record.path("objectGeneration").asLong();
+                                assertEquals(predecessor + 1, successor);
+                                assertEquals(
+                                        "active", record.path("allocation").path("state").asText());
+                                assertTrue(record.path("pendingCreation").isNull());
+                                var authority =
+                                        new systems.zlink.framework.runtime.locations
+                                                        .ZLinkServiceAuthorityPayloadCodec()
+                                                .decode(
+                                                        java.util.Base64.getDecoder()
+                                                                .decode(
+                                                                        record.path("payload")
+                                                                                .asText()))
+                                                .orElseThrow();
+                                assertEquals(
+                                        systems.zlink.framework.runtime.locations
+                                                .ZLinkServiceAuthorityPayloadCodec.State.CREATING,
+                                        authority.state());
+                                assertEquals(
+                                        predecessor,
+                                        EchoInstanceSpot.latestContext.objectGeneration());
+                                SourceEntrySpot.afterCloseStart.complete(null);
+                                boolean existing =
+                                        backend.existingAdmissionTaken.get(5, TimeUnit.SECONDS);
+                                if (!existing)
+                                    awaitSourceReplyWithDiagnostics(spotId, requestFlowCapture);
+                                assertTrue(existing);
+                                assertEquals(0, backend.coldActivations.get());
+                                assertFalse(SourceEntrySpot.reply.isDone());
+                                assertFalse(boundary.reply.isDone());
+                                assertEquals(0, boundary.releases.get());
+                                assertTrue(
+                                        ZLinkSpotRuntimeTesting.hasPendingMessages(
+                                                        EchoInstanceSpot.latestContext)
+                                                .toCompletableFuture()
+                                                .get(5, TimeUnit.SECONDS));
+                                store.releaseClosing.complete(null);
+                                assertEquals(
+                                        "echo:retained", boundary.reply.get(5, TimeUnit.SECONDS));
+                                assertEquals(
+                                        "echo:hello|echo:again|echo:after-close",
+                                        awaitSourceReplyWithDiagnostics(
+                                                spotId, requestFlowCapture));
+                                assertTrue(
+                                        EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
+                                assertEquals(List.of(successor), EchoInstanceSpot.retainedCalls);
+                                assertEquals(List.of(successor), EchoInstanceSpot.afterCloseCalls);
+                                boundary.released.get(5, TimeUnit.SECONDS);
+                                assertEquals(1, boundary.releases.get());
+                                return;
+                            }
                             if (capturedAdmission) {
                                 backend.beforeInstanceAdmission = new CompletableFuture<>();
                                 try {
@@ -1223,6 +1309,8 @@ final class InstanceSpotRuntimeIntegrationTest {
         private final java.util.Map<String, ObservedSpot> spots =
                 new java.util.concurrent.ConcurrentHashMap<>();
         private volatile ZLinkInternalSpotNode spotNode;
+        private volatile CompletableFuture<Boolean> existingAdmissionTaken;
+        private final AtomicInteger coldActivations = new AtomicInteger();
         private volatile ZLinkInternalSpotNode.SpotAdmissionResolver resolver;
         private volatile CompletableFuture<
                         systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
@@ -1265,6 +1353,16 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                     .ZLinkServiceM6BWireCodec.InstanceRouteFence)
                                             args[0]);
                             resumeInstanceAdmission.orTimeout(5, TimeUnit.SECONDS).join();
+                        }
+                        if (existingAdmissionTaken != null
+                                && (method.getName().equals("reserve")
+                                        || method.getName().equals("activate")))
+                            coldActivations.incrementAndGet();
+                        if (existingAdmissionTaken != null
+                                && method.getName().equals("admitExisting")) {
+                            Object result = invoke(handler, method, args);
+                            existingAdmissionTaken.complete(result != null);
+                            return result;
                         }
                         if (method.getName().equals("activate")) {
                             args = args.clone();
@@ -2089,6 +2187,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     public static final class EchoInstanceSpot implements ZLinkInstanceSpot {
+        static final List<Long> afterCloseCalls = new CopyOnWriteArrayList<>();
         static final List<Long> retainedCalls = new CopyOnWriteArrayList<>();
         static final AtomicInteger initializations = new AtomicInteger();
         static final List<Long> generations = new CopyOnWriteArrayList<>();
@@ -2147,6 +2246,9 @@ final class InstanceSpotRuntimeIntegrationTest {
             implements ZLinkSpotRequestHandler<EchoInstanceSpot, String, String> {
         @Override
         public CompletionStage<String> handle(EchoInstanceSpot spot, String request) {
+            if (request.equals("after-close")) {
+                EchoInstanceSpot.afterCloseCalls.add(spot.context().objectGeneration());
+            }
             if (request.equals("retained")) {
                 EchoInstanceSpot.retainedCalls.add(spot.context().objectGeneration());
             }

@@ -129,21 +129,19 @@ This repository uses several licenses, split by component:
 
 - `core/` and `bindings/` (per-language native bindings) are licensed under
   MPL-2.0. See `LICENSE`.
-- The server Framework runtime and packages that specify zlink License 1.0 are
-  licensed under zlink License 1.0. Versions before 1.0.0 are free regardless
-  of machine count; starting with 1.0.0, one server machine is free and each
-  additional machine requires a paid license. Releases through 0.30.0 remain
-  under FSL-1.1-ALv2. See `framework/LICENSE` for the full license text.
+- The server Framework runtime and its packages are licensed under the Elastic
+  License 2.0. Earlier releases remain under the license published with each
+  release. See `framework/LICENSE` for the full license text.
 - Client connectors, all eight shared C++ headers under
   `framework/languages/cpp/common/include/`, and example code copied from
   `samples/`, `tutorial/`, `quickstart/`, and
   `framework/languages/shared_sample/` use Apache License 2.0. Connector tests,
-  performance-gate source, and connector e2e fixtures retain zlink License 1.0.
+  performance-gate source, and connector e2e fixtures use the Elastic License 2.0.
 - `@zlink-systems/stream-wire` is a shared wire-codec package used by both the
   Node connector and server Framework packages. Its package metadata and
   included license use Apache License 2.0; server Framework runtime and
-  connector test, performance-gate, and e2e fixture source retain zlink License
-  1.0. The shared sample tree, including its test fixtures, uses Apache-2.0.
+  connector test, performance-gate, and e2e fixture source use the Elastic
+  License 2.0. The shared sample tree, including its test fixtures, uses Apache-2.0.
 - Each language's `http-client` package under `framework/` (a thin wrapper
   over that platform's commonly used HTTP client library — .NET's
   `System.Net.Http`, Java/Kotlin's `java.net.http`, Node's `undici`, C++'s

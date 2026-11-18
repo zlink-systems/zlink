@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
 
@@ -168,6 +168,8 @@ class spot_node_builder_state_t
     // Install before node start; clear after node stop. Only tests wait in this callback.
     handler_invocation_callback_t handler_invocation_for_tests;
     runtime::location_lifecycle_t *location_lifecycle = nullptr;
+    std::function<task_t<void> (authority_key_t, authority_snapshot_t, task_t<void>)>
+      discarded_authority_cleanup;
     std::shared_ptr<runtime::spot_address_resolver_t> spot_location_resolver;
     std::optional<service_provider_t> root_services;
     std::shared_ptr<std::atomic_bool> drain_flag;
@@ -2004,7 +2006,7 @@ class spot_node_runtime_t
                                                 std::uint64_t membership_epoch);
     void bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle);
     void resume_location_execution ();
-    void request_location_execution_discard (
+    task_t<void> request_location_execution_discard (
       runtime::serial_execution_queue_t::execution_admission_t allowed);
     void observe_location_authority (authority_key_t key,
                                      authority_snapshot_t snapshot,

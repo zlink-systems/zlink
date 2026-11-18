@@ -427,6 +427,44 @@ function validateSpotNodeFactories(spotNodeName: string, spotNode: ZLinkSpotNode
     }
     seen.add(factory);
   }
+  const owners = [
+    ...[
+      ...(spotNode.entrySpotPacketHandlers ?? []),
+      ...(spotNode.entrySpotSubscriptionHandlers ?? []),
+      ...(spotNode.entrySpotActorSendHandlers ?? []),
+      ...(spotNode.entrySpotActorRequestHandlers ?? []),
+      ...(spotNode.entrySpotTimerHandlers ?? [])
+    ].map((handler) => ({
+      handlerType: handler.handlerType,
+      owner: handler.entrySpotType,
+      concreteTypes: spotNode.entrySpotType === undefined ? [] : [spotNode.entrySpotType]
+    })),
+    ...[
+      ...(spotNode.spotPacketHandlers ?? []),
+      ...(spotNode.spotSubscriptionHandlers ?? []),
+      ...(spotNode.spotActorSendHandlers ?? []),
+      ...(spotNode.spotActorRequestHandlers ?? []),
+      ...(spotNode.spotTimerHandlers ?? [])
+    ].map((handler) => ({
+      handlerType: handler.handlerType,
+      owner: handler.spotType,
+      concreteTypes: [
+        ...(spotNode.spotFactories ?? []),
+        ...Object.values(spotNode.instanceSpotFactories ?? {})
+      ]
+    }))
+  ];
+  for (const handler of owners) {
+    const concrete =
+      handler.concreteTypes.find((type) => type === handler.owner) ??
+      handler.concreteTypes.find((type) => type.prototype instanceof handler.owner) ??
+      handler.concreteTypes.at(0);
+    if (handler.owner !== concrete) {
+      throw new ZLinkConfigurationException(
+        `SPOT handler '${handler.handlerType.name}' targets '${handler.owner.name}', but registration expects '${concrete?.name ?? 'unregistered owner'}'.`
+      );
+    }
+  }
 }
 
 function validateSpotNodeCapability(

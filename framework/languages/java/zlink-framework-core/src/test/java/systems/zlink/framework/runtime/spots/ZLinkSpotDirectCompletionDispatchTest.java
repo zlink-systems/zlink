@@ -261,6 +261,7 @@ final class ZLinkSpotDirectCompletionDispatchTest {
                         RoutingId.from("target"),
                         "spot",
                         1L,
+                        0L,
                         payload,
                         Optional.empty(),
                         null,

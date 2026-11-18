@@ -1581,6 +1581,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     flight.actor()
                             .prepareNativeActorRoute(
                                     flight.targetActor(),
+                                    flight.command().targetNodeGeneration(),
                                     flight.command().currentAuthorityOwnerGeneration(),
                                     flight.command().targetOwnerLeaseGeneration(),
                                     RELAY_SUBMIT_TIMEOUT);

@@ -30,6 +30,7 @@ const {
 function actorHarness(events, completionResult = { accepted: true }, options = {}) {
   const actorId = options.actorId ?? 'alice';
   const state = new ZLinkActorRuntimeState(actorId);
+  state.setNativeActorRef({ nodeRid: 'node-a', actorId, generation: 1n });
   const actorRef = {
     nodeRid: 'node-a',
     actorId,

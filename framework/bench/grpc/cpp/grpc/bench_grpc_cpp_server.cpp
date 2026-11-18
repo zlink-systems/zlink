@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // `grpc-cpp` server.
 //
 // README 8.2 records the gRPC server model and default configuration.

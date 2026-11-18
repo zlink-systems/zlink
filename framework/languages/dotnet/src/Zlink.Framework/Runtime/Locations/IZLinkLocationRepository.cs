@@ -8,6 +8,9 @@ namespace Zlink.Framework.Contracts.Locations;
 /// </summary>
 internal interface IZLinkLocationRepository
 {
+    // Await successful observations before exposing the operation result.
+    Func<ZLinkAuthorityKey, string?, ValueTask>? AuthorityObservedAsync { get; set; }
+
     ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,
@@ -88,6 +91,13 @@ internal interface IZLinkLocationRepository
         ZLinkAuthorityKey key,
         CancellationToken cancellationToken = default
     );
+
+    ValueTask<bool> CleanupDiscardedAuthorityAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot discarded,
+        ZLinkLocationOwnerToken owner,
+        CancellationToken cancellationToken = default
+    ) => throw new NotSupportedException("Discarded authority cleanup is not supported.");
 
     ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
         ZLinkAuthorityKey key,

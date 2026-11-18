@@ -66,7 +66,11 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
         var dispatchThread = new CompletableFuture<Thread>();
         var queries = new AtomicInteger();
         var dispatches = new AtomicInteger();
-        var targetQueue = queue();
+        var targetQueue =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
         RoutingId sourceRid = RoutingId.from("authority-completion-source");
         RoutingId targetRid = RoutingId.from("authority-completion-target");
         String endpoint = "inproc://authority-completion-" + System.nanoTime();
@@ -132,7 +136,8 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
             try (var payload = Message.from("request")) {
                 if (actorRequest) {
                     var actor = new ZLinkBackendActorRef(targetRid, "missing-actor", 1);
-                    source.spotNode().rememberActorAuthority(actor, 1, 1);
+                    source.spotNode()
+                            .rememberActorAuthority(actor, 1, 1, target.lifecycleGeneration());
                     request =
                             source.requestActor(
                                             new ZLinkServiceM6BWireCodec.ActorRouteFence(
@@ -150,6 +155,7 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
                                             targetRid,
                                             "missing-spot",
                                             1,
+                                            target.lifecycleGeneration(),
                                             new byte[0],
                                             List.of(payload),
                                             Duration.ofSeconds(5),
@@ -172,7 +178,14 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
             }
             assertEquals(2, queries.get());
             assertEquals(1, dispatches.get());
-            assertEquals(0, targetQueue.snapshot().queuedApplicationJobs());
+            assertEquals(1, targetQueue.snapshot().effectiveMaxQueuedApplicationJobs());
+            try (var ignored =
+                    targetQueue
+                            .acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS)) {
+                assertEquals(0, targetQueue.snapshot().queuedApplicationJobs());
+            }
             assertNotSame(
                     providerThread,
                     observed,

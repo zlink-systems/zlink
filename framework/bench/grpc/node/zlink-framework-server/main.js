@@ -16,8 +16,10 @@ const rawWire = require('../shared/raw-wire');
 const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = rawWire;
 const zlink = require('@zlink-systems/zlink');
 const { EchoHandler, CommandHandler, BENCH_SERVER_METRICS } = require('./bench-handlers');
+const argv = process.argv.slice(2);
+const jsonBody = argv.includes('--json-body');
 const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_SERVER === '1';
-const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1' && !ladderL5ToL7;
+const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1' && !ladderL5ToL7 && !jsonBody;
 const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
 const l0rServer = l0Server && process.env.ZLINK_LADDER_L0R === '1';
 const l1Permit = l0Server && process.env.ZLINK_LADDER_L1_PERMIT === '1';
@@ -54,14 +56,14 @@ let zlinkFramework;
 let ZLINK_PROTOBUF_CONTENT_TYPE;
 if (!lazyFramework) {
   contract = require('../shared/framework-bench-contract');
-  if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
+  if (!jsonBody && !ladderL5ToL7) {
     ({ createBenchPayloadSerializer } = require('../shared/framework-protobuf'));
   }
   require('reflect-metadata');
   ({ Module, Injectable, Inject } = require('@nestjs/common'));
   ({ NestFactory } = require('@nestjs/core'));
   ({ ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs'));
-  if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
+  if (!jsonBody && !ladderL5ToL7) {
     ({ ZLINK_PROTOBUF_CONTENT_TYPE } = require('@zlink-systems/framework-codec-protobuf/framework'));
   }
   Injectable()(EchoHandler);
@@ -70,7 +72,6 @@ if (!lazyFramework) {
   Inject(BENCH_SERVER_METRICS)(CommandHandler, undefined, 0);
 }
 
-const argv = process.argv.slice(2);
 const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5234');
 const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5235');
 const batch = argInt(argv, '--recv-batch', 256);
@@ -341,6 +342,30 @@ if (l0Server) {
   });
   setImmediate(schedulePump);
 } else {
+const packetName = jsonBody ? 'BenchGameMessage' : contract.PACKET_NAME;
+const requestHandler = jsonBody
+  ? class {
+      async handle(request) {
+        metrics.recordGamePayload(request);
+        return request;
+      }
+    }
+  : EchoHandler;
+const sendHandler = jsonBody
+  ? class {
+      async handle(message) {
+        metrics.recordGamePayload(message);
+        return undefined;
+      }
+    }
+  : CommandHandler;
+if (jsonBody) {
+  const gamePayload = require('../shared/game-payload');
+  Injectable()(requestHandler);
+  Injectable()(sendHandler);
+  requestHandler.messageType = gamePayload.GameMessage;
+  sendHandler.messageType = gamePayload.GameMessage;
+}
 class BenchServerModule {}
 Module({
   imports: [
@@ -348,18 +373,18 @@ Module({
       inject: [],
       useFactory: () => {
         const builder = zlinkFramework();
-          if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
-            builder.codecs().use({
-              register: (codecs) => {
-                codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
-              }
-            });
-          }
+        if (!jsonBody && !ladderL5ToL7) {
+          builder.codecs().use({
+            register: (codecs) => {
+              codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
+            }
+          });
+        }
         const mesh = builder.addRouteMesh(contract.MESH_NAME)
           .listen(endpoint)
           .routingId(contract.SERVER_ROUTING_ID);
-        mesh.addRequestHandler(contract.PACKET_NAME, EchoHandler);
-        mesh.addSendHandler(contract.PACKET_NAME, CommandHandler);
+        mesh.addRequestHandler(packetName, requestHandler);
+        mesh.addSendHandler(packetName, sendHandler);
         return builder.build();
       }
     })
@@ -375,13 +400,17 @@ Module({
     abortOnError: false
   });
   startStatsServer(metricsUrl, metrics, {
-    implementation: 'zlink-framework-node',
+    implementation: jsonBody ? 'zlink-framework-node-json' : 'zlink-framework-node',
     host: '@zlink-systems/nestjs',
-    codec: ladderL5ToL7 ? 'framework-json-v1' : 'framework-codec-protobuf',
+    codec: jsonBody ? 'framework-default-typed-json'
+      : ladderL5ToL7 ? 'framework-json-v1' : 'framework-codec-protobuf',
     endpoint
   });
   process.stderr.write(`[framework-server] endpoint=${endpoint} stats=${metricsUrl}\n`);
-  process.on('SIGTERM', async () => { await app.close(); process.exit(0); });
+  process.on('SIGTERM', async () => {
+    await app.close();
+    process.exit(0);
+  });
 })().catch((error) => {
   console.error(`framework server failed: ${error && error.stack}`);
   process.exit(1);

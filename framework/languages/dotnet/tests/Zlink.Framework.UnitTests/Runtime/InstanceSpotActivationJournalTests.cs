@@ -703,6 +703,7 @@ public sealed class InstanceSpotActivationJournalTests
             targetMethod?.Name switch
             {
                 "get_RoutingId" => routingId,
+                "get_LifecycleGeneration" => generation,
                 nameof(IZLinkBackendSpotNode.MeshStatus) => new MeshNodeStatus(
                     MeshNodeState.Ready,
                     routingId,

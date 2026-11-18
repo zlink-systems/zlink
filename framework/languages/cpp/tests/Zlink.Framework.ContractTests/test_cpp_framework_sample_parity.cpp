@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "../../samples/Bingo/Server/Configuration/sample_names.hpp"
 #include "../../samples/Bingo/Server/Configuration/sample_topology.hpp"

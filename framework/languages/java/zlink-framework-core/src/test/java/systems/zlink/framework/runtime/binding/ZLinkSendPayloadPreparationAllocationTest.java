@@ -15,8 +15,8 @@ import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -34,7 +34,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
 
     @Test
     void publicSendPreparationDoesNotWrapOwnedCodecOutput() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     private static final class Serializer

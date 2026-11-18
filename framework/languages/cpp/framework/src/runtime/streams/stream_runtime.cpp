@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "../utils/available_processor_count.hpp"
 
@@ -191,14 +191,14 @@ class stream_write_call_state_t
     }
 
     task_t<void> submit_now ()
-    {
+    try {
         if (_immediate) {
             if (!*_immediate) {
                 throw framework_exception_t (_immediate->error_kind (),
                                              _immediate->error () ? _immediate->error ()->what ()
                                                                   : "STREAM write failed");
             }
-            co_return;
+            return task_t<void> (result_t<void>::success ());
         }
         if (!_submit || !_header || !_payload) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
@@ -236,8 +236,10 @@ class stream_write_call_state_t
         if (auto actor_slot = _header->actor_slot ()) {
             header.with_actor_slot (*actor_slot);
         }
-        co_await _submit (header, payload);
-        co_return;
+        return _submit (header, payload);
+    }
+    catch (...) {
+        return task_t<void> (current_exception_result<void> ());
     }
 
   private:
@@ -900,9 +902,8 @@ stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
             state->written_payloads.push_back (payload);
             return task_t<void> (result_t<void>::success ());
         };
-        co_await detail::session_actor_manager_access_t::submit_terminal (
+        return detail::session_actor_manager_access_t::submit_terminal (
           stream_t (state), submitted_header, submitted_payload, submit);
-        co_return;
     };
 }
 

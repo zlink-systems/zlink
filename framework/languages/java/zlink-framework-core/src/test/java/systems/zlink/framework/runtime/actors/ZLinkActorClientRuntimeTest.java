@@ -72,6 +72,91 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
 final class ZLinkActorClientRuntimeTest {
+    private static final systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceOperationRegistry
+            OPERATIONS =
+                    new systems.zlink.framework.runtime.internal.service
+                            .ZLinkServiceOperationRegistry(
+                            new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.SHUTTING_DOWN, "closed"),
+                            () ->
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                            "timed out"));
+
+    @org.junit.jupiter.api.AfterAll
+    static void closeOperations() {
+        OPERATIONS.close();
+    }
+
+    @Test
+    void unavailableBeforeReceiveRecordsCallerTerminalOnce() {
+        var options =
+                new systems.zlink.framework.runtime.configuration
+                        .ZLinkDispatchOptionsRegistration();
+        options.messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.DETAILED);
+        var tracer =
+                new systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer(
+                        options,
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        Runnable::run);
+        var records = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var logger = java.util.logging.Logger.getLogger(tracer.getClass().getName());
+        var listener =
+                new java.util.logging.Handler() {
+                    public void publish(java.util.logging.LogRecord record) {
+                        records.add(record.getMessage());
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        logger.addHandler(listener);
+        try {
+            var node = new RequestFailingSpotNode(RequestResult.NOT_CONNECTED);
+            var client =
+                    new ZLinkActorClientRuntime(
+                            () -> node,
+                            new ZLinkStoreLocationResolvers(
+                                    ZLinkRegisteredLocationStores.fromUnified(
+                                            storeWithActor("actor-1")),
+                                    new ZLinkLocationOptions()),
+                            new ZLinkJsonMessageSerializer(),
+                            Duration.ofSeconds(5),
+                            CompletableFuture.completedFuture(null),
+                            tracer::captureEnabled);
+            client.setFlowTracer(tracer);
+            var failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    client.requestToActor("actor-1", new Ping("unavailable"))
+                                            .submit(Pong.class)
+                                            .toCompletableFuture()
+                                            .join());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    ((ZLinkFrameworkException) failure.getCause()).kind());
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+            var terminals =
+                    records.stream()
+                            .filter(
+                                    line ->
+                                            line.contains("phase=completed")
+                                                    && line.contains("actor=actor-1")
+                                                    && line.contains("outcome=failed"))
+                            .toList();
+            assertEquals(1, terminals.size(), records.toString());
+            assertTrue(terminals.getFirst().contains("flow="));
+            assertEquals(1, node.requestAttempts);
+        } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+            logger.removeHandler(listener);
+        }
+    }
+
     @Test
     void actorErrorPayloadFollowsSharedVectors() throws Exception {
         var current = java.nio.file.Path.of(System.getProperty("user.dir")).toAbsolutePath();
@@ -202,8 +287,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
         var file = java.nio.file.Files.createTempFile("actor-receiver-", ".jfr");
         try {
             try (var recording = new jdk.jfr.Recording()) {
@@ -291,14 +375,14 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
         var caller =
                 client.requestToActor("actor-1", new Ping("hello"))
                         .submit(Pong.class)
                         .toCompletableFuture();
         submitted.get(1, java.util.concurrent.TimeUnit.SECONDS);
         assertTrue(caller.cancel(false));
+        bindingReply.handle((reply, failure) -> null).get(1, java.util.concurrent.TimeUnit.SECONDS);
         assertTrue(
                 bindingReply.isCancelled(), "caller cancellation did not reach binding operation");
     }
@@ -328,7 +412,6 @@ final class ZLinkActorClientRuntimeTest {
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
                         Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create(),
                         ready);
         var caller =
                 client.requestToActor("actor-1", new Ping("hello"))
@@ -352,8 +435,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofMillis(80),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofMillis(80));
 
         CompletionException failure =
                 assertThrows(
@@ -393,8 +475,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         codecs.serializerWithFallback(new ZLinkJsonMessageSerializer()),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         client.sendToActor(
                         "actor-1",
@@ -426,8 +507,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         codecs.serializerWithFallback(new ZLinkJsonMessageSerializer()),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         Pong reply =
                 client.requestToActor("actor-1", new Ping("hello"))
@@ -448,8 +528,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         CompletionException failure =
                 assertThrows(
@@ -475,8 +554,7 @@ final class ZLinkActorClientRuntimeTest {
                                 ZLinkRegisteredLocationStores.fromUnified(store),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         client.sendToActor("actor-1", new Ping("hello")).metadata("trace-id", "send-1").submit();
         Pong pong =
@@ -512,8 +590,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         client.sendToActor("actor-1", new Ping("hello")).submit().toCompletableFuture().join();
 
@@ -532,8 +609,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-direct", 17)),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
         client.sendToActor("actor-direct", new Ping("hello")).submit();
         Pong pong =
                 client.requestToActor("actor-direct", new Ping("hello"))
@@ -584,8 +660,7 @@ final class ZLinkActorClientRuntimeTest {
                                 ZLinkRegisteredLocationStores.fromUnified(store),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofMillis(250),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofMillis(250));
 
         var result = client.sendToActor("actor-1", new Ping("hello")).submit();
 
@@ -605,8 +680,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         CompletionStage<Void> result = client.sendToActor("actor-1", new Ping("hello")).submit();
 
@@ -629,7 +703,6 @@ final class ZLinkActorClientRuntimeTest {
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
                         Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create(),
                         runtimeReady);
 
         CompletionStage<Void> result = client.sendToActor("actor-1", new Ping("hello")).submit();
@@ -655,7 +728,6 @@ final class ZLinkActorClientRuntimeTest {
                                     new ZLinkLocationOptions()),
                             new ZLinkJsonMessageSerializer(),
                             Duration.ofMillis(250),
-                            ZLinkTestAdmissionFactory.create(),
                             runtimeReady);
             var pending =
                     client.sendToActor("actor-1", new Ping("hello")).submit().toCompletableFuture();
@@ -684,8 +756,7 @@ final class ZLinkActorClientRuntimeTest {
                                             storeWithActor("actor-1")),
                                     new ZLinkLocationOptions()),
                             new ZLinkJsonMessageSerializer(),
-                            Duration.ofSeconds(5),
-                            ZLinkTestAdmissionFactory.create());
+                            Duration.ofSeconds(5));
 
             var result = client.sendToActor("actor-1", new Ping("hello")).submit();
 
@@ -722,8 +793,7 @@ final class ZLinkActorClientRuntimeTest {
                             () -> node,
                             locations,
                             new ZLinkJsonMessageSerializer(),
-                            Duration.ofSeconds(5),
-                            ZLinkTestAdmissionFactory.create());
+                            Duration.ofSeconds(5));
 
             var result = client.sendToActor("actor-1", new Ping("hello")).submit();
             assertEquals(7, node.sentRoute.actor().generation());
@@ -754,8 +824,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         CompletionException error =
                 assertThrows(
@@ -786,8 +855,7 @@ final class ZLinkActorClientRuntimeTest {
                         () -> node,
                         locations,
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         var result =
                 client.requestToActor("actor-1", new Ping("hello"))
@@ -822,8 +890,7 @@ final class ZLinkActorClientRuntimeTest {
                                                 "{\"code\":\"not_found\",\"message\":\"stale\"}")),
                         locations,
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         var result =
                 client.requestToActor("actor-1", new Ping("hello"))
@@ -869,8 +936,7 @@ final class ZLinkActorClientRuntimeTest {
                             () -> node,
                             locations,
                             new ZLinkJsonMessageSerializer(),
-                            Duration.ofSeconds(5),
-                            ZLinkTestAdmissionFactory.create());
+                            Duration.ofSeconds(5));
 
             var result =
                     client.requestToActor("actor-1", new Ping("hello"))
@@ -900,8 +966,7 @@ final class ZLinkActorClientRuntimeTest {
                         () -> node,
                         locations,
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         var result =
                 client.requestToActor("actor-1", new Ping("hello"))
@@ -935,8 +1000,7 @@ final class ZLinkActorClientRuntimeTest {
                         () -> node,
                         locations,
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         var result =
                 client.requestToActor("actor-1", new Ping("hello"))
@@ -968,8 +1032,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install()) {
             assertThrows(
@@ -999,7 +1062,6 @@ final class ZLinkActorClientRuntimeTest {
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
                         Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create(),
                         runtimeReady);
 
         try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install()) {
@@ -1010,6 +1072,7 @@ final class ZLinkActorClientRuntimeTest {
 
             assertEquals(1L, metrics.inflight("recording", "actor"));
             assertTrue(result.cancel(false));
+            result.handle((reply, failure) -> null).get(1, java.util.concurrent.TimeUnit.SECONDS);
             assertEquals(0L, metrics.inflight("recording", "actor"));
             assertEquals(1L, metrics.durationCount("recording", "actor", "cancelled"));
 
@@ -1029,8 +1092,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         CompletionException error =
                 assertThrows(
@@ -1071,8 +1133,7 @@ final class ZLinkActorClientRuntimeTest {
                                             storeWithActor("actor-1")),
                                     new ZLinkLocationOptions()),
                             new ZLinkJsonMessageSerializer(),
-                            Duration.ofSeconds(5),
-                            ZLinkTestAdmissionFactory.create());
+                            Duration.ofSeconds(5));
 
             CompletionException error =
                     assertThrows(
@@ -1101,8 +1162,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         CompletionException error =
                 assertThrows(
@@ -1128,8 +1188,7 @@ final class ZLinkActorClientRuntimeTest {
                                         storeWithActor("actor-1")),
                                 new ZLinkLocationOptions()),
                         new ZLinkJsonMessageSerializer(),
-                        Duration.ofSeconds(5),
-                        ZLinkTestAdmissionFactory.create());
+                        Duration.ofSeconds(5));
 
         CompletionException error =
                 assertThrows(
@@ -1330,6 +1389,12 @@ final class ZLinkActorClientRuntimeTest {
     private static class RecordingSpotNode
             implements ZLinkInternalSpotNode, ZLinkTestAdmissionFactory.Backend {
         @Override
+        public systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                operationRegistry() {
+            return OPERATIONS;
+        }
+
+        @Override
         public java.util.concurrent.CompletionStage<
                         systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived>
                 requestToNode(
@@ -1415,7 +1480,8 @@ final class ZLinkActorClientRuntimeTest {
         public void rememberActorAuthority(
                 ZLinkBackendActorRef actor,
                 long authorityOwnerGeneration,
-                long ownerLeaseGeneration) {
+                long ownerLeaseGeneration,
+                long targetNodeGeneration) {
             knownAuthorityOwnerGeneration = authorityOwnerGeneration;
             knownOwnerLeaseGeneration = ownerLeaseGeneration;
         }
@@ -1424,9 +1490,14 @@ final class ZLinkActorClientRuntimeTest {
         public void observeActorAuthority(
                 ZLinkBackendActorRef actor,
                 long authorityOwnerGeneration,
-                long ownerLeaseGeneration) {
+                long ownerLeaseGeneration,
+                long targetNodeGeneration) {
             if (knownAuthorityOwnerGeneration < authorityOwnerGeneration) {
-                rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+                rememberActorAuthority(
+                        actor,
+                        authorityOwnerGeneration,
+                        ownerLeaseGeneration,
+                        targetNodeGeneration);
             }
         }
 
@@ -1677,7 +1748,8 @@ final class ZLinkActorClientRuntimeTest {
                                             .Operation<
                                     Object>)
                             completion;
-            typed.completeExceptionally(
+            OPERATIONS.completeExceptionally(
+                    typed.id(),
                     new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, "request timed out"));
         }
@@ -1690,7 +1762,7 @@ final class ZLinkActorClientRuntimeTest {
                                             .Operation<
                                     Object>)
                             completion;
-            typed.completeExceptionally(mapFailure.apply(failure));
+            OPERATIONS.completeExceptionally(typed.id(), mapFailure.apply(failure));
         }
 
         private void assertRequestPartsReleased() {

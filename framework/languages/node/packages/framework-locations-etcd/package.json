@@ -2,12 +2,13 @@
   "name": "@zlink-systems/framework-locations-etcd",
   "version": "0.32.0",
   "engines": { "node": "^22.15.0 || >=23.10.0" },
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Elastic-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/zlink-systems/zlink.git",
     "directory": "framework/languages/node/packages/framework-locations-etcd"
   },
+  "homepage": "https://zlink.systems/",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {".": {"types": "./dist/index.d.ts", "default": "./dist/index.js"}},

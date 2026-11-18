@@ -10,7 +10,7 @@ English | [한국어](README.ko.md)
 | Layer | Directories | License | Canonical text |
 |-------|-------------|---------|-----------------|
 | Engine | `core/`, `bindings/` (per-language native bindings) | MPL-2.0 | [`/LICENSE`](../../LICENSE) |
-| Server Framework runtime | Server runtime in `framework/` and packages that specify zlink License 1.0 | zlink License 1.0 | [English canonical text](../../framework/LICENSE) · [Korean translation](../../framework/LICENSE.ko.md) |
+| Server Framework runtime | Server runtime in `framework/` and its packages | Elastic License 2.0 | [English canonical text](../../framework/LICENSE) · [Korean translation](../../framework/LICENSE.ko.md) |
 | Client connectors and copied examples | Per-language client connectors; shared C++ helper headers and the Node `stream-wire` codec used by connectors and the Framework runtime; example code under `samples/`, `tutorial/`, and `quickstart/` | Apache-2.0 | See §6 for ecosystem declarations; full text at [`framework/languages/cpp/http-client/LICENSE`](../../framework/languages/cpp/http-client/LICENSE) |
 | `http-client` | Each language's `http-client` package under `framework/` (dotnet/java/kotlin/node/cpp) | Apache-2.0 | See §6 for ecosystem declarations; full text also at [`framework/languages/cpp/http-client/LICENSE`](../../framework/languages/cpp/http-client/LICENSE) |
 
@@ -32,7 +32,7 @@ restrictive.
 MPL-2.0 is a **file-level weak copyleft**. It requires MPL-covered files to
 stay available under MPL-2.0, but it explicitly permits combining those
 files with differently-licensed code in a "Larger Work" — this is what lets
-`framework` (zlink License 1.0) link against `core`/`bindings` (MPL-2.0) without the whole
+`framework` (Elastic License 2.0) link against `core`/`bindings` (MPL-2.0) without the whole
 combined product having to be MPL-2.0.
 
 `bindings/` (the per-language native binding layer that wraps `core`) stays
@@ -40,16 +40,13 @@ MPL-2.0 alongside it: it's infrastructure with no independent product/SaaS
 surface of its own, so keeping it maximally permissive maximizes adoption at
 zero strategic cost.
 
-## 3. Server Framework runtime uses zlink License 1.0
+## 3. Server Framework runtime uses Elastic License 2.0
 
-The server Framework runtime and packages that specify zlink License 1.0 use
-this license. The complete text is in
-[`framework/LICENSE`](../../framework/LICENSE).
-
-Under §3.4 of that license, versions before 1.0.0 are free regardless of
-machine count. Starting with 1.0.0, one server machine is free and each
-additional machine requires a paid license. Already-released versions
-through 0.30.0 remain under FSL-1.1-ALv2.
+The server Framework runtime and its packages use the Elastic License 2.0
+(SPDX `Elastic-2.0`). The complete text is in
+[`framework/LICENSE`](../../framework/LICENSE). There are no license keys or
+machine limits. Earlier releases remain under the license published with each
+release.
 
 ## 4. Client connectors and examples use Apache-2.0
 
@@ -64,7 +61,7 @@ the connector and server Framework packages. Its package metadata and bundled
 license use Apache-2.0. All eight C++ headers under
 `framework/languages/cpp/common/include/` are also Apache-2.0 because client
 connectors use them. Server Framework runtime and non-connector test source
-retain zlink License 1.0.
+use the Elastic License 2.0.
 
 ## 5. `http-client` uses Apache-2.0
 
@@ -84,10 +81,10 @@ with the C++ package and in the repository at
 
 ## 6. Where this is declared, per ecosystem
 
-| Ecosystem | Server Framework runtime (zlink License 1.0) | Client connectors and examples (Apache-2.0) | `http-client` (Apache-2.0) |
+| Ecosystem | Server Framework runtime (Elastic License 2.0) | Client connectors and examples (Apache-2.0) | `http-client` (Apache-2.0) |
 |-----------|-------------------------------------------|---------------------------------------------|------------------------------|
 | dotnet | `Directory.Build.targets` bundles `framework/LICENSE` in packable `.nupkg` files | Connector `.csproj` declares Apache-2.0 and includes the full text as `LICENSE` | `Zlink.HttpClient.csproj` declares Apache-2.0 |
-| java/kotlin | The root `build.gradle.kts` Maven `pom.licenses` block names zlink License 1.0 and links to `framework/LICENSE` | The same block declares `zlink-stream-connector` and `zlink-framework-json-internal` as Apache-2.0; the internal JSON package embeds the full text in its JAR | The same block declares `zlink-http-client` and `zlink-http-client-kotlin` as Apache-2.0 |
-| node | Server packages use `"license": "SEE LICENSE IN LICENSE"` and include `framework/LICENSE` in their package-root `LICENSE` file | `stream-connector` declares Apache-2.0 and includes the full text; `stream-wire` does too and is shared with server Framework packages | `http-client/package.json` declares Apache-2.0 and includes the full text |
-| cpp | Framework packages use zlink License 1.0; server-only source files use `LicenseRef-zlink-License-1.0` | Conan/vcpkg metadata declare Apache-2.0; CMake installs `cpp/http-client/LICENSE`; production connector, all eight `common/include/` headers, and sample source headers use Apache-2.0 | `framework/languages/cpp/http-client/LICENSE` contains the full text and source files use `SPDX-License-Identifier: Apache-2.0` |
+| java/kotlin | The root `build.gradle.kts` Maven `pom.licenses` block names Elastic License 2.0 and links to its canonical text | The same block declares `zlink-stream-connector` and `zlink-framework-json-internal` as Apache-2.0; the internal JSON package embeds the full text in its JAR | The same block declares `zlink-http-client` and `zlink-http-client-kotlin` as Apache-2.0 |
+| node | Server packages declare `"license": "Elastic-2.0"` and include `framework/LICENSE` in their package-root `LICENSE` file | `stream-connector` declares Apache-2.0 and includes the full text; `stream-wire` does too and is shared with server Framework packages | `http-client/package.json` declares Apache-2.0 and includes the full text |
+| cpp | The Conan recipe declares `Elastic-2.0`; the vcpkg port, which also carries the HTTP client and connector, declares `Elastic-2.0 AND Apache-2.0` and installs both texts; server-only source files use `Elastic-2.0` | Source headers declare Apache-2.0; CMake installs `cpp/http-client/LICENSE`; production connector, all eight `common/include/` headers, and sample source headers use Apache-2.0 | `framework/languages/cpp/http-client/LICENSE` contains the full text and source files use `SPDX-License-Identifier: Apache-2.0` |
 | Unity | — | `package.json` declares Apache-2.0 and includes the full text in package-root `LICENSE.md` | — |

@@ -7,13 +7,13 @@ import {
 
 let client: ZlinkStreamConnector | undefined;
 
-async function connect(endpoint: string): Promise<void> {
+async function connect(endpoint: string, maxAttempts: number | null = null): Promise<void> {
   client = zlinkStreamConnectorFactory.create({
     endpoint,
     codec: zlinkStreamJsonCodec,
     dispatchMode: ZlinkStreamDispatchMode.Immediate,
     heartbeat: { enabled: false },
-    reconnect: { enabled: true, maxAttempts: 20, initialDelayMs: 25, maxDelayMs: 100 }
+    reconnect: { enabled: true, maxAttempts, initialDelayMs: 25, maxDelayMs: 100 }
   });
   await client.connect();
 }

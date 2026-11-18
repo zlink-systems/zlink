@@ -17,4 +17,17 @@ public final class ZLinkHandlerScanValidation {
         }
         return topic;
     }
+
+    public static void requireExactSpotType(
+            Class<?> handlerType, Class<?> expectedSpotType, Class<?> actualSpotType) {
+        if (actualSpotType != expectedSpotType) {
+            throw new ZLinkConfigurationException(
+                    "SPOT handler "
+                            + handlerType.getName()
+                            + " targets "
+                            + actualSpotType.getName()
+                            + " but expected "
+                            + expectedSpotType.getName());
+        }
+    }
 }

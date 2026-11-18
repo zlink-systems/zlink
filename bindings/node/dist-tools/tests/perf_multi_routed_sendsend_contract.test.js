@@ -42,24 +42,6 @@ function within(promise, timeoutMs = 5_000) {
         promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
     });
 }
-async function waitForMonitorEvent(monitor, expectedEvent, timeoutMs = 5_000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        try {
-            const event = monitor.recv(zlink.RecvFlags.DontWait);
-            if (event?.event === expectedEvent)
-                return;
-        }
-        catch (error) {
-            if (!(error instanceof zlink.RecvError
-                && error.result === zlink.RecvResult.NoData)) {
-                throw error;
-            }
-        }
-        await nextTurn();
-    }
-    throw new Error(`monitor event ${expectedEvent} timed out after ${timeoutMs}ms`);
-}
 function advanceReceived(received, mode) {
     if (mode === 'reuse') {
         return received;
@@ -526,70 +508,126 @@ test('routed async multipart boundary preserves inline and overflow part storage
         context.close();
     }
 });
-test('received routed send preserves stale-route ownership across immediate or waiting failure', async () => {
+test('received routed send preserves its parts when a stale route fails immediately', async () => {
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
-    const disconnected = router.monitorOpen([zlink.MonitorEventType.Disconnected]);
+    const poller = zlink.createPoller();
+    const events = zlink.createPollEvents(1);
     const received = new zlink.Received();
     try {
-        const endpoint = await benchmarkEndpoint('tcp', `routed-sendsend-stale-${process.pid}`, { suite: 'multi' });
+        const endpoint = await benchmarkEndpoint('tcp', `routed-sendsend-stale-${process.pid}`, {
+            suite: 'multi'
+        });
         router.options.linger = 0;
         dealer.options.linger = 0;
         router.bind(endpoint);
         dealer.setRoutingId(zlink.RoutingId.from(Buffer.from('stale-client')));
         await waitForConnectionReady(dealer, () => dealer.connect(endpoint));
-        await dealer.send()
-            .message(Buffer.alloc(64, 0x61))
-            .message(Buffer.alloc(0))
-            .submit().admitted;
+        await dealer.send().message(Buffer.alloc(64, 0x61)).message(Buffer.alloc(0)).submit().admitted;
         const receiveDeadline = Date.now() + 5_000;
-        while (!router.recv(received, zlink.RecvFlags.DontWait)
-            && Date.now() < receiveDeadline) {
+        while (!router.recv(received, zlink.RecvFlags.DontWait) && Date.now() < receiveDeadline) {
             await nextTurn();
         }
         assert.ok(received.routingId);
         assert.equal(received.parts.length, 2);
+        poller.add(router, [zlink.PollEventFlag.PollRoute], 0);
         dealer.close();
-        await waitForMonitorEvent(disconnected, zlink.MonitorEventType.Disconnected);
+        // A transport disconnect can precede selected-route removal.
+        // Wait for Core's route snapshot before testing stale-route ownership.
+        const routeDeadline = Date.now() + 5_000;
+        while (router.routesSnapshot().length !== 0 && Date.now() < routeDeadline) {
+            poller.wait(events, Math.max(0, routeDeadline - Date.now()));
+        }
+        assert.deepEqual(router.routesSnapshot(), []);
         const sourceParts = received.parts.slice();
-        let submission = null;
         let immediateError;
         try {
-            submission = received.send()
-                .message(sourceParts[0])
-                .message(sourceParts[1])
-                .submit();
+            received.send().message(sourceParts[0]).message(sourceParts[1]).submit();
         }
         catch (error) {
             immediateError = error;
         }
-        if (submission !== null) {
-            // A stale physical pipe may first report BACKPRESSURED. The binding has
-            // already snapshotted the record, so closing its sender terminates the
-            // WRITABLE wait without retaining the caller's Message wrappers.
-            assert.equal(submission.result, zlink.SubmitResult.Backpressured);
-            assert.equal(sourceParts[0].size(), 0);
-            assert.equal(sourceParts[1].size(), 0);
-            router.close();
-            await assert.rejects(submission.admitted, (error) => error instanceof zlink.SubmitError
-                && error.result === zlink.SubmitResult.Terminated);
-        }
-        else {
-            // If Core has already retired the route, target selection fails before
-            // snapshot/acceptance and Received keeps its parts for close or refill.
-            assert.ok(immediateError instanceof zlink.SubmitError);
-            assert.ok(immediateError.result === zlink.SubmitResult.NotConnected
-                || immediateError.result === zlink.SubmitResult.NotFound);
-            assert.equal(sourceParts[0].size(), 64);
-            assert.equal(sourceParts[1].size(), 0);
-        }
+        // PollRoute confirmed Core retired the route before target selection.
+        assert.ok(immediateError instanceof zlink.SubmitError);
+        assert.ok(immediateError.result === zlink.SubmitResult.NotConnected ||
+            immediateError.result === zlink.SubmitResult.NotFound);
+        assert.equal(sourceParts[0].size(), 64);
+        assert.equal(sourceParts[1].size(), 0);
     }
     finally {
         received.close();
-        disconnected.close();
+        dealer.close();
+        events.close();
+        poller.close();
+        router.close();
+        context.close();
+    }
+});
+test('received routed send terminates its WRITABLE wait when the route owner closes', async () => {
+    const context = zlink.createContext();
+    context.options.autoHwmEnabled = false;
+    const router = zlink.createRouterSocket(context);
+    const dealer = zlink.createDealerSocket(context);
+    const poller = zlink.createPoller();
+    const received = new zlink.Received();
+    const pendingSends = [];
+    try {
+        const endpoint = await benchmarkEndpoint('tcp', `routed-sendsend-wait-${process.pid}`, {
+            suite: 'multi'
+        });
+        router.options.linger = 0;
+        router.options.mandatory = true;
+        router.options.sendHwm = 1n;
+        dealer.options.linger = 0;
+        dealer.options.recvHwm = 1n;
+        dealer.setRoutingId(zlink.RoutingId.from(Buffer.from('waiting-client')));
+        router.bind(endpoint);
+        await waitForConnectionReady(dealer, () => dealer.connect(endpoint));
+        // Keep the PollCompletion registration: removing it makes this routed send fail
+        // with SubmitError instead of reaching the WRITABLE wait (checked 2026-11-17).
+        poller.add(router, [zlink.PollEventFlag.PollCompletion], 0);
+        await dealer.send().message(Buffer.alloc(64, 0x61)).message(Buffer.alloc(0)).submit().admitted;
+        assert.equal(router.recv(received), true);
+        assert.ok(received.routingId);
+        assert.equal(router.routesSnapshot().length, 1);
+        let waiting;
+        let waitingParts = [];
+        for (let index = 0; index < 512; index += 1) {
+            const parts = index === 0
+                ? received.parts.slice()
+                : [
+                    zlink.Message.from(Buffer.alloc(64, index)),
+                    zlink.Message.from(Buffer.alloc(0)),
+                ];
+            const submission = received.send().message(parts[0]).message(parts[1]).submit();
+            if (submission.result === zlink.SubmitResult.Backpressured) {
+                waiting = submission;
+                waitingParts = parts;
+                break;
+            }
+            assert.equal(submission.result, zlink.SubmitResult.Ok);
+            pendingSends.push(submission.admitted);
+        }
+        assert.ok(waiting, 'small routed-send HWM must leave a WRITABLE wait');
+        assert.equal(waiting.result, zlink.SubmitResult.Backpressured);
+        assert.equal(waitingParts[0].size(), 0);
+        pendingSends.push(waiting.admitted);
+        router.close();
+        let termination;
+        await assert.rejects(waiting.admitted, (error) => {
+            termination = error;
+            return true;
+        });
+        assert.ok(termination instanceof zlink.SubmitError);
+        assert.equal(termination.result, zlink.SubmitResult.Terminated);
+    }
+    finally {
+        received.close();
+        poller.close();
         dealer.close();
         router.close();
         context.close();
+        await Promise.allSettled(pendingSends);
     }
 });

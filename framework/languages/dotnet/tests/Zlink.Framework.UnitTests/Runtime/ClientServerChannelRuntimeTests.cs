@@ -18,6 +18,113 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task ClientServer_client_stop_closes_pending_hello_wrapper()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ClientServer_client_stop_closes_pending_hello_wrapper)
+            )
+        )
+            return;
+        using var probe = new MessageFinalizerProbe();
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        router.Bind("tcp://127.0.0.1:0");
+        await using var client = CreateClient(router.Options.LastEndpoint);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        Received? hello = null;
+        try
+        {
+            // Withhold the reply so stop cancels admission while it owns its Hello.
+            // No client receive has rented a pool wrapper. Keep the fixture's
+            // received wrapper and router alive through the final collection.
+            var count = await probe.CountAsync(async () =>
+            {
+                await runtime.StartAsync(CancellationToken.None);
+                hello = await ReceiveClientServerHelloAsync(router, TimeSpan.FromSeconds(5));
+                Assert.NotNull(hello.ReplyToken);
+                Assert.Equal(0, runtime.GetClientServerClientRuntime("work").ReadyCount);
+                await runtime.StopAsync(CancellationToken.None);
+            });
+            GC.KeepAlive(hello);
+            output.WriteLine($"client stop pending hello finalizers={count}");
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            try
+            {
+                await runtime.StopAsync(CancellationToken.None);
+            }
+            finally
+            {
+                hello?.Dispose();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ClientServer_hello_and_admission_reply_close_wrappers()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ClientServer_hello_and_admission_reply_close_wrappers)
+            )
+        )
+            return;
+        using var probe = new MessageFinalizerProbe();
+        await using var server = CreateServer(0);
+        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        var clients = new List<ServiceProvider>();
+        try
+        {
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            var endpoint = (
+                await GetServerBundle(state, "work").ClientServerServer!.ReadAsync()
+            ).AdvertisedEndpoint;
+            var count = await probe.CountAsync(async () =>
+            {
+                for (var index = 0; index < 8; index++)
+                {
+                    var client = CreateClient(endpoint);
+                    clients.Add(client);
+                    var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+                    await clientRuntime.StartAsync(CancellationToken.None);
+                    var transport = clientRuntime.GetClientServerClientRuntime("work");
+                    await WaitUntilAsync(
+                        transport,
+                        () => transport.ReadyCount == 1,
+                        TimeSpan.FromSeconds(10)
+                    );
+                    Assert.Equal(1, transport.ReadyCount);
+                }
+            });
+            output.WriteLine($"hello and admission reply finalizers={count}");
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            foreach (var client in clients)
+            {
+                try
+                {
+                    await client
+                        .GetRequiredService<ZLinkFrameworkRuntime>()
+                        .StopAsync(CancellationToken.None);
+                }
+                finally
+                {
+                    await client.DisposeAsync();
+                }
+            }
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(false, false, true)]
@@ -1579,18 +1686,26 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var router = (IRouterSocket)bundle.Socket;
 
             await expiredRuntime.StopAsync(CancellationToken.None);
-            // Client stop does not wait for the server to observe the disconnect, so the
-            // route may still exist here. Remove it once; the expiry cleanup then sees NOT_FOUND.
-            try
-            {
-                router.DisconnectRid(expiredRid);
-            }
-            catch (ZlinkConnectException absent)
-                when (absent.Result == ZlinkConnectException.ErrorCode.NotFound) { }
-            var disconnect = Assert.Throws<ZlinkConnectException>(() =>
-                router.DisconnectRid(expiredRid)
+            // Client stop does not wait for the server to observe the disconnect, and a
+            // successful DisconnectRid only schedules the route removal on the socket's
+            // I/O thread. Wait until the route is gone, so the expiry cleanup sees NOT_FOUND.
+            await WaitUntilAsync(
+                () =>
+                {
+                    try
+                    {
+                        router.DisconnectRid(expiredRid);
+                        return Task.FromResult(false);
+                    }
+                    catch (ZlinkConnectException absent)
+                        when (absent.Result == ZlinkConnectException.ErrorCode.NotFound)
+                    {
+                        return Task.FromResult(true);
+                    }
+                },
+                TimeSpan.FromSeconds(5),
+                "The expired client's route was not removed."
             );
-            Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, disconnect.Result);
             var ackCount = identity.LivenessAckCount;
             for (var interval = 0; interval < 3; interval++)
             {

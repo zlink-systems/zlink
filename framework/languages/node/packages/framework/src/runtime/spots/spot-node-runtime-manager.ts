@@ -410,7 +410,7 @@ export class ZLinkSpotNodeRuntimeManager {
           }
         }
         node.setMessageFollowHandler?.((record) => this.options.messageFollowReceiver?.(record));
-        node.start();
+        node.start('preparing');
         this.publishers.set(spotNodeName, node.createPublisher());
         for (const endpoint of spotNode.router?.manualConnections ?? []) {
           await node.connectPeer({ endpoint });
@@ -473,6 +473,12 @@ export class ZLinkSpotNodeRuntimeManager {
     await previous;
     try {
       await this.publishMeshNodeStateCore(state, signal, selectedMeshName);
+      if (state === ZLinkFrameworkRuntimeState.Serving) {
+        for (const [meshName, node] of this.meshNodes) {
+          if (selectedMeshName !== undefined && meshName !== selectedMeshName) continue;
+          await node.markServiceReady?.();
+        }
+      }
     } finally {
       release();
     }

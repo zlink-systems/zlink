@@ -54,6 +54,8 @@ function owner(options = {}) {
   const timerClock = clock();
   const ready = deferred();
   const release = deferred();
+  const closeEntered = deferred();
+  const closeReleased = deferred();
   const ticks = [];
   let close;
   let spot;
@@ -66,16 +68,18 @@ function owner(options = {}) {
       options.delivered?.resolve();
     }
   }
-  function requestClose(room, phase) {
-    if (options.phase === phase) close = room.context.close();
+  async function requestClose(room, phase) {
+    if (options.phase !== phase) return;
+    closeEntered.resolve(room.context);
+    await closeReleased.promise;
   }
   class Room {
-    configure() {
+    async configure() {
       spot = this;
-      requestClose(this, 'configure');
+      await requestClose(this, 'configure');
     }
     async onCreate() {
-      requestClose(this, 'create');
+      await requestClose(this, 'create');
       if (options.timer) {
         timer = await this.context.addTimer('ready', 100, Tick, {
           overrunPolicy: options.policy,
@@ -85,8 +89,8 @@ function owner(options = {}) {
       }
       return { accepted: options.failure !== 'reject' };
     }
-    onInitialize() {
-      requestClose(this, 'initialize');
+    async onInitialize() {
+      await requestClose(this, 'initialize');
       if (options.failure === 'initialize') throw new Error('initialization failed');
     }
   }
@@ -151,8 +155,20 @@ function owner(options = {}) {
     get spot() {
       return spot;
     },
-    create: () => spots.getOrCreate('ready-room', 'room').inMesh('mesh').submit(),
+    create: () => {
+      const creation = spots.getOrCreate('ready-room', 'room').inMesh('mesh').submit();
+      if (options.phase === undefined) return creation;
+      const submitted = closeEntered.promise.then((context) => {
+        try {
+          close = context.close();
+        } finally {
+          closeReleased.resolve();
+        }
+      });
+      return Promise.all([creation, submitted]).then(([created]) => created);
+    },
     async dispose() {
+      closeReleased.resolve();
       release.resolve();
       await timer?.cancel();
       await manager.abortUserSpotPublication('mesh', 'ready-room');
@@ -193,7 +209,7 @@ for (const mode of [
 ]) {
   for (const phase of ['configure', 'create', 'initialize']) {
     for (const failure of [undefined, 'initialize'])
-      test(`Ready lifecycle context Close: ${mode}/${phase}/${failure ?? 'success'}`, async (t) => {
+      test(`External context Close during preparation: ${mode}/${phase}/${failure ?? 'success'}`, async (t) => {
         const runtime = owner({
           mode,
           phase,
@@ -397,10 +413,11 @@ test('Instance initialization Close waits for first handler, durable cursor and 
   );
   const claims = new ZLinkSpotLocationClaims({}, store);
   let close;
+  let closeContext;
   let closing = false;
   class Instance {
     onInitialize() {
-      close = this.context.close();
+      closeContext = this.context;
     }
     async onClosing() {
       closing = true;
@@ -488,7 +505,8 @@ test('Instance initialization Close waits for first handler, durable cursor and 
     applicationJobOwner: job
   });
   await held.ready.promise;
-  assert.ok(close instanceof Promise, 'Instance initialization must expose Close before Ready.');
+  close = closeContext.close();
+  assert.ok(close instanceof Promise, 'External Close must be admitted before Ready completes.');
   let settled = false;
   close.then(() => {
     settled = true;
@@ -538,6 +556,7 @@ for (const mode of [
       test(`Target staging Close stays behind Ready and preserves membership: ${mode}/${phase}/${members}`, async (t) => {
         const timerClock = clock();
         let close;
+        let closeContext;
         let authorityCalls = 0;
         let closing = 0;
         const ticks = [];
@@ -548,11 +567,11 @@ for (const mode of [
         }
         class Target {
           async configure() {
-            if (phase === 'configure') close = this.context.close();
+            if (phase === 'configure') closeContext = this.context;
             await this.context.addTimer('restored', 100, Tick);
           }
           async onInitialize() {
-            if (phase === 'initialize') close = this.context.close();
+            if (phase === 'initialize') closeContext = this.context;
             await this.context.addTimer('fresh', 100, Tick);
           }
           onClosing() {
@@ -608,6 +627,7 @@ for (const mode of [
           ]
         );
         t.after(() => manager.abortRelocationSpot(activation));
+        if (phase === 'configure') close = closeContext.close();
         if (members)
           activation.commitActorJoin({ actorId: 'member', context: { actorId: 'member' } });
         let settled = false;
@@ -621,6 +641,7 @@ for (const mode of [
         assert.equal(closing, 0);
         assert.deepEqual(ticks, []);
         const published = manager.publishRelocationSpot(activation, async () => {
+          if (phase === 'initialize') close = closeContext.close();
           assert.ok(close);
           close.then(() => {
             settled = true;
@@ -647,12 +668,13 @@ for (const mode of [
     }
 }
 
-test('Cold Instance staging is hidden and failed Ready discards initialization Close', async () => {
+test('Cold Instance staging is hidden and failed Ready discards external Close', async () => {
   let close;
+  let closeContext;
   let authorityCalls = 0;
   class Instance {
     onInitialize() {
-      close = this.context.close();
+      closeContext = this.context;
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
@@ -675,6 +697,7 @@ test('Cold Instance staging is hidden and failed Ready discards initialization C
     undefined,
     'first-terminal'
   );
+  close = closeContext.close();
   assert.equal(manager.isInstanceMaterialized('mesh', 'instance', 'unpublished-cold'), false);
   await manager.discardInstance('mesh', 'unpublished-cold');
   assert.equal(await close, false);
@@ -768,6 +791,7 @@ for (const { mode, phase, native, instance, lateFailure = false } of cancellatio
       let activation;
       let timer;
       let close;
+      let closeContext;
       let closing = 0;
       let authorityCalls = 0;
       let initialized = 0;
@@ -784,9 +808,7 @@ for (const { mode, phase, native, instance, lateFailure = false } of cancellatio
         callbackSignal = signal;
         const resource = await resolveLifecycleHandler(room, ScopedResource);
         timer = await room.context.addTimer('cancel-ready', 100, Tick);
-        close = room.context.close();
-        close.catch(() => undefined);
-        activation = manager.closeOperations.get(`mesh\0${String(room.context.spotId)}`).activation;
+        closeContext = room.context;
         entered.resolve();
         await release.promise;
         resource.use();
@@ -903,8 +925,23 @@ for (const { mode, phase, native, instance, lateFailure = false } of cancellatio
           throw outcome.error ?? new Error('Creation finished before the held callback');
         })
       ]);
+      close = closeContext.close();
+      close.catch(() => undefined);
+      activation = manager.closeOperations.get(`mesh\0${String(closeContext.spotId)}`).activation;
       assert.equal(activation.serialExecutor.isPreparing, true);
       if (instance) assert.equal(activeAdmissions, 1);
+      const barrier = activation.executionBarrier;
+      const enter = barrier.enter;
+      const bothAdmissions = deferred();
+      let blockedAdmissions = 0;
+      barrier.enter = function () {
+        const claim = enter.call(this);
+        if (claim instanceof Promise && ++blockedAdmissions >= 2) bothAdmissions.resolve();
+        return claim;
+      };
+      t.after(() => {
+        barrier.enter = enter;
+      });
       timerClock.fire();
       const application = activation.serial.execute(() => {
         messages++;
@@ -913,9 +950,9 @@ for (const { mode, phase, native, instance, lateFailure = false } of cancellatio
         (value) => ({ value }),
         (error) => ({ error })
       );
-      for (let i = 0; i < 10000 && activation.executionBarrier.admissionWaiters.length < 2; i++)
-        await Promise.resolve();
-      assert.ok(activation.executionBarrier.admissionWaiters.length >= 2);
+      await bothAdmissions.promise;
+      barrier.enter = enter;
+      assert.ok(blockedAdmissions >= 2);
       assert.equal(ticks, 0);
       assert.equal(messages, 0);
       controller.abort();

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/telemetry_observation.hpp"
 #include <zlink/json.hpp>
 #include "../support/stateful_object_sync.hpp"
@@ -3784,9 +3784,28 @@ bool verify_spot_serial_task_async_retains_work_until_terminal ()
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
+    struct actor_release_guard_t
+    {
+        std::shared_ptr<int> actor;
+        std::promise<void> *released;
+
+        actor_release_guard_t (std::shared_ptr<int> value, std::promise<void> &release_completed) :
+            actor (std::move (value)), released (&release_completed)
+        {
+        }
+
+        ~actor_release_guard_t ()
+        {
+            actor.reset ();
+            released->set_value ();
+        }
+    };
+
     // Declared before the executor and owner so queued work never outlives them.
     std::promise<void> entered;
     std::promise<result_t<void>> settled;
+    std::promise<void> released;
+    const auto released_result = released.get_future ();
     auto executor = std::make_shared<runtime::offload_executor_t> (1, "spot-serial-retain");
     auto owner = std::make_shared<spot_context_state_t> ();
     owner->serial_executor = executor;
@@ -3800,9 +3819,11 @@ bool verify_spot_serial_task_async_retains_work_until_terminal ()
       [&] { (void) terminal->complete (result_t<void>::success ()); });
     auto actor_instance = std::make_shared<int> (7);
     const std::weak_ptr<int> weak_actor = actor_instance;
+    auto work_guard =
+      std::make_shared<actor_release_guard_t> (std::move (actor_instance), released);
     owner->run_serial_task_async (
       "retained-spot-lifecycle-leave",
-      [actor_instance = std::move (actor_instance), terminal, &entered] {
+      [work_guard = std::move (work_guard), terminal, &entered] {
           entered.set_value ();
           return await_lifecycle_terminal (terminal);
       },
@@ -3814,9 +3835,11 @@ bool verify_spot_serial_task_async_retains_work_until_terminal ()
     terminal->complete (result_t<void>::success ());
     if (settled_result.wait_for (std::chrono::seconds (5)) != std::future_status::ready)
         return false;
+    const bool released_after_terminal =
+      released_result.wait_for (std::chrono::seconds (5)) == std::future_status::ready
+      && weak_actor.expired ();
     const bool succeeded = static_cast<bool> (settled_result.get ());
     owner->serial_queue->drain ();
-    const bool released_after_terminal = weak_actor.expired ();
     if (!retained_while_suspended || !succeeded || !released_after_terminal)
         std::cerr << "lifecycle work lifetime: retained=" << retained_while_suspended
                   << " succeeded=" << succeeded << " released=" << released_after_terminal << '\n';
@@ -8288,9 +8311,12 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
       target_address.node_rid, target_address.spot_id, target_address.object_generation,
       target_address.node_generation, target_address.authority_owner_generation,
       static_cast<std::uint64_t> (target_address.owner.lease_generation));
+    const auto target_resolver = std::make_shared<wire_join_spot_resolver_t> ();
+    target_resolver->address = target_address;
     auto joined = std::async (std::launch::async, [&] {
         auto result = std::move (source.join_application_actor_to_spot (
-                                   actor, target_address, zlink::message_t{}, join_timeout))
+                                   actor, spot_id_t (target_address.spot_id), target_resolver,
+                                   zlink::message_t{}, join_timeout))
                         .result ();
         if (result && result.value ().result_code == actor_join_reply_t::relayed) {
             const auto cleanup = result.value ().source_cleanup ().result ();
@@ -8465,10 +8491,12 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                                                     .owner = target_owner,
                                                     .node_generation =
                                                       target.status ().lifecycle_generation ()};
+        const auto local_resolver = std::make_shared<wire_join_spot_resolver_t> ();
+        local_resolver->address = local_address;
         auto local_join = std::async (std::launch::async, [&] {
-            return std::move (target.join_application_actor_to_spot (joined_result.value ().actor,
-                                                                     local_address,
-                                                                     zlink::message_t{}, 2s))
+            return std::move (target.join_application_actor_to_spot (
+                                joined_result.value ().actor, spot_id_t (local_address.spot_id),
+                                local_resolver, zlink::message_t{}, 2s))
               .result ();
         });
         if (local_join.wait_for (2s) == std::future_status::ready) {

@@ -339,6 +339,133 @@ public sealed class MeshApplicationWorkerTests
         Assert.Equal(0UL, node.Status().PendingApplicationMessages);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalRequestTerminal_ContinuationObservesReleasedAdmission(bool cancel)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "local-terminal",
+            applicationJobQueue: jobs
+        );
+        var rid = RoutingId.From("local-terminal-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        var spot = node.GetOrCreateSpot("local-spot", out _);
+        using var held = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        using var payload = Message.From(new byte[16]);
+        using var cancellation = new CancellationTokenSource();
+        var request = node.RequestToSpotDirectAsync(
+                "",
+                rid,
+                "local-spot",
+                spot.LifecycleGeneration,
+                [payload],
+                SendFlags.None,
+                default,
+                cancel ? TimeSpan.FromSeconds(5) : TimeSpan.FromMilliseconds(100),
+                cancellation.Token
+            )
+            .AsTask();
+        var observed = request.ContinueWith(
+            _ => jobs.GetStatus(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+        Assert.Equal(1UL, jobs.GetStatus().CapacityWaiters);
+        if (cancel)
+            cancellation.Cancel();
+        if (cancel)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+        else
+            await Assert.ThrowsAsync<ZLinkRequestTerminalException>(() => request);
+        var atPublication = await observed;
+        Assert.Equal(0UL, atPublication.CapacityWaiters);
+        Assert.Equal(1UL, atPublication.PermitsInUse);
+        Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+        Assert.Equal(0UL, jobs.GetStatus().CapacityWaiters);
+        Assert.Equal(1UL, jobs.GetStatus().PermitsInUse);
+        held.Dispose();
+        using var next = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueuedLocalRequestTerminal_ContinuationObservesReleasedAdmission(bool cancel)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var operationLane = new ZLinkStateLane();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "local-terminal",
+            applicationJobQueue: jobs,
+            operationLane: operationLane
+        );
+        var rid = RoutingId.From("local-terminal-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        var spot = node.GetOrCreateSpot("local-spot", out _);
+        using var payload = Message.From(new byte[16]);
+        using var cancellation = new CancellationTokenSource();
+        var request = node.RequestToSpotDirectAsync(
+                "",
+                rid,
+                "local-spot",
+                spot.LifecycleGeneration,
+                [payload],
+                SendFlags.None,
+                default,
+                cancel ? TimeSpan.FromSeconds(5) : TimeSpan.FromMilliseconds(100),
+                cancellation.Token
+            )
+            .AsTask();
+        var observed = request.ContinueWith(
+            _ => jobs.GetStatus(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+        Assert.Equal(1UL, jobs.GetStatus().PermitsInUse);
+        // The grant posts to the operation lane; observe acceptance before ending the caller.
+        await operationLane.RunAsync(() => { });
+        Assert.Equal(1UL, node.Status().PendingApplicationMessages);
+        if (cancel)
+            cancellation.Cancel();
+        if (cancel)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+        else
+            await Assert.ThrowsAsync<ZLinkRequestTerminalException>(() => request);
+        var atPublication = await observed;
+        Assert.Equal(0UL, atPublication.CapacityWaiters);
+        Assert.Equal(0UL, atPublication.PermitsInUse);
+        // Caller termination returns admission while the accepted payload keeps its FIFO position (§9).
+        Assert.Equal(1UL, node.Status().PendingApplicationMessages);
+        Assert.Equal(0UL, jobs.GetStatus().CapacityWaiters);
+        Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+        using var next = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        Assert.Equal(1UL, node.Status().PendingApplicationMessages);
+    }
+
     [Fact]
     public async Task LocalActorRecord_KeepsItsLocalPermitOriginThroughThePump()
     {

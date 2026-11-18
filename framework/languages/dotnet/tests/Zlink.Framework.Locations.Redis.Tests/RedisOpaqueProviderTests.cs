@@ -649,8 +649,18 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
                 .Value.ExpiresAt
         );
 
-        await Task.Delay(250);
-        Assert.IsType<ZLinkStoreReadResult.Missing>(await store.ReadAsync(expiring));
+        // Expiry follows the provider clock, so the case waits until a read reports a
+        // provider time past ExpiresAt instead of assuming local elapsed time (#4542).
+        var expiresAt = beforeExpiry.Value.ExpiresAt!.Value;
+        ZLinkStoreReadResult afterExpiry;
+        do
+        {
+            await Task.Delay(10);
+            afterExpiry = await store.ReadAsync(expiring);
+        } while (
+            afterExpiry is ZLinkStoreReadResult.Found found && found.Value.StoreNow < expiresAt
+        );
+        Assert.IsType<ZLinkStoreReadResult.Missing>(afterExpiry);
         Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(durable));
     }
 

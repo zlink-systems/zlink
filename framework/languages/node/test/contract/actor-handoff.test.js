@@ -1116,6 +1116,7 @@ for (const firstJoin of ['accepted', 'rejected', 'transferred']) {
     const transfer = new ZLinkActorTransferRuntime({
       actorHandoff: coordinator,
       spotManager: () => ({
+        captureSourceActorPacketPrefix() {},
         admitSourceActorPacketPrefix(actorId, records) {
           return this.admitRoutedActorPacketPrefix(undefined, actorId, records);
         },

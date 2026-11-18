@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // The test harness owns main so that test registration and RUN_ALL_TESTS
 // resolve to the same GoogleTest instance.

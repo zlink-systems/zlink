@@ -17,9 +17,7 @@ final class ZLinkSpotHandlerCatalog implements ZLinkSpotHandlerRegistry {
     private final List<Class<?>> configuredHandlerTypes = new ArrayList<>();
     private final List<ConfiguredSubscription> configuredSubscriptions = new ArrayList<>();
     private boolean registrationOpen = true;
-    private Map<String, SpotPacketHandlerRegistration> packetHandlers = Map.of();
-    private Map<ZLinkBackendSubscription, List<SpotSubscriptionHandlerRegistration>>
-            subscriptionHandlers = Map.of();
+    private Registrations registrations = new Registrations(Map.of(), Map.of(), Map.of());
 
     ZLinkSpotHandlerCatalog(String registrationClosedMessage) {
         this.registrationClosedMessage = registrationClosedMessage;
@@ -53,25 +51,30 @@ final class ZLinkSpotHandlerCatalog implements ZLinkSpotHandlerRegistry {
     void closeRegistration(
             BiFunction<List<Class<?>>, List<ConfiguredSubscription>, Registrations> loader) {
         registrationOpen = false;
-        Registrations registrations =
+        registrations =
                 loader.apply(
                         List.copyOf(configuredHandlerTypes), List.copyOf(configuredSubscriptions));
-        packetHandlers = registrations.packetHandlers();
-        subscriptionHandlers = registrations.subscriptionHandlers();
+        configuredHandlerTypes.clear();
+        configuredSubscriptions.clear();
     }
 
     SpotPacketHandlerRegistration packetHandler(String packetName) {
-        return packetHandlers.get(packetName);
+        return registrations.packetHandlers().get(packetName);
     }
 
     List<SpotSubscriptionHandlerRegistration> subscriptionHandlers(
             String channelName, String topic) {
-        return subscriptionHandlers.getOrDefault(
-                new ZLinkBackendSubscription(channelName, topic), List.of());
+        return registrations
+                .subscriptionHandlers()
+                .getOrDefault(new ZLinkBackendSubscription(channelName, topic), List.of());
+    }
+
+    List<SpotActorPacketHandlerRegistration> actorPacketHandlers(String packetName) {
+        return registrations.actorPacketHandlers().getOrDefault(packetName, List.of());
     }
 
     Set<ZLinkBackendSubscription> subscriptions() {
-        return subscriptionHandlers.keySet();
+        return registrations.subscriptionHandlers().keySet();
     }
 
     record ConfiguredSubscription(Class<?> handlerType, ZLinkBackendSubscription subscription) {}
@@ -79,7 +82,8 @@ final class ZLinkSpotHandlerCatalog implements ZLinkSpotHandlerRegistry {
     record Registrations(
             Map<String, SpotPacketHandlerRegistration> packetHandlers,
             Map<ZLinkBackendSubscription, List<SpotSubscriptionHandlerRegistration>>
-                    subscriptionHandlers) {
+                    subscriptionHandlers,
+            Map<String, List<SpotActorPacketHandlerRegistration>> actorPacketHandlers) {
 
         Registrations {
             packetHandlers = Map.copyOf(packetHandlers);
@@ -88,6 +92,10 @@ final class ZLinkSpotHandlerCatalog implements ZLinkSpotHandlerRegistry {
             subscriptionHandlers.forEach(
                     (topic, handlers) -> subscriptions.put(topic, List.copyOf(handlers)));
             subscriptionHandlers = Map.copyOf(subscriptions);
+            Map<String, List<SpotActorPacketHandlerRegistration>> actors = new HashMap<>();
+            actorPacketHandlers.forEach(
+                    (packet, handlers) -> actors.put(packet, List.copyOf(handlers)));
+            actorPacketHandlers = Map.copyOf(actors);
         }
     }
 }

@@ -4,12 +4,9 @@
 require('reflect-metadata');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
-const {
-  ZLinkModule,
-  ZLINK_ROUTE_CLIENT,
-  zlinkFramework
-} = require('@zlink-systems/nestjs');
+const { ZLinkModule, ZLINK_ROUTE_CLIENT, zlinkFramework } = require('@zlink-systems/nestjs');
 const contract = require('../shared/framework-bench-contract');
+const header = require('../shared/bench-metric-header');
 const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_CLIENT === '1';
 let ZLINK_PROTOBUF_CONTENT_TYPE;
 let createBenchPayloadSerializer;
@@ -21,6 +18,20 @@ if (!ladderL5ToL7) {
 }
 
 async function createFrameworkTransport(options) {
+  const jsonBody = options.implementation === 'zlink-framework-node-json';
+  const gamePayload = jsonBody ? require('../shared/game-payload') : undefined;
+  const packetName = jsonBody ? 'BenchGameMessage' : contract.PACKET_NAME;
+  const createPayload = jsonBody
+    ? (size, run, phase, sequence) =>
+        gamePayload.createGameMessage(
+          size,
+          run,
+          phase,
+          sequence,
+          header.nowNs(),
+          options.implementation
+        )
+    : undefined;
   class BenchClientModule {}
   Module({
     imports: [
@@ -28,7 +39,7 @@ async function createFrameworkTransport(options) {
         inject: [],
         useFactory: () => {
           const builder = zlinkFramework();
-          if (!ladderL5ToL7) {
+          if (!jsonBody && !ladderL5ToL7) {
             builder.codecs().use({
               register: (codecs) => {
                 codecs.addSerializer(
@@ -53,24 +64,54 @@ async function createFrameworkTransport(options) {
     abortOnError: false
   });
   const client = app.get(ZLINK_ROUTE_CLIENT, { strict: false });
-  const requestSubmission = (_stream, body) => {
-    const request = client.requestToNode(
-      contract.MESH_NAME,
-      contract.SERVER_ROUTING_ID,
-      new contract.BenchPayload(body)
-    ).timeout(options.requestTimeoutMs).submit();
-    return { admitted: request.admitted, reply: request.then(reply => toBuffer(reply.body)) };
-  };
+  const requestSubmission = jsonBody
+    ? (_stream, message) => {
+        const request = client
+          .requestToNode(contract.MESH_NAME, contract.SERVER_ROUTING_ID, message)
+          .timeout(options.requestTimeoutMs)
+          .submit();
+        return { admitted: request.admitted, reply: request.then((reply) => reply) };
+      }
+    : (_stream, body) => {
+        const request = client
+          .requestToNode(
+            contract.MESH_NAME,
+            contract.SERVER_ROUTING_ID,
+            new contract.BenchPayload(body)
+          )
+          .timeout(options.requestTimeoutMs)
+          .submit();
+        return { admitted: request.admitted, reply: request.then((reply) => toBuffer(reply.body)) };
+      };
+  const send = jsonBody
+    ? async (_stream, message) => {
+        await client.sendToNode(contract.MESH_NAME, contract.SERVER_ROUTING_ID, message).submit();
+      }
+    : async (_stream, body) => {
+        await client
+          .sendToNode(
+            contract.MESH_NAME,
+            contract.SERVER_ROUTING_ID,
+            new contract.BenchPayload(body)
+          )
+          .submit();
+      };
   return {
+    createPayload,
     requestSubmission,
     request: (_stream, body) => requestSubmission(_stream, body).reply,
-    send: async (_stream, body) => {
-      await client.sendToNode(
-        contract.MESH_NAME,
-        contract.SERVER_ROUTING_ID,
-        new contract.BenchPayload(body)
-      ).submit();
-    },
+    send,
+    validateReply: jsonBody
+      ? (reply, run, phase, size, sequence) =>
+          gamePayload.assertGameMessageStamp(
+            reply,
+            run,
+            phase,
+            sequence,
+            size,
+            options.implementation
+          )
+      : undefined,
     close: async () => app.close()
   };
 }

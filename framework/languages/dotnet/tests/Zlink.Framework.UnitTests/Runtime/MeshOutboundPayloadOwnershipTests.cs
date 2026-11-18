@@ -265,7 +265,7 @@ public sealed class MeshOutboundPayloadOwnershipTests
                 [payload],
                 CancellationToken.None
             );
-            Assert.Equal(ZLinkOneWaySubmitStatus.RouteNotConnected, result.Status);
+            Assert.Equal(ZLinkOneWaySubmitStatus.TargetNotFound, result.Status);
             Assert.Equal(1, witness.RefCount);
         }
         finally

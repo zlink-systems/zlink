@@ -890,15 +890,14 @@ final class ZLinkNodeSubmitTurnTest {
                                     onSpotBinding.run();
                                     return CompletableFuture.completedFuture(null);
                                 }
-                                if (method.getName().equals("requestToSpot")
-                                        && (args.length == 8 || args.length == 9)) {
-                                    timeout.set((Duration) args[5]);
+                                if (method.getName().equals("requestToSpot") && args.length == 10) {
+                                    timeout.set((Duration) args[6]);
                                     ZLinkServiceOperationRegistry operations =
-                                            (ZLinkServiceOperationRegistry) args[6];
-                                    UUID operationId = (UUID) args[7];
+                                            (ZLinkServiceOperationRegistry) args[7];
+                                    UUID operationId = (UUID) args[8];
                                     return operations.submit(
                                             operationId,
-                                            (Duration) args[5],
+                                            (Duration) args[6],
                                             () -> {
                                                 assertEquals(1, operations.pendingCount());
                                                 spotRequests.incrementAndGet();

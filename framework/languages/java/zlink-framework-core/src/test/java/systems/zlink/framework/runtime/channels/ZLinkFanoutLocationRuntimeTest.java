@@ -420,6 +420,7 @@ final class ZLinkFanoutLocationRuntimeTest {
                                         node,
                                         spot,
                                         generation,
+                                        targetNodeGeneration,
                                         authorityOwnerGeneration,
                                         ownerLeaseGeneration,
                                         parts,

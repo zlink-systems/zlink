@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_runtime.hpp"
@@ -57,12 +57,12 @@ struct in_memory_location_repository_test_access_t
 
 struct location_runtime_test_access_t
 {
-    static task_t<void> drain_publications (location_runtime_t &runtime)
+    static task_t<void> drain_repository_operations (location_runtime_t &runtime)
     {
         auto ambient = detail::capture_ambient_context ();
         ambient.infrastructure_wait = true;
         const auto context = detail::enter_ambient_context (ambient);
-        return runtime.drain_descriptor_publications ();
+        return runtime.drain_repository_operations ();
     }
 
     static void settle_publication (location_runtime_t &runtime)
@@ -6381,7 +6381,7 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, PublicationDrainWaitsForActualProvider
         const auto context = detail::enter_ambient_context (ambient);
         return runtime.descriptor_write_confirmed ([&] { return provider.task (); });
     }();
-    auto drained = location_runtime_test_access_t::drain_publications (runtime);
+    auto drained = location_runtime_test_access_t::drain_repository_operations (runtime);
     const bool cancelled = publication.await_ready ();
     EXPECT_TRUE (cancelled);
     if (cancelled)
@@ -6811,6 +6811,34 @@ void configure_review_host (app_t &app,
     app.advanced ().services ().add_factory<location_repository_t> (
       [repository] (service_provider_t &) { return repository; }, service_lifetime_t::singleton);
 }
+}
+
+TEST (ProviderLocationRepositoryTest, AuthorityKindPrefixIsPassedToProvider)
+{
+    startup_review_store_t store;
+    provider_location_repository_t repository (store);
+    const auto check = [&] (std::string logical, std::string physical) {
+        unsigned scans = 0;
+        store.before_scan = [&] (const store_scan_request_t &request) -> task_t<void> {
+            ++scans;
+            EXPECT_EQ (request.prefix, physical);
+            EXPECT_FALSE (request.cursor);
+            EXPECT_EQ (request.limit, 100u);
+            co_return;
+        };
+        auto read = repository.list_authorities (logical, std::nullopt, 100).result ().value ();
+        const auto *page = std::get_if<authority_page_t> (&read);
+        ASSERT_NE (page, nullptr);
+        EXPECT_TRUE (page->items.empty ());
+        EXPECT_FALSE (page->next_cursor);
+        EXPECT_EQ (scans, 1u);
+        store.before_scan = {};
+    };
+    check ("", std::string ("authority\0", 10));
+    check ("zla1:a:", std::string ("authority\0actor\0", 16));
+    check ("zla1:s:", std::string ("authority\0spot\0", 15));
+    EXPECT_THROW (repository.list_authorities ("invalid", std::nullopt, 100).result ().value (),
+                  std::invalid_argument);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, FixedRidCompetingStartupRejectsLoserAfterPreparing)

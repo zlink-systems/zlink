@@ -12,7 +12,7 @@ import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.file.Files;
 import java.util.concurrent.CompletionStage;
@@ -25,7 +25,7 @@ public final class ZLinkSendSubmitAdapterAllocationTest {
 
     @Test
     void immediateSubmitDoesNotAllocateAnAdmissionAdapter() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     private static final class Immediate implements SendSubmission {

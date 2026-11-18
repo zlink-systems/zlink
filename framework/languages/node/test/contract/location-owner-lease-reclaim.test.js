@@ -95,6 +95,32 @@ async function fixture(t, provider, retention = true) {
 }
 
 for (const provider of [false, true]) {
+  test(`stale outside an outage discards executions before fresh claim (${provider})`, async (t) => {
+    const s = await fixture(t, provider);
+    const claim = s.lease.claimOwnerLease;
+    let discardedAtClaim;
+    s.lease.claimOwnerLease = (...args) => {
+      discardedAtClaim = s.discarded();
+      return claim(...args);
+    };
+    await s.store.releaseOwnerLease(s.original);
+    s.setNow(200);
+    assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
+    assert.equal(discardedAtClaim, 1, 'old execution must lose ownership before reclaim');
+    assert.equal(s.claims(), 1);
+    assert.equal(s.episode(), undefined);
+    assert.notDeepEqual(s.runtime.currentOwnerToken, s.original);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
+    const fresh = {};
+    s.runtime.trackExecution(
+      fresh,
+      () => true,
+      () => {}
+    );
+    assert.equal(s.runtime.executionAllowed(fresh), true);
+  });
   for (const retention of [false, true]) {
     for (const boundary of [1199, 1200, 1201]) {
       test(`D17 Missing at lifetime+margin ${boundary - 1200} (${provider}/${retention}), 100 iterations`, async (t) => {

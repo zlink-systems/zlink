@@ -2078,7 +2078,8 @@ final class ZLinkCanonicalRelocationStateMachine
                         targetNodeRid,
                         ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()),
                         timeout,
-                        admission);
+                        admission,
+                        attempt.prepare().target().nodeGeneration());
         reply.thenCompose(encoded -> apply(targetNodeRid, Byte.toUnsignedInt(encoded[3]), encoded))
                 .whenComplete(
                         (ignored, failure) -> {

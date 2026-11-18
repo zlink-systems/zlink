@@ -247,17 +247,19 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     }
 
     default void rememberActorAuthority(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration) {}
-
-    default void rememberActorAuthority(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
-        rememberActorAuthority(actor, authorityOwnerGeneration);
-    }
+            ZLinkBackendActorRef actor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long targetNodeGeneration) {}
 
     /** Observes a route for outbound use; it does not publish a local native Actor stay. */
     default void observeActorAuthority(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
-        rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+            ZLinkBackendActorRef actor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long targetNodeGeneration) {
+        rememberActorAuthority(
+                actor, authorityOwnerGeneration, ownerLeaseGeneration, targetNodeGeneration);
     }
 
     CompletionStage<ZLinkBackendActorJoinResult> joinActor(
@@ -322,7 +324,8 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             long authorityOwnerGeneration,
             long ownerLeaseGeneration) {
         registerTransferredActor(actor, spotId, membershipEpoch);
-        rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+        rememberActorAuthority(
+                actor, authorityOwnerGeneration, ownerLeaseGeneration, localNodeGeneration());
     }
 
     boolean sendActorBoundSession(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags);
@@ -434,6 +437,23 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     default CompletionStage<Void> closeActorBoundSessionAsync(
             ZLinkBackendActorRef actor, Duration timeout) {
+        return closeActorBoundSessionAsync(
+                actor,
+                timeout,
+                () ->
+                        CompletableFuture.failedFuture(
+                                new systems.zlink.framework.errors.ZLinkFrameworkException(
+                                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                                .INVALID_OPERATION,
+                                        "No current session binding exists for Actor "
+                                                + actor.actorId())));
+    }
+
+    /** Reads and submits in the binding owner's turn; the caller owns the unbound result. */
+    default CompletionStage<Void> closeActorBoundSessionAsync(
+            ZLinkBackendActorRef actor,
+            Duration timeout,
+            Supplier<CompletionStage<Void>> whenUnbound) {
         return java.util.concurrent.CompletableFuture.failedFuture(
                 new UnsupportedOperationException("Session close is unavailable"));
     }
@@ -511,6 +531,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                                 RemoteSessionBindingTransition, CompletionStage<Boolean>>
                         transition);
 
+        /** Restores the preserved route under the relocation owner's existing move gate. */
         default CompletionStage<Boolean> restoreRelocated(
                 ZLinkInternalSpotNode node,
                 ZLinkBackendActorRef actor,
@@ -532,9 +553,25 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                     public void retire(BoundSessionRoute route) {}
                 };
 
+        /** Applies the decided binding in the state owner turn, outside the user callback. */
+        default CompletionStage<Boolean> commit(
+                java.util.function.Supplier<CompletionStage<Boolean>> transition) {
+            return transition.get();
+        }
+
         void bind(BoundSessionRoute route);
 
         void retire(BoundSessionRoute route);
+
+        /** Executes the callback and binding commit in one turn when a callback is required. */
+        default CompletionStage<Boolean> acceptBinding(
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
+                RoutingId incomingSessionRid,
+                java.util.function.Function<
+                                RemoteSessionBindingTransition, CompletionStage<Boolean>>
+                        transition) {
+            return transition.apply(this);
+        }
 
         default CompletionStage<java.util.Optional<String>> decideDuplicateBind(
                 systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
@@ -660,7 +697,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             Duration timeout,
             CompletableFuture<Void> requestAdmission);
 
-    /** Delivers to the prepared receiver; the decoder consumes the reply messages. */
+    /** Continues the registered logical request; the decoder consumes the reply messages. */
     default <T> void requestToActor(
             ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             List<Message> parts,
@@ -680,14 +717,17 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         reply.whenComplete(
                 (messages, failure) -> {
                     if (failure != null) {
-                        completion.completeExceptionally(mapFailure.apply(failure));
+                        operationRegistry()
+                                .completeExceptionally(completion.id(), mapFailure.apply(failure));
                         return;
                     }
                     try {
-                        ZLinkCompletionBridge.completeOrDiscard(
-                                completion, decodeReply.apply(messages), discardReply);
+                        T value = decodeReply.apply(messages);
+                        if (!operationRegistry().complete(completion.id(), value))
+                            discardReply.accept(value);
                     } catch (RuntimeException | Error error) {
-                        completion.completeExceptionally(mapFailure.apply(error));
+                        operationRegistry()
+                                .completeExceptionally(completion.id(), mapFailure.apply(error));
                     }
                 });
     }

@@ -10,6 +10,9 @@ const {
 const {
   ZLinkSerialExecutionQueue
 } = require('../../packages/framework/dist/internal');
+const {
+  ZLinkActorSerialExecutor
+} = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
 
 function deferred() {
   let resolve;
@@ -37,6 +40,20 @@ test('a mailbox control failure retains its original cause', async () => {
   });
   await new Promise(setImmediate);
   assert.equal(observed, failure);
+});
+
+test('a callable scheduler context does not replace an Actor operation during packet capture', async () => {
+  const actor = new ZLinkActorSerialExecutor('actor-1', undefined);
+  const events = [];
+  const context = () => events.push('context');
+  const operation = () => events.push('operation');
+
+  const terminal = actor.scheduler.submit(operation, undefined, context);
+  actor.capturePacketPrefix();
+
+  await terminal;
+  await actor.close();
+  assert.deepEqual(events, ['operation']);
 });
 
 async function assertConsumerOwnership(injectIndependentConsumer = false) {
@@ -196,4 +213,59 @@ test('passive Actor lanes retain fairness and synchronous acceptance sequence', 
   await Promise.all(admitted);
   assert.deepEqual(events, ['life1', 'life2', 'app', 'life3']);
   await executor.close();
+});
+
+test('handoff captures a preparing packet before releasing its source FIFO without awaiting target terminal', async () => {
+  const { ZLinkActorSerialExecutor } = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
+  const { enterApplicationJobPermitScope, leaveApplicationJobPermitScope } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
+  const actor = new ZLinkActorSerialExecutor('actor', 'source');
+  const target = deferred();
+  let withdraw;
+  let preparationSignal;
+  let initialReleases = 0;
+  let captures = 0;
+  const [prefix] = actor.admitDurablePrefix([{
+    operation: () => { throw new Error('withdrawn prefix must not execute'); },
+    preparation: { prepare: async () => {}, cancel() {} },
+    workOptions: { onWithdrawable(value) { withdraw = value; } }
+  }]);
+  const initial = {
+    releaseAfterInternalProcessing() { initialReleases += 1; },
+    get isReleased() { return initialReleases > 0; },
+    reacquire(signal) {
+      preparationSignal = signal;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    }
+  };
+  let packet;
+  const previous = enterApplicationJobPermitScope(initial);
+  try {
+    packet = actor.execute(
+      () => { throw new Error('preparing source handler must not execute during transfer'); },
+      undefined,
+      () => { captures += 1; return { terminal: target.promise }; }
+    );
+  } finally {
+    leaveApplicationJobPermitScope(previous);
+  }
+  try {
+    assert.equal(withdraw(), true);
+    await prefix;
+    await new Promise(setImmediate);
+    assert.equal(preparationSignal.aborted, false);
+    actor.capturePacketPrefix();
+    const accepted = await packet;
+    assert.strictEqual(accepted.terminal, target.promise);
+    assert.equal(captures, 1);
+    assert.equal(preparationSignal.aborted, true);
+    assert.equal(initialReleases, 1);
+    assert.equal(actor.scheduler.application.records.length, 0);
+    target.resolve();
+    await accepted.terminal;
+  } finally {
+    target.resolve();
+    await actor.close();
+  }
 });

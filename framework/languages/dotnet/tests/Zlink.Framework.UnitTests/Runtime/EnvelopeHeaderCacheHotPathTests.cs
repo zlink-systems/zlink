@@ -5,6 +5,127 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task ParallelMissesPublishEveryDistinctPlanOnce()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ParallelMissesPublishEveryDistinctPlanOnce)
+            )
+        )
+            return;
+
+        const int participants = 8;
+        const int rounds = 128;
+        foreach (var sharedKey in new[] { true, false })
+        {
+            var prefix = $"cache-parallel-{sharedKey}-{Guid.NewGuid():N}";
+            var headers = Enumerable
+                .Range(0, sharedKey ? rounds : participants * rounds)
+                .Select(index => Header($"{prefix}-{index}") with { FormatMarker = 242 })
+                .ToArray();
+            var expected = headers.Select(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes).ToArray();
+            var initialCount = ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders;
+            using var start = new Barrier(participants);
+            var workers = Enumerable
+                .Range(0, participants)
+                .Select(worker =>
+                    Task.Factory.StartNew(
+                        () =>
+                        {
+                            var actual = new byte[rounds][];
+                            for (var round = 0; round < rounds; round++)
+                            {
+                                var index = sharedKey ? round : worker * rounds + round;
+                                start.SignalAndWait();
+                                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(headers[index]);
+                                actual[round] = encoded.ToArray();
+                            }
+                            return actual;
+                        },
+                        CancellationToken.None,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default
+                    )
+                )
+                .ToArray();
+            var results = await Task.WhenAll(workers);
+            for (var worker = 0; worker < participants; worker++)
+            for (var round = 0; round < rounds; round++)
+                Assert.Equal(
+                    expected[sharedKey ? round : worker * rounds + round],
+                    results[worker][round]
+                );
+            Assert.Equal(
+                initialCount + headers.Length,
+                ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders
+            );
+            output.WriteLine(
+                $"sharedKey={sharedKey}: {participants * rounds} encodes, {headers.Length} published plans"
+            );
+        }
+    }
+
+    [Fact]
+    public async Task ReplacementRemainsFifoAndWarmHitsDoNotRefreshOrder()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                GetType(),
+                nameof(ReplacementRemainsFifoAndWarmHitsDoNotRefreshOrder)
+            )
+        )
+            return;
+
+        var headers = Enumerable
+            .Range(0, 4097)
+            .Select(index => Header($"cache-fifo-{index}") with { FormatMarker = 242 })
+            .ToArray();
+        byte[] bytes;
+        using (var warm = ZLinkEnvelopeCodec.EncodeHeader(headers[0]))
+            bytes = warm.ToArray();
+        for (var index = 0; index < 256; index++)
+            _ = EncodingAllocation(headers[0]);
+        var nativeBytes =
+            PerCallAllocation.MinWindow(
+                () =>
+                {
+                    using var message = Message.From(bytes);
+                },
+                1024
+            ) / 1024;
+        for (var index = 1; index < 4096; index++)
+        {
+            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(headers[index]);
+        }
+
+        Assert.Equal(4096, ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders);
+        Assert.True(EncodingAllocation(headers[0]) <= nativeBytes + 16);
+        using var replacement = ZLinkEnvelopeCodec.EncodeHeader(headers[4096]);
+        Assert.Equal(
+            ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(headers[4096]),
+            replacement.ToArray()
+        );
+        Assert.True(EncodingAllocation(headers[4095]) <= nativeBytes + 16);
+        var evictedBytes = EncodingAllocation(headers[0]);
+        Assert.True(
+            evictedBytes > nativeBytes + 16,
+            $"The oldest plan was not evicted: {evictedBytes} B."
+        );
+        Assert.Equal(4096, ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders);
+        output.WriteLine(
+            $"FIFO: bound=4096, warm hit <= {nativeBytes + 16} B, evicted miss={evictedBytes} B"
+        );
+
+        static long EncodingAllocation(ZLinkEnvelopeHeader header)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            using (var encoded = ZLinkEnvelopeCodec.EncodeHeader(header)) { }
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -43,52 +164,6 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             encodedBytes <= directBytes + iterations * 16L,
             $"Warm encoding allocated {encodedBytes} B per {iterations} calls; owned Message allocated {directBytes} B."
         );
-    }
-
-    [Fact]
-    public async Task WarmHeaderEncodingAndBothDecodersDoNotWaitForCacheMutation()
-    {
-        var header = Header("cache-hot");
-        using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-        var decoded = ZLinkEnvelopeCodec.DecodeHeader(encoded);
-        using var body = Message.From(new byte[] { 48 });
-        using var multipart = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
-            encoded,
-            body,
-        ]);
-        Assert.True(
-            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
-                multipart,
-                out var view
-            )
-        );
-        var lane = ZLinkEnvelopeCodec.CacheLane;
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = lane.RunAsync(async () =>
-        {
-            entered.SetResult();
-            await release.Task;
-        });
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        Task? lookup = null;
-        try
-        {
-            lookup = Task.Run(() =>
-            {
-                using var again = ZLinkEnvelopeCodec.EncodeHeader(header);
-                Assert.Equal(encoded.ToArray(), again.ToArray());
-                Assert.Same(decoded, ZLinkEnvelopeCodec.DecodeHeader(encoded));
-                Assert.Same(decoded, ZLinkEnvelopeCodec.DecodeHeader(view));
-            });
-            await lookup.WaitAsync(TimeSpan.FromSeconds(3));
-        }
-        finally
-        {
-            release.TrySetResult();
-            if (lookup is not null)
-                await lookup.WaitAsync(TimeSpan.FromSeconds(3));
-        }
     }
 
     [Fact]
@@ -375,6 +450,109 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
 
         Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
             ZLinkEnvelopeCodec.DecodeHeader(encoded)
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RequestAndReplyHeaderBytesAndValuesArePinned(bool response)
+    {
+        var header = new ZLinkEnvelopeHeader(
+            response ? ZLinkMessageKind.Response : ZLinkMessageKind.Request,
+            "bench",
+            response ? string.Empty : "BenchPayload",
+            "application/x-protobuf",
+            "abc123",
+            response ? null : new DateTimeOffset(2026, 11, 13, 12, 34, 56, TimeSpan.Zero),
+            null,
+            null,
+            null
+        );
+        var expected = response
+            ? """{"formatMarker":242,"kind":2,"channelName":"bench","messageName":"","contentType":"application/x-protobuf","correlationId":"abc123","deadline":null,"topic":null,"errorCode":null,"errorMessage":null,"source":null,"flowId":null,"flowOrigin":null}"""
+            : """{"formatMarker":242,"kind":1,"channelName":"bench","messageName":"BenchPayload","contentType":"application/x-protobuf","correlationId":"abc123","deadline":"2026-11-13T12:34:56+00:00","topic":null,"errorCode":null,"errorMessage":null,"source":null,"flowId":null,"flowOrigin":null}""";
+        using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(expected), encoded.ToArray());
+        Assert.Equal(header with { FormatMarker = 242 }, ZLinkEnvelopeCodec.DecodeHeader(encoded));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EscapedKnownHeaderNamesAllocateOnlyTheDecodedValues(bool response)
+    {
+        var header = Header("escaped-allocation") with
+        {
+            Kind = response ? ZLinkMessageKind.Response : ZLinkMessageKind.Request,
+            CorrelationId = "escaped-allocation-1",
+        };
+        using var plain = ZLinkEnvelopeCodec.EncodeHeader(header);
+        var escapedJson = System.Text.RegularExpressions.Regex.Replace(
+            plain.GetString(),
+            "\"([a-zA-Z]+)\":",
+            match =>
+                "\"" + string.Concat(match.Groups[1].Value.Select(c => $"\\u{(int)c:x4}")) + "\":"
+        );
+        using var escaped = Message.From(escapedJson);
+        Assert.Equal(
+            ZLinkEnvelopeCodec.DecodeHeader(plain),
+            ZLinkEnvelopeCodec.DecodeHeader(escaped)
+        );
+        const int calls = 1024;
+        var plainBytes = PerCallAllocation.MinWindow(
+            () => ZLinkEnvelopeCodec.DecodeHeader(plain),
+            calls
+        );
+        var escapedBytes = PerCallAllocation.MinWindow(
+            () => ZLinkEnvelopeCodec.DecodeHeader(escaped),
+            calls
+        );
+        output.WriteLine(
+            $"response={response}: plain={plainBytes / calls}, escaped={escapedBytes / calls} B/header"
+        );
+        Assert.True(
+            escapedBytes <= plainBytes + calls * 16L,
+            $"Escaped field names added {(escapedBytes - plainBytes) / calls} B/header."
+        );
+    }
+
+    [Theory]
+    [InlineData("\\uD800")]
+    [InlineData("\\uDC00")]
+    public void UnknownHeaderNamesStillRequireValidUnicode(string name)
+    {
+        using var encoded = Message.From("{\"formatMarker\":242,\"kind\":3,\"" + name + "\":null}");
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(encoded)
+        );
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(14)]
+    [InlineData(78)]
+    [InlineData(79)]
+    [InlineData(1024)]
+    public void UnknownHeaderNamesPreserveUnicodeValidationAcrossStackBufferBounds(int length)
+    {
+        var prefix = "{\"formatMarker\":242,\"kind\":3,\"" + new string('x', length);
+        using var valid = Message.From(prefix + "키\":null}");
+        Assert.Equal(ZLinkMessageKind.Command, ZLinkEnvelopeCodec.DecodeHeader(valid).Kind);
+        using var invalidEscape = Message.From(prefix + "\\uD800\":null}");
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(invalidEscape)
+        );
+        byte[] invalidBytes =
+        [
+            .. System.Text.Encoding.UTF8.GetBytes(prefix),
+            0xff,
+            .. "\":null}"u8.ToArray(),
+        ];
+        using var invalidUtf8 = Message.From(invalidBytes);
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(invalidUtf8)
         );
     }
 

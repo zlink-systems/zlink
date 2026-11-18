@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // Target-contract pin for checklist C-3 (store record golden fixture:
 // 21-location-runtime.md#2.4, 22-location-store-redis.md#7). This test

@@ -502,6 +502,13 @@ Do not call it directly in a Session callback's execution context or add a separ
 current state for duplicate-bind decisions. The decision and its binding effect follow the same
 Actor owner order.
 
+**A bind that does not call the callback does not wait for the Actor gate.** A bind with no current
+binding, an idempotent resubmission from the same physical Session, or a bind without a callback is
+infrastructure progress that runs no user code. After the §5 fence checks, the Actor owner commits
+its binding effect directly instead of queueing it on the Actor gate or lifecycle lane
+([Handler Turn and Execution Gate §1 and §13](../01-execution/02-handler-turn-and-execution-gate.en.md)).
+Whether the Actor gate is used is decided by one question: whether the callback is called.
+
 The callback execution timeout uses the server setting `SessionReplacementCallbackTimeout`, default
 `30,000 ms`. This setting also applies to the Actor owner's duplicate-bind callback. If no result arrives within that time, end the incoming
 bind with `DeadlineExceeded` and signal cancellation to the callback. A late acceptance does not

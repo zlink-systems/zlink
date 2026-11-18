@@ -1157,7 +1157,7 @@ final class ZLinkDefaultSpotContextTest {
                             workerPool,
                             new ZLinkSpotHandlerLoader(
                                     scannedHandlers,
-                                    new ZLinkSpotActorHandlerCatalog(scannedHandlers, null),
+                                    new ZLinkSpotActorHandlerCatalog(null),
                                     handlerType -> null),
                             "instance-mesh",
                             RoutingId.from("node-a"),

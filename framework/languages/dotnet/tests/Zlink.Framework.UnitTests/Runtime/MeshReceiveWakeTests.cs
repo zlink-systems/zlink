@@ -313,6 +313,91 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task ActorReplyRelayKeepsTheOriginalRegistryAcrossPhysicalMeshes()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var owner = new ZLinkManagedMeshNode(context, "lookup-registry-owner");
+        await using var physical = new ZLinkManagedMeshNode(context, "lookup-physical-source");
+        var originalSource = SetRequestSource(owner);
+        physical.SetRoutingId(RoutingId.From("lookup-physical-source"));
+        var physicalSource = originalSource with
+        {
+            NodeRid = physical.RoutingId,
+            NodeGeneration = physical.AllocateOperationId().High,
+        };
+        physical.SetLocalRequestSourceFence(physicalSource);
+        var actor = CreateRegistrationActor(physical, "lookup-relay-actor");
+        var registered = new TaskCompletionSource<ZLinkManagedMeshNode.PendingOperation<int>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var caller = owner.RunDeadlineRequestAsync<int>(
+            RegistrationTimeout,
+            CancellationToken.None,
+            completion =>
+            {
+                try
+                {
+                    return BitConverter.ToInt32(Assert.Single(completion.Parts).AsReadOnlySpan());
+                }
+                finally
+                {
+                    ZLinkMessageParts.DisposeAll(completion.Parts);
+                }
+            },
+            (operation, _) =>
+            {
+                registered.SetResult(operation);
+                return Task.CompletedTask;
+            },
+            kind: MeshOperationKind.ActorRequest
+        );
+        var operation = await registered.Task.WaitAsync(CompletionBound);
+        var deadline = operation.Deadline;
+        await owner.BindActorRequestSourceAsync(operation, physical);
+        using var request = Message.From("request");
+        var submitted = physical.RequestToActorAsync(
+            actor,
+            [request],
+            RegistrationTimeout,
+            CancellationToken.None,
+            _ => 7,
+            static error => error,
+            null,
+            existingOperation: operation,
+            operationOwner: owner
+        );
+        Assert.Same(caller, submitted);
+        Assert.Equal(operation.OperationId, Assert.Single(DrainApplicationRequests(physical)));
+        Assert.Equal(1, owner.PendingOperationCount);
+        Assert.Equal(0, physical.PendingOperationCount);
+        Assert.Equal(deadline, operation.Deadline);
+        Assert.Same(operation, owner._operations[operation.OperationId.Low]);
+        using var wrong = Message.From(BitConverter.GetBytes(7));
+        Assert.Equal(
+            ZLinkRelocationReplyCompletionState.NotFound,
+            owner
+                .TryCompleteRelocationReply(Relay(operation.OperationId), [wrong], originalSource)
+                .State
+        );
+        Assert.False(caller.IsCompleted);
+        var target = new Zlink.Framework.Runtime.Spots.ZLinkRelocationReplyTarget(
+            (relay, payload) => owner.TryCompleteRelocationReply(relay, payload, physicalSource)
+        );
+        var relay = Relay(operation.OperationId);
+        var ack = await target.RelayAsync(
+            relay,
+            relay.Coordinator.NodeRid,
+            relay.Coordinator.NodeGeneration,
+            [Message.From(BitConverter.GetBytes(7))],
+            CancellationToken.None
+        );
+        Assert.NotNull(ack);
+        Assert.Equal(7, await caller.WaitAsync(CompletionBound));
+        Assert.Equal(0, owner.PendingOperationCount);
+        Assert.Equal(0, physical.PendingOperationCount);
+    }
+
+    [Fact]
     public async Task DuplicateRelocationRegistrationPreservesTheOriginalReference()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

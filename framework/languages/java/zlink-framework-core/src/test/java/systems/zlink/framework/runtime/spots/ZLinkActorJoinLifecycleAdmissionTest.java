@@ -41,6 +41,52 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
     static final long COMPLETION_SECONDS = 5;
 
     @Test
+    void discardedExecutionRejectsTheSuspendedCanonicalRegistrationInBothModes() throws Exception {
+        for (var mode : systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode.values()) {
+            try (var fixture = new Fixture<>(Room.class, mode)) {
+                var entered = new CompletableFuture<Void>();
+                var response = new CompletableFuture<ZLinkSpotActorJoinResult>();
+                fixture.room.callback =
+                        id -> {
+                            entered.complete(null);
+                            return response;
+                        };
+                var admitted = fixture.canonical(1);
+                entered.get(COMPLETION_SECONDS, TimeUnit.SECONDS);
+                var discarded = fixture.activation.context.execution.discardAsync();
+                try {
+                    assertFalse(discarded.toCompletableFuture().isDone());
+                    response.complete(ZLinkSpotActorJoinResult.accept());
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    admitted.toCompletableFuture()
+                                            .get(COMPLETION_SECONDS, TimeUnit.SECONDS));
+                    discarded.toCompletableFuture().get(COMPLETION_SECONDS, TimeUnit.SECONDS);
+                    assertEquals(0, fixture.registrations.get());
+                } finally {
+                    response.complete(ZLinkSpotActorJoinResult.accept());
+                }
+            }
+        }
+    }
+
+    @Test
+    void canonicalRegistrationBelongsToItsAcceptedLifecycleTurn() throws Exception {
+        try (var fixture = new Fixture<>(Room.class)) {
+            assertTrue(
+                    fixture.canonical(1)
+                            .toCompletableFuture()
+                            .get(COMPLETION_SECONDS, TimeUnit.SECONDS)
+                            .accepted());
+            assertEquals(1, fixture.registrations.get());
+            assertTrue(
+                    fixture.registrationInTurn,
+                    "canonical registration belongs to the accepted lifecycle turn");
+        }
+    }
+
+    @Test
     void admissionReadsCommittedCloseAtExecution() throws Exception {
         try (var fixture = new Fixture<>(Room.class)) {
             var entered = new CompletableFuture<Void>();
@@ -305,16 +351,41 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
         final SpotActivation activation;
         final T room;
         final ZLinkApplicationJobQueue jobs;
+        final java.util.concurrent.atomic.AtomicInteger registrations =
+                new java.util.concurrent.atomic.AtomicInteger();
+        volatile boolean registrationInTurn;
 
         Fixture(Class<T> roomType) throws Exception {
+            this(
+                    roomType,
+                    systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode.SPOT_WIDE);
+        }
+
+        Fixture(
+                Class<T> roomType,
+                systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode mode)
+                throws Exception {
             var options = new DefaultZLinkFrameworkOptions();
+            if (mode == systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode.PER_ACTOR)
+                options.addRelocationStore(
+                        new systems.zlink.framework.runtime.InMemoryRelocationStore());
             options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
             options.addLocationStore(new ZLinkInMemoryLocationStore());
             var node = options.addRouteMesh("join-admission");
             node.listen("inproc://join-admission-" + UUID.randomUUID()).setRoutingId(NODE);
             node.objects()
                     .server()
-                    .addSpotFactory("room", roomType, factory -> factory.disableRelocation());
+                    .addSpotFactory(
+                            "room",
+                            roomType,
+                            factory -> {
+                                if (mode
+                                        == systems.zlink.framework.configuration
+                                                .ZLinkUserSpotExecutionMode.PER_ACTOR)
+                                    factory.recreateOnRelocation();
+                                else factory.disableRelocation();
+                                factory.executionMode(mode);
+                            });
             framework = ZLinkFrameworkRuntimeTestAccess.start(options);
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(framework)
                     .toCompletableFuture()
@@ -376,6 +447,11 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
             actors.setActorJoinRelocationPort(
                     new ZLinkActorJoinRelocationPort() {
                         @Override
+                        public CompletionStage<Void> discardTargetJoins(Object targetSpot) {
+                            return CompletableFuture.completedFuture(null);
+                        }
+
+                        @Override
                         public CompletionStage<Submission> relocate(Goal goal, Duration timeout) {
                             return CompletableFuture.failedFuture(
                                     new AssertionError("not relocating"));
@@ -387,7 +463,10 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                         }
 
                         @Override
-                        public void admitCanonical(CanonicalAdmission admission) {}
+                        public void admitCanonical(CanonicalAdmission admission) {
+                            registrationInTurn = activation.context.serials.isCurrentSpotTurn();
+                            registrations.incrementAndGet();
+                        }
                     });
             host.actorAdmissions().attach(actors, host::isDraining, null);
         }

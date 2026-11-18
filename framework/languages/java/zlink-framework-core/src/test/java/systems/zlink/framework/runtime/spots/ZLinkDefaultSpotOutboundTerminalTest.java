@@ -23,6 +23,37 @@ import java.util.concurrent.CompletionException;
 
 final class ZLinkDefaultSpotOutboundTerminalTest {
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void staleRouteIsInvalidatedBeforeCallerContinuation(boolean invalidationFails)
+            throws Exception {
+        var invalidations = new java.util.concurrent.atomic.AtomicInteger();
+        var resolver =
+                new systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver() {
+                    public java.util.concurrent.CompletionStage<
+                                    java.util.Optional<
+                                            systems.zlink.framework.runtime.internal.spots
+                                                    .SpotTransportAddress>>
+                            resolve(String spotId) {
+                        return CompletableFuture.completedFuture(java.util.Optional.empty());
+                    }
+
+                    public void invalidate(String spotId) {
+                        invalidations.incrementAndGet();
+                        if (invalidationFails)
+                            throw new IllegalStateException("invalidation failed");
+                    }
+                };
+        var transport = new CompletableFuture<String>();
+        var caller = resolver.observeTerminal("room", transport);
+        var observed = caller.handle((value, error) -> invalidations.get());
+        transport.completeExceptionally(
+                ZLinkFrameworkErrorOrigin.framework(
+                        ZLinkFrameworkErrorKind.NOT_FOUND, "stale owner"));
+        assertEquals(
+                1, observed.toCompletableFuture().get(2, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    @ParameterizedTest
     @CsvSource({"false,false", "false,true", "true,false", "true,true"})
     void sendPreservesFirstTerminal(boolean instance, boolean stale) {
         verifyTerminal(false, instance, stale, false);
@@ -161,6 +192,7 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                             probe.address.targetNodeRid(),
                                             probe.address.spotId(),
                                             probe.address.spotGeneration(),
+                                            probe.address.targetNodeGeneration(),
                                             null,
                                             java.util.List.of(payload),
                                             timeout,

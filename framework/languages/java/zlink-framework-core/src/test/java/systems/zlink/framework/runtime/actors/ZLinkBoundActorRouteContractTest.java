@@ -560,6 +560,7 @@ final class ZLinkBoundActorRouteContractTest {
                                                         RoutingId.from("actor-node-b"),
                                                         "actor-1",
                                                         7),
+                                                0L,
                                                 12,
                                                 13,
                                                 Duration.ZERO)
@@ -620,6 +621,7 @@ final class ZLinkBoundActorRouteContractTest {
         CompletionStage<Void> preparation =
                 actor.prepareNativeActorRoute(
                         new ZLinkBackendActorRef(RoutingId.from("actor-node-b"), "actor-1", 7),
+                        0L,
                         12,
                         13,
                         Duration.ofSeconds(1));

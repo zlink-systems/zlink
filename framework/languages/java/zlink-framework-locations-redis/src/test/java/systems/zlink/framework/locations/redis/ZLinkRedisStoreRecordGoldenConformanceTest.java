@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,6 +50,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacity
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -99,10 +99,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
 
     @Test
     void productionWritePathMatchesGoldenKeysAndWireShape() throws IOException {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         JsonNode fixture = readTree(sharedFixturePath());
         String prefix = fixture.path("prefixExample").asText();
@@ -219,10 +216,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
      */
     @Test
     void productionMeshNodeDescriptorWriteMatchesFullFieldVector() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         JsonNode fixture = readTree(sharedFixturePath());
         JsonNode keyVector = keyDerivationVector(fixture, "mesh-node-descriptor");
@@ -320,10 +314,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
      */
     @Test
     void productionOwnerLeaseClaimMatchesFullFieldVector() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         JsonNode fixture = readTree(sharedFixturePath());
         JsonNode keyVector = keyDerivationVector(fixture, "owner-lease");
@@ -375,10 +366,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
      */
     @Test
     void productionClientServerDescriptorWriteMatchesFullFieldVector() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         JsonNode fixture = readTree(sharedFixturePath());
         JsonNode keyVector = keyDerivationVector(fixture, "client-server-descriptor");
@@ -463,10 +451,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
      */
     @Test
     void productionFanoutPublisherDescriptorWriteMatchesFullFieldVector() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         JsonNode fixture = readTree(sharedFixturePath());
         JsonNode keyVector = keyDerivationVector(fixture, "fanout-publisher-descriptor");
@@ -554,10 +539,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
      */
     @Test
     void productionAuthorityActorReserveCommitMatchesFullFieldVector() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         JsonNode fixture = readTree(sharedFixturePath());
         JsonNode keyVector = keyDerivationVector(fixture, "authority-actor");
@@ -665,10 +647,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
      */
     @Test
     void productionAuthoritySpotReserveMatchesFullFieldVector() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         JsonNode fixture = readTree(sharedFixturePath());
         JsonNode keyVector = keyDerivationVector(fixture, "authority-spot");
@@ -777,10 +756,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
 
     @Test
     void productionCreationTerminalMatchesGoldenKeyAndRawValue() throws Exception {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         JsonNode fixture = readTree(sharedFixturePath());
         JsonNode keyVector = keyDerivationVector(fixture, "creation-terminal");
@@ -886,10 +862,7 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
 
     @Test
     void unrecognizedFormatTagFailsExplicitlyInsteadOfSilentlyMissing() throws IOException {
-        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        assumeTrue(
-                endpoint != null && !endpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String endpoint = ZLinkTestRedis.endpoint();
 
         String prefix = "goldenconf-tag:" + UUID.randomUUID();
         ZLinkRedisLocationKeys keys = new ZLinkRedisLocationKeys(prefix);

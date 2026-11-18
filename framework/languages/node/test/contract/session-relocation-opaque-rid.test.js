@@ -195,6 +195,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   });
   const sent = [];
   const transfer = new ZLinkActorTransferRuntime({
+    currentOwner: () => ({ ownerId: 'actor-owner', leaseGeneration: 13n }),
     primaryMeshNode: () => ({ status: () => ({ routingId: ids.source, lifecycleGeneration: 2n }) }),
     authorityStore: () => ({ readAuthority: async () => currentAuthority }),
     sessionRelocationWire: () => ({
@@ -216,7 +217,6 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   const state = {
     nativeActorRef: { actorId, generation: 5n, nodeRid: ids.source },
     locationGeneration: 11n,
-    ownerLeaseGeneration: 13n,
     boundSession: {
       routerChannelId: 'mesh',
       targetNodeRid: ids.owner,

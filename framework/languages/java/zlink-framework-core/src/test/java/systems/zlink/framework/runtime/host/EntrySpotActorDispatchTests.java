@@ -92,6 +92,106 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class EntrySpotActorDispatchTests {
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"none", "first", "same", "different"})
+    void bindingWaitsForActorGateOnlyWhenInvokingCallback(String scenario) throws Exception {
+        var backend = startBackend();
+        try (var runtime = startRuntime(backend)) {
+            String id = scenario.equals("none") ? "actor-a" : "callback-actor";
+            runtime.actorManager()
+                    .create(id, "probe")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            var actors = ZLinkFrameworkRuntimeTestAccess.actors(runtime);
+            var actor = (ProbeActor) actors.localActor(id).orElseThrow();
+            var ref = actors.currentRef(actor);
+            var current = backend.node.canonicalBoundSessionRoute.orElseThrow();
+            var incoming =
+                    new ZLinkInternalSpotNode.BoundSessionRoute(
+                            current.sessionOwnerNodeRid(),
+                            current.sessionOwnerNodeGeneration(),
+                            current.sessionOwnerId(),
+                            current.sessionOwnerLeaseGeneration(),
+                            scenario.equals("same")
+                                    ? current.sessionRid()
+                                    : RoutingId.from("incoming-session"),
+                            scenario.equals("same")
+                                    ? current.bindingGeneration()
+                                    : current.bindingGeneration() + 1);
+            if (scenario.equals("first"))
+                backend.node.canonicalBoundSessionRoute = Optional.empty();
+            var entered = new CompletableFuture<Void>();
+            var release = new CompletableFuture<Void>();
+            var lane =
+                    actors.actorRelocationLaneAsync(id)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+            var handler =
+                    lane.enqueue(
+                            () -> {
+                                entered.complete(null);
+                                return release;
+                            },
+                            null);
+            entered.get(5, TimeUnit.SECONDS);
+            var binding =
+                    actors.applyRemoteSessionBindingAsync(
+                                    backend.node,
+                                    ref,
+                                    applied ->
+                                            applied.acceptBinding(
+                                                    incoming.sessionBindingIdentity(),
+                                                    incoming.sessionRid(),
+                                                    selected ->
+                                                            selected.decideDuplicateBind(
+                                                                            incoming
+                                                                                    .sessionBindingIdentity(),
+                                                                            incoming.sessionRid(),
+                                                                            () -> {},
+                                                                            () -> false)
+                                                                    .thenCompose(
+                                                                            rejection -> {
+                                                                                assertTrue(
+                                                                                        rejection
+                                                                                                .isEmpty());
+                                                                                return selected
+                                                                                        .commit(
+                                                                                                () -> {
+                                                                                                    backend.node
+                                                                                                                    .canonicalBoundSessionRoute =
+                                                                                                            Optional
+                                                                                                                    .of(
+                                                                                                                            incoming);
+                                                                                                    return CompletableFuture
+                                                                                                            .completedFuture(
+                                                                                                                    true);
+                                                                                                });
+                                                                            })))
+                            .toCompletableFuture();
+            try {
+                if (scenario.equals("different")) {
+                    assertFalse(binding.isDone());
+                    assertEquals(0, ((CallbackProbeActor) actor).duplicateCallbacks.get());
+                    assertEquals(Optional.of(current), backend.node.canonicalBoundSessionRoute);
+                } else {
+                    assertTrue(binding.get(5, TimeUnit.SECONDS));
+                    assertFalse(handler.toCompletableFuture().isDone());
+                    assertEquals(Optional.of(incoming), backend.node.canonicalBoundSessionRoute);
+                    if (actor instanceof CallbackProbeActor callbackActor)
+                        assertEquals(0, callbackActor.duplicateCallbacks.get());
+                }
+            } finally {
+                release.complete(null);
+                handler.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+            assertTrue(binding.get(5, TimeUnit.SECONDS));
+            if (scenario.equals("different"))
+                assertEquals(1, ((CallbackProbeActor) actor).duplicateCallbacks.get());
+            assertEquals(Optional.of(incoming), backend.node.canonicalBoundSessionRoute);
+        }
+    }
+
     private static final int NO_BIND = 1;
     private static final ZLinkJsonMessageSerializer SERIALIZER = new ZLinkJsonMessageSerializer();
     private static final ZLinkMessageSerializer PROTOBUF_SERIALIZER = new ProbeProtobufSerializer();
@@ -1611,7 +1711,7 @@ final class EntrySpotActorDispatchTests {
         }
     }
 
-    public static final class ProbeActor implements ZLinkActor {
+    public static class ProbeActor implements ZLinkActor {
         private final AtomicInteger disconnectCallbacks = new AtomicInteger();
         private final CompletableFuture<Void> disconnectEntered = new CompletableFuture<>();
         private final CompletableFuture<Void> disconnectTerminal = new CompletableFuture<>();
@@ -1638,10 +1738,30 @@ final class EntrySpotActorDispatchTests {
         }
     }
 
+    public static final class CallbackProbeActor extends ProbeActor {
+        final AtomicInteger duplicateCallbacks = new AtomicInteger();
+
+        CallbackProbeActor(ZLinkActorContext context) {
+            super(context.actorId(), context);
+        }
+
+        @Override
+        public CompletionStage<Optional<String>> onDuplicateBind(
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity current,
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
+                systems.zlink.framework.actors.ZLinkActorCallbackCancellation cancellation) {
+            duplicateCallbacks.incrementAndGet();
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+    }
+
     public static final class ProbeActorFactory implements ZLinkActorFactory {
         @Override
         public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
-            return CompletableFuture.completedFuture(new ProbeActor(context.actorId(), context));
+            return CompletableFuture.completedFuture(
+                    context.actorId().startsWith("callback-")
+                            ? new CallbackProbeActor(context)
+                            : new ProbeActor(context.actorId(), context));
         }
     }
 
@@ -2121,6 +2241,7 @@ final class EntrySpotActorDispatchTests {
                 RoutingId targetNodeRid,
                 String spotId,
                 long spotGeneration,
+                long targetNodeGeneration,
                 byte[] metadata,
                 List<Message> parts,
                 Duration timeout,
@@ -2154,6 +2275,7 @@ final class EntrySpotActorDispatchTests {
                 RoutingId targetNodeRid,
                 String spotId,
                 long spotGeneration,
+                long targetNodeGeneration,
                 byte[] metadata,
                 List<Message> parts,
                 Duration timeout,
