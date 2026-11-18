@@ -47,7 +47,23 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
             java.util.function.Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
             java.util.function.Supplier<String> parent,
             Runnable cleanup) {
-        return runtime.execution(
+        return executionAsync(
+                actorId,
+                steady,
+                apply,
+                parent,
+                () ->
+                        systems.zlink.framework.runtime.handlers.ZLinkHandlerStages.fromRunnable(
+                                cleanup));
+    }
+
+    public ZLinkLocationRuntime.Execution executionAsync(
+            String actorId,
+            java.util.function.BooleanSupplier steady,
+            java.util.function.Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
+            java.util.function.Supplier<String> parent,
+            java.util.function.Supplier<CompletionStage<Void>> cleanup) {
+        return runtime.executionAsync(
                 () -> actors.containsKey(actorId) ? ZLinkAuthorityKeyCodec.actor(actorId) : null,
                 steady,
                 apply,

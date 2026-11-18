@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 // §10.7 spot-no-await-echo (also the §11.3 local Spot reference). Question: what the public Spot client costs from the caller

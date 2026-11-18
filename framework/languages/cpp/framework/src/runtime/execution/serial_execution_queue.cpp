@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/execution/serial_application_record.hpp"
@@ -792,6 +792,7 @@ class serial_turn_handle_impl_t final
     }
 
     bool belongs_to (const void *owner) const noexcept override { return owner == &_queue; }
+    bool is_lifecycle () const noexcept { return _lane == serial_work_lane_t::lifecycle; }
     bool is_after_active_phase () const noexcept override
     {
         return std::holds_alternative<serial_execution_queue_t::barrier_origin_t> (_origin);
@@ -1104,6 +1105,13 @@ class serial_turn_handle_impl_t final
     };
     phase_t _phase = phase_t::open;
 };
+
+bool serial_execution_queue_t::is_current_lifecycle_turn () const noexcept
+{
+    const auto turn =
+      std::dynamic_pointer_cast<serial_turn_handle_impl_t> (detail::capture_current_serial_turn ());
+    return turn && turn->belongs_to (this) && turn->is_lifecycle ();
+}
 
 serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor,
                                                     serial_execution_queue_options_t options,
@@ -1426,7 +1434,8 @@ serial_execution_queue_t::accept_application_locked (
     runtime::handler_entry_t initial;
     if (item.lane != serial_work_lane_t::application || !item.application_record)
         return {};
-    if (item.application_record->saved_work () || (preceding && preceding->admission.durable ()))
+    if (item.application_record->saved_work ()
+        || (preceding && (preceding->admission.durable () || !preceding->admission.ready ())))
         item.application_record->admission.take_over (&initial);
     return {std::move (initial), std::exchange (item.application_record->transferred, {})};
 }
@@ -1497,6 +1506,8 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
         record = next->application_record;
         if (!record || record->admission.ready ())
             return false;
+        if (!record->admission.durable ())
+            record->admission.take_over ();
         auto &owned =
           std::get<serial_application_admission_t::durable_t> (record->admission.reservation);
         if (std::holds_alternative<application_job_queue_t::waiter_t> (owned.supply))

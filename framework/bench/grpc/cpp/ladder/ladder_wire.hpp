@@ -59,10 +59,9 @@ inline void control (zlink::router_socket_t &socket, const zlink::routing_id_t &
 // A binding-only peer speaks the real admission/liveness protocol outside the
 // measured data path. No mesh owner/operation/handler is constructed here.
 inline bool handle_control (zlink::router_socket_t &socket, zlink::received_t &received,
-                            const fw::runtime::mesh::service_node_descriptor_t &local,
+                            const fw::runtime::mesh::service_node_descriptor_t &local, int level,
                             std::atomic<bool> *admitted = nullptr,
-                            std::optional<std::uint64_t> *correlation = nullptr,
-                            int level = 1)
+                            std::optional<std::uint64_t> *correlation = nullptr)
 {
     if (received.parts ().empty () || received.parts ()[0].size () == 0)
         return false;
@@ -148,7 +147,7 @@ class encoder_t
         // L4 restores the Framework typed codec. L0 still performs all of
         // the raw binding benchmark's payload allocation and protobuf encode.
         if (_level >= 4 && _shape == payload_shape_t::mixed) {
-            auto value = make_game_message (size, run, phase, seq);
+            auto value = ladder::make_game_message (size, run, phase, seq);
             const auto selected = game_serializer ();
             _type = fw::detail::serializer_registry_access_t::request_plan (selected);
             body = fw::detail::encoded_payload_to_raw (selected.serialize (value));
@@ -209,11 +208,11 @@ class encoder_t
 };
 
 inline std::vector<std::span<const std::byte>> application_views (
-  std::span<const zlink::message_t> parts)
+  std::span<const zlink::message_t> parts, int level)
 {
     if (parts.size () != 2)
         throw std::runtime_error ("ladder requires two wire parts");
-    if (parts[0].size () && *reinterpret_cast<const char *> (parts[0].data ()) == '{')
+    if (level >= 0 && level < 3)
         return {parts[0].bytes (), parts[1].bytes ()};
     return protocol::decode_application_part_views (protocol::message_bytes (parts[1]), false);
 }
@@ -235,7 +234,7 @@ inline void verify_wire (payload_shape_t shape = payload_shape_t::bytes)
             for (bool command : {true, false}) {
                 encoder_t encoder (level, shape);
                 auto parts = encoder.encode (size, 123, phase_active, 456, command);
-                auto views = application_views (parts);
+                auto views = application_views (parts, level);
                 validate_envelope (level, views[0]);
                 const auto expected_size = shape == payload_shape_t::mixed
                   ? game_payload_plan (size).json_size : size;
@@ -394,7 +393,7 @@ Payload decode_reply (const std::vector<zlink::message_t> &parts, int level,
     std::vector<std::span<const std::byte>> packed;
     std::span<const std::span<const std::byte>> views = legacy;
     if (level >= 3 || level < 0) {
-        packed = application_views (parts);
+        packed = application_views (parts, level);
         views = packed;
     }
     if (views.size () != 2)
@@ -517,7 +516,7 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
                 continue;
             while (socket.recv (received, zlink::recv_flags_t::dontwait) == 0) {
                 std::optional<std::uint64_t> correlation;
-                if (handle_control (socket, received, local, nullptr, &correlation, level))
+                if (handle_control (socket, received, local, level, nullptr, &correlation))
                     continue;
                 std::optional<messaging::envelope_header_t> header;
                 auto payload = handler.handle (received, header);
@@ -558,8 +557,8 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
         auto &state = *static_cast<state_t *> (opaque);
         std::optional<std::uint64_t> correlation;
         if (handle_control (state.owner.ablation_socket (), received,
-                            state.owner.startup_descriptor (), nullptr, &correlation,
-                            state.handler.level))
+                            state.owner.startup_descriptor (), state.handler.level,
+                            nullptr, &correlation))
             return;
         // L0-L4: one fixed handler; activation/scope starts at L5_7.
         if (permit) {

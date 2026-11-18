@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/execution/task_result.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -58,6 +58,14 @@
 namespace zlink::framework::detail::test_creation_probe
 {
 std::atomic<void (*) ()> local_completion_sink_fault{nullptr};
+namespace
+{
+std::atomic_size_t actor_request_submissions{0};
+}
+std::size_t actor_request_submission_count () noexcept
+{
+    return actor_request_submissions.load (std::memory_order_relaxed);
+}
 }
 #endif
 
@@ -72,7 +80,7 @@ struct local_completion_sink_t
       std::shared_ptr<task_completion_source_t<operation_completion_t>> source,
       std::shared_ptr<operation_completion_t> result,
       spot_request_completion_t completion,
-      std::function<void ()> incomplete) :
+      std::function<task_t<void> ()> incomplete) :
         source (std::move (source)),
         result (std::move (result)),
         completion (std::move (completion)),
@@ -83,7 +91,8 @@ struct local_completion_sink_t
     void operator() (foundation::operation_terminal_t terminal,
                      ::zlink::framework::result_t<zlink::message_t> completion_payload)
     {
-        auto payload = std::move (completion_payload.value ());
+        auto payload =
+          completion_payload ? std::move (completion_payload.value ()) : zlink::message_t{};
         std::string terminal_message;
         if (terminal == foundation::operation_terminal_t::completed && payload.size () != 0) {
             try {
@@ -96,21 +105,40 @@ struct local_completion_sink_t
         }
         if (terminal != foundation::operation_terminal_t::completed && terminal_message.empty ())
             terminal_message = "Local operation did not complete";
-        if (terminal != foundation::operation_terminal_t::completed && incomplete) {
-            try {
-                incomplete ();
-            }
-            catch (const std::exception &error) {
-                terminal_message += ": rollback failed: ";
-                terminal_message += error.what ();
-            }
-            catch (...) {
-                terminal_message += ": rollback failed with an unknown exception";
-            }
+        if (terminal != foundation::operation_terminal_t::completed && incomplete)
+            (void) finish_failure (std::move (*this), terminal, std::move (terminal_message),
+                                   completion_payload.exception ());
+        else
+            publish (terminal, terminal_message, completion_payload.exception ());
+    }
+
+    static task_t<void> finish_failure (local_completion_sink_t sink,
+                                        foundation::operation_terminal_t terminal,
+                                        std::string terminal_message,
+                                        std::exception_ptr failure)
+    {
+        try {
+            co_await sink.incomplete ();
         }
+        catch (const std::exception &error) {
+            terminal_message += ": rollback failed: ";
+            terminal_message += error.what ();
+        }
+        catch (...) {
+            terminal_message += ": rollback failed with an unknown exception";
+        }
+        sink.publish (terminal, terminal_message, failure);
+        co_return;
+    }
+
+    void publish (foundation::operation_terminal_t terminal,
+                  const std::string &terminal_message,
+                  std::exception_ptr failure)
+    {
         if (completion) {
             auto decoded =
-              terminal == foundation::operation_terminal_t::completed
+              failure ? detail::result_access_t::failure<std::vector<zlink::message_t>> (failure)
+              : terminal == foundation::operation_terminal_t::completed
                 ? result_t<std::vector<zlink::message_t>>::success (std::move (result->parts))
               : terminal == foundation::operation_terminal_t::shutdown
                 ? detail::boundary_failure<std::vector<zlink::message_t>> (
@@ -122,7 +150,9 @@ struct local_completion_sink_t
                     framework_error_kind_t::internal_failure, terminal_message);
             completion (terminal, std::move (decoded));
         } else {
-            auto decoded = terminal == foundation::operation_terminal_t::completed
+            auto decoded = failure
+                             ? detail::result_access_t::failure<operation_completion_t> (failure)
+                           : terminal == foundation::operation_terminal_t::completed
                              ? result_t<operation_completion_t>::success (std::move (*result))
                            : terminal == foundation::operation_terminal_t::shutdown
                              ? detail::boundary_failure<operation_completion_t> (
@@ -143,7 +173,7 @@ struct local_completion_sink_t
     std::shared_ptr<task_completion_source_t<operation_completion_t>> source;
     std::shared_ptr<operation_completion_t> result;
     spot_request_completion_t completion;
-    std::function<void ()> incomplete;
+    std::function<task_t<void> ()> incomplete;
     std::function<void (const result_t<operation_completion_t> &)> receiver;
 };
 
@@ -154,7 +184,8 @@ task_t<zlink::submit_result_t> finish_local_enqueue (mesh::raw_mesh_node_owner_t
                                                      Start start)
 {
     const auto finish = [&transport, operation] (result_t<zlink::submit_result_t> result) {
-        if ((!result || result.value () != zlink::submit_result_t::ok) && operation)
+        if ((!result || result.value () != zlink::submit_result_t::ok) && operation
+            && !operation->registry)
             transport.unregister_local_operation (operation->id);
         if (result && result.value () == zlink::submit_result_t::ok)
             transport.signal_activity ();
@@ -735,8 +766,7 @@ struct application_claim_batch_t
         if (stateful && (kind == owner_kind_t::actor || kind == owner_kind_t::spot))
             return;
         for (std::size_t index = 0; index < claim->claimed_messages; ++index)
-            entries[index].original.emplace (
-              mesh::service_mailbox_t::transfer_locked (*claim->records[index]));
+            entries[index].original.emplace (std::move (*claim->records[index]));
     }
 
     std::array<entry_t, dispatch_limits::receive_batch_messages> storage;
@@ -3250,6 +3280,33 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_bound_session (
       encode_application (parts), std::move (trace));
 }
 
+task_t<void> public_host_runtime_t::register_actor_request (pending_operation_t &operation,
+                                                            std::chrono::milliseconds timeout)
+{
+    const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
+    const auto reservation = co_await prepare_local_completion (operation);
+    if (!reservation)
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "Actor request source is closed");
+    operation.id = reservation->first;
+    operation.registry = _transport->operation_registry ();
+    auto host = shared_from_this ();
+    if (!_transport->register_prepared_local_operation (
+          *reservation, deadline,
+          [host, operation] (auto terminal, auto payload) {
+              if (!payload)
+                  operation.completion->complete (
+                    detail::result_access_t::failure<operation_completion_t> (
+                      payload.exception ()));
+              else
+                  host->complete_operation (operation, operation_kind_t::none, terminal,
+                                            std::move (payload.value ()));
+          },
+          mesh_request_surface_t::actor))
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "Actor request registry is closed");
+}
+
 task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
   const actor_ref_t &target,
   const std::vector<zlink::message_t> &parts,
@@ -3261,6 +3318,10 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
   std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
   std::uint64_t node_generation)
 {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+    ::zlink::framework::detail::test_creation_probe::actor_request_submissions.fetch_add (
+      1, std::memory_order_relaxed);
+#endif
     const auto target_routing_id =
       zlink::routing_id_t::from (std::string (target.node_rid ().value ()));
     if (target_routing_id.to_bytes () == status ().routing_id ().to_bytes ()) {
@@ -3269,8 +3330,10 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
           timeout, authority_owner_generation, owner_lease_generation);
         co_return accepted;
     }
-    operation.prepare_for_registration ();
-    operation.id = next_operation ();
+    if (!operation.registry) {
+        operation.prepare_for_registration ();
+        operation.id = next_operation ();
+    }
     const auto object = co_await _objects.find_async (stateful::object_kind_t::actor,
                                                       std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation
@@ -3283,6 +3346,10 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         || node_generation == 0) {
         co_return zlink::submit_result_t::not_found;
     }
+    const auto deadline =
+      operation.registry ? operation.registry->deadline (operation.id) : std::nullopt;
+    if (operation.registry && !deadline)
+        co_return zlink::submit_result_t::not_connected;
     const auto host = shared_from_this ();
     auto public_operation = operation;
     public_operation.receiver = {};
@@ -3291,8 +3358,10 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         complete_public = [host, public_operation] (auto terminal, auto payload) {
             // The prepared receiver owns application decoding. This task publishes only
             // the registry's terminal, including a timeout whose dispatcher ran later.
-            auto record = host->decode_operation_record (
-              public_operation.id, operation_kind_t::none, terminal, payload.value ());
+            auto record =
+              payload ? host->decode_operation_record (public_operation.id, operation_kind_t::none,
+                                                       terminal, payload.value ())
+                      : detail::result_access_t::failure<receive_record_t> (payload.exception ());
             public_operation.completion->complete (
               record
                 ? result_t<operation_completion_t>::success ({record.value (), {}})
@@ -3300,8 +3369,11 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         };
     } else {
         complete_public = [host, public_operation] (auto terminal, auto payload) {
-            host->complete_operation (public_operation, operation_kind_t::none, terminal,
-                                      payload.value ());
+            public_operation.completion->complete (
+              payload
+                ? host->decode_operation_completion (public_operation, operation_kind_t::none,
+                                                     terminal, payload.value ())
+                : detail::result_access_t::failure<operation_completion_t> (payload.exception ()));
         };
     }
     auto submission = _transport->request_to_actor (
@@ -3325,7 +3397,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
                   : detail::result_access_t::failure<operation_completion_t> (payload.exception ()),
                 claimed);
           }}
-        : mesh::raw_mesh_node_owner_t::physical_receiver_t{});
+        : mesh::raw_mesh_node_owner_t::physical_receiver_t{},
+      operation.registry, deadline);
     // C1 consumes the callback synchronously at publication. The binding/readiness
     // producer now owns physical delivery even if admission later fails.
     if (!complete_public)
@@ -7542,7 +7615,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
         if (!application_dispatch_started) {
             for (;;) {
                 mesh::service_mailbox_application_t pending;
-                bool skip = false;
                 _local_dispatch_completion_lane.run_sync ([&] {
                     if (_local_application_dispatches.empty ())
                         return;
@@ -7553,12 +7625,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
                         return;
                     pending = std::move (_local_application_dispatches.front ());
                     _local_application_dispatches.pop_front ();
-                    if (uses_local_operation_registry (pending->record.kind))
-                        skip = !_transport->operation_pending (pending->record.operation_id);
                 });
                 if (!pending)
                     break;
-                if (skip)
+                // Accepted request payloads outlive their caller. Join admission
+                // controls still require their operation's terminal claim.
+                if (pending->record.kind == record_kind_t::spot_control
+                    && !_transport->operation_pending (pending->record.operation_id))
                     continue;
                 if (pending->record.kind == record_kind_t::spot_multicast
                     && pending->record.spot_route) {
@@ -8810,7 +8883,7 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
   const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation,
   std::chrono::milliseconds timeout,
   spot_request_completion_t completion,
-  std::function<void ()> incomplete,
+  std::function<task_t<void> ()> incomplete,
   mesh_request_surface_t request_surface)
 {
     const auto source = operation.completion;
@@ -8820,8 +8893,12 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
     result->record.operation_id = reservation.first;
     result->record.source_node_rid =
       zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
-    const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
+    const auto deadline = operation.registry
+                            ? operation.registry->deadline (operation.id)
+                                .value_or (foundation::operation_registry_t::clock_t::time_point{})
+                            : foundation::operation_registry_t::clock_t::now () + timeout;
     foundation::operation_registry_t::callback_t complete;
+    local_completion_sink_t *receiver_owner = nullptr;
     try {
         auto sink = std::make_shared<local_completion_sink_t> (
           source, result, std::move (completion), std::move (incomplete));
@@ -8831,22 +8908,30 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
                 .exchange (nullptr))
             fault ();
 #endif
-        sink->receiver = std::exchange (operation.receiver, {});
+        receiver_owner = sink.get ();
         complete = foundation::operation_registry_t::callback_t{
           std::move (sink),
           [] (local_completion_sink_t &selected, foundation::operation_terminal_t terminal,
               ::zlink::framework::result_t<zlink::message_t> payload) {
               selected (terminal, std::move (payload));
           }};
-        if (!_transport->register_prepared_local_operation (reservation, deadline,
-                                                            std::move (complete), request_surface))
+        receiver_owner->receiver = std::exchange (operation.receiver, {});
+        const auto registered =
+          operation.registry
+            ? operation.registry->continue_operation (operation.id, std::move (complete))
+            : _transport->register_prepared_local_operation (reservation, deadline,
+                                                             std::move (complete), request_surface);
+        if (!registered)
             throw framework_exception_t (framework_error_kind_t::shutting_down,
                                          "Operation completion registry is closed");
     }
     catch (...) {
         // An unconsumed callback never acquired a C1 entry. Its physical
         // receiver still needs the same terminal and capture retirement.
-        if (complete)
+        if (operation.registry) {
+            if (complete)
+                operation.receiver = std::move (receiver_owner->receiver);
+        } else if (complete)
             complete (foundation::operation_terminal_t::shutdown,
                       result_t<zlink::message_t>::success ({}));
         else
@@ -8854,7 +8939,8 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
                                               foundation::operation_terminal_t::transport_failed);
         throw;
     }
-    operation.id = reservation.first;
+    if (!operation.registry)
+        operation.id = reservation.first;
     operation.local_result = result;
     return deadline;
 }
@@ -8864,9 +8950,12 @@ bool public_host_runtime_t::enqueue_completion (const pending_operation_t &opera
                                                 receive_record_t record,
                                                 std::vector<zlink::message_t> parts)
 {
-    return _transport->complete_local_operation (operation.id, [&] {
+    auto fill = [&] {
         *operation.local_result = operation_completion_t{std::move (record), std::move (parts)};
-    });
+    };
+    if (operation.registry)
+        return operation.registry->complete (operation.id, zlink::message_t{}, fill);
+    return _transport->complete_local_operation (operation.id, fill);
 }
 
 task_t<zlink::submit_result_t>
@@ -8901,6 +8990,18 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
       result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
     std::exception_ptr failure;
     std::optional<std::chrono::steady_clock::time_point> operation_deadline;
+    struct incomplete_join_t
+    {
+        static task_t<void> run (std::shared_ptr<public_host_runtime_t> host,
+                                 stateful::membership_token_t membership,
+                                 std::function<task_t<void> ()> cleanup)
+        {
+            if (cleanup)
+                co_await cleanup ();
+            if (membership.value != 0)
+                (void) co_await host->_objects.abort_membership_move_async (membership);
+        }
+    };
     try {
         co_await _lifecycle_configuration_lane.run_task ([&] {
             if (!_started || _closing)
@@ -8909,17 +9010,8 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                 operation_deadline = register_local_completion (
                   operation, *reservation, timeout, {},
                   [host = shared_from_this (), membership,
-                   cleanup = local_request_wait_cleanup (waiter)] {
-                      if (cleanup)
-                          cleanup ();
-                      if (membership.value != 0) {
-                          const auto abort =
-                            [] (std::shared_ptr<public_host_runtime_t> owner,
-                                stateful::membership_token_t move) -> task_t<void> {
-                              (void) co_await owner->_objects.abort_membership_move_async (move);
-                          };
-                          (void) abort (host, membership);
-                      }
+                   cleanup = local_request_wait_cleanup (waiter)] () -> task_t<void> {
+                      return incomplete_join_t::run (host, membership, cleanup);
                   });
             }
             catch (const framework_exception_t &failure) {
@@ -9079,15 +9171,26 @@ bool public_host_runtime_t::complete_local_actor_join (
     return completed;
 }
 
-std::function<void ()> public_host_runtime_t::local_request_wait_cleanup (
+std::function<task_t<void> ()> public_host_runtime_t::local_request_wait_cleanup (
   const std::shared_ptr<application_job_queue_t::waiter_t> &waiter)
 {
     if (!waiter)
         return {};
-    std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-    return [weak, waiter] {
-        if (auto host = weak.lock ())
-            host->_local_dispatch_completion_lane.try_post ([waiter] { (void) waiter->cancel (); });
+    struct wait_cleanup_t
+    {
+        static task_t<void> run (std::weak_ptr<public_host_runtime_t> weak,
+                                 std::shared_ptr<application_job_queue_t::waiter_t> waiter)
+        {
+            const auto cancel = [waiter] { (void) waiter->cancel (); };
+            if (auto host = weak.lock ();
+                host && !host->_local_dispatch_completion_lane.is_on_lane ())
+                co_await host->_local_dispatch_completion_lane.run_task (cancel);
+            else
+                cancel ();
+        }
+    };
+    return [weak = weak_from_this (), waiter] () -> task_t<void> {
+        return wait_cleanup_t::run (weak, waiter);
     };
 }
 
@@ -9459,7 +9562,9 @@ void public_host_runtime_t::admit_local_application (
     auto application = original.retain_mutable ();
     auto pending = waiter ? waiter : std::make_shared<application_job_queue_t::waiter_t> ();
     std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-    *pending = _options.mesh.application_jobs->wait_for_supply (
+    auto register_supply = waiter ? &application_job_queue_t::register_request_supply
+                                  : &application_job_queue_t::register_supply;
+    auto registration = (_options.mesh.application_jobs.get ()->*register_supply) (
       [weak, waiter = pending, application,
        admitted] (std::optional<application_job_queue_t::permit_t> reserved) mutable {
           auto waiting = std::move (waiter);
@@ -9480,7 +9585,6 @@ void public_host_runtime_t::admit_local_application (
           }
           application->application_permit = std::move (*reserved);
           auto publish = [weak, waiting, application, admitted] () mutable {
-              *waiting = {};
               auto host = weak.lock ();
               if (!host || !host->_transport->started ()) {
                   if (admitted)
@@ -9514,6 +9618,8 @@ void public_host_runtime_t::admit_local_application (
                                                            "application admission lane closed"));
       },
       application_job_queue_t::origin_t::local);
+    *pending = std::move (registration.waiter);
+    _options.mesh.application_jobs->deliver_immediate (registration, *pending);
 }
 
 task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_message (
@@ -9550,7 +9656,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
               source_binding_generation = bound_session_source->binding_generation;
               source_session_sequence = bound_session_source->session_sequence;
           }
-          auto waiter = _options.mesh.application_jobs
+          auto waiter = operation && _options.mesh.application_jobs
                           ? std::make_shared<application_job_queue_t::waiter_t> ()
                           : nullptr;
           auto enqueue =
@@ -9577,9 +9683,13 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
                             return local_enqueue_result (zlink::submit_result_t::terminated);
                         reply_token_t reply_token;
                         if (operation) {
-                            register_local_completion (*operation, *reservation, timeout, {},
-                                                       local_request_wait_cleanup (waiter),
-                                                       mesh_request_surface_t::actor);
+                            register_local_completion (
+                              *operation,
+                              reservation.value_or (
+                                mesh::raw_mesh_node_owner_t::local_operation_reservation_t{
+                                  operation->id, {}}),
+                              timeout, {}, local_request_wait_cleanup (waiter),
+                              mesh_request_surface_t::actor);
                             operation_id = operation->id;
                             std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
                             reply_token.host = weak;
@@ -9632,6 +9742,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
                     });
               });
           };
+          if (operation && operation->registry)
+              return enqueue (std::nullopt, std::nullopt);
           if (operation)
               return continue_task<zlink::submit_result_t> (
                 prepare_local_completion (*operation),

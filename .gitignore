@@ -379,3 +379,6 @@ framework/languages/unity/*.sln
 framework/languages/unity/**/*.csproj
 framework/languages/unity/**/*.meta
 !framework/languages/unity/com.zlink.stream-connector.webgl/**/*.meta
+
+# engine sample run output (run_sample)
+framework/languages/engines/Server/.run/

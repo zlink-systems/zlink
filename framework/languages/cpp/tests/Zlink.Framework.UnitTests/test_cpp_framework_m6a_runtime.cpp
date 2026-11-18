@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "mailbox_claim_fixture.hpp"
 #include "../support/telemetry_observation.hpp"
 
@@ -620,8 +620,10 @@ void verify_bound_session_bind_missing_descriptor (std::string_view outcome)
     const auto invalidation_deadline = invalidated_other_generation
                                          ? std::chrono::steady_clock::now () + 2s
                                          : std::chrono::steady_clock::time_point::max ();
+    const auto request_timeout = outcome == "late-endpoint-failure" ? 5s : 2s;
     assert (await_task (source.request_bound_session_bind (
-      remote.node_routing_id, bound_session_bind_request (remote, "missing-bind-actor"), 2s,
+      remote.node_routing_id, bound_session_bind_request (remote, "missing-bind-actor"),
+      request_timeout,
       [&promise] (foundation::operation_terminal_t terminal, result_t<zlink::message_t> payload) {
           promise.set_value ({terminal, payload.value ().to_bytes ()});
       },
@@ -643,15 +645,20 @@ void verify_bound_session_bind_missing_descriptor (std::string_view outcome)
         target.close ();
         source.expect_peer (remote);
         assert (source.connect_peer (remote.advertised_endpoint, remote));
-        const auto failure_deadline = std::chrono::steady_clock::now () + 2s;
+        // Windows confirms a refused connect at about 2s, so this request must outlast that event.
+        const auto failure_deadline = std::chrono::steady_clock::now () + request_timeout;
         bool observed_failure = false;
         while (!observed_failure && std::chrono::steady_clock::now () < failure_deadline) {
-            (void) source.observe_routes ();
+            // Core snapshot changes signal POLLCONNECT; use the existing ingress poller.
+            const auto readiness = source.wait_for_activity (
+              std::max (0ms, std::chrono::ceil<std::chrono::milliseconds> (
+                               failure_deadline - std::chrono::steady_clock::now ())));
+            assert (readiness);
+            assert (source.begin_receive_turn (*readiness));
             const auto observation = source.topology ().observe_peer (
               remote.node_routing_id, remote.advertised_endpoint) ();
             const auto attempt = observation.connection_attempt ();
             observed_failure = attempt && attempt->last_failure_id != 0;
-            std::this_thread::yield ();
         }
         assert (observed_failure);
 #if !defined(_WIN32)

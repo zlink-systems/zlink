@@ -863,13 +863,25 @@ export class RawServiceMeshRuntime {
     this.serviceIngressAccepts = accepts;
   }
 
-  async reserveLocalIngress(signal?: AbortSignal): Promise<ApplicationIngressRecordOwner> {
+  reserveLocalIngress(signal?: AbortSignal): Promise<ApplicationIngressRecordOwner> {
     const waitSignal =
       signal === undefined
         ? this.applicationJobStop.signal
         : AbortSignal.any([this.applicationJobStop.signal, signal]);
-    const permit = await this.applicationJobQueue.acquire(waitSignal, 'local');
-    return ApplicationIngressRecordOwner.create(this.applicationJobQueue, permit, { close() {} });
+    return new Promise((resolve, reject) => {
+      const reserve = (
+        permit: import('../application-jobs/contracts').ApplicationJobPermitPort
+      ): void => {
+        signal?.addEventListener('abort', () => permit.releaseAfterInternalProcessing(), {
+          once: true
+        });
+        resolve(
+          ApplicationIngressRecordOwner.create(this.applicationJobQueue, permit, { close() {} })
+        );
+      };
+      const permit = this.applicationJobQueue.acquireOrResume(reserve, reject, waitSignal, 'local');
+      if (permit !== undefined) reserve(permit);
+    });
   }
 
   async sendService(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
@@ -1159,7 +1171,6 @@ export class RawServiceMeshRuntime {
           permit.releaseStorage?.();
         } else {
           this.receivePermit = permit;
-          this.onReceiveReady?.();
         }
         resolveAcquisition?.(permit);
       },
@@ -1173,10 +1184,14 @@ export class RawServiceMeshRuntime {
         rejectAcquisition = reject;
       });
       this.receiveAcquisition = acquisition;
-      acquisition.catch((error) => {
-        this.receiveAcquisition = undefined;
-        if (!this.applicationJobStop.signal.aborted) this.reportInfrastructureFailure(error);
-      });
+      acquisition
+        .then(() => {
+          if (!this.closed) this.onReceiveReady?.();
+        })
+        .catch((error) => {
+          this.receiveAcquisition = undefined;
+          if (!this.applicationJobStop.signal.aborted) this.reportInfrastructureFailure(error);
+        });
     }
     return permit;
   }
@@ -1754,8 +1769,7 @@ export class RawServiceMeshRuntime {
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
       encodedPayload = copyPayloadBytes(encodedPayload);
-      // The local admission path aborts its capacity wait on the terminal
-      // Promise, so a local request always keeps the Promise entry.
+      // The registry ends local admission before delivering the terminal.
       const pending =
         requestOperation === undefined
           ? this.operations.register(timeoutMs)
@@ -1766,16 +1780,11 @@ export class RawServiceMeshRuntime {
               requestOperation
             ) as PendingOperation<RawServiceRequestResult>);
       const parts = [header, encodedPayload];
-      const capacityStop = new AbortController();
-      void pending.promise.finally(() => capacityStop.abort()).catch(() => undefined);
       void (async () => {
-        const applicationJobOwner = await this.reserveLocalIngress(capacityStop.signal);
+        const applicationJobOwner = await this.reserveLocalIngress(pending.signal);
         try {
           if (!pending.isPending()) return;
-          const applicationJob = await applicationJobOwner.acquire(
-            'application',
-            capacityStop.signal
-          );
+          const applicationJob = await applicationJobOwner.acquire('application', pending.signal);
           if (!pending.isPending()) {
             applicationJob.close();
             return;

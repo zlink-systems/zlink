@@ -6,7 +6,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_common.sh
 source "${HERE}/../runner_common.sh"
-bench_init cpp "grpc-cpp,zlink-cpp,zlink-framework-cpp" \
+bench_init cpp "grpc-cpp,zlink-cpp,zlink-framework-cpp,zlink-cpp-json,zlink-framework-cpp-json" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 cd "${HERE}"
 
@@ -80,6 +80,17 @@ for run in $(seq 1 "${RUNS}"); do
         target_endpoint="tcp://127.0.0.1:5294"; target_command_endpoint=""; target_stats_port=5295
         target_command=("${BUILD_DIR}/bench_cpp_framework_server" --endpoint "${target_endpoint}" --stats-port "${target_stats_port}")
         ;;
+      zlink-cpp-json)
+        trigger_port=5285; source_stats_port=5286
+        target_endpoint="tcp://127.0.0.1:5287"; target_command_endpoint="tcp://127.0.0.1:5288"; target_stats_port=5289
+        target_command=("${BUILD_DIR}/bench_cpp_zlink_server" --endpoint "${target_endpoint}" \
+          --command-endpoint "${target_command_endpoint}" --stats-port "${target_stats_port}" --implementation zlink-cpp-json)
+        ;;
+      zlink-framework-cpp-json)
+        trigger_port=5292; source_stats_port=5293
+        target_endpoint="tcp://127.0.0.1:5294"; target_command_endpoint=""; target_stats_port=5295
+        target_command=("${BUILD_DIR}/bench_cpp_framework_server" --endpoint "${target_endpoint}" --stats-port "${target_stats_port}")
+        ;;
     esac
     trigger_url="http://127.0.0.1:${trigger_port}"
     source_stats_url="http://127.0.0.1:${source_stats_port}"
@@ -95,7 +106,12 @@ for run in $(seq 1 "${RUNS}"); do
         mkdir -p "${cell_dir}"
         log "cell=${cell_id} run=${run}: start target B then source A"
 
-        target_process=("${target_command[@]}")
+        # Main JSON cells use the production path beside the selected ladder cell.
+        cell_environment=()
+        if [[ "${implementation}" == *-json ]]; then
+          cell_environment=(env ZLINK_CPP_LADDER_LEVEL=8)
+        fi
+        target_process=("${cell_environment[@]}" "${target_command[@]}")
         if [[ -n "${TARGET_CPUS:-}" ]]; then
           target_process=(taskset -c "${TARGET_CPUS}" "${target_process[@]}")
         fi
@@ -117,7 +133,7 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${TARGET_RATE:-}" ]]; then
           source_args+=(--target-rate "${TARGET_RATE}")
         fi
-        source_process=("${BUILD_DIR}/bench_cpp_client" "${source_args[@]}")
+        source_process=("${cell_environment[@]}" "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}")
         if [[ -n "${SOURCE_CPUS:-}" ]]; then
           source_process=(taskset -c "${SOURCE_CPUS}" "${source_process[@]}")
         fi

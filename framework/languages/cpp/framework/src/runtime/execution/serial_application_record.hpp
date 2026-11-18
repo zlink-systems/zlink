@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include <zlink/framework/contracts/spots/spot.hpp>
@@ -36,7 +36,9 @@ struct serial_application_admission_t
     bool durable () const noexcept { return std::holds_alternative<durable_t> (reservation); }
     bool ready () const noexcept
     {
-        return !durable () || !jobs
+        if (!durable ())
+            return !std::get<initial_t> (reservation).needs_reacquisition ();
+        return !jobs
                || std::holds_alternative<application_job_queue_t::permit_t> (
                  std::get<durable_t> (reservation).supply);
     }

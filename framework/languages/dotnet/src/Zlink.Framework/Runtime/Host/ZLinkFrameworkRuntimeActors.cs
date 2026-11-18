@@ -1882,6 +1882,13 @@ internal sealed partial class ZLinkFrameworkRuntime
         bool startTeardownReconciliation = true
     )
     {
+        if (actorState.ContextInvalidated)
+        {
+            await _actorSessionManager
+                .DiscardLocationExecutionAsync(actorState)
+                .ConfigureAwait(false);
+            return;
+        }
         Exception? failure = null;
         if (actorState.Actor is { } actor)
         {
@@ -2402,7 +2409,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                             ZLinkRemoteActorJoinPackets.ConservativeReceiveChunkLimitBytes
                         );
                     },
-                    cancellationToken
+                    cancellationToken,
+                    () => target.UserSpot?.IsDisposed == true
                 )
                 .ConfigureAwait(false);
         }
@@ -3192,7 +3200,15 @@ internal sealed partial class ZLinkFrameworkRuntime
             duplicateBindMethodIndex >= 0
             && actorInterfaceMap.TargetMethods[duplicateBindMethodIndex].DeclaringType
                 != typeof(IZLinkActor);
-        if (!hasDuplicateBindCallback)
+        if (
+            !state.TryGetBoundSession(out var currentBinding)
+            || currentBinding.IsSamePhysicalSessionOwner(
+                sourceNodeRid,
+                sourceNodeGeneration,
+                sessionRid
+            )
+            || !hasDuplicateBindCallback
+        )
         {
             ScheduleReplacementNotification(ReplaceBinding());
             return;
@@ -3209,21 +3225,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ExecuteDispatchAsync(
                 async _ =>
                 {
-                    if (
-                        !state.TryGetBoundSession(out var currentBinding)
-                        || currentBinding.IsSamePhysicalSessionOwner(
-                            sourceNodeRid,
-                            sourceNodeGeneration,
-                            sessionRid
-                        )
-                    )
-                    {
-                        return (
-                            Transition: (ZLinkActorSessionBindingTransition?)ReplaceBinding(),
-                            Rejected: false
-                        );
-                    }
-
                     var actor =
                         state.Actor
                         ?? throw new ZLinkFrameworkException(

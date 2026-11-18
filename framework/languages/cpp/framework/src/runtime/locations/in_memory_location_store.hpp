@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/relocation_authority_payload.hpp"

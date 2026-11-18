@@ -1,8 +1,9 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // Source A: HTTP-triggered logical streams. The runner owns process isolation and settle.
 #include "../common/bench_async.hpp"
 #include "../common/bench_common.hpp"
 #include "../common/binding_wire.hpp"
+#include "../common/game_message.hpp"
 #include "../common/bench_stats_server.hpp"
 #include <zlink/codecs/protobuf.hpp>
 #include <zlink/framework.hpp>
@@ -271,6 +272,7 @@ struct stream_t
         changed.notify_one ();
     }
 
+#if defined(ZLINK_CPP_ABLATION_LADDER)
     void finish_game (const ladder::game_message_t &reply, uint64_t seq,
                       const std::exception *error = nullptr)
     {
@@ -292,6 +294,39 @@ struct stream_t
                 if (reply.sent_ns > static_cast<std::int64_t> (ladder::game_timestamp_offset))
                     latency.add_us (static_cast<double> (now_ns ()
                       - (reply.sent_ns - static_cast<std::int64_t> (ladder::game_timestamp_offset))) / 1000.0);
+            }
+        }
+        counters.leave ();
+        changed.notify_one ();
+    }
+#endif
+    void finish_game (uint64_t sent,
+                      const game_message_t *reply,
+                      uint64_t seq,
+                      const std::exception *error = nullptr)
+    {
+        std::lock_guard lock (mutex);
+        if (closed)
+            return;
+        const auto now = clock_t_::now ();
+        bool valid = !error;
+        if (reply && valid) {
+            valid = game_stamp_matches (*reply, run_id, phase, seq, size);
+            if (!valid)
+                ++counters.header_failures;
+            else if (sent == 0)
+                sent = static_cast<uint64_t> (reply->sent_ns);
+        }
+        if (error)
+            counters.record_exception (*error);
+        else if (!valid)
+            counters.record_error ("ValidationError", "JSON game message stamp mismatch");
+        else {
+            ++counters.completed;
+            if (now < deadline) {
+                ++active_completed;
+                if (sent)
+                    latency.add_us (static_cast<double> (now_ns () - sent) / 1000.0);
             }
         }
         counters.leave ();
@@ -635,7 +670,8 @@ class zlink_raw_driver_t final : public driver_t
 {
   public:
     zlink_raw_driver_t (const options_t &options, int window, bool command) :
-        driver_t (options, window, command), _socket (_context),
+        driver_t (options, window, command),
+        _json_body (options.implementation == "zlink-cpp-json"), _socket (_context),
         _target (zlink::routing_id_t::from (command ? options.raw_command_rid : options.raw_request_rid))
     {
         _socket.set_routing_id (zlink::routing_id_t::from (
@@ -677,8 +713,59 @@ class zlink_raw_driver_t final : public driver_t
   private:
     void submit (std::shared_ptr<stream_t> stream, int, uint64_t seq) override
     {
+        if (_json_body) {
+            const auto payload =
+              make_game_message (stream->size, stream->run_id, stream->phase, seq);
+            const auto text = encode_game_json (payload);
+            const char *envelope = request_json_envelope ();
+            auto header = zlink::message_t::from (
+              std::as_bytes (std::span<const char> (envelope, std::strlen (envelope))));
+            auto body = zlink::message_t::from (std::as_bytes (std::span<const char> (text)));
+            if (_command) {
+                auto submission = _socket.send (_target).message (header).message (body).async ();
+                observe_binding (
+                  std::move (submission.admitted),
+                  [stream, seq] {
+                      stream->finish_game (0, nullptr, seq);
+                      stream->admit ();
+                  },
+                  [stream, seq] (const auto &error) {
+                      stream->finish_game (0, nullptr, seq, &error);
+                      stream->admit (false);
+                  });
+            } else {
+                auto submission =
+                  _socket.request (_target)
+                    .message (header)
+                    .message (body)
+                    .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
+                    .async ();
+                observe_binding (
+                  std::move (submission.reply),
+                  [stream, seq] (const auto &parts) {
+                      try {
+                          if (parts.empty ())
+                              throw std::runtime_error ("empty raw JSON reply");
+                          const auto reply =
+                            decode_game_json (parts.back ().data (), parts.back ().size ());
+                          stream->finish_game (0, &reply, seq);
+                      }
+                      catch (const std::exception &error) {
+                          stream->finish_game (0, nullptr, seq, &error);
+                      }
+                  },
+                  [stream, seq] (const auto &error) {
+                      stream->finish_game (0, nullptr, seq, &error);
+                  });
+                observe_binding (
+                  std::move (submission.admitted), [stream] { stream->admit (); },
+                  [stream] (const auto &) { stream->admit (false); });
+            }
+            return;
+        }
         submit_raw (_socket, _target, std::move (stream), seq);
     }
+    const bool _json_body;
     zlink::context_t _context;
     zlink::router_socket_t _socket;
     zlink::routing_id_t _target;
@@ -744,7 +831,10 @@ class framework_driver_t final : public driver_t
             return ladder::make_typed_payload (size, _run_id, phase, seq);
         else
 #endif
-            return make_payload (size, phase, seq);
+            if constexpr (std::is_same_v<Payload, game_message_t>)
+                return make_game_message (size, _run_id, phase, seq);
+            else
+                return make_payload (size, phase, seq);
     }
     void submit (std::shared_ptr<stream_t> stream, int, uint64_t seq) override
     {
@@ -754,14 +844,21 @@ class framework_driver_t final : public driver_t
         if (_command) {
             auto task = _client->send_to_node ("bench", _target_node, std::move (payload)).async ();
             observe_framework (task, [stream, seq] (const auto &result) {
-                stream->finish (0, nullptr, seq, result ? nullptr : result.error ());
+                if constexpr (std::is_same_v<Payload, game_message_t>)
+                    stream->finish_game (0, nullptr, seq, result ? nullptr : result.error ());
+                else
+                    stream->finish (0, nullptr, seq, result ? nullptr : result.error ());
                 stream->admit (static_cast<bool> (result));
             });
         } else {
             auto task = _client->request_to_node ("bench", _target_node, std::move (payload))
               .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).template async<Payload> ();
             observe_framework (task, [stream, sent, seq] (const auto &result) {
-                stream->finish_bytes (sent, result ? result.value ().body ().data () : nullptr,
+                if constexpr (std::is_same_v<Payload, game_message_t>)
+                    stream->finish_game (sent, result ? &result.value () : nullptr, seq,
+                                         result ? nullptr : result.error ());
+                else
+                    stream->finish_bytes (sent, result ? result.value ().body ().data () : nullptr,
                                       result ? result.value ().body ().size () : 0, seq,
                                       result ? nullptr : result.error ());
             });
@@ -840,10 +937,12 @@ class source_t
 #endif
                 if (_options.implementation == "grpc-cpp")
                     _driver = std::make_unique<grpc_driver_t> (_options, window, command);
-                else if (_options.implementation == "zlink-cpp")
+                else if (_options.implementation == "zlink-cpp" || _options.implementation == "zlink-cpp-json")
                     _driver = std::make_unique<zlink_raw_driver_t> (_options, window, command);
                 else if (_options.implementation == "zlink-framework-cpp")
                     _driver = std::make_unique<framework_driver_t<>> (_options, window, command);
+                else if (_options.implementation == "zlink-framework-cpp-json")
+                    _driver = std::make_unique<framework_driver_t<game_message_t>> (_options, window, command);
                 else
                     throw std::runtime_error ("unknown implementation: " + _options.implementation);
 
@@ -1140,6 +1239,11 @@ int main (int argc, char **argv)
 #endif
         options.pattern = arg_value (argc, argv, "--pattern", "request-serial");
         options.payload_size = std::stoul (arg_value (argc, argv, "--payload-size", "1024"));
+        if ((options.implementation == "zlink-cpp-json"
+             || options.implementation == "zlink-framework-cpp-json")
+            && options.payload_size != 1024 && options.payload_size != 4096)
+            throw std::runtime_error (options.implementation
+                                      + " supports payload sizes 1024 and 4096 only");
         if (options.payload_size != 1024 && options.payload_size != 4096 && options.payload_size != 1376 && options.payload_size != 5472)
             throw std::runtime_error ("payload must be 1024 or 4096");
         const auto endpoint = arg_value (argc, argv, "--endpoint", "127.0.0.1:5282");

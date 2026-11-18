@@ -27,15 +27,13 @@ msg::message_parts_t before_parts (const msg::envelope_header_t &actual,
     header.correlation_id = actual.correlation_id;
     header.deadline = actual.deadline;
     auto payload = fw::detail::encoded_payload_from_raw (body);
-    auto type = std::make_shared<fw::detail::request_type_plan_t> (
-      fw::detail::prepare_request_type ("BenchPayload", "application/x-protobuf"));
-    auto channel = std::make_shared<fw::detail::prepared_header_fragment_t> (
-      fw::detail::prepare_request_channel ("bench"));
+    auto type = std::make_shared<const fw::detail::request_type_plan_t> (
+      fw::detail::request_type_plan_t{"application/x-protobuf"});
     if (command)
         return codec.encode_payload_parts (header, std::move (payload), type->content_type);
     if (level == 3)
-        return codec.encode_service_payload_parts (std::move (header), std::move (payload), type, channel);
-    return codec.encode_payload_parts (std::move (header), std::move (payload), type, channel);
+        return codec.encode_service_payload_parts (std::move (header), std::move (payload), type);
+    return codec.encode_payload_parts (std::move (header), std::move (payload), type);
 }
 
 void wire_identity (ladder::payload_shape_t shape)
@@ -46,7 +44,7 @@ void wire_identity (ladder::payload_shape_t shape)
             for (bool command : {true, false}) {
                 auto after = encoder.encode (size, 123, phase_active, 456, command,
                                               std::chrono::seconds (2));
-                auto views = ladder::application_views (after);
+                auto views = ladder::application_views (after, level);
                 const auto actual = msg::envelope_codec_t{}.decode_header_view (
                   msg::message_parts_t::borrow (views), false).value ();
                 // Reuse the same stamped body: its send timestamp also varies.

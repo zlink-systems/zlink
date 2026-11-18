@@ -756,28 +756,32 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       : nodeSendResult(submitted);
   }
 
-  async sendInfrastructureControl(
+  sendInfrastructureControl(
     targetRid: unknown,
     record: Uint8Array | readonly Uint8Array[]
   ): Promise<SubmitResultValue> {
-    return (await this.requireRuntime().sendService(
-      String(targetRid),
-      (Array.isArray(record) ? record : [record]).map((value) => Buffer.from(value))
-    ))
-      ? SubmitResult.Ok
-      : SubmitResult.NotConnected;
+    return this.sendInfrastructureControlFrames(
+      targetRid,
+      Array.isArray(record) ? record : [record]
+    );
   }
 
   async sendInfrastructureControlFrames(
     targetRid: unknown,
     frames: readonly Uint8Array[]
   ): Promise<SubmitResultValue> {
-    return (await this.requireRuntime().sendService(
-      String(targetRid),
-      frames.map((frame) => Buffer.from(frame))
-    ))
-      ? SubmitResult.Ok
-      : SubmitResult.NotConnected;
+    const runtime = this.requireRuntime();
+    const sourceRoutingId = runtime.topology.localDescriptor().nodeRoutingId;
+    const parts = frames.map((frame) => Buffer.from(frame));
+    const accepted = routingIdsEqual(String(targetRid), sourceRoutingId)
+      ? runtime.mailbox.tryEnqueue({
+          owner: `node:${sourceRoutingId}`,
+          domain: 'infrastructure',
+          parts,
+          sourceRoutingId
+        })
+      : await runtime.sendService(String(targetRid), parts);
+    return accepted ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
   async requestInfrastructureControlFrames(
@@ -1943,19 +1947,21 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       unknown,
       unknown
     > = {
-      operationCompleted: (_operationId, value) =>
+      operationCompleted: (_operationId, value) => {
+        entry.deferCompletion();
         queueMicrotask(() =>
           this.deliverCompletion(id, kind, value as ServiceStatefulResult, completion)
-        ),
-      operationFailed: (_operationId, error) =>
+        );
+      },
+      operationFailed: (_operationId, error) => {
+        entry.deferCompletion();
         queueMicrotask(() =>
           this.deliverCompletion(id, kind, requestFailureResult(error), completion)
-        )
+        );
+      }
     };
-    if (completion === undefined) {
-      entry.setObserver(receiver);
-      submit();
-    } else submit(receiver);
+    entry.setObserver(receiver);
+    submit(receiver);
     return this.requestSubmission(id, entry);
   }
 
@@ -2289,18 +2295,6 @@ class RawStreamSessionService implements StreamSessionService {
       pendingByteCount: 0n,
       lastError: 0
     };
-  }
-
-  lookupActor(
-    targetNodeRid: RoutingId,
-    actorId: string,
-    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
-  ): MeshOperationId {
-    this.requireStarted();
-    return this.observe(
-      OperationKind.ActorLookup,
-      this.stateful.lookupRemoteActor(String(targetNodeRid), actorId, timeoutMs)
-    );
   }
 
   bindActor(

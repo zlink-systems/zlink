@@ -1,8 +1,9 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #ifndef ZLINK_CPP_BENCH_STATS_SERVER_HPP
 #define ZLINK_CPP_BENCH_STATS_SERVER_HPP
 
 #include "bench_common.hpp"
+#include "game_message.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -57,6 +58,34 @@ class server_metrics_t
         const double latency =
           now >= header.sent_ns ? static_cast<double> (now - header.sent_ns) : 0.0;
         if (header.phase != phase_active)
+            return;
+        ++_active_messages;
+        if (_latency_ns.size () < latency_sample_limit)
+            _latency_ns.push_back (latency);
+    }
+
+    void record_game (const game_message_t &payload)
+    {
+        std::lock_guard<std::mutex> lock (_gate);
+        ++_all_phase_messages;
+        const auto valid_size = [&] {
+            try {
+                return payload.items.size () == game_item_count (1024)
+                       || payload.items.size () == game_item_count (4096);
+            }
+            catch (const std::invalid_argument &) {
+                return false;
+            }
+        };
+        if (!valid_size () || payload.run < 0 || payload.phase < phase_warmup
+            || payload.phase > phase_active || payload.seq < 0 || payload.sent_ns < 0) {
+            ++_errors;
+            return;
+        }
+        const uint64_t sent_ns = static_cast<uint64_t> (payload.sent_ns);
+        const uint64_t now = now_ns ();
+        const double latency = now >= sent_ns ? static_cast<double> (now - sent_ns) : 0.0;
+        if (payload.phase != phase_active)
             return;
         ++_active_messages;
         if (_latency_ns.size () < latency_sample_limit)

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // The Actor Object Server hosts the Actors that a remote Session binds (§10.2) or an ActorCaller addresses by
 // ActorId (§10.9, §10.10).

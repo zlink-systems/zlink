@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 // §10.6 s2s-spot-to-channel-send-send-echo. Question: what a send that goes from a Spot to a Channel and returns to the

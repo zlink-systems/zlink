@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/utils/available_processor_count.hpp"
 #include "../support/runtime_failure_fixture.hpp"

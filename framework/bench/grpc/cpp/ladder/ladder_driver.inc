@@ -106,7 +106,7 @@ class ladder_driver_t final : public driver_t
   private:
     void receive_control (zlink::received_t &received)
     {
-        if (!ladder::handle_control (*_socket, received, _local, &_admitted))
+        if (!ladder::handle_control (*_socket, received, _local, _level, &_admitted))
             throw std::runtime_error ("unexpected binding client receive");
     }
     void prepare_streams (int count) override

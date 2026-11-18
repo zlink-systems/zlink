@@ -244,7 +244,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         Map.copyOf(peerAdmissionExpectations));
     }
 
-    /** Owns the pending HELLO submission and its first descriptor bytes until ADMIT. */
+    /** Owns the route's first outbound admission snapshot and HELLO submission until ADMIT. */
     static final class HelloExchange {
         // Carries the map key to the existing descriptor submission after the owner commit.
         private final RoutingId target;
@@ -3790,15 +3790,26 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         var completion =
                 ZLinkServiceOperationRegistry.<List<Message>>prepareOperation(
                         ZLinkServiceOperationIds.next());
-        requestActor(
-                target,
-                parts,
-                timeout,
-                requestAdmission,
-                Function.identity(),
-                reply -> reply.forEach(Message::close),
-                Function.identity(),
-                completion);
+        var retained = ZLinkJavaRawSpot.copy(parts);
+        operations
+                .<List<Message>>submitTerminal(
+                        completion.id(),
+                        timeout,
+                        terminal -> {
+                            requestActor(
+                                    target,
+                                    retained,
+                                    timeout,
+                                    requestAdmission,
+                                    Function.identity(),
+                                    Message::closeAll,
+                                    Function.identity(),
+                                    completion);
+                            return completion;
+                        },
+                        Message::closeAll,
+                        completion)
+                .whenComplete((accepted, failure) -> Message.closeAll(retained));
         return completion;
     }
 
@@ -3811,7 +3822,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             Consumer<T> discardReply,
             Function<Throwable, Throwable> mapFailure,
             ZLinkServiceOperationRegistry.Operation<T> completion) {
-        long startedAt = System.nanoTime();
         ZLinkBackendActorRef actor = target.actor();
         long correlation = allocateCorrelation();
         UUID operationId = completion.id();
@@ -3832,13 +3842,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         try {
             inSourceTurn(
                             () -> {
-                                Duration remaining =
-                                        ZLinkRequestCalls.remainingTimeout(
-                                                timeout, startedAt, System::nanoTime);
                                 operations
-                                        .submitTerminal(
+                                        .submitRegistered(
                                                 operationId,
-                                                remaining,
                                                 terminal -> {
                                                     BiConsumer<T, Throwable> receiver =
                                                             (value, failure) ->
@@ -3875,8 +3881,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                                             requestAdmission),
                                                             target.targetNodeGeneration());
                                                 },
-                                                discardReply,
-                                                completion)
+                                                discardReply)
                                         .whenComplete(
                                                 (accepted, failure) -> {
                                                     if (failure != null || !accepted)
@@ -3888,7 +3893,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             (ignored, failure) -> {
                                 if (failure != null) {
                                     Message.closeAll(frames);
-                                    completion.completeExceptionally(mapFailure.apply(failure));
+                                    operations.completeExceptionally(
+                                            operationId, mapFailure.apply(failure));
                                 }
                             });
         } catch (RuntimeException | Error failure) {
@@ -8477,14 +8483,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     int responseCommand;
                     if (receivedCommand == ServiceWireConstants.COMMAND_HELLO) {
                         responseCommand = ServiceWireConstants.COMMAND_ADMIT;
-                        var exchange = helloExchanges.get(target);
-                        if (exchange != null && exchange.hello != null) {
-                            descriptor =
-                                    wire.decodeAdmission(
-                                            exchange.hello,
-                                            ServiceWireConstants.COMMAND_HELLO,
-                                            localDescriptor.nodeRoutingId());
-                        }
+                        descriptor =
+                                wire.decodeAdmission(
+                                        admissionHello(
+                                                target, selectedRoutes.getOrDefault(target, 0L)),
+                                        ServiceWireConstants.COMMAND_HELLO,
+                                        localDescriptor.nodeRoutingId());
                     } else {
                         responseCommand = ServiceWireConstants.COMMAND_UPDATE;
                         if (completedExchange != null)
@@ -8493,6 +8497,27 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     return trySendAdmissionControl(
                             target, List.of(wire.encodeAdmission(responseCommand, descriptor)));
                 });
+    }
+
+    // The descriptor lane selects the snapshot once; the map commit also orders HELLO retries.
+    private byte[] admissionHello(RoutingId target, long generation) {
+        if (!helloExchanges.containsKey(target) && isRouteReady(target))
+            return wire.encodeAdmission(ServiceWireConstants.COMMAND_HELLO, localDescriptor);
+        return helloExchanges.compute(
+                        target,
+                        (ignored, current) -> {
+                            var exchange =
+                                    current != null && current.routeGeneration() == generation
+                                            ? current
+                                            : new HelloExchange(target, generation, null, null);
+                            if (exchange.hello == null)
+                                exchange.hello =
+                                        wire.encodeAdmission(
+                                                ServiceWireConstants.COMMAND_HELLO,
+                                                localDescriptor);
+                            return exchange;
+                        })
+                .hello;
     }
 
     private CompletionStage<Void> trySendAdmissionControl(RoutingId target, List<byte[]> frames) {
@@ -8718,31 +8743,33 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     /** MeshNode §7.1: every selected route retries HELLO until its ADMIT is received. */
     private List<HelloExchange> announceExpectedPeers(boolean admissionDue) {
         if (peerAdmissionSealed.getAsBoolean()) return List.of();
-        List<HelloExchange> submissions = null;
+        List<HelloExchange> submissions = new ArrayList<>();
         for (var route : selectedRoutes.entrySet()) {
             RoutingId peerRid = route.getKey();
             long generation = route.getValue();
             if (notRequiredPeers.contains(peerRid)
                     || rejectedPeers.contains(peerRid)
                     || isRouteReady(peerRid)) continue;
-            HelloExchange current = helloExchanges.get(peerRid);
-            boolean sameRoute = current != null && current.routeGeneration() == generation;
-            if (sameRoute && (!admissionDue || !current.submission().isDone())) continue;
-            var exchange =
-                    new HelloExchange(
-                            peerRid,
-                            generation,
-                            new CompletableFuture<>(),
-                            sameRoute ? current.hello : null);
-            boolean installed =
-                    current == null
-                            ? helloExchanges.putIfAbsent(peerRid, exchange) == null
-                            : helloExchanges.replace(peerRid, current, exchange);
-            if (!installed) continue;
-            if (submissions == null) submissions = new ArrayList<>();
-            submissions.add(exchange);
+            helloExchanges.compute(
+                    peerRid,
+                    (ignored, current) -> {
+                        boolean sameRoute =
+                                current != null && current.routeGeneration() == generation;
+                        if (sameRoute
+                                && current.submission() != null
+                                && (!admissionDue || !current.submission().isDone()))
+                            return current;
+                        var exchange =
+                                new HelloExchange(
+                                        peerRid,
+                                        generation,
+                                        new CompletableFuture<>(),
+                                        sameRoute ? current.hello : null);
+                        submissions.add(exchange);
+                        return exchange;
+                    });
         }
-        return submissions == null ? List.of() : List.copyOf(submissions);
+        return List.copyOf(submissions);
     }
 
     private void refreshAdmissionPending(long nowNanos) {
@@ -8796,13 +8823,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     if (peerAdmissionSealed.getAsBoolean()
                                             || helloExchanges.get(exchange.target) != exchange)
                                         return CompletableFuture.<Void>completedStage(null);
-                                    if (exchange.hello == null)
-                                        exchange.hello =
-                                                wire.encodeAdmission(
-                                                        ServiceWireConstants.COMMAND_HELLO,
-                                                        localDescriptor);
                                     return trySendAdmissionControl(
-                                            exchange.target, List.of(exchange.hello));
+                                            exchange.target,
+                                            List.of(
+                                                    admissionHello(
+                                                            exchange.target,
+                                                            exchange.routeGeneration())));
                                 })
                         .thenCompose(stage -> stage)
                         .whenComplete(

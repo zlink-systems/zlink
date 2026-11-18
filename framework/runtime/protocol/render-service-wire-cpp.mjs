@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: LicenseRef-zlink-License-1.0
+// SPDX-License-Identifier: Elastic-2.0
 
 import crypto from "node:crypto";
 import fs from "node:fs";

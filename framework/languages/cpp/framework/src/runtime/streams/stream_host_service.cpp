@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/disconnect_rid.hpp"
@@ -1832,7 +1832,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     {
         const auto _mesh_node = this->_mesh_node;
         auto *const services = _services;
-        auto *const io = &_io;
         const auto binding_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
         if (!_mesh_node) {
             throw framework_exception_t (framework_error_kind_t::not_configured,
@@ -1941,54 +1940,19 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                   },
                   &session_rid);
             }
-            if (transition.value ().changed && transition.value ().previous
-                && transition.value ().previous->session_rid
-                && transition.value ().previous->node_generation != 0
-                && transition.value ().previous->binding_generation != 0
-                && !transition.value ().previous->session_owner_id.empty ()
-                && transition.value ().previous->session_owner_lease_generation != 0) {
-                const auto &previous = *transition.value ().previous;
-                const runtime::protocol::bound_session_replaced_t notice{
-                  runtime::protocol::actor_route_fence_t{
-                    std::string (actor.actor_id ().value ()), actor.object_generation (),
-                    actor_route->node_rid.to_bytes (), actor_route->node_generation,
-                    actor_route->authority_owner_generation,
-                    static_cast<std::uint64_t> (actor_route->owner.lease_generation)},
-                  runtime::protocol::retired_bound_session_route_fence_t{
-                    previous.node_rid.to_bytes (), previous.node_generation,
-                    previous.session_owner_id, previous.session_owner_lease_generation,
-                    previous.session_rid->to_bytes (), previous.binding_generation}};
-                asio::post (*io, [_mesh_node, actor_gateway, notice] () mutable {
-                    const auto local_status = _mesh_node->native_node ().status ();
-                    if (notice.retired_session.session_owner_node_routing_id
-                        == local_status.routing_id ().to_bytes ()) {
-                        (void) actor_gateway.dispatch_bound_session_replaced (notice);
-                    } else {
-                        (void) _mesh_node->native_node ().transport ().send_bound_session_replaced (
-                          notice.retired_session.session_owner_node_routing_id, notice);
-                    }
-                });
-            }
             return result_t<void>::success ();
         };
-        if (local_node->to_hex () == actor_route->node_rid.to_hex ()) {
-            co_await detail::request_admitted_t{};
-            recorded = result_t<void>::success ();
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+          binding_deadline - std::chrono::steady_clock::now ());
+        if (remaining <= std::chrono::milliseconds::zero ()) {
+            recorded = result_t<void>::failure (framework_error_kind_t::deadline_exceeded,
+                                                "Actor session binding deadline elapsed");
         } else {
-            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-              binding_deadline - std::chrono::steady_clock::now ());
-            if (remaining <= std::chrono::milliseconds::zero ()) {
-                recorded =
-                  result_t<void>::failure (framework_error_kind_t::deadline_exceeded,
-                                           "Remote Actor session binding deadline elapsed");
-            } else {
-                const auto remote_binding =
-                  co_await detail::request_submission (_mesh_node->bind_application_actor_session (
-                    actor, session_rid, binding.binding_generation, *actor_route, remaining));
-                binding.binding_generation = remote_binding.binding_generation;
-                binding.actor.authority_owner_generation =
-                  remote_binding.authority_owner_generation;
-            }
+            const auto accepted_binding =
+              co_await detail::request_submission (_mesh_node->bind_application_actor_session (
+                actor, session_rid, binding.binding_generation, *actor_route, remaining));
+            binding.binding_generation = accepted_binding.binding_generation;
+            binding.actor.authority_owner_generation = accepted_binding.authority_owner_generation;
         }
         if (recorded) {
             std::tie (error, binding) = _mesh_node->native_node ().sessions ().bind_remote (

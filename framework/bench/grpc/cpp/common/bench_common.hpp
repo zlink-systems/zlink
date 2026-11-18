@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 // Shared measurement plumbing for the C++ with-grpc bench.
 //
 // Everything here is measurement scaffolding, never judgement: the shared
@@ -174,6 +174,22 @@ inline const char *response_envelope ()
     return "{\"kind\":2,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":"
            "\"application/"
            "x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":"
+           "null,\"errorMessage\":null,\"source\":null}";
+}
+
+inline const char *request_json_envelope ()
+{
+    return "{\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"GameMessage\",\"contentType\":"
+           "\"application/"
+           "json\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":"
+           "null,\"errorMessage\":null,\"source\":null}";
+}
+
+inline const char *response_json_envelope ()
+{
+    return "{\"kind\":2,\"channelName\":\"bench\",\"messageName\":\"GameMessage\",\"contentType\":"
+           "\"application/"
+           "json\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":"
            "null,\"errorMessage\":null,\"source\":null}";
 }
 

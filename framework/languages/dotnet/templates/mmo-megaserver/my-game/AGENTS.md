@@ -238,7 +238,7 @@ The body follows the issue template of the ZLink repository. Copy the following 
 
 Reduce the reproduction to the minimal code or commands that keep only the failing public call, not this whole project. Paste only the first failing log section and the step before it; attach the full log as a file when it is needed. State when startup failed before flow recording.
 
-> **Issues are public.** Remove license keys, tokens, internal host names, and personal data from logs and settings before filing.
+> **Issues are public.** Remove tokens, internal host names, and personal data from logs and settings before filing.
 
 ### Filing procedure
 

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include "runtime/backend/raw_route_port.hpp"
@@ -302,6 +302,17 @@ class raw_mesh_node_owner_t
                                      const service_node_descriptor_t &local) noexcept;
     bool complete_relocated_request (const protocol::reply_relay_t &relay,
                                      const std::optional<protocol::application_payload_t> &reply);
+    std::shared_ptr<foundation::operation_registry_t> operation_registry () const
+    {
+        return _operations;
+    }
+    using operation_owner_t =
+      std::pair<std::shared_ptr<foundation::operation_registry_t>, foundation::call_id_t>;
+    using operation_owner_resolver_t =
+      std::function<std::optional<operation_owner_t> (foundation::call_id_t, std::uint64_t)>;
+    std::optional<operation_owner_t> local_operation_owner (foundation::call_id_t operation,
+                                                            std::uint64_t reply_route_id) const;
+    void set_operation_owner_resolver (operation_owner_resolver_t resolver);
     bool operation_pending (const foundation::call_id_t &operation) const;
     std::size_t pending_operation_count () const;
     task_t<bool> send_to_channel (const std::string &channel_name,
@@ -365,7 +376,9 @@ class raw_mesh_node_owner_t
         std::nullopt,
       std::optional<std::uint64_t> correlation = std::nullopt,
       std::uint8_t message_follow_hop_count = 0,
-      physical_receiver_t receiver = {});
+      physical_receiver_t receiver = {},
+      std::shared_ptr<foundation::operation_registry_t> registered = {},
+      std::optional<foundation::operation_registry_t::clock_t::time_point> deadline = {});
     task_t<bool> send_bound_session (const std::vector<std::uint8_t> &session_owner_routing_id,
                                      const protocol::bound_session_send_t &record,
                                      protocol::application_payload_t application_payload);
@@ -654,7 +667,9 @@ class raw_mesh_node_owner_t
       std::optional<foundation::operation_registry_t::request_identity_t> request = {},
       std::shared_ptr<task_completion_source_t<void>> admitted = {},
       physical_receiver_t receiver = {},
-      std::uint64_t target_lifecycle_generation = 0);
+      std::uint64_t target_lifecycle_generation = 0,
+      std::shared_ptr<foundation::operation_registry_t> registered = {},
+      std::optional<foundation::call_id_t> registered_operation = {});
     std::shared_ptr<task_completion_source_t<void>> start_request_with_header (
       std::span<const std::uint8_t> target_routing_id,
       const std::function<zlink::message_t (std::uint64_t)> &header,
@@ -667,7 +682,9 @@ class raw_mesh_node_owner_t
       std::optional<foundation::operation_registry_t::request_identity_t> request = {},
       std::shared_ptr<task_completion_source_t<void>> admitted = {},
       physical_receiver_t receiver = {},
-      std::uint64_t target_lifecycle_generation = 0);
+      std::uint64_t target_lifecycle_generation = 0,
+      std::shared_ptr<foundation::operation_registry_t> registered = {},
+      std::optional<foundation::call_id_t> registered_operation = {});
     task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
@@ -734,6 +751,10 @@ class raw_mesh_node_owner_t
     static void publish_peer_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
+    operation_owner_resolver_t _operation_owner_resolver = [this] (auto operation,
+                                                                   auto reply_route_id) {
+        return local_operation_owner (operation, reply_route_id);
+    };
     peer_reconcile_t _peer_reconcile;
     live_location_reader_t *_request_sources = nullptr;
     std::function<std::shared_ptr<const location_owner_token_t> ()> _local_request_lease;

@@ -1,4 +1,3 @@
-const { OperationRegistry } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -55,15 +54,6 @@ function bindFixture(request, initiallyReady = true) {
   const service = backend.createStreamSessionService({});
   // Location resolution succeeds before the bind transport scenario starts.
   service.start();
-  const lookups = new OperationRegistry();
-  runtime.lookupRemoteActor = (_node, _actorId, timeoutMs) => {
-    const pending = lookups.register(timeoutMs);
-    queueMicrotask(() => pending.complete({
-      terminalResult: RequestResult.Ok, failureCode: 0,
-      kindData: { kind: 'actorLookupCompletion', location: { actor } }
-    }));
-    return pending;
-  };
   let bindCalls = 0;
   let deadline;
   const bindActor = service.bindActor.bind(service);

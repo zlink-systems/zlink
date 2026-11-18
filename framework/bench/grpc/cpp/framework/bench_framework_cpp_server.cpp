@@ -1,7 +1,8 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
-// Target B: public RouteMesh typed protobuf echo/count handlers.
+/* SPDX-License-Identifier: Elastic-2.0 */
+// Target B: public RouteMesh protobuf and default typed JSON echo/count handlers.
 #include "bench_metric_reader.hpp"
 #include "bench_stats_server.hpp"
+#include "../common/game_message.hpp"
 #include "bench.pb.h"
 #include <zlink/framework.hpp>
 #include <zlink/codecs/protobuf.hpp>
@@ -38,6 +39,24 @@ template <typename Payload = payload_t> struct command_handler_t
     {
         metrics.record (request.body ().data (), request.body ().size ());
     }
+    server_metrics_t &metrics;
+};
+
+struct game_echo_handler_t
+{
+    explicit game_echo_handler_t (server_metrics_t &metrics) : metrics (metrics) {}
+    game_message_t handle (const game_message_t &request)
+    {
+        metrics.record_game (request);
+        return request;
+    }
+    server_metrics_t &metrics;
+};
+
+struct game_command_handler_t
+{
+    explicit game_command_handler_t (server_metrics_t &metrics) : metrics (metrics) {}
+    void handle (const game_message_t &request) { metrics.record_game (request); }
     server_metrics_t &metrics;
 };
 
@@ -108,6 +127,10 @@ int main (int argc, char **argv)
             mesh.add_route_request_handler<echo_handler_t<>, payload_t, payload_t> ("BenchPayload")
               .add_route_send_handler<command_handler_t<>, payload_t> ("BenchPayload");
         }
+        mesh
+          .add_route_request_handler<game_echo_handler_t, game_message_t, game_message_t> (
+            "GameMessage")
+          .add_route_send_handler<game_command_handler_t, game_message_t> ("GameMessage");
         if (!server.start ())
             return 2;
         std::fprintf (stderr, "zlink-framework-cpp target: endpoint=%s stats=%d\n",

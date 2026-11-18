@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LicenseRef-zlink-License-1.0
+# SPDX-License-Identifier: Elastic-2.0
 #
 # C++ with-grpc bench (spec: framework/bench/grpc/README.ko.md).
 #
@@ -221,3 +221,10 @@ if(ZLINK_CPP_ABLATION_LADDER)
       "${BENCH_REPO_ROOT}/framework/runtime/protocol/generated/cpp")
   endforeach()
 endif()
+
+add_executable(bench_cpp_game_json_test tests/game_json_test.cpp ${BENCH_PROTO_CC})
+target_include_directories(bench_cpp_game_json_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+target_link_libraries(bench_cpp_game_json_test PRIVATE zlink::framework protobuf::libprotobuf)
+target_compile_definitions(bench_cpp_game_json_test PRIVATE
+  BENCH_GAME_JSON_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../ladder-mixed-payload.json")
+add_test(NAME bench_cpp_game_json_fixture COMMAND bench_cpp_game_json_test)

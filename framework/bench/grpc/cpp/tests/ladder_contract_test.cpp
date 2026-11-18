@@ -95,7 +95,7 @@ void socket_contract (int level)
                 std::optional<std::uint64_t> correlation;
                 require (!ladder::handle_control (target, received,
                            ladder::descriptor (target_rid, "inproc://ladder-contract"),
-                           nullptr, &correlation), "unexpected control record");
+                           level, nullptr, &correlation), "unexpected control record");
                 if (permit)
                     permit->release_for_handler_entry ();
                 const auto *body_storage = received.parts ()[1].data ();
@@ -135,7 +135,7 @@ void socket_contract (int level)
                     require_rejected ([&] {
                         ladder::handle_control (target, received,
                           ladder::descriptor (target_rid, "inproc://ladder-contract"),
-                          nullptr, &invalid_correlation);
+                          level, nullptr, &invalid_correlation);
                         handler.handle (received, invalid);
                     },
                                       "target accepted a malformed wire/envelope header");
@@ -161,7 +161,10 @@ void socket_contract (int level)
                 }
             }
         }
-        catch (...) { target_failure = std::current_exception (); }
+        catch (const std::exception &error) {
+            std::fprintf (stderr, "target contract: %s\n", error.what ());
+            target_failure = std::current_exception ();
+        }
     });
     const auto shape = ladder::read_payload_shape ();
     ladder::encoder_t encoder (level, shape);
@@ -190,7 +193,7 @@ void socket_contract (int level)
                 require_rejected ([&] { ladder::decode_reply<Payload> (reply, level, 456); },
                                   "source accepted the wrong service correlation");
                 reply[0] = std::move (saved);
-                const auto views = ladder::application_views (reply);
+                const auto views = ladder::application_views (reply, level);
                 std::vector<zlink::message_t> invalid;
                 invalid.push_back (ladder::message ("{broken"));
                 invalid.push_back (zlink::message_t::from (views[1]));

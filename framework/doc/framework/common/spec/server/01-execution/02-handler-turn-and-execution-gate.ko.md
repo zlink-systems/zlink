@@ -309,6 +309,7 @@ local·remote bounded resource의 오류 선택은 [Framework 오류 모델 §5]
 | 허용된 `SpotWide`·Instance 문맥에서 request 또는 Actor·Spot create/get-or-create를 `Yield`로 기다린다 | 허용. Shared gate를 반납하고 완료 뒤 queue 뒤의 새 turn에서 재개한다 |
 | runtime이 handler를 실행하려고 내부적으로 실행 문맥을 합성한다 | 허용. 새 작업의 제출이 아니다 |
 | handler가 결과를 기다리지 않고 자기 대상에 작업을 제출한다 | 허용. 대기열 뒤에 추가한다 |
+| Spot의 lifecycle callback(Join·Leave 등, [§7](#7-lane-분리와-우선순위-구현)) 안에서 그 Spot 자신의 close를 호출한다 | 금지. 결과를 기다리는지와 관계없이 호출 시점에 `InvalidOperation`. Close는 호출과 동시에 terminal을 돌려주어 대기 여부로 나눌 수 없고, 그 Close는 현재 callback이 끝나야 진행한다 |
 
 "제출 전"이 중요하다. 요청이 나간 뒤에 실패하면 원격에 부작용만 남기고 caller는 실패를
 받는다.

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include <zlink/locations/redis.hpp>
 
@@ -350,6 +350,39 @@ TEST (ZLinkFrameworkLocationsRedis, SnapshotRetainsValuesAcrossImmediateVersionP
     EXPECT_FALSE (next.next_cursor);
     const auto current = std::get<store_found_t> (provider.read ({"mesh:b"}).result ().value ());
     EXPECT_EQ (current.value.bytes, bytes ("127"));
+}
+
+TEST (ZLinkFrameworkLocationsRedis, SnapshotUsesRedisClockAndKeepsItAcrossPages)
+{
+    const auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
+
+    redis_location_store_t store (*options);
+    location_store_t &provider = store;
+    const store_key_t expires_later{"mesh:a"};
+    const store_key_t never_expires{"mesh:b"};
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider
+        .write ({{},
+                 {store_put_t{expires_later, bytes ("a"), 5min},
+                  store_put_t{never_expires, bytes ("b"), std::nullopt}}})
+        .result ()
+        .value ()));
+
+    const auto first = std::get<store_scan_page_t> (
+      provider.scan ({.prefix = "mesh:", .limit = 1}).result ().value ());
+    ASSERT_EQ (first.items.size (), 1u);
+    EXPECT_EQ (first.items.front ().key.value, expires_later.value);
+    ASSERT_TRUE (first.next_cursor);
+
+    const auto second = std::get<store_scan_page_t> (
+      provider.scan ({.prefix = "mesh:", .cursor = first.next_cursor, .limit = 1})
+        .result ()
+        .value ());
+    ASSERT_EQ (second.items.size (), 1u);
+    EXPECT_EQ (second.items.front ().key.value, never_expires.value);
+    EXPECT_EQ (second.store_now, first.store_now);
 }
 
 } // namespace

@@ -146,14 +146,17 @@ test('raw MeshNode keeps pre-admitted batch depth within the fixed permit limit'
   const releaseHandlers = deferred();
   const complete = deferred();
   const received = [];
-  const acquire = fixture.queue.acquire.bind(fixture.queue);
+  const acquire = fixture.queue.acquireOrResume.bind(fixture.queue);
   let acquired = 0;
   let pump;
-  fixture.queue.acquire = async signal => {
-    const permit = await acquire(signal);
+  const observeGrant = permit => {
     acquired += 1;
     if (acquired === 3) thirdPermit.resolve();
     return permit;
+  };
+  fixture.queue.acquireOrResume = (resume, reject, signal, origin) => {
+    const permit = acquire(value => resume(observeGrant(value)), reject, signal, origin);
+    return permit === undefined ? undefined : observeGrant(permit);
   };
   try {
     pump = new backend.ZLinkMeshDispatchPump(fixture.node, {
@@ -317,7 +320,7 @@ test('raw local Spot send preserves a normal sibling after the first record fail
   }
 });
 
-test('dispose during a pre-admitted batch returns unstarted leases and closes their parts once', async () => {
+test('dispose after a pre-admitted batch starts returns suspended leases and closes their parts once', async () => {
   const fixture = createFixture();
   const observed = [];
   const firstDispatch = deferred();
@@ -344,7 +347,7 @@ test('dispose during a pre-admitted batch returns unstarted leases and closes th
     releaseFirst.resolve();
     await disposing;
 
-    assert.equal(dispatches, 1);
+    assert.equal(dispatches, 64);
     assert.equal(observed.length, 64);
     for (const record of observed) {
       assert.equal(record.released(), 1);
