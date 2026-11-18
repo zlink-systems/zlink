@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/telemetry_observation.hpp"
@@ -7,6 +7,9 @@
 #include <zlink.hpp>
 
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/channels/channel_host_service.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/utils/available_processor_count.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/fanout/fanout_subscription.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
@@ -698,4 +701,198 @@ TEST (CppFrameworkFanoutSubscription, ForcedShutdownCancelsOwnedCompletionWait)
     host.join ();
     EXPECT_EQ (exit_code, 0);
     EXPECT_EQ (gate_state->scopes_created.load (), gate_state->scopes_destroyed.load ());
+}
+
+namespace
+{
+struct manual_suspend_state_t
+{
+    zlink::framework::task_completion_source_t<void> release;
+    std::vector<std::promise<void>> entered = std::vector<std::promise<void>> (
+      std::min (8u, zlink::framework::runtime::available_processor_count ()));
+    std::atomic_size_t completed{0};
+    std::atomic_size_t scopes_live{0};
+    std::atomic_size_t scopes_destroyed{0};
+    std::promise<void> all_completed;
+    bool fail_first = false;
+};
+
+struct manual_suspend_scope_t
+{
+    explicit manual_suspend_scope_t (manual_suspend_state_t &state) : state (state)
+    {
+        ++state.scopes_live;
+    }
+    ~manual_suspend_scope_t ()
+    {
+        --state.scopes_live;
+        ++state.scopes_destroyed;
+    }
+    manual_suspend_state_t &state;
+    const int marker = 4772;
+};
+
+class manual_suspend_handler_t
+{
+  public:
+    using event_type = gate_event_t;
+    manual_suspend_handler_t (manual_suspend_state_t &state, manual_suspend_scope_t &scope) :
+        _state (state), _scope (scope)
+    {
+    }
+
+    zlink::framework::task_t<void>
+    handle (const gate_event_t &event, const zlink::framework::publish_message_context_t &context)
+    {
+        if (static_cast<std::size_t> (event.value) < _state.entered.size ()) {
+            _state.entered[event.value].set_value ();
+            co_await _state.release.task ();
+        } else {
+            _state.release.complete (zlink::framework::result_t<void>::success ());
+        }
+        EXPECT_EQ (_scope.marker, 4772);
+        EXPECT_EQ (context.channel_name, "manual-suspend");
+        EXPECT_EQ (context.topic, "suspend");
+        EXPECT_GE (event.value, 0);
+        if (++_state.completed == _state.entered.size () + 1)
+            _state.all_completed.set_value ();
+        if (_state.fail_first && event.value == 0)
+            throw zlink::framework::framework_exception_t (
+              zlink::framework::framework_error_kind_t::internal_failure,
+              "manual fanout resumed handler failed");
+    }
+
+  private:
+    manual_suspend_state_t &_state;
+    manual_suspend_scope_t &_scope;
+};
+void verify_manual_subscriber_suspend (bool fail_first, bool drain_suspended)
+{
+    namespace fw = zlink::framework;
+    auto context = std::make_shared<zlink::context_t> ();
+    zlink::xpub_socket_t publisher (*context);
+    publisher.options ().linger (0ms);
+    publisher.options ().recv_timeout (2s);
+    publisher.options ().verbose (true);
+    publisher.bind ("tcp://127.0.0.1:0");
+    const auto endpoint = publisher.options ().last_endpoint ();
+
+    auto builder = fw::test::runtime_failure_builder ();
+    fw::serializer_registry_t serializers;
+    fw::service_collection_t services;
+    fw::handler_registry_t handlers;
+    fw::zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_fanout_channel ("manual-suspend")
+      .connect (endpoint)
+      .use_handler_group ("manual-suspend");
+    options.handlers ().group ("manual-suspend").add_publish<manual_suspend_handler_t> ();
+    auto &dispatch = options.configure_dispatch ();
+    dispatch.message_flow (fw::message_flow_log_mode_t::normal);
+    auto flows = std::make_shared<fw::test::telemetry_observations_t<fw::message_flow_event_t>> ();
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (
+      dispatch, [flows] (const auto &event) { flows->record (event); });
+    auto errors =
+      std::make_shared<fw::test::telemetry_observations_t<fw::message_dispatch_error_event_t>> ();
+    fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      dispatch, [errors] (const auto &event) { errors->record (event); });
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_core_context (context);
+    runtime.bind_serializers (serializers);
+    services.add_singleton<manual_suspend_state_t> ();
+    services.add_scoped<manual_suspend_scope_t, manual_suspend_state_t> ();
+    services
+      .add_transient<manual_suspend_handler_t, manual_suspend_state_t, manual_suspend_scope_t> ();
+    options.apply ();
+    auto provider = services.build_provider ();
+    auto &state = provider.get_required<manual_suspend_state_t> ();
+    state.fail_first = fail_first;
+    auto completed = state.all_completed.get_future ();
+    fw::runtime::channel_host_service_t host (runtime.runtime_failures (), builder.message_bus (),
+                                              runtime.channel_snapshots (), handlers, serializers,
+                                              {});
+    host.start (provider).result ().value ();
+
+    // Observe the subscription before publishing; no delivery retry is needed.
+    zlink::subscription_event_t subscription;
+    const auto subscribed = publisher.receive_subscription_event (subscription);
+    EXPECT_EQ (subscribed, static_cast<int> (zlink::recv_result_t::ok));
+    EXPECT_TRUE (subscription.subscribed);
+    const auto publish = [&] (int value) {
+        fw::runtime::messaging::envelope_header_t header;
+        header.kind = fw::runtime::messaging::message_kind_t::publish;
+        header.channel_name = "manual-suspend";
+        header.message_name = gate_event_t::packet_name;
+        header.topic = "suspend";
+        header.correlation_id = "manual-suspend-" + std::to_string (value);
+        auto parts = fw::runtime::messaging::envelope_codec_t{}.encode_parts (
+          header, gate_event_t{value}, serializers);
+        auto first = parts[0];
+        auto second = parts[1];
+        publisher.publish ("suspend").message (first).message (second).submit ();
+    };
+    bool all_entered = true;
+    for (std::size_t index = 0; index < state.entered.size (); ++index) {
+        auto entered = state.entered[index].get_future ();
+        publish (static_cast<int> (index));
+        const bool ready = entered.wait_for (2s) == std::future_status::ready;
+        EXPECT_TRUE (ready) << "handler " << index << " did not enter";
+        all_entered = all_entered && ready;
+        if (!ready)
+            break;
+    }
+    EXPECT_EQ (state.scopes_live.load (), state.entered.size ());
+    if (drain_suspended) {
+        auto stopped = std::async (std::launch::async, [&] { host.stop (); });
+        EXPECT_EQ (stopped.wait_for (20ms), std::future_status::timeout);
+        EXPECT_EQ (state.scopes_live.load (), state.entered.size ());
+        state.release.complete (fw::result_t<void>::success ());
+        EXPECT_EQ (stopped.wait_for (2s), std::future_status::ready);
+        stopped.get ();
+    } else {
+        if (all_entered)
+            publish (static_cast<int> (state.entered.size ()));
+        const bool terminal = completed.wait_for (2s) == std::future_status::ready;
+        EXPECT_TRUE (terminal) << "the signal-completing handler could not acquire a worker";
+        // Release failed fixtures before drain, preserving the failed terminal assertion.
+        state.release.complete (fw::result_t<void>::success ());
+        host.stop ();
+    }
+    const auto expected_count = state.entered.size () + (drain_suspended ? 0u : 1u);
+    EXPECT_EQ (state.completed.load (), expected_count);
+    EXPECT_EQ (state.scopes_live.load (), 0u);
+    EXPECT_EQ (state.scopes_destroyed.load (), expected_count);
+    EXPECT_NO_THROW (runtime.runtime_failures ()->rethrow_if_failed ());
+    fw::test::acknowledge_delivery ();
+    const auto observed = flows->snapshot ();
+    std::string trace;
+    for (const auto &event : observed) {
+        trace += "flow=" + event.flow_id.value_or ("")
+                 + " outcome=" + std::to_string (static_cast<int> (event.outcome)) + "\n";
+    }
+    ::testing::Test::RecordProperty ("message_flow", trace);
+    const auto failures = errors->snapshot ();
+    ASSERT_EQ (failures.size (), fail_first ? 1u : 0u);
+    if (fail_first) {
+        EXPECT_EQ (failures.front ().reason, fw::dispatch_error_reason_t::handler_exception);
+        EXPECT_EQ (failures.front ().channel_name, "manual-suspend");
+        EXPECT_NE (failures.front ().exception, nullptr);
+    }
+    publisher.close ();
+    provider.close ();
+}
+}
+
+TEST (CppFrameworkFanoutSubscription, ManualSubscriberReturnsWorkersWhileHandlersSuspend)
+{
+    verify_manual_subscriber_suspend (false, false);
+}
+
+TEST (CppFrameworkFanoutSubscription, ManualSubscriberReportsResumedHandlerFailure)
+{
+    verify_manual_subscriber_suspend (true, false);
+}
+
+TEST (CppFrameworkFanoutSubscription, ManualSubscriberDrainsSuspendedHandlerScopes)
+{
+    verify_manual_subscriber_suspend (false, true);
 }

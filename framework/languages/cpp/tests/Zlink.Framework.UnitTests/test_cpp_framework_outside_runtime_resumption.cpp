@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // Submit and completion §11: a wait started outside a runtime execution
 // context has no lane to return to. The resumption the Framework delivers

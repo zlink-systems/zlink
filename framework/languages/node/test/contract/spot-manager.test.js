@@ -2498,7 +2498,7 @@ test('ZLinkSpotManager does not bind formal Mesh actor packets as remote session
   }
 });
 
-test('relocation materialization restores inherited User Spot handler registrations', async () => {
+test('relocation materialization restores handler registrations for the concrete User Spot type', async () => {
   class BaseSpot {}
   class RecoverySpot extends BaseSpot {}
   class ProbeActor {}
@@ -2510,24 +2510,24 @@ test('relocation materialization restores inherited User Spot handler registrati
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RecoverySpot],
     spotActorSendHandlers: [{
-      spotType: BaseSpot,
+      spotType: RecoverySpot,
       actorType: ProbeActor,
       handlerType: ActorSendHandler,
       packetName: 'ActorSend'
     }],
     spotActorRequestHandlers: [{
-      spotType: BaseSpot,
+      spotType: RecoverySpot,
       actorType: ProbeActor,
       handlerType: ActorRequestHandler,
       packetName: 'ActorRequest'
     }],
     spotPacketHandlers: [{
-      spotType: BaseSpot,
+      spotType: RecoverySpot,
       handlerType: PacketHandler,
       packetName: 'Packet'
     }],
     spotSubscriptionHandlers: [{
-      spotType: BaseSpot,
+      spotType: RecoverySpot,
       handlerType: SubscriptionHandler,
       channelName: 'events',
       topic: 'stage.*'

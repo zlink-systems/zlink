@@ -181,8 +181,12 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
 // owner over inert queue/permit ports and attach it at the capture point.
 function testIngressJobOwner(): ApplicationIngressRecordOwner {
   let detached = false;
+  let released = false;
   const permit: ApplicationJobPermitPort = {
     origin: 'remote',
+    get isReleased() {
+      return released;
+    },
     markApplicationQueued() {},
     get detachedForHandlerTurn() {
       return detached;
@@ -190,8 +194,12 @@ function testIngressJobOwner(): ApplicationIngressRecordOwner {
     detachForHandlerTurn() {
       detached = true;
     },
-    releaseBeforeHandler() {},
-    releaseAfterInternalProcessing() {}
+    releaseBeforeHandler() {
+      released = true;
+    },
+    releaseAfterInternalProcessing() {
+      released = true;
+    }
   };
   const queue: ApplicationJobQueuePort = {
     createReceiveRotation: () => {
@@ -6958,6 +6966,10 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     });
     sessionService.start();
     const bindOperation = sessionService.bindActor('session-a', actor, 2_000);
+    const bindControl = await drainOne(backend, ReadyDomain.Infrastructure);
+    assert.equal(bindControl.kind, ReceiveKind.ActorBinding);
+    assert.equal(bindControl.reply(Buffer.alloc(0)), SubmitResult.Ok);
+    closeParts(bindControl);
     const bindCompletion = await drainOne(backend, ReadyDomain.Infrastructure);
     assert.deepEqual(bindCompletion.operationId, bindOperation);
     assert.equal(bindCompletion.terminalResult, RequestResult.Ok);
@@ -8647,6 +8659,18 @@ for (const remote of [false, true]) {
       observePeerConnectionIntentRemoved: () => () => {},
       setServiceIngress(handler: typeof ingress) {
         ingress = handler;
+      },
+      mailbox: {
+        tryEnqueue(record: {
+          stateful: { reply(terminal: number, code: number): boolean };
+          applicationJob: { close(): void };
+        }) {
+          queueMicrotask(() => {
+            record.stateful.reply(RequestResult.Ok, 0);
+            record.applicationJob.close();
+          });
+          return true;
+        }
       },
       reserveLocalIngress: async () => testIngressJobOwner(),
       replyService(record: RawServiceIngressRecord, parts: readonly Buffer[]) {

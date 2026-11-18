@@ -1882,6 +1882,13 @@ internal sealed partial class ZLinkFrameworkRuntime
         bool startTeardownReconciliation = true
     )
     {
+        if (actorState.ContextInvalidated)
+        {
+            await _actorSessionManager
+                .DiscardLocationExecutionAsync(actorState)
+                .ConfigureAwait(false);
+            return;
+        }
         Exception? failure = null;
         if (actorState.Actor is { } actor)
         {
@@ -2402,7 +2409,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                             ZLinkRemoteActorJoinPackets.ConservativeReceiveChunkLimitBytes
                         );
                     },
-                    cancellationToken
+                    cancellationToken,
+                    () => target.UserSpot?.IsDisposed == true
                 )
                 .ConfigureAwait(false);
         }
@@ -3192,7 +3200,15 @@ internal sealed partial class ZLinkFrameworkRuntime
             duplicateBindMethodIndex >= 0
             && actorInterfaceMap.TargetMethods[duplicateBindMethodIndex].DeclaringType
                 != typeof(IZLinkActor);
-        if (!hasDuplicateBindCallback)
+        if (
+            !state.TryGetBoundSession(out var currentBinding)
+            || currentBinding.IsSamePhysicalSessionOwner(
+                sourceNodeRid,
+                sourceNodeGeneration,
+                sessionRid
+            )
+            || !hasDuplicateBindCallback
+        )
         {
             ScheduleReplacementNotification(ReplaceBinding());
             return;
@@ -3206,24 +3222,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
         var decision = 0;
         var callbackTask = state
-            .ExecuteDispatchAsync(
+            .ExecuteLifecycleCallbackAsync(
                 async _ =>
                 {
-                    if (
-                        !state.TryGetBoundSession(out var currentBinding)
-                        || currentBinding.IsSamePhysicalSessionOwner(
-                            sourceNodeRid,
-                            sourceNodeGeneration,
-                            sessionRid
-                        )
-                    )
-                    {
-                        return (
-                            Transition: (ZLinkActorSessionBindingTransition?)ReplaceBinding(),
-                            Rejected: false
-                        );
-                    }
-
                     var actor =
                         state.Actor
                         ?? throw new ZLinkFrameworkException(
@@ -3281,7 +3282,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                         Rejected: false
                     );
                 },
-                countAsPendingRequest: false,
                 cancellationToken
             )
             .AsTask();
@@ -3376,7 +3376,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             if (
                 RoutingId.From(request.Actor.TargetNodeRid.Value) != targetNodeRid
-                || node.MeshStatus().LifecycleGeneration != request.Actor.TargetNodeGeneration.Value
+                || node.LifecycleGeneration != request.Actor.TargetNodeGeneration.Value
                 || current.IsDispatchBlocked
                 || current.Actor is null
                 || current.NativeActorRef != actorRef
@@ -4155,14 +4155,14 @@ internal sealed partial class ZLinkFrameworkRuntime
         //  exception never reaches the original requester: the frame just
         //  disappears and the caller waits out its deadline.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"remote_frame_dispatch actor={actorId} node_gen={targetNode.MeshStatus().LifecycleGeneration}/{targetNodeGeneration} authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}"
+            $"remote_frame_dispatch actor={actorId} node_gen={targetNode.LifecycleGeneration}/{targetNodeGeneration} authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}"
         );
         var hasBoundSessionFence = ZLinkActorBoundSessionHandoffMetadata.TryDecode(
             applicationMetadata,
             out var boundSessionFence
         );
         if (
-            targetNode.MeshStatus().LifecycleGeneration != targetNodeGeneration
+            targetNode.LifecycleGeneration != targetNodeGeneration
             || authorityOwnerGeneration == 0
             || (!hasBoundSessionFence && ownerLeaseGeneration == 0)
         )

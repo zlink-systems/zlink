@@ -279,7 +279,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (submission && !ZLinkBlockingCalls.isRuntimeExecutionContext()) {
             try {
                 return CompletableFuture.completedFuture(
-                        owner.awaitTurn(() -> ZLinkFlowContext.call(flow, work)));
+                        owner.awaitResult(() -> ZLinkFlowContext.call(flow, work)));
             } catch (RuntimeException | Error failure) {
                 return CompletableFuture.failedStage(failure);
             }
@@ -380,6 +380,32 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         completions.register(entry);
         entry.completeWithFailure(failure);
         completions.post(entry);
+    }
+
+    /** Continues physical work under the original logical registration and deadline. */
+    public <T> CompletionStage<Boolean> submitRegistered(
+            UUID id,
+            Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
+            Consumer<? super T> discardValue) {
+        var continued =
+                submitOwnerTurn(
+                        () -> {
+                            @SuppressWarnings("unchecked")
+                            Entry<T> entry = (Entry<T>) pending.get(id);
+                            if (entry == null) return false;
+                            if (entry.deadlineNanos <= nanoTime.getAsLong()) {
+                                completeExceptionally(entry, timeoutFailure.get());
+                                return false;
+                            }
+                            submitOnOwner(entry, submission, discardValue);
+                            return true;
+                        },
+                        true);
+        continued.whenComplete(
+                (accepted, failure) -> {
+                    if (failure != null) completeExceptionally(id, failure);
+                });
+        return continued;
     }
 
     private <T> void submitOnOwner(

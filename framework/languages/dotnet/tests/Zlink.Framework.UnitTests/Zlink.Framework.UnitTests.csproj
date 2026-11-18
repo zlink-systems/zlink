@@ -54,14 +54,18 @@
         <Compile Include="Runtime/CanonicalSessionBindCrossLanguageTests.cs" Condition="'$(ZLinkCrossLanguageBind)' == 'true'"/>
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
+        <Compile Include="Runtime/SameNodeDuplicateBindTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Support/PerCallAllocation.cs"/>
+        <Compile Include="Support/MessageFinalizerProbe.cs"/>
+        <Compile Include="Runtime/MessageWrapperLifetimeTests.cs"/>
         <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/PrestartCallTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/InstanceIntentAuthorityFollowTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
+        <Compile Include="Runtime/SuspendedHandlerWorkerTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/MeshLivenessDisconnectContractTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
@@ -119,6 +123,7 @@
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
+        <Compile Include="Runtime/ActorLookupDeadlineTests.cs"/>
         <Compile Include="Runtime/StateLaneTests.cs"/>
         <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
@@ -212,6 +217,7 @@
         <Compile Include="Runtime/SpotStoreFailureKindTests.cs"/>
         <Compile Include="Runtime/LocalCallbackCauseTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/LocationRuntimeTests.DiscardedAuthority.cs"/>
         <Compile Include="Runtime/LocationStoreOperationMetricsTests.cs"/>
         <Compile Include="Runtime/MaintenanceRuntimeTests.cs"/>
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
@@ -298,6 +304,7 @@
         <Compile Include="Runtime/RouteChangeProxy.cs"/>
         <Compile Include="Runtime/RelocationTargetShutdownTests.cs"/>
         <Compile Include="Runtime/SpotRouteRecreateTests.cs"/>
+        <Compile Include="Runtime/SpotCloseInLeave4432Tests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.Closing.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.JoinFailures.cs"/>

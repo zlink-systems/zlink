@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "actor_gateway_runtime.hpp"
 #include "actor_ref_access.hpp"
@@ -1176,6 +1176,33 @@ bound_session_t actor_context_t::bound_session () const
     return bound_session_t (_state, *_actor_ref, _source_binding_generation);
 }
 
+namespace
+{
+task_t<detail::actor_join_reply_t>
+complete_actor_join (std::shared_ptr<detail::actor_gateway_state_t> state,
+                     std::shared_ptr<actor_ref_t> actor_ref,
+                     detail::actor_join_reply_t joined)
+{
+    if (joined.result_code == detail::actor_join_reply_t::relayed) {
+        auto cleanup = std::exchange (joined.source_cleanup, {});
+        const auto settled = co_await runtime::await_result (cleanup ());
+        if (!settled)
+            co_return joined;
+        joined.result_code = detail::actor_join_reply_t::accepted;
+    }
+    if (joined.result_code == detail::actor_join_reply_t::accepted) {
+        state->sync ([&] {
+            *actor_ref = joined.actor;
+            auto found = state->actors_by_id.find (std::string (actor_ref->actor_id ().value ()));
+            if (found != state->actors_by_id.end ()) {
+                found->second.ref = *actor_ref;
+            }
+        });
+    }
+    co_return joined;
+}
+} // namespace
+
 task_t<detail::actor_join_reply_t>
 actor_context_t::join_spot_erased (spot_id_t spot_id,
                                    const zlink::message_t &request,
@@ -1245,23 +1272,7 @@ actor_context_t::join_spot_erased (spot_id_t spot_id,
           });
     }
 
-    if (joined.result_code == detail::actor_join_reply_t::relayed) {
-        auto cleanup = std::exchange (joined.source_cleanup, {});
-        const auto settled = co_await runtime::await_result (cleanup ());
-        if (!settled)
-            co_return joined;
-        joined.result_code = detail::actor_join_reply_t::accepted;
-    }
-    if (joined.result_code == detail::actor_join_reply_t::accepted) {
-        state->sync ([&] {
-            *actor_ref = joined.actor;
-            auto found = state->actors_by_id.find (std::string (actor_ref->actor_id ().value ()));
-            if (found != state->actors_by_id.end ()) {
-                found->second.ref = *actor_ref;
-            }
-        });
-    }
-    co_return joined;
+    co_return co_await complete_actor_join (state, actor_ref, std::move (joined));
 }
 
 result_t<std::shared_ptr<detail::deferred_barrier_t>> actor_context_t::reserve_join_barrier () const
@@ -1349,17 +1360,8 @@ actor_context_t::join_entry_spot_erased (std::shared_ptr<actor_context_t> contex
         }
     });
     auto joined = co_await dispatcher (*context->_actor_ref, request, timeout);
-    if (joined.result_code == detail::actor_join_reply_t::accepted) {
-        context->_state->sync ([&] {
-            *context->_actor_ref = joined.actor;
-            auto found = context->_state->actors_by_id.find (
-              std::string (context->_actor_ref->actor_id ().value ()));
-            if (found != context->_state->actors_by_id.end ()) {
-                found->second.ref = *context->_actor_ref;
-            }
-        });
-    }
-    co_return joined;
+    co_return co_await complete_actor_join (context->_state, context->_actor_ref,
+                                            std::move (joined));
 }
 
 session_actor_t::session_actor_t (

@@ -265,6 +265,7 @@ interface ZLinkHostRelocationOptions {
   readonly meshNode: (meshName: string) => ZLinkBackendMeshNode | undefined;
   readonly completions: (meshName: string) => ZLinkMeshCompletionTable | undefined;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
+  readonly ensureEntryActivation?: (meshName: string) => Promise<void>;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly actorTransfer: ZLinkActorTransferRuntime;
   readonly boundSessionRelocation?: {
@@ -3535,16 +3536,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           mesh_name: meshName
         });
       }
+      const replayAuthority = authority;
       for (const [index, participant] of stage.staging.envelope.participants.entries()) {
         const hidden = stage.staging.hidden.get(participant.key);
-        if (hidden?.actor === undefined || hidden.replayPackets.length === 0) continue;
-        const coordinator = this.targetReplyRelayCoordinator(meshName, stage, authority);
+        if (hidden?.actor === undefined) continue;
         hidden.replayStart = stage.finalize;
         hidden.onReplayResult = (packet, result) =>
           this.relayTerminalReply(
             meshName,
             stage,
-            coordinator,
+            this.targetReplyRelayCoordinator(meshName, stage, replayAuthority),
             BigInt(index + 1),
             packet,
             result,
@@ -5062,6 +5063,9 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         membership,
         this.options.localDescriptor?.(this.meshName)
       )!;
+      if (targetMembership.actorSpotKind === ZLinkSpotKind.Entry) {
+        await this.options.ensureEntryActivation?.(this.meshName);
+      }
       const actor = await this.requireActorManager().prepareRelocationActor(
         identity,
         participant.stableType,
@@ -5210,7 +5214,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         native.spotGeneration,
         native.membershipEpoch
       );
-      this.requireActorManager().adoptCreatedAuthority(actorId, current.authorityOwnerGeneration);
+      this.requireActorManager().adoptCreatedAuthority(actorId, current);
       hidden.targetAuthorityOwnerGeneration = current.authorityOwnerGeneration;
     } else if (hidden.activation !== undefined) {
       const registration = this.registration(
@@ -5309,7 +5313,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   }
 
   async normalize(hidden: LocalHidden): Promise<void> {
-    if (hidden.actor === undefined || hidden.replayPackets.length === 0) return;
+    if (hidden.actor === undefined) return;
     if (hidden.replayStart === undefined || hidden.onReplayResult === undefined) {
       throw new Error('Relocated Actor backlog has no target activation owner.');
     }

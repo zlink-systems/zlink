@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include <runtime/locations/location_repository.hpp>
@@ -629,6 +629,8 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     }
 
   private:
+    friend struct store_location_runtime_query_test_access_t;
+
     // Argument errors above throw at the call; the Store scan runs as a coroutine.
     task_t<location_page_t<location_object_entry_t>>
     scan_object_locations (location_object_filter_t filter, location_page_request_t page)
@@ -639,31 +641,83 @@ class store_location_runtime_query_t final : public location_runtime_query_t
             cursor.emplace (*page.continuation_token);
         location_page_t<location_object_entry_t> output;
         output.items.reserve (static_cast<std::size_t> (page.page_size));
+        std::vector<std::pair<std::optional<authority_scan_cursor_t>, std::size_t>> item_rows;
+        const auto prefix = std::string (authority_key_codec_detail::prefix) + authority_kind + ":";
+        std::size_t encoded_items_bytes = 0;
         do {
+            const auto batch_cursor = cursor;
             const auto remaining = static_cast<std::size_t> (page.page_size) - output.items.size ();
-            auto read = co_await _store->list_authorities (
-              std::string (authority_key_codec_detail::prefix) + authority_kind + ":",
-              std::move (cursor), remaining);
+            auto read = co_await _store->list_authorities (prefix, batch_cursor, remaining);
             const auto *stored_page = std::get_if<authority_page_t> (&read);
             if (stored_page == nullptr)
                 co_return co_await unavailable<location_page_t<location_object_entry_t>> (
                   "Location Store object scan cursor expired");
-            for (const auto &item : stored_page->items) {
+            std::size_t index = 0;
+            for (; index < stored_page->items.size ()
+                   && output.items.size () < static_cast<std::size_t> (page.page_size);
+                 ++index) {
+                const auto &item = stored_page->items[index];
                 const auto decoded =
                   authority_key_codec_detail::decode_authority_key (item.key.value);
                 if (!decoded || decoded->kind != authority_kind || !matches (item.snapshot, filter))
                     continue;
                 auto projected = co_await project_object (decoded->object_id, item.snapshot);
+                const auto entry_bytes = encoded_object_size (projected);
+                const auto candidate_items_bytes = encoded_items_bytes + entry_bytes;
+                const auto continuation =
+                  stored_page->next_cursor
+                    ? std::optional<std::string_view> (stored_page->next_cursor->encoded ())
+                    : std::nullopt;
+                if (!encoded_object_page_fits (candidate_items_bytes, output.items.size () + 1,
+                                               continuation)) {
+                    if (output.items.empty ())
+                        co_return co_await unavailable<location_page_t<location_object_entry_t>> (
+                          "Location Store encoded object entry exceeds 4 MiB");
+                    break;
+                }
                 output.items.push_back (std::move (projected));
+                item_rows.emplace_back (batch_cursor, index + 1);
+                encoded_items_bytes = candidate_items_bytes;
             }
             cursor = stored_page->next_cursor;
-        } while (output.items.size () < static_cast<std::size_t> (page.page_size)
-                 && cursor.has_value ());
+            if (index < stored_page->items.size ()) {
+                if (index == 0)
+                    cursor = batch_cursor;
+                else {
+                    auto consumed = co_await _store->list_authorities (prefix, batch_cursor, index);
+                    const auto *consumed_page = std::get_if<authority_page_t> (&consumed);
+                    if (consumed_page == nullptr)
+                        co_return co_await unavailable<location_page_t<location_object_entry_t>> (
+                          "Location Store object scan cursor expired");
+                    cursor = consumed_page->next_cursor;
+                }
+                while (!encoded_object_page_fits (
+                  encoded_items_bytes, output.items.size (),
+                  cursor ? std::optional<std::string_view> (cursor->encoded ()) : std::nullopt)) {
+                    const auto entry_bytes = encoded_object_size (output.items.back ());
+                    output.items.pop_back ();
+                    encoded_items_bytes -= entry_bytes;
+                    const auto [start, rows] = item_rows.back ();
+                    item_rows.pop_back ();
+                    if (output.items.empty ())
+                        co_return co_await unavailable<location_page_t<location_object_entry_t>> (
+                          "Location Store encoded object entry exceeds 4 MiB");
+                    if (rows == 1) {
+                        cursor = start;
+                        continue;
+                    }
+                    auto prior = co_await _store->list_authorities (prefix, start, rows - 1);
+                    const auto *prior_page = std::get_if<authority_page_t> (&prior);
+                    if (prior_page == nullptr)
+                        co_return co_await unavailable<location_page_t<location_object_entry_t>> (
+                          "Location Store object scan cursor expired");
+                    cursor = prior_page->next_cursor;
+                }
+                break;
+            }
+        } while (output.items.size () < static_cast<std::size_t> (page.page_size) && cursor);
         if (cursor)
             output.continuation_token = std::string (cursor->encoded ());
-        if (encoded_size_upper_bound (output) > 4u * 1024u * 1024u)
-            co_return co_await unavailable<location_page_t<location_object_entry_t>> (
-              "Location Store encoded object page exceeds 4 MiB");
         co_return std::move (output);
     }
 
@@ -712,23 +766,57 @@ class store_location_runtime_query_t final : public location_runtime_query_t
           .stable_type = snapshot.allocation.stable_type};
     }
 
-    static std::size_t
-    encoded_size_upper_bound (const location_page_t<location_object_entry_t> &page)
+    static std::size_t json_string_size (std::string_view value)
     {
-        constexpr std::size_t maximum_json_escape_bytes = sizeof ("\\uFFFF") - 1;
-        constexpr std::size_t fixed_page_bytes = 256;
-        constexpr std::size_t fixed_entry_bytes = 256;
-        auto size = fixed_page_bytes;
-        if (page.continuation_token)
-            size += page.continuation_token->size () * maximum_json_escape_bytes;
-        for (const auto &entry : page.items) {
-            size += fixed_entry_bytes;
-            size += entry.global_id.size () * maximum_json_escape_bytes;
-            size += entry.mesh_name.size () * maximum_json_escape_bytes;
-            size += entry.stable_type.size () * maximum_json_escape_bytes;
-            size += entry.node_rid.to_string ().size () * maximum_json_escape_bytes;
+        std::size_t bytes = value.size () + 2;
+        for (const auto character : value) {
+            const auto byte = static_cast<unsigned char> (character);
+            if (byte == '"' || byte == '\\')
+                ++bytes;
+            else if (byte < 0x20)
+                bytes +=
+                  byte == '\b' || byte == '\t' || byte == '\n' || byte == '\f' || byte == '\r' ? 1
+                                                                                               : 5;
         }
-        return size;
+        return bytes;
+    }
+
+    static std::string_view object_state_name (location_object_state_t state)
+    {
+        switch (state) {
+            case location_object_state_t::creating:
+                return "creating";
+            case location_object_state_t::ready:
+                return "ready";
+            case location_object_state_t::unavailable:
+                return "unavailable";
+        }
+        return "unavailable";
+    }
+
+    static std::size_t encoded_object_size (const location_object_entry_t &entry)
+    {
+        const auto rid = entry.node_rid.to_string ();
+        return std::string_view ("{\"globalId\":").size () + json_string_size (entry.global_id)
+               + std::string_view (",\"objectGeneration\":").size ()
+               + std::to_string (entry.object_generation).size ()
+               + std::string_view (",\"meshName\":").size () + json_string_size (entry.mesh_name)
+               + std::string_view (",\"nodeRid\":").size () + json_string_size (rid)
+               + std::string_view (",\"state\":").size ()
+               + json_string_size (object_state_name (entry.state))
+               + std::string_view (",\"stableType\":").size ()
+               + json_string_size (entry.stable_type) + 1;
+    }
+
+    static bool encoded_object_page_fits (std::size_t encoded_items_bytes,
+                                          std::size_t item_count,
+                                          std::optional<std::string_view> continuation_token)
+    {
+        return std::string_view ("{\"items\":[").size () + encoded_items_bytes
+                 + (item_count == 0 ? 0 : item_count - 1)
+                 + std::string_view ("],\"continuationToken\":").size ()
+                 + (continuation_token ? json_string_size (*continuation_token) : 4) + 1
+               <= 4u * 1024u * 1024u;
     }
 
     static bool matches (const authority_snapshot_t &snapshot,

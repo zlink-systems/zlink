@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "mailbox_claim_fixture.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
@@ -42,7 +42,6 @@
 #include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
-#include "runtime/timers/async_delay.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -664,8 +663,6 @@ void verify_actor_client_authority_generation (bool invalidated)
       std::get<owner_lease_claimed_t> (
         store->claim_owner_lease ("actor-generation-owner", 30s).result ().value ())
         .token;
-    std::mutex delay_mutex;
-    detail::delay_owner_t delays (delay_mutex);
     auto context = std::make_shared<zlink::context_t> ();
     const auto make_runtime = [&] (std::string rid) {
         auto state =
@@ -763,8 +760,7 @@ void verify_actor_client_authority_generation (bool invalidated)
     options.owner_lease_fencing_margin = 1s;
     runtime::live_location_reader_t locations (*store, options);
     serializer_registry_t serializers;
-    auto client =
-      runtime::make_actor_client (locations, serializers, {source}, {}, options, delays);
+    auto client = runtime::make_actor_client (locations, serializers, {source}, {}, options);
 #if !defined(_WIN32)
     request_submissions.store (0);
     count_request_submissions.store (true);
@@ -819,8 +815,6 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
         store->claim_owner_lease ("actor-send-new-owner", 30s).result ().value ())
         .token;
 
-    std::mutex delay_mutex;
-    detail::delay_owner_t delays (delay_mutex);
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_runtime = [core_context] (std::string rid) {
         auto state = zlink::framework::test::runtime_failure_fixture<
@@ -981,8 +975,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     serializer_registry_t serializers;
     old_target->bind_serializers (serializers);
     new_target->bind_serializers (serializers);
-    auto client = runtime::make_actor_client (live_locations, serializers, {source}, {},
-                                              location_options, delays);
+    auto client =
+      runtime::make_actor_client (live_locations, serializers, {source}, {}, location_options);
 
     const auto collect_actor_sends = [] (detail::mesh_node_runtime_t &target,
                                          std::chrono::milliseconds budget,
@@ -1024,8 +1018,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     // A second application scope can resolve the same singleton MeshNode
     // after this client has already cached A. Its notice registration cannot
     // replace the first client's exact-fence invalidation subscription.
-    auto second_client = runtime::make_actor_client (live_locations, serializers, {source}, {},
-                                                     location_options, delays);
+    auto second_client =
+      runtime::make_actor_client (live_locations, serializers, {source}, {}, location_options);
 
     const auto new_actor = detail::actor_ref_access_t::make (
       new_placement.node_rid, "route-probe", key.global_id, committed.ready.object_generation);
@@ -5978,16 +5972,16 @@ void verify_location_store_accepted_record_authority ()
 
     const auto resolver = stateful::make_location_store_authority_resolver (store);
     const auto resolved =
-      resolver (
-        {.target = {stateful::object_kind_t::actor, "actor-authority",
-                    committed.ready.object_generation, committed.ready.authority_owner_generation,
-                    "m6b-mesh", "raw-target"},
-         .source_node_routing_id = bytes ("raw-source"),
-         .source_node_generation = 1,
-         .target_node_routing_id = bytes ("raw-target"),
-         .target_node_generation = 1,
-         .source_kind = protocol::frozen_source_kind_t::node,
-         .requested_authority_owner_generation = committed.ready.authority_owner_generation})
+      resolver ({.target = {stateful::object_kind_t::actor, "actor-authority",
+                            committed.ready.object_generation,
+                            committed.ready.authority_owner_generation, "m6b-mesh", "raw-target"},
+                 .source_node_routing_id = bytes ("raw-source"),
+                 .source_node_generation = 1,
+                 .target_node_routing_id = bytes ("raw-target"),
+                 .target_node_generation = 1,
+                 .source_kind = protocol::frozen_source_kind_t::node,
+                 .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+                 .requested_object_generation = committed.ready.object_generation})
         .result ()
         .value ();
     assert (resolved);
@@ -6000,21 +5994,21 @@ void verify_location_store_accepted_record_authority ()
     // A bound-session query carries the session triple next to the owning
     // Actor identity so resolvers can fence-check the binding.
     const auto resolved_bound =
-      resolver (
-        {.target = {stateful::object_kind_t::actor, "actor-authority",
-                    committed.ready.object_generation, committed.ready.authority_owner_generation,
-                    "m6b-mesh", "raw-target"},
-         .source_node_routing_id = bytes ("raw-source"),
-         .source_node_generation = 1,
-         .target_node_routing_id = bytes ("raw-target"),
-         .target_node_generation = 1,
-         .source_kind = protocol::frozen_source_kind_t::bound_session,
-         .source_actor =
-           std::make_pair (std::string ("actor-authority"), committed.ready.object_generation),
-         .source_session_routing_id = bytes ("sess-1"),
-         .source_binding_generation = 5,
-         .source_session_sequence = 9,
-         .requested_authority_owner_generation = committed.ready.authority_owner_generation})
+      resolver ({.target = {stateful::object_kind_t::actor, "actor-authority",
+                            committed.ready.object_generation,
+                            committed.ready.authority_owner_generation, "m6b-mesh", "raw-target"},
+                 .source_node_routing_id = bytes ("raw-source"),
+                 .source_node_generation = 1,
+                 .target_node_routing_id = bytes ("raw-target"),
+                 .target_node_generation = 1,
+                 .source_kind = protocol::frozen_source_kind_t::bound_session,
+                 .source_actor = std::make_pair (std::string ("actor-authority"),
+                                                 committed.ready.object_generation),
+                 .source_session_routing_id = bytes ("sess-1"),
+                 .source_binding_generation = 5,
+                 .source_session_sequence = 9,
+                 .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+                 .requested_object_generation = committed.ready.object_generation})
         .result ()
         .value ();
     assert (resolved_bound);
@@ -6031,8 +6025,18 @@ void verify_location_store_accepted_record_authority ()
       .target_node_routing_id = bytes ("raw-target"),
       .target_node_generation = 1,
       .source_kind = protocol::frozen_source_kind_t::node,
-      .requested_authority_owner_generation = committed.ready.authority_owner_generation};
+      .requested_authority_owner_generation = committed.ready.authority_owner_generation,
+      .requested_object_generation = committed.ready.object_generation};
     assert (!resolver (stale).result ().value ());
+
+    auto previous_incarnation = stale;
+    previous_incarnation.source_node_generation = 1;
+    previous_incarnation.requested_object_generation = committed.ready.object_generation + 1;
+    ++previous_incarnation.requested_authority_owner_generation;
+    assert (resolver (previous_incarnation).result ().value ());
+    auto same_incarnation_wrong_owner = previous_incarnation;
+    same_incarnation_wrong_owner.requested_object_generation = committed.ready.object_generation;
+    assert (!resolver (same_incarnation_wrong_owner).result ().value ());
 
     for (const auto kind :
          {placement_object_kind_t::user_spot, placement_object_kind_t::instance_spot}) {

@@ -8,6 +8,7 @@ import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
@@ -26,6 +27,16 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
 final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, SpotDispatchLine {
+    @Override
+    public void requireExecution() {
+        dispatchQueue.requireExecution(true);
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
+        return enqueueDispatch(operation);
+    }
+
     final systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution;
     private final ZLinkSpotContextHost host;
     private final ZLinkWorkerPool workerPool;
@@ -401,7 +412,8 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public CompletionStage<Boolean> close() {
-        return ZLinkSerialExecutionQueue.yieldCurrent(activation.closeExplicit());
+        ZLinkSpotCloseCallAccess.ensureAllowed(dispatchQueue);
+        return activation.closeExplicit();
     }
 
     @Override

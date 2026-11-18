@@ -157,6 +157,10 @@ jobs:
             bash scripts/local-package/java/build-wsl.sh \
               --core-prefix "${core_prefix}"
 
+      - name: Verify the packaged Java public contract and API snapshot
+        if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
+        run: bash framework/languages/java/scripts/verify_packaged_contract.sh java
+
       - name: Fetch Core and build the checkout Java binding package on Windows
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'win-')) }}
         shell: pwsh
@@ -180,22 +184,49 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "ZLINK_LIBRARY_PATH=$runtime"
           Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $corePrefix "bin")
 
+      # Redis-backed tests fail instead of skipping once the job provides Redis (#4542).
+      - name: Start Redis for Redis-backed tests
+        if: ${{ !inputs.skip_tests && startsWith(matrix.target.name, 'linux-') }}
+        uses: ./.github/actions/test-redis
+
       - name: Run Framework Java core, integration and Spring starter tests
         if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/java
         shell: bash
         env:
           ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/${{ matrix.target.local_package_root }}
+          ZLINK_CI_TEST_PROGRESS: "true"
         run: |
           worker_count=2
           if [[ "${ZLINK_SINGLE_WORKER}" == "true" ]]; then
             worker_count=1
           fi
+          dump_dir="${RUNNER_TEMP}/framework-java-thread-dumps/${{ matrix.target.name }}"
+          mkdir -p "${dump_dir}"
+          bash scripts/ci/gradle-test-watchdog.sh 3600 600 "${dump_dir}" &
+          watchdog_pid=$!
+          stop_watchdog() {
+            kill "${watchdog_pid}" 2>/dev/null || true
+            wait "${watchdog_pid}" 2>/dev/null || true
+          }
+          trap stop_watchdog EXIT
           ./gradlew --no-daemon --max-workers="${worker_count}" \
             :zlink-framework-core:test \
             :zlink-framework-core:integrationTest \
+            :zlink-framework-kotlin:test \
             :zlink-framework-spring-boot-starter:test \
+            :zlink-framework-spring-boot-starter:integrationTest \
+            :zlink-framework-locations-redis:test \
             -Pzlink.includeSamples=false
+
+      - name: Upload Java test thread dumps
+        if: ${{ !inputs.skip_tests && always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: framework-java-thread-dumps-${{ matrix.target.name }}
+          path: ${{ runner.temp }}/framework-java-thread-dumps/${{ matrix.target.name }}/**
+          retention-days: 14
+          if-no-files-found: ignore
 
       # 위 step은 `-Pzlink.includeSamples=false`로 샘플 composite build를 아예 등록하지
       # 않는다. 그래서 public API가 바뀌어도 샘플 호출부는 이 워크플로우에서 한 번도
@@ -216,7 +247,7 @@ jobs:
         run: |
           .\scripts\ci\framework-java-test-results.ps1 `
             -Mode summarize `
-            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results" `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results" `
             -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
             -Platform "${{ matrix.target.name }}" `
             -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS
@@ -232,6 +263,10 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           overwrite: true
+
+      - name: Stop Redis for Redis-backed tests
+        if: always() && env.ZLINK_TEST_REDIS_CONTAINER != ''
+        run: docker rm -f "${ZLINK_TEST_REDIS_CONTAINER}"
 
   framework-java-compare:
     name: Compare Linux and Windows Java results

@@ -650,12 +650,16 @@ export class ZLinkSpotActivationLifecycle {
       }
       throw new ZLinkConfigurationException('Core Spot lifecycle generation is not available.');
     }
-    const locationClaim = await this.options.locationClaim.claimUserSpot(
-      meshName,
-      spotId,
-      spotType.name,
-      spotGeneration
-    );
+    // The canonical reservation owns visibility until its Ready publication.
+    const locationClaim =
+      authority === undefined
+        ? await this.options.locationClaim.claimUserSpot(
+            meshName,
+            spotId,
+            spotType.name,
+            spotGeneration
+          )
+        : { claimed: true as const, meshName };
     if (!locationClaim.claimed) {
       await nativeSpot.dispose();
       return { spotId, state: ZLinkSpotCreateState.Existing };
@@ -1053,12 +1057,17 @@ export class ZLinkSpotActivationLifecycle {
       handlersDisposed: false,
       actorDispatchDisposed: false,
       nativeDisposed: false,
-      locationReleased: true
+      locationReleased: false
     };
-    state.locationReleased = true;
     this.cleanupStates.set(activation, state);
     activation.serial.closeAdmission();
-    await this.cleanupActivation(activation, activation.meshName, false);
+    await this.runCleanup(
+      activation,
+      activation.meshName,
+      false,
+      ZLinkSpotCloseReason.ExplicitClose,
+      state
+    );
   }
 
   private async cleanupActivation(
@@ -1094,6 +1103,24 @@ export class ZLinkSpotActivationLifecycle {
           deadline,
           ownsLifecycle
         );
+        if (
+          !state.locationReleased &&
+          // Spot messaging §7 step 3: an Instance Spot's ExplicitClose releases its authority
+          // through the Close operation's Closing fence; a User Spot still releases its location.
+          !(
+            ownsLifecycle &&
+            reason === ZLinkSpotCloseReason.ExplicitClose &&
+            activation.domain.kind === 'instance'
+          ) &&
+          state.timersDisposed &&
+          state.serialDisposed &&
+          state.handlersDisposed &&
+          state.actorDispatchDisposed &&
+          state.nativeDisposed
+        ) {
+          await this.options.releaseLocation(activation, locationMeshName, activation.spotId);
+          state.locationReleased = true;
+        }
       } finally {
         if (activation.serialExecutor.isPreparing) {
           activation.serial.closeAdmission();
@@ -1220,28 +1247,7 @@ export class ZLinkSpotActivationLifecycle {
         }
       );
     }
-    if (
-      !state.locationReleased &&
-      // Spot messaging §7 step 3: an Instance Spot's ExplicitClose releases its authority
-      // through the Close operation's Closing fence; a User Spot still releases its location.
-      !(
-        owningLifecycle &&
-        reason === ZLinkSpotCloseReason.ExplicitClose &&
-        activation.domain.kind === 'instance'
-      ) &&
-      state.timersDisposed &&
-      state.serialDisposed &&
-      state.handlersDisposed &&
-      state.actorDispatchDisposed &&
-      state.nativeDisposed
-    ) {
-      await cleanup(
-        () => this.options.releaseLocation(activation, locationMeshName, activation.spotId),
-        () => {
-          state.locationReleased = true;
-        }
-      );
-    }
+
     if (errors.length > 0) {
       if (closingFailure !== undefined) errors.unshift(closingFailure);
       if (errors.length === 1) throw errors[0];

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/http/http_request_pipeline.hpp"
 #include "runtime/configuration/service_scope.hpp"

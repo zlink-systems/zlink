@@ -9,8 +9,92 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class LocationRuntimeTests
+public sealed partial class LocationRuntimeTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task YieldResumeRejectsLocationCutoffOrOwnerLeaseLoss(bool shared, bool leaseLoss)
+    {
+        var time = new ControllableTimeProvider();
+        var store = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time));
+        await using var locations = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { StoreOutageRetention = true },
+            store,
+            time
+        );
+        await using var services = new ServiceCollection()
+            .AddSingleton(locations)
+            .BuildServiceProvider();
+        var actor = new ZLinkActorRuntimeState("yield-location-loss", services: services);
+        actor.BindActorInstance(new Runtime.EntrySpotActorDispatchTests.ProbeActor(actor.ActorId));
+        locations.CaptureExecutions = () => new HashSet<object> { actor };
+        Assert.True(await locations.RenewOwnerLeaseOnceAsync());
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            applicationStartAllowed: item =>
+                item.ExecutionStatus != ZLinkObjectExecutionStatus.Paused,
+            sharedGate: shared
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completeIo = new TaskCompletionSource();
+        var resumed = false;
+        queue.TryPostApplicationWithAdmission(
+            async ct =>
+            {
+                entered.TrySetResult();
+                await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                    _ => new ValueTask(completeIo.Task),
+                    ct
+                );
+                resumed = true;
+            },
+            0,
+            0,
+            false,
+            out var item,
+            executionState: new OutageExecutionRecord(actor)
+        );
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            store.Stale = leaseLoss;
+            store.Fail = !leaseLoss;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            if (!leaseLoss)
+            {
+                var episode = locations.GetHealthSnapshot().StoreOutage!;
+                time.AdvanceMonotonic(
+                    episode.Lifetime - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                );
+                Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            }
+            Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
+            completeIo.TrySetResult();
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                item.Completion.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+            Assert.Contains("no longer owns execution", error.Message);
+            Assert.DoesNotContain("queue is closed", error.Message);
+            Assert.False(resumed);
+            await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            completeIo.TrySetResult();
+            store.Fail = false;
+            store.Stale = false;
+            await actor.InvalidateRuntimeGenerationAfterDispatchesAsync();
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -2103,6 +2187,21 @@ public sealed class LocationRuntimeTests
     internal sealed class OutageLeaseStore(IZLinkLocationRepository inner)
         : ZLinkLocationStoreTestDouble
     {
+        internal Func<ValueTask>? AfterMembershipCommit;
+        internal Func<ValueTask>? BeforeAuthorityRead;
+        internal int DiscardedCleanupCalls;
+
+        public override ValueTask<bool> CleanupDiscardedAuthorityAsync(
+            ZLinkAuthorityKey key,
+            ZLinkAuthoritySnapshot discarded,
+            ZLinkLocationOwnerToken owner,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Interlocked.Increment(ref DiscardedCleanupCalls);
+            return inner.CleanupDiscardedAuthorityAsync(key, discarded, owner, cancellationToken);
+        }
+
         internal Func<ValueTask>? BeforeRecoveryCas;
         internal ZLinkMeshNodeDescriptor? RecoveryDescriptor;
         internal int MeshListReads;
@@ -2171,10 +2270,15 @@ public sealed class LocationRuntimeTests
             return inner.ListMeshNodesAsync(meshName, page, cancellationToken);
         }
 
-        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+        public override async ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
             ZLinkAuthorityKey key,
             CancellationToken cancellationToken = default
-        ) => inner.ReadAuthorityAsync(key, cancellationToken);
+        )
+        {
+            if (BeforeAuthorityRead is { } before)
+                await before();
+            return await inner.ReadAuthorityAsync(key, cancellationToken);
+        }
 
         public override async ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
             ZLinkAuthorityKey key,
@@ -2211,6 +2315,16 @@ public sealed class LocationRuntimeTests
                 mutation,
                 cancellationToken
             );
+            if (
+                mutation is ZLinkAuthorityMutation.Put membershipPut
+                && ZLinkActorAuthorityPayloadCodec.TryDecode(
+                    membershipPut.Payload.Span,
+                    out var membership
+                )
+                && membership.CurrentSpotKind == ZLinkSpotKind.User
+                && AfterMembershipCommit is { } afterMembership
+            )
+                await afterMembership();
             if (
                 recovery
                 && HoldRecoveryCas

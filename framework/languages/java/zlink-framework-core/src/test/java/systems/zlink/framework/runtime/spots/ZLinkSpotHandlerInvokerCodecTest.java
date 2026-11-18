@@ -36,7 +36,7 @@ final class ZLinkSpotHandlerInvokerCodecTest {
                 new SpotPacketHandlerRegistration(
                         CapturingHandler.class,
                         null,
-                        Object.class,
+                        CodecSpot.class,
                         Probe.class,
                         Void.class,
                         "Probe",
@@ -46,7 +46,7 @@ final class ZLinkSpotHandlerInvokerCodecTest {
         try (Message payload = Message.from(new byte[] {1})) {
             invoker.invokePacket(
                             registration,
-                            new Object(),
+                            new CodecSpot(),
                             payload,
                             "application/x-wire",
                             Map.of(),
@@ -101,7 +101,7 @@ final class ZLinkSpotHandlerInvokerCodecTest {
                 new SpotPacketHandlerRegistration(
                         CapturingHandler.class,
                         null,
-                        Object.class,
+                        CodecSpot.class,
                         Probe.class,
                         Void.class,
                         "Probe",
@@ -115,7 +115,7 @@ final class ZLinkSpotHandlerInvokerCodecTest {
                             () ->
                                     invoker.invokePacket(
                                             registration,
-                                            new Object(),
+                                            new CodecSpot(),
                                             payload,
                                             "application/x-unknown",
                                             Map.of(),
@@ -135,7 +135,7 @@ final class ZLinkSpotHandlerInvokerCodecTest {
                 new SpotPacketHandlerRegistration(
                         CapturingHandler.class,
                         null,
-                        Object.class,
+                        CodecSpot.class,
                         Probe.class,
                         Void.class,
                         "Probe",
@@ -145,7 +145,7 @@ final class ZLinkSpotHandlerInvokerCodecTest {
         try (Message payload = Message.from(payloadBytes)) {
             invoker.invokePacket(
                             registration,
-                            new Object(),
+                            new CodecSpot(),
                             payload,
                             contentType,
                             Map.of(),
@@ -157,11 +157,14 @@ final class ZLinkSpotHandlerInvokerCodecTest {
         return handler;
     }
 
-    private static final class CapturingHandler implements ZLinkSpotPacketHandler<Object, Probe> {
+    private static final class CodecSpot {}
+
+    private static final class CapturingHandler
+            implements ZLinkSpotPacketHandler<CodecSpot, Probe> {
         private Probe received;
 
         @Override
-        public CompletionStage<Void> handle(Object spot, Probe message) {
+        public CompletionStage<Void> handle(CodecSpot spot, Probe message) {
             received = message;
             return CompletableFuture.completedFuture(null);
         }

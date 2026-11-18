@@ -24,9 +24,10 @@ public final class ZLinkSerialTurnAllocationTest {
     private static final int UNFILTERED_DISPATCHES = 1000;
     // #2029 adds one receivedAt Instant per dispatch: +1000 objects / +32000 bytes.
     // #1673 dispatch loop: 39881 objects / 1556976 bytes over 1000 dispatches.
+    // #4570 drops Message's direct-scope field (56 -> 48 bytes): request + reply = -16 bytes.
     // Round each per-dispatch mean to the nearest integer; .5 rounds up (Math.round).
     private static final long EXPECTED_OBJECTS_PER_DISPATCH = 41;
-    private static final long EXPECTED_BYTES_PER_DISPATCH = 1589;
+    private static final long EXPECTED_BYTES_PER_DISPATCH = 1573;
     private static final String UNFILTERED_WINDOW_EVENT = "systems.zlink.UnfilteredDispatchWindow";
 
     @Name(UNFILTERED_WINDOW_EVENT)
@@ -41,7 +42,10 @@ public final class ZLinkSerialTurnAllocationTest {
                 actual[0] + UNFILTERED_DISPATCHES,
                 mutation[0],
                 "one added object per dispatch must be detected");
-        assertTrue(mutation[1] > actual[1], "the added objects must increase allocated bytes");
+        assertEquals(
+                actual[1] + 32L * UNFILTERED_DISPATCHES,
+                mutation[1],
+                "one added byte[16] per dispatch must add its header and payload");
         assertThrows(
                 AssertionError.class,
                 () -> assertUnfilteredAllocationBudget(mutation),
@@ -132,6 +136,14 @@ public final class ZLinkSerialTurnAllocationTest {
     }
 
     public static void main(String[] args) throws Exception {
+        // The byte budget includes Message's layout from #4570. Prepare the current local
+        // binding package before running this probe; an older jar still allocates 56-byte Messages.
+        System.out.println(
+                "allocation probe binding: "
+                        + systems.zlink.contracts.messaging.Message.class
+                                .getProtectionDomain()
+                                .getCodeSource()
+                                .getLocation());
         Path recordingPath = Files.createTempFile("zlink-turn-allocation", ".jfr");
         try (var executor = new ManualExecutor();
                 var recording = new Recording()) {
@@ -160,7 +172,7 @@ public final class ZLinkSerialTurnAllocationTest {
                                 for (int i = 0; i < UNFILTERED_DISPATCHES; i++) {
                                     unfiltered.run();
                                     if (args.length != 0 && Boolean.parseBoolean(args[0]))
-                                        extraAllocation = new Object();
+                                        extraAllocation = new byte[16];
                                 }
                                 unfilteredWindow.end();
                                 unfilteredWindow.commit();

@@ -71,7 +71,8 @@ export class ZLinkSpotSerialTurn {
       reject: (reason: unknown) => void
     ) => boolean,
     private executionClaim: ZLinkExecutionBarrierClaim | undefined,
-    readonly yieldAllowed: boolean
+    readonly yieldAllowed: boolean,
+    readonly work?: { readonly lane: 'application' | 'lifecycle'; readonly lifecycleOwner?: object }
   ) {}
 
   get isSuspended(): boolean {

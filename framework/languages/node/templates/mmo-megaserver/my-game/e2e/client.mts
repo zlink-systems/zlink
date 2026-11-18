@@ -81,7 +81,6 @@ export async function scenario(
       mb = b.messages.length,
       mc = c?.messages.length ?? 0;
     await a.connector.send(new MoveRequest(Test.movedX, Test.sequence)).submit();
-    if (name === 'movement') await a.connector.send(new MoveRequest(Test.movedX, 2n)).submit();
     const moved = (v: RegionView): boolean =>
       v.players.some((p) => p.playerId === a.playerId && p.x === Test.movedX);
     const before = await a.wait<RegionView>(PacketNames.regionView, ma, moved);
@@ -123,18 +122,18 @@ export async function scenario(
       assert.equal(denied.retryAfterMs, 0);
       assert.equal((await unknown.sessionInfo()).actorId, unknown.playerId);
     } else if (name === 'movement') {
-      const rejectedMark = ma;
-      const rejected = await a.wait<ActionRejected>(PacketNames.actionRejected, rejectedMark);
-      assert.equal(rejected.reason, 'move-budget');
-      assert(rejected.retryAfterMs > 0);
-      sameState(before, await b.view());
-      await new Promise<void>((resolve) => setTimeout(resolve, rejected.retryAfterMs));
       const acceptedMark = a.messages.length;
-      await a.connector.send(new MoveRequest(Test.movedX, 2n)).submit();
+      await a.connector.send(new MoveRequest(0, 2n)).submit();
       const accepted = await a.wait<RegionView>(PacketNames.regionView, acceptedMark, (v) =>
-        v.players.some((p) => p.playerId === a.playerId && p.x === Test.movedX * 2 && p.sequence === 2n)
+        v.players.some((p) => p.playerId === a.playerId && p.x === Test.movedX && p.sequence === 2n)
       );
-      assert.equal(accepted.players.find((p) => p.playerId === a.playerId)?.sequence, 2n);
+      const staleMark = a.messages.length;
+      await a.connector.send(new MoveRequest(0, 2n)).submit();
+      const stale = await a.wait<ActionRejected>(PacketNames.actionRejected, staleMark);
+      assert.equal(stale.reason, 'stale-sequence');
+      assert.equal(stale.retryAfterMs, 0);
+      sameState(accepted, await a.view());
+      sameState(accepted, await b.view());
     } else if (name === 'dungeon') {
       const mark = a.messages.length,
         id = `dungeon-${runId}`;

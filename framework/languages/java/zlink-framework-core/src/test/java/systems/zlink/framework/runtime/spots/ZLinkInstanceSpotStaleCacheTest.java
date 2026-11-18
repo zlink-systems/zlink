@@ -30,6 +30,31 @@ final class ZLinkInstanceSpotStaleCacheTest {
     private static final String SPOT = "cached-spot";
     private static final Duration WAIT = Duration.ofSeconds(5);
 
+    @org.junit.jupiter.api.Test
+    void successfulRequestAllocationDoesNotDependOnErrorTracing() throws Exception {
+        systems.zlink.framework.testsupport.ChildJvm.runInJvm(
+                getClass(),
+                List.of("-XX:-UseTLAB", "-XX:-DoEscapeAnalysis", "-XX:TieredStopAtLevel=1"));
+    }
+
+    public static void main(String[] args) throws Exception {
+        new ZLinkInstanceSpotStaleCacheTest().compareSuccessAllocation();
+    }
+
+    private void compareSuccessAllocation() throws Exception {
+        long off =
+                measureSuccess(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.OFF);
+        long errors =
+                measureSuccess(
+                        systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.ERRORS);
+        assertEquals(off, errors);
+    }
+
+    private long measureSuccess(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode level)
+            throws Exception {
+        return followAuthority("Ready", null, level);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     @SuppressWarnings("unchecked")
@@ -37,8 +62,64 @@ final class ZLinkInstanceSpotStaleCacheTest {
         followAuthority(missing ? "Missing" : "Ready");
     }
 
-    @SuppressWarnings("unchecked")
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void notReadyFailureRetainsSelectedTargetOnce(boolean request) throws Exception {
+        var records = new CopyOnWriteArrayList<String>();
+        var recorded = new CompletableFuture<Void>();
+        var logger =
+                java.util.logging.Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        var previous = logger.getLevel();
+        var handler =
+                new java.util.logging.Handler() {
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getMessage().contains("target_rid=old")) {
+                            records.add(record.getMessage());
+                            recorded.complete(null);
+                        }
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        logger.setLevel(java.util.logging.Level.ALL);
+        try {
+            followAuthority("Ready", request);
+            recorded.get(5, TimeUnit.SECONDS);
+            String failure =
+                    assertDoesNotThrow(
+                            () -> {
+                                assertEquals(1, records.size());
+                                return records.getFirst();
+                            });
+            assertTrue(failure.contains("reason=stale_target"), failure);
+            assertTrue(failure.contains("error_type=ZlinkSubmitException"), failure);
+            assertTrue(failure.contains("error_message="), failure);
+        } finally {
+            logger.removeHandler(handler);
+            logger.setLevel(previous);
+        }
+    }
+
     void followAuthority(String state) throws Exception {
+        followAuthority(state, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    void followAuthority(String state, Boolean requestFailure) throws Exception {
+        followAuthority(state, requestFailure, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    long followAuthority(
+            String state,
+            Boolean requestFailure,
+            systems.zlink.framework.configuration.ZLinkMessageFlowLogMode allocationLevel)
+            throws Exception {
         boolean missing = !state.equals("Ready");
         boolean creating = state.equals("Creating");
         var current = new AtomicReference<ZLinkAuthorityReadResult>(snapshot("old", 2));
@@ -95,6 +176,11 @@ final class ZLinkInstanceSpotStaleCacheTest {
                     }
                 };
         var options = new DefaultZLinkFrameworkOptions();
+        if (allocationLevel != null) options.configureDispatch().messageFlow(allocationLevel);
+        if (requestFailure != null)
+            options.configureDispatch()
+                    .messageFlow(
+                            systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh(MESH).listen("inproc://cache-" + UUID.randomUUID()).objects().server();
         var submissions = new AtomicInteger();
@@ -111,6 +197,29 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                                 getClass().getClassLoader(),
                                                 new Class<?>[] {ZLinkInternalMeshNode.class},
                                                 (proxy, method, args) -> {
+                                                    if (allocationLevel != null
+                                                            && method.getName()
+                                                                    .equals(
+                                                                            "requestInstanceSpot")) {
+                                                        return CompletableFuture.completedFuture(
+                                                                List.of());
+                                                    }
+                                                    if (requestFailure != null
+                                                            && (method.getName()
+                                                                            .equals(
+                                                                                    "requestInstanceSpot")
+                                                                    || method.getName()
+                                                                            .equals(
+                                                                                    "submitInstanceSpotSend"))) {
+                                                        submissions.incrementAndGet();
+                                                        return CompletableFuture.failedFuture(
+                                                                new systems.zlink.contracts.errors
+                                                                        .ZlinkSubmitException(
+                                                                        systems.zlink.contracts
+                                                                                .sockets
+                                                                                .SubmitResult
+                                                                                .NOT_CONNECTED));
+                                                    }
                                                     if (method.getName()
                                                             .equals("requestInstanceSpot")) {
                                                         int submitted =
@@ -165,21 +274,25 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                                         }
                                                         assertTrue(
                                                                 missing,
-                                                                "Missing or Creating delegates to the activation coordinator");
+                                                                "Missing or Creating delegates to"
+                                                                        + " the activation"
+                                                                        + " coordinator");
                                                         assertEquals(
                                                                 "InstanceColdActivation",
                                                                 args[0].getClass().getSimpleName());
                                                         assertSame(
                                                                 requestParts.get(),
                                                                 args[4],
-                                                                "cold admission retains the original payload");
+                                                                "cold admission retains the"
+                                                                        + " original payload");
                                                         assertTrue(
                                                                 ((Duration) args[5])
                                                                                 .compareTo(
                                                                                         firstTimeout
                                                                                                 .get())
                                                                         <= 0,
-                                                                "cold admission retains the deadline");
+                                                                "cold admission retains the"
+                                                                        + " deadline");
                                                         accepted.incrementAndGet();
                                                         current.set(snapshot("new", 3));
                                                         return CompletableFuture.completedFuture(
@@ -219,6 +332,70 @@ final class ZLinkInstanceSpotStaleCacheTest {
                             runtime);
             var ready = resolver.resolve(SPOT).toCompletableFuture().join().orElseThrow();
             assertEquals("old", ready.ownerId());
+            if (allocationLevel != null) {
+                var bytes =
+                        systems.zlink.framework.testutil.PerCallAllocation.minWindow(
+                                () ->
+                                        host.instanceSpotCalls()
+                                                .request(
+                                                        SPOT,
+                                                        TYPE,
+                                                        MESH,
+                                                        payload,
+                                                        Optional.of("Probe"),
+                                                        "application/json",
+                                                        Map.of(),
+                                                        WAIT,
+                                                        ready,
+                                                        resolver,
+                                                        null)
+                                                .toCompletableFuture()
+                                                .join(),
+                                1000,
+                                2000);
+                System.out.printf(
+                        "instance-request success level=%s requests=1000 B/op=%.3f%n",
+                        allocationLevel, bytes / 1000.0);
+                return bytes;
+            }
+            if (requestFailure != null) {
+                CompletionStage<?> failed;
+                if (requestFailure)
+                    failed =
+                            host.instanceSpotCalls()
+                                    .request(
+                                            SPOT,
+                                            TYPE,
+                                            MESH,
+                                            payload,
+                                            Optional.of("Probe"),
+                                            "application/json",
+                                            Map.of(),
+                                            WAIT,
+                                            ready,
+                                            resolver,
+                                            null);
+                else
+                    failed =
+                            host.instanceSpotCalls()
+                                    .send(
+                                            SPOT,
+                                            TYPE,
+                                            MESH,
+                                            systems.zlink.framework.runtime.internal.service
+                                                    .ZLinkFrameworkMultipartView.snapshot(
+                                                    new byte[] {1}),
+                                            Optional.of("Probe"),
+                                            "application/json",
+                                            Map.of(),
+                                            System.currentTimeMillis() + 5000,
+                                            ready);
+                assertThrows(
+                        ExecutionException.class,
+                        () -> failed.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                assertEquals(1, submissions.get());
+                return 0;
+            }
             var call =
                     host.instanceSpotCalls()
                             .request(
@@ -265,6 +442,7 @@ final class ZLinkInstanceSpotStaleCacheTest {
             assertEquals(2, accepted.get());
             assertEquals(
                     1, invalidations.get(), "successful next operation must not invalidate again");
+            return 0;
         } finally {
             routes.close();
         }

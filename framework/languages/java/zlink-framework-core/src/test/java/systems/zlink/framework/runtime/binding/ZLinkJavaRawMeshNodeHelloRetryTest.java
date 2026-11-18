@@ -31,6 +31,97 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
     private static final Duration IO_DEADLINE = Duration.ofSeconds(2);
 
     @Test
+    void admitBeforeFirstHelloRetainsSnapshotUntilRemoteAdmit() throws Exception {
+        var localRid = RoutingId.from("admit-first-local");
+        var remoteRid = RoutingId.from("admit-first-remote");
+        var wire = new ZLinkServiceM6AWireCodec();
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "hello-retry");
+                var peerPort = new ZLinkJavaRawServicePort(context);
+                var peer = peerPort.openRouter(remoteRid)) {
+            var port = node.port;
+            var router = port.openRouter(localRid);
+            node.router = router;
+            node.localDescriptor = descriptor(localRid);
+            node.topology =
+                    new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
+            String endpoint = "inproc://admit-first-" + java.util.UUID.randomUUID();
+            peer.bind(endpoint);
+            router.connect(endpoint);
+            port.ensureReceivePollerRegistered(router);
+            peerPort.send(
+                            peer,
+                            localRid,
+                            List.of(
+                                    wire.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_HELLO,
+                                            descriptor(remoteRid))))
+                    .toCompletableFuture()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            dispatchNext(node, port, router, ServiceWireConstants.COMMAND_HELLO);
+            var admit = receiveFrame(peerPort, peer);
+            assertEquals(
+                    descriptor(localRid),
+                    wire.decodeAdmission(admit, ServiceWireConstants.COMMAND_ADMIT, localRid));
+            node.descriptorStateLaneForTest()
+                    .runAsync(() -> node.publishLocalDescriptor(descriptor(localRid, 2)))
+                    .toCompletableFuture()
+                    .join();
+            tick(node, System.nanoTime());
+            node.helloExchanges
+                    .get(remoteRid)
+                    .submission()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            var hello = receiveAdmissionFrame(peerPort, peer, wire);
+            assertEquals(
+                    descriptor(localRid),
+                    wire.decodeAdmission(hello, ServiceWireConstants.COMMAND_HELLO, localRid));
+            peerPort.send(
+                            peer,
+                            localRid,
+                            List.of(
+                                    wire.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_ADMIT,
+                                            descriptor(remoteRid))))
+                    .toCompletableFuture()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            dispatchNext(node, port, router, ServiceWireConstants.COMMAND_ADMIT);
+            byte[] update = receiveAdmissionFrame(peerPort, peer, wire);
+            assertEquals(
+                    descriptor(localRid, 2),
+                    wire.decodeAdmission(update, ServiceWireConstants.COMMAND_UPDATE, localRid));
+            assertFalse(node.helloExchanges.containsKey(remoteRid));
+            peerPort.send(
+                            peer,
+                            localRid,
+                            List.of(
+                                    wire.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_HELLO,
+                                            descriptor(remoteRid))))
+                    .toCompletableFuture()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            dispatchNext(node, port, router, ServiceWireConstants.COMMAND_HELLO);
+            assertEquals(
+                    descriptor(localRid, 2),
+                    wire.decodeAdmission(
+                            receiveFrame(peerPort, peer),
+                            ServiceWireConstants.COMMAND_ADMIT,
+                            localRid));
+            assertFalse(node.helloExchanges.containsKey(remoteRid));
+            node.descriptorStateLaneForTest()
+                    .runAsync(() -> node.publishLocalDescriptor(descriptor(localRid, 3)))
+                    .toCompletableFuture()
+                    .join();
+            assertEquals(
+                    descriptor(localRid, 3),
+                    wire.decodeAdmission(
+                            receiveFrame(peerPort, peer),
+                            ServiceWireConstants.COMMAND_UPDATE,
+                            localRid));
+        }
+    }
+
+    @Test
     void selectedHelloBeforeSnapshotReadiesBothPeersOnFirstExchange() throws Exception {
         var localRid = RoutingId.from("snapshot-local");
         var remoteRid = RoutingId.from("snapshot-remote");
@@ -586,6 +677,16 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
     private static int receive(
             ZLinkJavaRawServicePort port, RouterSocket router, ZLinkServiceM6AWireCodec wire) {
         return wire.decodeHeader(receiveFrame(port, router)).command();
+    }
+
+    // A HELLO tick may also emit a liveness probe; only admission order is checked.
+    private static byte[] receiveAdmissionFrame(
+            ZLinkJavaRawServicePort port, RouterSocket router, ZLinkServiceM6AWireCodec wire) {
+        while (true) {
+            byte[] frame = receiveFrame(port, router);
+            if (wire.decodeHeader(frame).command() != ServiceWireConstants.COMMAND_LIVENESS_PROBE)
+                return frame;
+        }
     }
 
     private static byte[] receiveFrame(ZLinkJavaRawServicePort port, RouterSocket router) {

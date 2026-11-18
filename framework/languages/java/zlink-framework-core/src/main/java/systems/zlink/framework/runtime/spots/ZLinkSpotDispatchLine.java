@@ -9,6 +9,28 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
 interface SpotDispatchLine {
+    static SpotDispatchLine from(Object surface) {
+        Object context =
+                surface instanceof systems.zlink.framework.spots.ZLinkSpot<?> spot
+                        ? spot.context()
+                        : surface instanceof systems.zlink.framework.spots.ZLinkEntrySpot<?> entry
+                                ? entry.context()
+                                : null;
+        return context instanceof SpotDispatchLine line ? line : null;
+    }
+
+    void requireExecution();
+
+    CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation);
+
+    long objectGeneration();
+
+    systems.zlink.contracts.core.RoutingId nodeRid();
+
+    default int spotKind() {
+        return 2;
+    }
+
     CompletionStage<Void> enqueueDispatch(Supplier<CompletionStage<Void>> operation);
 
     /** Returns whether all application sources share this Spot's gate. */

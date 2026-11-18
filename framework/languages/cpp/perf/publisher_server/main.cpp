@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // The Publisher role of §10.11: automatic Classic fanout, the publisher listens on the reserved endpoint and publishes its
 // descriptor to the run Store.

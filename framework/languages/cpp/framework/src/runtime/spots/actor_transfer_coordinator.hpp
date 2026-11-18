@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
@@ -55,7 +55,7 @@ struct pending_actor_admission_t
     // Only command-28's canonical non-entry branch creates this admission.
     // Legacy/maintenance transfers may use the same coordinator, but do not
     // carry the durable routed-Join recovery contract.
-    bool canonical_user_spot_join = false;
+    bool canonical_application_join = false;
     std::chrono::steady_clock::time_point deadline;
     std::uint64_t completion_operation_id_high = 0;
     std::uint64_t completion_operation_id_low = 0;

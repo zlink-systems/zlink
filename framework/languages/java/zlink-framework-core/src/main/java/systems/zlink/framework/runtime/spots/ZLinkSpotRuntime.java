@@ -1620,7 +1620,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                             throw new ZLinkFrameworkException(
                                                                                     ZLinkFrameworkErrorKind
                                                                                             .UNAVAILABLE,
-                                                                                    "User Spot authority is unavailable");
+                                                                                    "User Spot"
+                                                                                            + " authority"
+                                                                                            + " is unavailable");
                                                                         }
                                                                         return existing;
                                                                     });
@@ -1793,7 +1795,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 ignored ->
                                                         CompletableFuture.failedFuture(
                                                                 new IllegalStateException(
-                                                                        "Object client Mesh is not configured: "
+                                                                        "Object client Mesh is not"
+                                                                                + " configured: "
                                                                                 + meshName)));
                             }
                             var fence =
@@ -2832,6 +2835,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             .thenAccept(ignored -> {})
                                             .whenComplete(
                                                     (ignored, failure) -> {
+                                                        if (failure != null) {
+                                                            reportInstanceSpotFailure(
+                                                                    activation,
+                                                                    spotId,
+                                                                    packetName.orElse(null),
+                                                                    false,
+                                                                    failure);
+                                                        }
                                                         systems.zlink.framework.runtime.internal
                                                                 .service.ZLinkFrameworkMultipartView
                                                                 .closeAll(parts);
@@ -2909,7 +2920,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 ZLinkFrameworkErrorOrigin.framework(
                                                                         ZLinkFrameworkErrorKind
                                                                                 .DEADLINE_EXCEEDED,
-                                                                        "Instance Spot request deadline expired"));
+                                                                        "Instance Spot request"
+                                                                                + " deadline expired"));
                                                     }
                                                     return activation
                                                             .source()
@@ -2923,29 +2935,54 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                     parts,
                                                                     Duration.ofMillis(
                                                                             remainingMillis),
-                                                                    requestAdmission);
+                                                                    requestAdmission)
+                                                            .exceptionallyComposeAsync(
+                                                                    failure -> {
+                                                                        Throwable cause =
+                                                                                unwrapCompletion(
+                                                                                        failure);
+                                                                        if (dispatchErrors
+                                                                                        .errorsEnabled()
+                                                                                && (requestAdmission
+                                                                                                != null
+                                                                                        ? !requestAdmission
+                                                                                                        .isDone()
+                                                                                                || requestAdmission
+                                                                                                        .isCompletedExceptionally()
+                                                                                        : cause
+                                                                                                        instanceof
+                                                                                                        systems
+                                                                                                                .zlink
+                                                                                                                .contracts
+                                                                                                                .errors
+                                                                                                                .ZlinkSubmitException
+                                                                                                || cause
+                                                                                                                .getCause()
+                                                                                                        instanceof
+                                                                                                        systems
+                                                                                                                .zlink
+                                                                                                                .contracts
+                                                                                                                .errors
+                                                                                                                .ZlinkSubmitException)
+                                                                                && !isInstanceSpotAuthorityRefusal(
+                                                                                        failure)) {
+                                                                            reportInstanceSpotFailure(
+                                                                                    activation,
+                                                                                    activation
+                                                                                            .route()
+                                                                                            .targetSpotId(),
+                                                                                    null,
+                                                                                    true,
+                                                                                    failure);
+                                                                        }
+                                                                        return CompletableFuture
+                                                                                .failedFuture(
+                                                                                        failure);
+                                                                    });
                                                 }))
                         .exceptionallyComposeAsync(
                                 failure ->
-                                        switch (ZLinkRequestFailureMapping.causeCode(failure)) {
-                                                    case (int)
-                                                                    systems.zlink.framework.runtime
-                                                                            .protocol
-                                                                            .ServiceWireConstants
-                                                                            .FRAMEWORK_ERROR_SPOT_MOVING,
-                                                            (int)
-                                                                    systems.zlink.framework.runtime
-                                                                            .protocol
-                                                                            .ServiceWireConstants
-                                                                            .FRAMEWORK_ERROR_ACTOR_LOCATION_STALE,
-                                                            (int)
-                                                                    systems.zlink.framework.runtime
-                                                                            .protocol
-                                                                            .ServiceWireConstants
-                                                                            .FRAMEWORK_ERROR_SPOT_GENERATION_STALE ->
-                                                            true;
-                                                    default -> false;
-                                                }
+                                        isInstanceSpotAuthorityRefusal(failure)
                                                 ? requestInstanceSpot(
                                                         spotId,
                                                         stableType,
@@ -2959,6 +2996,53 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 : CompletableFuture.failedFuture(failure));
             }
         };
+    }
+
+    private static boolean isInstanceSpotAuthorityRefusal(Throwable failure) {
+        return switch (ZLinkRequestFailureMapping.causeCode(failure)) {
+            case (int)
+                            systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                    .FRAMEWORK_ERROR_SPOT_MOVING,
+                    (int)
+                            systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                    .FRAMEWORK_ERROR_ACTOR_LOCATION_STALE,
+                    (int)
+                            systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                    .FRAMEWORK_ERROR_SPOT_GENERATION_STALE ->
+                    true;
+            default -> false;
+        };
+    }
+
+    private void reportInstanceSpotFailure(
+            InstanceActivation activation,
+            String spotId,
+            String packetName,
+            boolean request,
+            Throwable failure) {
+        if (!dispatchErrors.errorsEnabled()) return;
+        Throwable cause = unwrapCompletion(failure);
+        dispatchErrors.report(
+                new systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.INSTANCE_SPOT,
+                        request ? ZLinkDispatchMessageKind.REQUEST : ZLinkDispatchMessageKind.SEND,
+                        ZLinkDispatchErrorReporter.reasonFrom(
+                                cause, ZLinkRequestFailureMapping.causeCode(cause)),
+                        request
+                                ? ZLinkDispatchErrorAction.FAIL_CALLER
+                                : ZLinkDispatchErrorAction.DROP,
+                        packetName,
+                        null,
+                        null,
+                        spotId,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        activation.route().targetNodeRid().toString(),
+                        cause));
     }
 
     private CompletionStage<InstanceActivation> resolveInstanceSpotRoute(
@@ -5298,7 +5382,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 + target.id()));
                     }
                     if (activation instanceof EntrySpotActivation entry)
-                        return entry.admitCanonicalActorJoin(request, sourcePeerRid);
+                        return entry.admitCanonicalActorJoin(request, sourcePeerRid, join);
                     SpotActivation spot = (SpotActivation) activation;
                     Message payload =
                             Message.from(
@@ -5527,15 +5611,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private SpotActorPacketHandlerRegistration resolveActorPacketHandler(
             String packetName, Object spotSurface, ZLinkScannedHandlerKind kind) {
-        Object context =
-                spotSurface instanceof ZLinkSpot<?> spot
-                        ? spot.context()
-                        : spotSurface instanceof ZLinkEntrySpot<?> entrySpot
-                                ? entrySpot.context()
-                                : null;
-        if (!(context instanceof SpotDispatchLine dispatchLine)) {
-            return null;
-        }
+        SpotDispatchLine dispatchLine = SpotDispatchLine.from(spotSurface);
+        if (dispatchLine == null) return null;
         List<SpotActorPacketHandlerRegistration> handlers =
                 dispatchLine.handlerCatalog().actorPacketHandlers(packetName);
         if (handlers.isEmpty()) {
@@ -5554,7 +5631,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 continue;
             }
             if (spotType != null) {
-                if (handler.spotType().isAssignableFrom(spotType)) {
+                if (handler.spotType() == spotType) {
                     return handler;
                 }
                 continue;
@@ -5858,9 +5935,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
             DefaultSpotContext context) {
         if (userSpotLocationRuntime == null) return null;
-        return userSpotLocationRuntime.execution(
-                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
-                        context.spotId()),
+        return userSpotLocationRuntime.executionAsync(
+                () ->
+                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                                context.spotId()),
                 context::steady,
                 snapshot ->
                         context.serials.spotQueue.enqueueLifecycleBarrier(
@@ -5870,9 +5948,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 }),
                 () -> null,
                 () -> {
-                    actorAdmissions.discardLocalMembers(context.spot());
-                    context.serials.discardApplications();
-                    spotLifecycle.discardExecution(context);
+                    return context.serials
+                            .discardApplications()
+                            .thenCompose(
+                                    ignored -> actorAdmissions.discardTargetJoins(context.spot()))
+                            .thenCompose(
+                                    ignored ->
+                                            context.awaitAllLanes(
+                                                    ZLinkSerialExecutionQueue.Quiescence.ALL))
+                            .thenCompose(
+                                    ignored -> actorAdmissions.discardLocalMembers(context.spot()))
+                            .thenCompose(ignored -> spotLifecycle.discardExecution(context));
                 });
     }
 

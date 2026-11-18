@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.Runtime.Execution;
@@ -109,6 +110,12 @@ internal sealed class ZLinkSerialWorkItem
             ? record.ExecutionStatus
             : ExecutionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed;
     internal ZLinkSerialWorkPreparation? Preparation { get; set; }
+    internal ZLinkApplicationJobQueueInvocation.Scope? QueuedAdmission;
+
+    // The caller terminal returned the admission this accepted record was queued with.
+    internal bool QueuedAdmissionReturned =>
+        QueuedAdmission is { } scope && Volatile.Read(ref scope.Lease) is not { IsReleased: false };
+
     internal Action<Exception>? ErrorReporter { get; set; }
     internal bool IsReady => Ready?.Invoke() != false && Preparation?.IsReady != false;
 

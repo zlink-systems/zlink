@@ -41,6 +41,7 @@ import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamError;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.io.InputStream;
 import java.net.Socket;
@@ -256,10 +257,7 @@ final class StreamSessionTest {
             throws Exception {
         var entered = new CompletableFuture<Void>();
         var release = new CompletableFuture<Void>();
-        String redisEndpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
-        org.junit.jupiter.api.Assumptions.assumeTrue(
-                redisEndpoint != null && !redisEndpoint.isBlank(),
-                "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        String redisEndpoint = ZLinkTestRedis.endpoint();
         GameEntrySpot.disconnectCallback =
                 actor -> {
                     entered.complete(null);

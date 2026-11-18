@@ -46,22 +46,15 @@ class Ask {
 }
 class Unregistered {}
 
-const redisUrl = process.env.ZLINK_TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
+const { testRedisUrl: redisUrl, connectTestRedis } = require('./helpers/test-redis');
 
 test(
   'public relocation transfers queued sends, requests and physical disconnect to the current Spot',
   { timeout: 30000 },
   async (t) => {
     const hostClock = fixedRidHostClock(t);
-    const probe = createClient({ url: redisUrl, socket: { reconnectStrategy: false } });
-    probe.on('error', () => {});
-    try {
-      await probe.connect();
-    } catch (error) {
-      if (probe.isOpen) probe.disconnect();
-      t.skip(`Redis is unavailable at ${redisUrl}: ${error.message}`);
-      return;
-    }
+    const probe = await connectTestRedis(t);
+    if (probe === undefined) return;
     await probe.quit();
     const suffix = randomUUID();
     const mesh = 'follow-' + suffix;

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 // RouteMesh admission follows the Core selected route (#1087 FW01):
 // Core ROUTER §10.1 owns which pipe carries a RID; the framework observes the
@@ -112,6 +112,34 @@ TEST (CppFrameworkMeshSelectedRoute, AdmissionFollowsCoreSelectedRouteAcrossHand
 
     source.close ();
     first->close ();
+}
+
+TEST (CppFrameworkMeshSelectedRoute, EntryJoinRejectsRetiredLifecycleBeforeSubmission)
+{
+    mesh::raw_mesh_node_owner_t source (options ("entry-source", 101));
+    mesh::raw_mesh_node_owner_t first (options ("entry-target", 201));
+    source.start ();
+    first.start ();
+    const auto retired = first.topology ().local_descriptor ();
+    first.close ();
+    mesh::raw_mesh_node_owner_t replacement (options ("entry-target", 202));
+    replacement.start ();
+    source.expect_peer (replacement.topology ().local_descriptor ());
+    const auto local = source.topology ().local_descriptor ();
+    protocol::actor_join_request_t request{
+      19,
+      {"existing-actor", 3, local.node_routing_id, local.lifecycle_generation, 1, 1},
+      true,
+      {"entry-target", 201, retired.node_routing_id, 201, 201, 1}};
+    auto pending = source.request_actor_join (retired.node_routing_id, request, {}, 100ms);
+    ASSERT_TRUE (pump_until ({&source, &replacement}, [&] { return pending.await_ready (); }));
+    const auto result = pending.result ();
+    ASSERT_TRUE (result);
+    EXPECT_EQ (result.value ().failure, mesh::actor_join_wire_failure_t::unavailable);
+    EXPECT_EQ (
+      replacement.mailbox ().pending_messages (mesh::service_mailbox_domain_t::infrastructure), 0u);
+    source.close ();
+    replacement.close ();
 }
 
 // Submit §5: the first request precedes service admission; no warm-up is sent.

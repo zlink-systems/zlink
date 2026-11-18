@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 1.25.0 LANGUAGES CXX)
+project(zlink_cpp VERSION 1.25.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -548,6 +548,12 @@ if(ZLINK_CPP_BUILD_TESTS)
   )
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_cpp_contract_test(test_cpp_contract_receive_close_admission
+      "tests/contract/test_cpp_contract_receive_close_admission.cpp")
+    target_link_options(test_cpp_contract_receive_close_admission PRIVATE
+      "LINKER:--wrap=zlink_recv" "LINKER:--wrap=zlink_router_recv"
+      "LINKER:--wrap=zlink_subscribe" "LINKER:--wrap=zlink_stream_recv_packet"
+      "LINKER:--wrap=zlink_xpub_recv")
     add_cpp_contract_test(test_cpp_contract_submit_close_admission
       "tests/contract/test_cpp_contract_submit_close_admission.cpp")
     target_include_directories(test_cpp_contract_submit_close_admission PRIVATE

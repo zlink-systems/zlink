@@ -47,6 +47,98 @@ final class ZLinkStateLaneTest {
     }
 
     @Test
+    void idleResultBoundariesKeepTheirAllocationAndFailureContract() {
+        var lane = new ZLinkStateLane(Runnable::run);
+        java.util.function.Supplier<Object> work = () -> null;
+        long bytes =
+                PerCallAllocation.minWindow(
+                        () -> {
+                            lane.awaitResult(work);
+                            return null;
+                        },
+                        20_000,
+                        50_000);
+        assertTrue(bytes < 20_000, "idle result boundary allocated " + bytes + " bytes");
+        var failure = new IllegalStateException("owner failure");
+        assertSame(
+                failure,
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                lane.awaitResult(
+                                        () -> {
+                                            throw failure;
+                                        })));
+        assertFalse(lane.isOnLane());
+        assertEquals(
+                42,
+                lane.awaitResult(
+                        () -> {
+                            assertSame(lane, ZLinkStateLane.current());
+                            assertThrows(IllegalStateException.class, () -> lane.awaitResult(work));
+                            return 42;
+                        }));
+        assertFalse(lane.isOnLane());
+        lane.closeAsync().toCompletableFuture().join();
+        assertThrows(IllegalStateException.class, () -> lane.awaitResult(work));
+    }
+
+    @Test
+    void queuedResultsKeepFifoAndEachCallersValueOrFailureWhileCloseDrains() throws Exception {
+        var published = new java.util.concurrent.Semaphore(0);
+        var lane = new ZLinkStateLane(Runnable::run, publicationQueue(published));
+        var hold = new CompletableFuture<Void>();
+        var order = new ArrayList<Integer>();
+        var failure = new IllegalStateException("queued failure");
+        var values = new Object[8];
+        var results = new ArrayList<java.util.concurrent.Future<Object>>();
+        assertTrue(lane.tryPost(() -> hold));
+        assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+        try (var callers = Executors.newFixedThreadPool(8)) {
+            try {
+                for (int index = 0; index < values.length; index++) {
+                    int turn = index;
+                    values[turn] = new Object();
+                    results.add(
+                            callers.submit(
+                                    () -> {
+                                        try {
+                                            return lane.awaitResult(
+                                                    () -> {
+                                                        assertSame(lane, ZLinkStateLane.current());
+                                                        order.add(turn);
+                                                        if (turn == 3) throw failure;
+                                                        return values[turn];
+                                                    });
+                                        } catch (IllegalStateException error) {
+                                            if (turn != 3) throw error;
+                                            return error;
+                                        } finally {
+                                            assertFalse(lane.isOnLane());
+                                        }
+                                    }));
+                    assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+                    assertFalse(results.getLast().isDone());
+                }
+                var closed = lane.closeAsync().toCompletableFuture();
+                assertFalse(closed.isDone());
+                assertThrows(IllegalStateException.class, () -> lane.awaitResult(() -> null));
+                hold.complete(null);
+                for (int turn = 0; turn < values.length; turn++) {
+                    assertSame(
+                            turn == 3 ? failure : values[turn],
+                            results.get(turn).get(5, TimeUnit.SECONDS));
+                }
+                closed.get(5, TimeUnit.SECONDS);
+                assertEquals(java.util.stream.IntStream.range(0, 8).boxed().toList(), order);
+                assertFalse(lane.isOnLane());
+            } finally {
+                hold.complete(null);
+            }
+        }
+    }
+
+    @Test
     void contendedSynchronousTurnsRunOnTheirWaitingCallersInFifoOrder() throws Exception {
         var executorCalls = new AtomicInteger();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
@@ -81,8 +81,20 @@ class service_mailbox_application_t
         _original (std::move (original))
     {
     }
-    service_mailbox_application_t (service_mailbox_application_t &&) = default;
-    service_mailbox_application_t &operator= (service_mailbox_application_t &&) = default;
+    service_mailbox_application_t (service_mailbox_application_t &&other) noexcept (
+      std::is_nothrow_move_constructible_v<decltype (_original)>) :
+        _original (std::move (other._original))
+    {
+        other.reset ();
+    }
+    service_mailbox_application_t &operator= (service_mailbox_application_t &&other) noexcept (
+      std::is_nothrow_move_assignable_v<decltype (_original)>)
+    {
+        // The empty source is the mailbox's taken mark for an application original.
+        _original = std::move (other._original);
+        other.reset ();
+        return *this;
+    }
     service_mailbox_application_t (const service_mailbox_application_t &) = delete;
     service_mailbox_application_t &operator= (const service_mailbox_application_t &) = delete;
 
@@ -391,7 +403,7 @@ class service_mailbox_t
             return std::move (*kept);
         if (!next_locked (handle))
             return std::monostate{};
-        return transfer_locked (*slot);
+        return std::move (*slot);
     }
     std::optional<service_mailbox_record_t> take (const claim_handle_t &handle);
     // Relocation flow §4.2: observe runs in the producer step that transfers the original,
@@ -404,7 +416,7 @@ class service_mailbox_t
         if (!slot || !next_locked (handle))
             return std::nullopt;
         observe ();
-        return transfer_locked (*slot);
+        return std::move (*slot);
     }
     // Relocation flow §4.2 producer cut: in one producer step, takes every original of the
     // owners not taken yet, claimed or not, in FIFO order, then runs cut. A claimed original
@@ -426,7 +438,6 @@ class service_mailbox_t
   private:
     friend class service_mailbox_settlement_t;
     friend struct service_mailbox_claim_t;
-    friend struct host::application_claim_batch_t;
 
     enum class owner_phase_t
     {
@@ -487,7 +498,6 @@ class service_mailbox_t
     static std::size_t retained_bytes (const service_mailbox_record_t &record);
     static service_mailbox_record_t *slot_locked (const claim_handle_t &handle);
     static bool next_locked (const claim_handle_t &handle);
-    static service_mailbox_record_t transfer_locked (service_mailbox_record_t &slot);
 
     void notify_application_ready ();
 

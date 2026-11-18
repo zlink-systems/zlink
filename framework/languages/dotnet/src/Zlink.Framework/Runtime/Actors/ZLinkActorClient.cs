@@ -115,12 +115,6 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        var started = timeout is null ? 0 : Stopwatch.GetTimestamp();
-        using var operation = (
-            await runtime
-                .AdmitOperationAsync(countAsRequest: true, boundExecution: true)
-                .ConfigureAwait(false)
-        ).Enter();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
@@ -128,17 +122,73 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         var terminal = runtime.Flow.CaptureEnabled
             ? new ActorRequestTerminalTrace(runtime.Flow, actorId, packetName)
             : null;
+        Zlink.Framework.Runtime.Service.ZLinkManagedMeshNode owner;
         try
         {
+            owner = runtime.GetActorClientSpotNodeRuntime().Node.RequestOperations;
+            var result = await owner
+                .RunDeadlineRequestAsync<TReply>(
+                    timeout ?? runtime.Registration.DefaultRequestTimeout,
+                    cancellationToken,
+                    completion =>
+                    {
+                        if (completion.Result != RequestResult.Ok)
+                            throw new ZlinkRequestException(
+                                (ZlinkRequestException.ErrorCode)(int)completion.Result
+                            );
+                        try
+                        {
+                            return ZLinkActorReplyDecoder.Decode<TReply>(
+                                completion.Parts,
+                                runtime.Flow.CaptureEnabled
+                            );
+                        }
+                        finally
+                        {
+                            ZLinkMessageParts.DisposeAll(completion.Parts);
+                        }
+                    },
+                    (pending, terminalTask) => ProduceAsync(pending),
+                    kind: MeshOperationKind.ActorRequest,
+                    mapFailure: MapActorRequestFailure,
+                    requestAdmission: requestAdmission
+                )
+                .ConfigureAwait(false);
+            terminal?.Succeeded();
+            return result;
+        }
+        catch (Exception failure)
+        {
+            terminal?.Failed(failure);
+            throw;
+        }
+        finally
+        {
+            terminal?.Dispose();
+        }
+
+        async Task ProduceAsync(
+            Zlink.Framework.Runtime.Service.ZLinkManagedMeshNode.PendingOperation<TReply> pending
+        )
+        {
+            using var operation = (
+                await runtime
+                    .AdmitOperationAsync(countAsRequest: true, boundExecution: true)
+                    .ConfigureAwait(false)
+            ).Enter();
+            pending.Token.ThrowIfCancellationRequested();
             var route =
                 fixedRoute
-                ?? await ResolveActorRouteAsync(actorId, cancellationToken).ConfigureAwait(false);
+                ?? await ResolveActorRouteAsync(actorId, pending.Token).ConfigureAwait(false);
             var actor = route.ActorRef;
             var meshName = route.MeshName;
             var targetNodeGeneration = route.TargetNodeGeneration;
             var authorityOwnerGeneration = route.AuthorityOwnerGeneration;
             var ownerLeaseGeneration = route.OwnerLeaseGeneration;
-            var nodeRuntime = await GetActorSpotNodeAsync(meshName, cancellationToken)
+            var nodeRuntime = await GetActorSpotNodeAsync(meshName, pending.Token)
+                .ConfigureAwait(false);
+            await owner
+                .BindActorRequestSourceAsync(pending, nodeRuntime.Node.RequestOperations)
                 .ConfigureAwait(false);
             if (authorityOwnerGeneration != 0)
                 nodeRuntime.ObserveActorAuthority(
@@ -149,7 +199,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                 );
             EnsureRouteAvailable(nodeRuntime, actor);
             var node = nodeRuntime.Node;
-            var remainingTimeout = RemainingTimeout(timeout, started);
+            pending.Token.ThrowIfCancellationRequested();
+            var remainingTimeout = owner.RemainingTimeout(pending);
             var parts = CreatePacketParts(
                 ZlinkStreamMessageKind.Request,
                 new ZlinkStreamRequestSeq(1),
@@ -160,36 +211,25 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             var header = ZLinkStreamProtocolDefaults.DecodeHeader(parts[0].AsReadOnlyMemory());
             terminal?.SetRoute(meshName, actor.NodeRid.ToString(), header.CorrelationId);
             TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorRequest);
-            TReply reply;
             try
             {
-                reply = await SubmitActorRequest<TReply>(
-                        node,
-                        actor.ToBackend(),
-                        parts,
-                        remainingTimeout,
-                        cancellationToken,
-                        actorId,
-                        route,
-                        requestAdmission: requestAdmission
-                    )
-                    .ConfigureAwait(false);
+                SubmitActorRequest<TReply>(
+                    node,
+                    actor.ToBackend(),
+                    parts,
+                    remainingTimeout,
+                    cancellationToken,
+                    actorId,
+                    route,
+                    requestAdmission: requestAdmission,
+                    operation: pending,
+                    operationOwner: owner
+                );
             }
             finally
             {
                 ZLinkMessageParts.DisposeAll(parts);
             }
-            terminal?.Succeeded();
-            return reply;
-        }
-        catch (Exception failure)
-        {
-            terminal?.Failed(failure);
-            throw;
-        }
-        finally
-        {
-            terminal?.Dispose();
         }
     }
 
@@ -286,7 +326,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         );
     }
 
-    private ValueTask<TReply> SubmitActorRequest<TReply>(
+    private void SubmitActorRequest<TReply>(
         IZLinkBackendSpotNode node,
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
@@ -294,11 +334,14 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         CancellationToken cancellationToken,
         string actorId,
         ResolvedActorRoute route,
-        ZLinkRequestAdmission? requestAdmission = null
+        ZLinkRequestAdmission? requestAdmission = null,
+        Zlink.Framework.Runtime.Service.ZLinkManagedMeshNode.PendingOperation<TReply>? operation =
+            null,
+        Zlink.Framework.Runtime.Service.ZLinkManagedMeshNode? operationOwner = null
     )
     {
         var captureFlow = runtime.Flow.CaptureEnabled;
-        return node.RequestToActorAsync<TReply>(
+        _ = node.RequestToActorAsync<TReply>(
             actor,
             parts,
             timeout,
@@ -306,7 +349,9 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             reply => ZLinkActorReplyDecoder.Decode<TReply>(reply, captureFlow),
             MapActorRequestFailure,
             requestAdmission,
-            failure => DecideActorRouteInvalidation(actorId, route, failure)
+            failure => DecideActorRouteInvalidation(actorId, route, failure),
+            operation,
+            operationOwner
         );
     }
 

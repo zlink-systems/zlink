@@ -141,33 +141,38 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
     }
 
     private NativeRecord receive(RecvFlags flags, boolean nullOnNoData) {
-        RecvOutScratch scratch = RECV_OUT_SCRATCH.get();
-        int rc = flags == RecvFlags.DONT_WAIT
-            ? Native.routerRecvNoWaitCritical(
-                InternalAccess.socketHandle(socket),
-                scratch.sourceNodeRidOut, scratch.replyTokenValueOut,
-                scratch.partsOut, scratch.partCountOut, flags.value())
-            : Native.routerRecv(InternalAccess.socketHandle(socket),
-                scratch.sourceNodeRidOut, scratch.replyTokenValueOut,
-                scratch.partsOut, scratch.partCountOut, flags.value());
-        if (rc == RecvResult.OK.value()) {
-            long routeGeneration = Native.routerRecvRouteGeneration(
-                InternalAccess.socketHandle(socket));
-            Message[] parts =
-                InternalAccess.messageFromOwnedMessageVector(
-                    scratch.partsOut.get(ValueLayout.ADDRESS, 0),
-                    scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
-            return new NativeRecord(
-                NativeRoutingIds.readBytesOut(scratch.sourceNodeRidOut),
-                parts, scratch.replyTokenValueOut.get(
-                    ValueLayout.JAVA_LONG, 0), routeGeneration);
+        socket.runtime().socketCore().reserveNativeCall();
+        try {
+            RecvOutScratch scratch = RECV_OUT_SCRATCH.get();
+            int rc = flags == RecvFlags.DONT_WAIT
+                ? Native.routerRecvNoWaitCritical(
+                    InternalAccess.socketHandle(socket),
+                    scratch.sourceNodeRidOut, scratch.replyTokenValueOut,
+                    scratch.partsOut, scratch.partCountOut, flags.value())
+                : Native.routerRecv(InternalAccess.socketHandle(socket),
+                    scratch.sourceNodeRidOut, scratch.replyTokenValueOut,
+                    scratch.partsOut, scratch.partCountOut, flags.value());
+            if (rc == RecvResult.OK.value()) {
+                long routeGeneration = Native.routerRecvRouteGeneration(
+                    InternalAccess.socketHandle(socket));
+                Message[] parts =
+                    InternalAccess.messageFromOwnedMessageVector(
+                        scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                        scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
+                return new NativeRecord(
+                    NativeRoutingIds.readBytesOut(scratch.sourceNodeRidOut),
+                    parts, scratch.replyTokenValueOut.get(
+                        ValueLayout.JAVA_LONG, 0), routeGeneration);
+            }
+            int errno = Native.errno();
+            RecvResult result = RecvResult.fromValue(rc);
+            if (nullOnNoData && result == RecvResult.NO_DATA) {
+                return null;
+            }
+            throw new ZlinkRecvException(result, errno);
+        } finally {
+            socket.runtime().socketCore().releaseNativeCall();
         }
-        int errno = Native.errno();
-        RecvResult result = RecvResult.fromValue(rc);
-        if (nullOnNoData && result == RecvResult.NO_DATA) {
-            return null;
-        }
-        throw new ZlinkRecvException(result, errno);
     }
 
     private Received toReceived(NativeRecord record) {

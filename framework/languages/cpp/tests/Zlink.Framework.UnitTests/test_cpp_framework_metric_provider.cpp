@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include "metric_test_reader.hpp"
 #include "metric_test_store.hpp"
 #include <zlink/framework.hpp>

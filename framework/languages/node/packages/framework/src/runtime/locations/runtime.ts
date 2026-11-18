@@ -195,11 +195,18 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     readonly retainedByOwner: WeakMap<object, ZLinkRetainedExecution>;
   };
   private readonly discardedExecutions = new WeakSet<object>();
+  private readonly discardedAuthorities = new Map<
+    ZLinkExecutionRecovery,
+    {
+      settled?: Promise<void> | 'failed';
+      pending?: Promise<void>;
+    }
+  >();
   private readonly executions = new Map<
     object,
     {
       readonly steadyReady: () => boolean;
-      readonly discard: (error: unknown) => void;
+      readonly discard: (error: unknown) => void | Promise<void>;
       readonly captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined;
     }
   >();
@@ -210,7 +217,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   trackExecution(
     owner: object,
     steadyReady: () => boolean,
-    discard: (error: unknown) => void,
+    discard: (error: unknown) => void | Promise<void>,
     captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined
   ): void {
     if (!this.discardedExecutions.has(owner) && !this.executions.has(owner))
@@ -223,11 +230,34 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   discardExecution(owner: object): void {
     if (!this.started) return;
+    if (this.discardedExecutions.has(owner)) return;
     const execution = this.executions.get(owner);
+    const recovery = execution?.captureRecovery?.(new WeakRef(owner));
     this.discardedExecutions.add(owner);
     this.wakeExecution();
     this.forgetExecution(owner);
-    execution?.discard(this.executionFailure());
+    if (execution === undefined) return;
+    const record: { settled?: Promise<void> | 'failed'; pending?: Promise<void> } = {};
+    if (recovery !== undefined) this.discardedAuthorities.set(recovery, record);
+    try {
+      const settled = execution.discard(this.executionFailure());
+      if (settled !== undefined) {
+        record.settled = settled;
+        void settled.then(
+          () => {
+            record.settled = undefined;
+          },
+          (error: unknown) => {
+            record.settled = 'failed';
+            this.lastError = errorMessage(error);
+          }
+        );
+      }
+    } catch (error) {
+      this.lastError = errorMessage(error);
+      // A failed local disposal never qualifies as settled authority cleanup.
+      record.settled = 'failed';
+    }
   }
 
   discardSteadyExecution(owner: object): boolean {
@@ -375,6 +405,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   }
 
   get ownerLeaseRecoveryRequired(): boolean {
+    // A failed local disposal can never progress, so it must not keep recovery running.
+    for (const record of this.discardedAuthorities.values())
+      if (record.settled !== 'failed') return true;
     if (this.storeOutage !== undefined)
       for (const record of this.storeOutage.retained.values())
         if (record.phase !== 'recovered') return true;
@@ -418,6 +451,43 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
             );
           });
     await Promise.all([confirmedPublication, ...recoveries]);
+    if (owner !== undefined && this.ownerLeaseUsable) {
+      // Start Actor operations first; each Spot waits only for its own member incarnations.
+      const discarded = [...this.discardedAuthorities].sort(
+        ([left], [right]) =>
+          Number(decodeAuthorityKey(left.key).kind !== 'actor') -
+          Number(decodeAuthorityKey(right.key).kind !== 'actor')
+      );
+      const operations: Promise<void>[] = [];
+      for (const [recovery, record] of discarded) {
+        if (record.pending !== undefined) {
+          operations.push(record.pending);
+          continue;
+        }
+        if (record.settled !== undefined) continue;
+        const pending = (async () => {
+          const identity = decodeAuthorityKey(recovery.key);
+          if (identity.kind !== 'actor') {
+            const members = [...this.discardedAuthorities].filter(
+              ([member]) =>
+                member.memberOf?.spotId === identity.globalId &&
+                member.memberOf.objectGeneration === recovery.incarnation.objectGeneration
+            );
+            await Promise.all(members.map(([, member]) => member.pending));
+            if (members.some(([member]) => this.discardedAuthorities.has(member))) return;
+          }
+          if (!this.ownerLeaseUsable || this.ownerToken !== owner) return;
+          if (await recovery.cleanup(owner, signal)) this.discardedAuthorities.delete(recovery);
+        })();
+        record.pending = pending;
+        operations.push(
+          pending.finally(() => {
+            record.pending = undefined;
+          })
+        );
+      }
+      await Promise.all(operations);
+    }
     if (
       outage !== undefined &&
       !outage.discarded &&
@@ -589,7 +659,21 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
     this.leaseOperationStartedAtMs = 0;
     this.ownerLeaseDeadlineMs = undefined;
-    await this.cleanupOwner(signal);
+    try {
+      const pending = await Promise.allSettled(
+        [...this.discardedAuthorities.values()].map((record) => record.pending)
+      );
+      await this.cleanupOwner(signal);
+      const failures = pending.flatMap((result) =>
+        result.status === 'rejected' ? [result.reason] : []
+      );
+      if (failures.length > 0)
+        throw new AggregateError(failures, 'Discarded authority cleanup failed during shutdown.');
+    } finally {
+      this.discardedAuthorities.clear();
+      this.executions.clear();
+      this.storeOutage = undefined;
+    }
   }
 
   async cleanupOwner(signal?: AbortSignal): Promise<void> {
@@ -1434,14 +1518,23 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     let cursor =
       requestedCursor === undefined ? undefined : PublicAuthorityScanCursor.from(requestedCursor);
     const items: ZLinkLocationObjectEntry[] = [];
+    const itemRows: { start: PublicAuthorityScanCursor | undefined; rows: number }[] = [];
+    let encodedItemsBytes = 0;
+    const prefix = filter.objectKind === 'actor' ? 'zla1:a:' : 'zla1:s:';
     for (;;) {
-      // Keep the Store cursor at the public page boundary. Scanning 1000 rows
-      // and returning only a smaller page would discard the unreturned rows.
-      const result = await this.stores.authorityStore.listAuthorities('', cursor, pageSize, signal);
+      const batchCursor = cursor;
+      const result = await this.stores.authorityStore.listAuthorities(
+        prefix,
+        batchCursor,
+        pageSize - items.length,
+        signal
+      );
       if (result.kind === 'scanExpired') {
         throw new Error('The authority query snapshot expired.');
       }
-      for (const entry of result.items) {
+      let index = 0;
+      for (; index < result.items.length && items.length < pageSize; index++) {
+        const entry = result.items[index]!;
         const identity = decodeAuthorityKey(entry.key);
         const allocation = entry.snapshot.allocation;
         if (
@@ -1463,18 +1556,85 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
               ),
             signal
           )) !== undefined;
-        items.push(this.objectLocationEntry(identity.globalId, entry.snapshot, live));
-        if (items.length >= pageSize) break;
+        const projected = this.objectLocationEntry(identity.globalId, entry.snapshot, live);
+        const entryBytes = this.encodedObjectSize(projected);
+        const candidateItemsBytes = encodedItemsBytes + entryBytes;
+        const continuation = result.nextCursor?.encoded;
+        if (!this.encodedObjectPageFits(candidateItemsBytes, items.length + 1, continuation)) {
+          if (items.length === 0)
+            throw new Error('The encoded object location entry exceeds 4 MiB.');
+          break;
+        }
+        items.push(projected);
+        itemRows.push({ start: batchCursor, rows: index + 1 });
+        encodedItemsBytes = candidateItemsBytes;
       }
-      const nextCursor = result.nextCursor;
-      if (items.length >= pageSize || nextCursor === undefined) {
-        return {
-          items,
-          continuationToken: nextCursor?.encoded
-        };
+      cursor = result.nextCursor;
+      if (index < result.items.length) {
+        if (index === 0) cursor = batchCursor;
+        else {
+          const consumed = await this.stores.authorityStore.listAuthorities(
+            prefix,
+            batchCursor,
+            index,
+            signal
+          );
+          if (consumed.kind === 'scanExpired')
+            throw new Error('The authority query snapshot expired.');
+          cursor = consumed.nextCursor;
+        }
+        while (!this.encodedObjectPageFits(encodedItemsBytes, items.length, cursor?.encoded)) {
+          encodedItemsBytes -= this.encodedObjectSize(items.pop()!);
+          const position = itemRows.pop()!;
+          if (items.length === 0)
+            throw new Error('The encoded object location entry exceeds 4 MiB.');
+          if (position.rows === 1) {
+            cursor = position.start;
+            continue;
+          }
+          const prior = await this.stores.authorityStore.listAuthorities(
+            prefix,
+            position.start,
+            position.rows - 1,
+            signal
+          );
+          if (prior.kind === 'scanExpired') {
+            throw new Error('The authority query snapshot expired.');
+          }
+          cursor = prior.nextCursor;
+        }
+        return { items, continuationToken: cursor?.encoded };
       }
-      cursor = nextCursor;
+      if (items.length >= pageSize || cursor === undefined) {
+        return { items, continuationToken: cursor?.encoded };
+      }
     }
+  }
+
+  private encodedObjectPageFits(
+    encodedItemsBytes: number,
+    itemCount: number,
+    continuationToken: string | undefined
+  ): boolean {
+    return (
+      Buffer.byteLength('{"items":[') +
+        encodedItemsBytes +
+        Math.max(0, itemCount - 1) +
+        Buffer.byteLength(']') +
+        (continuationToken === undefined
+          ? 0
+          : Buffer.byteLength(`,"continuationToken":${JSON.stringify(continuationToken)}`)) +
+        1 <=
+      4 * 1024 * 1024
+    );
+  }
+
+  private encodedObjectSize(entry: ZLinkLocationObjectEntry): number {
+    return Buffer.byteLength(
+      `{"globalId":${JSON.stringify(entry.globalId)},"objectGeneration":${entry.objectGeneration.toString()},` +
+        `"meshName":${JSON.stringify(entry.meshName)},"nodeRid":${JSON.stringify(entry.nodeRid.toString())},` +
+        `"state":${JSON.stringify(entry.state)},"stableType":${JSON.stringify(entry.stableType)}}`
+    );
   }
 
   async findActorLocation(

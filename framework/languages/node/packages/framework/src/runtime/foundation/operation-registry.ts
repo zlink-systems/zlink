@@ -23,6 +23,7 @@ export class OperationCancelledError extends Error {
 export interface OperationHandle<T> {
   readonly id: bigint;
   readonly deadlineMs: number | undefined;
+  readonly signal: AbortSignal;
   readonly promise?: Promise<T>;
   complete(value: T, retentionMs?: number): boolean;
   fail(reason: unknown): boolean;
@@ -62,7 +63,7 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
   observer?: OperationObserver<T, Context>;
   failureDispatcher?: (reason: unknown) => void;
   private terminalRetentionMs = 0;
-  private signal?: AbortSignal;
+  private stop?: AbortController;
   private callerValue?: (value: unknown) => unknown;
   private callerFailure?: (error: unknown) => unknown;
   constructor(
@@ -94,17 +95,19 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
     observer.operationFailed(this.id, reason, this.context);
     return true;
   }
+  get signal(): AbortSignal {
+    if (this.stop === undefined && !this.isPending()) return AbortSignal.abort(createAbortError());
+    return (this.stop ??= new AbortController()).signal;
+  }
   setSignal(signal: AbortSignal | undefined): void {
-    this.signal = signal;
-    if (signal?.aborted === true) this.handleEvent();
-    else signal?.addEventListener('abort', this, { once: true });
+    if (signal?.aborted === true) this.fail(signal.reason ?? createAbortError());
+    else signal?.addEventListener('abort', this, { once: true, signal: this.signal });
   }
-  handleEvent(): void {
-    this.fail(this.signal?.reason ?? createAbortError());
+  handleEvent(event: Event): void {
+    this.fail((event.target as AbortSignal).reason ?? createAbortError());
   }
-  private detachSignal(): void {
-    this.signal?.removeEventListener('abort', this);
-    this.signal = undefined;
+  endAdmission(): void {
+    this.stop?.abort();
   }
   mapCaller(onValue: (value: unknown) => unknown, onFailure: (error: unknown) => unknown): boolean {
     if (this.resolve === undefined || this.reject === undefined) return false;
@@ -166,7 +169,6 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
   operationCompleted(): void {}
   operationFailed(): void {}
   resolveCaller(value: T): boolean {
-    this.detachSignal();
     const resolve = this.resolve,
       reject = this.reject,
       map = this.callerValue;
@@ -183,7 +185,6 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
     return true;
   }
   rejectCaller(reason: unknown): boolean {
-    this.detachSignal();
     const reject = this.reject,
       map = this.callerFailure;
     this.resolve = undefined;
@@ -437,6 +438,7 @@ export class OperationRegistry<T, Context = unknown> {
     this.entries.delete(id);
     if (this.entries.size === 0) this.resetEmptyIndex();
     this.pendingCount--;
+    entry.endAdmission();
     if (this.pendingCount === 0) this.onPendingChanged?.();
     return entry;
   }

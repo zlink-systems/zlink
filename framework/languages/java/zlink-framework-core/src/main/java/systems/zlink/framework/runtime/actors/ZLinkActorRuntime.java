@@ -188,11 +188,30 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 RoutingId sourceNodeRid, ZLinkServiceMessageFollowWireCodec.Notice notice);
     }
 
-    public record EntrySpotTarget(RoutingId nodeRid, String spotId) {
+    public record EntrySpotTarget(SpotTransportAddress address) {
         public EntrySpotTarget {
-            Objects.requireNonNull(nodeRid, "nodeRid");
+            Objects.requireNonNull(address, "address");
+            Objects.requireNonNull(address.targetNodeRid(), "nodeRid");
             systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator.requireValid(
-                    spotId);
+                    address.spotId());
+        }
+
+        public EntrySpotTarget(RoutingId nodeRid, String spotId) {
+            this(
+                    new SpotTransportAddress(
+                            null,
+                            nodeRid,
+                            spotId,
+                            0L,
+                            systems.zlink.framework.spots.ZLinkSpotKind.ENTRY));
+        }
+
+        public RoutingId nodeRid() {
+            return address.targetNodeRid();
+        }
+
+        public String spotId() {
+            return address.spotId();
         }
     }
 
@@ -2237,7 +2256,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 : context.execution.ready();
     }
 
-    private void discardExecution(DefaultActorContext context) {
+    private CompletionStage<Void> discardExecution(DefaultActorContext context) {
         String actorId = context.actorId();
         ZLinkBackendActorRef actorRef = context.actorRef();
         ZLinkActor actor = context.actor();
@@ -2252,7 +2271,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         CompletionStage<Void> disconnected =
                 ZLinkHandlerStages.fromStageSupplier(context::disconnectBoundSessionForDestroy);
         // Detach local state before waiting for transport or Session completion.
-        ZLinkHandlerStages.completeAll(
+        return ZLinkHandlerStages.completeAll(
                 List.of(
                         () -> retired,
                         () ->
@@ -2268,18 +2287,44 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         () -> disconnected));
     }
 
-    public void discardLocalMembers(ZLinkSpot<?> spot) {
-        actorRegistry
+    public CompletionStage<Void> discardLocalMembers(ZLinkSpot<?> spot) {
+        return actorRegistry
                 .entriesAsync()
-                .thenAccept(
+                .thenCompose(
                         entries -> {
+                            var pending = new java.util.ArrayList<CompletableFuture<Void>>();
                             for (ActorEntry entry : entries) {
                                 DefaultActorContext context = entry.context();
-                                if (context.currentSpot() == spot
-                                        && !context.moving()
-                                        && context.execution != null) context.execution.discard();
+                                if (context.currentSpot() == spot && context.execution != null) {
+                                    // Both Join outcomes must settle before deciding which local
+                                    // incarnation remains a member. Disposal failures still
+                                    // propagate.
+                                    pending.add(
+                                            context.moveCompletion()
+                                                    .handle((ignored, failure) -> null)
+                                                    .thenCompose(
+                                                            ignored -> {
+                                                                if (context.currentSpot() == spot
+                                                                        && context.execution
+                                                                                != null)
+                                                                    return context.execution
+                                                                            .discardAsync();
+                                                                return CompletableFuture
+                                                                        .completedFuture(null);
+                                                            })
+                                                    .toCompletableFuture());
+                                }
                             }
+                            return CompletableFuture.allOf(
+                                    pending.toArray(CompletableFuture[]::new));
                         });
+    }
+
+    public CompletionStage<Void> discardTargetJoins(ZLinkSpot<?> spot) {
+        ZLinkActorJoinRelocationPort port = actorJoinRelocationPort;
+        return port == null
+                ? CompletableFuture.completedFuture(null)
+                : port.discardTargetJoins(spot);
     }
 
     CompletionStage<Void> deactivateActorOnOwnershipLoss(String actorId) {
@@ -2886,7 +2931,28 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     private ZLinkInternalSpotNode.RemoteSessionBindingTransition remoteSessionBindingTransition(
             ZLinkInternalSpotNode node, ZLinkBackendActorRef actorRef) {
+        return remoteSessionBindingTransition(
+                node,
+                actorRef,
+                (started, cancellation) -> CompletableFuture.completedFuture(Optional.empty()));
+    }
+
+    private ZLinkInternalSpotNode.RemoteSessionBindingTransition remoteSessionBindingTransition(
+            ZLinkInternalSpotNode node,
+            ZLinkBackendActorRef actorRef,
+            java.util.function.BiFunction<
+                            Runnable,
+                            ZLinkActorCallbackCancellation,
+                            CompletionStage<Optional<String>>>
+                    callback) {
         return new ZLinkInternalSpotNode.RemoteSessionBindingTransition() {
+            @Override
+            public CompletionStage<Boolean> commit(Supplier<CompletionStage<Boolean>> transition) {
+                return inOwnerTurn(transition)
+                        .thenCompose(
+                                stage -> Objects.requireNonNull(stage, "binding commit stage"));
+            }
+
             @Override
             public void bind(ZLinkInternalSpotNode.BoundSessionRoute route) {
                 ZLinkActor actor = actorRegistry.actor(actorRef.actorId());
@@ -2909,11 +2975,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             }
 
             @Override
-            public CompletionStage<Optional<String>> decideDuplicateBind(
+            public CompletionStage<Boolean> acceptBinding(
                     ZLinkSessionBindingIdentity incoming,
                     RoutingId incomingSessionRid,
-                    Runnable callbackStarted,
-                    ZLinkActorCallbackCancellation cancellation) {
+                    Function<
+                                    ZLinkInternalSpotNode.RemoteSessionBindingTransition,
+                                    CompletionStage<Boolean>>
+                            transition) {
                 ZLinkActor actor = actorRegistry.actor(actorRef.actorId());
                 if (actor == null) {
                     return CompletableFuture.failedFuture(
@@ -2949,33 +3017,47 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         }
                     }
                     if (callbackAbsent) {
-                        return CompletableFuture.completedFuture(Optional.empty());
+                        return transition.apply(this);
                     }
                 } catch (NoSuchMethodException failure) {
                     return CompletableFuture.failedFuture(failure);
                 }
-                return enqueueActorDispatchTurn(
+                Optional<ZLinkInternalSpotNode.BoundSessionRoute> currentRoute =
+                        node.boundSessionRoute(actorRef);
+                if (currentRoute.isEmpty()) {
+                    return transition.apply(this);
+                }
+                ZLinkInternalSpotNode.BoundSessionRoute current = currentRoute.orElseThrow();
+                if (current.isSamePhysicalSession(incoming, incomingSessionRid)) {
+                    return transition.apply(this);
+                }
+                return enqueueActorLifecycleTurn(
                         actorRef.actorId(),
-                        () -> {
-                            Optional<ZLinkInternalSpotNode.BoundSessionRoute> currentRoute =
-                                    node.boundSessionRoute(actorRef);
-                            if (currentRoute.isEmpty()) {
-                                return CompletableFuture.completedFuture(Optional.empty());
-                            }
-                            ZLinkInternalSpotNode.BoundSessionRoute current =
-                                    currentRoute.orElseThrow();
-                            if (current.isSamePhysicalSession(incoming, incomingSessionRid)) {
-                                return CompletableFuture.completedFuture(Optional.empty());
-                            }
-                            callbackStarted.run();
-                            return invokeActorLifecycle(
-                                    actor,
-                                    () ->
-                                            actor.onDuplicateBind(
-                                                    current.sessionBindingIdentity(),
-                                                    incoming,
-                                                    cancellation));
-                        });
+                        () ->
+                                transition.apply(
+                                        remoteSessionBindingTransition(
+                                                node,
+                                                actorRef,
+                                                (started, cancellation) -> {
+                                                    started.run();
+                                                    return invokeActorLifecycle(
+                                                            actor,
+                                                            () ->
+                                                                    actor.onDuplicateBind(
+                                                                            current
+                                                                                    .sessionBindingIdentity(),
+                                                                            incoming,
+                                                                            cancellation));
+                                                })));
+            }
+
+            @Override
+            public CompletionStage<Optional<String>> decideDuplicateBind(
+                    ZLinkSessionBindingIdentity incoming,
+                    RoutingId incomingSessionRid,
+                    Runnable callbackStarted,
+                    ZLinkActorCallbackCancellation cancellation) {
+                return callback.apply(callbackStarted, cancellation);
             }
         };
     }
@@ -4070,7 +4152,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .thenCompose(turn -> dispatches.runTurn(turn, operation));
     }
 
-    private <T> CompletionStage<T> enqueueActorDispatchTurn(
+    private <T> CompletionStage<T> enqueueActorLifecycleTurn(
             String actorId, Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(actorId, "actorId");
         Objects.requireNonNull(operation, "operation");
@@ -4103,7 +4185,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                 });
                                     };
                             CompletionStage<Void> queued =
-                                    dispatches.enqueue(turn, queuedOperation);
+                                    turn.activation()
+                                            .executeLifecycle(
+                                                    () ->
+                                                            dispatches.runTurn(
+                                                                    turn, queuedOperation));
                             queued.whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null) {
@@ -4960,7 +5046,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     new systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner(
                             handlerFactory);
             this.execution =
-                    locations.execution(
+                    locations.executionAsync(
                             actorRef.actorId(),
                             state::steady,
                             snapshot ->
@@ -5124,22 +5210,18 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
 
         private ZLinkActorJoinCall createJoinEntrySpotCall(Message request, Duration timeout) {
-            return new ZLinkActorEntrySpotJoinCall(
+            return new ZLinkActorSpotJoinCall(
                     this,
                     requestedTimeout ->
-                            entrySpotTargetSelector.select(
-                                    actorRegistry.actorType(state.actorId()), requestedTimeout),
+                            entrySpotTargetSelector
+                                    .select(
+                                            actorRegistry.actorType(state.actorId()),
+                                            requestedTimeout)
+                                    .thenApply(EntrySpotTarget::address),
                     request,
                     timeout,
-                    entrySpotJoinServices());
-        }
-
-        private ZLinkActorEntrySpotJoinCall.Services entrySpotJoinServices() {
-            return new ZLinkActorEntrySpotJoinCall.Services(
-                    spotNode,
-                    serializer,
-                    ZLinkActorRuntime.this,
-                    ZLinkActorRuntime.this::renewActorMovedToEntrySpotLocation);
+                    spotJoinServices(),
+                    true);
         }
 
         @Override

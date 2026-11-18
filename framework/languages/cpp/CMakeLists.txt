@@ -66,7 +66,7 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.25.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.25.1" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
 set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.25.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
@@ -2486,6 +2486,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
   add_executable(test_cpp_framework_shared_infrastructure
     tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_infrastructure.cpp)
+  add_executable(test_cpp_framework_suspended_handler_worker
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_suspended_handler_worker.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_suspended_handler_worker)
+  target_link_libraries(test_cpp_framework_suspended_handler_worker PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_suspended_handler_worker PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_suspended_handler_worker
+    COMMAND test_cpp_framework_suspended_handler_worker
+    LABELS "framework-unit;framework-contract;execution"
+    TIER unit
+    TIMEOUT 30)
   target_use_zlink_gtest_main(test_cpp_framework_shared_infrastructure)
   target_compile_features(test_cpp_framework_shared_infrastructure PRIVATE cxx_std_20)
   target_link_libraries(test_cpp_framework_shared_infrastructure PRIVATE zlink::framework)
@@ -2931,6 +2943,26 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;stream;reply"
     unit)
   add_zlink_framework_test(
+    test_cpp_framework_same_node_duplicate_bind
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_same_node_duplicate_bind.cpp
+    "framework-integration;framework-contract;stream;stream-session"
+    contract)
+  target_link_libraries(test_cpp_framework_same_node_duplicate_bind PRIVATE zlink::stream_connector nlohmann_json::nlohmann_json)
+  target_compile_definitions(test_cpp_framework_same_node_duplicate_bind PRIVATE
+    ZLINK_BINDING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/bound-session-relocation-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_remote_duplicate_bind_replacement
+    COMMAND test_cpp_framework_same_node_duplicate_bind remote
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_same_node_duplicate_bind_reject
+    COMMAND test_cpp_framework_same_node_duplicate_bind reject
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  add_zlink_framework_test(
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
@@ -2957,6 +2989,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_stream_reader_retirement_tracked
     COMMAND test_cpp_framework_stream_framework --reader-retirement-tracked
+    LABELS "framework-unit;stream;stream-session"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stream_write_terminal_shutdown
+    COMMAND test_cpp_framework_stream_framework --write-terminal-shutdown
     LABELS "framework-unit;stream;stream-session"
     TIMEOUT 30)
   zlink_framework_cpp_add_boost_headers(

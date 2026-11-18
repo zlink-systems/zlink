@@ -165,9 +165,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         get
         {
             lock (_admissionGate)
-                return _applicationQueue.PendingTail is { Next: not null, Preparation: not null }
-                    || _sharedOwner is not null
-                        && _applicationQueue.PendingTail?.Preparation is not null;
+                return HasPendingDurableApplicationUnderLock;
+        }
+    }
+
+    private bool HasPendingDurableApplicationUnderLock
+    {
+        get
+        {
+            var tail = _applicationQueue.PendingTail;
+            return tail is not null
+                && (tail.Next is not null || _sharedOwner is not null)
+                && (tail.Preparation is not null || tail.QueuedAdmissionReturned);
         }
     }
 
@@ -533,6 +542,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             executionAllowed: _executionAllowed
         );
         candidate.AcceptedState = executionState;
+        ZLinkApplicationJobQueueInvocation.Scope? durable = null;
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0 || _applicationAdmissionClosed)
@@ -541,17 +551,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 return ZLinkSerialPostAdmission.Closed;
             }
             // Publication and durable inheritance use the same admission boundary.
-            // Ordinary Actor admission adds no lock, preparation or delegate.
-            if (
-                _applicationQueue.PendingTail?.Preparation is not null
-                && ZLinkApplicationJobQueueInvocation.CurrentScope
-                    is { Lease.IsReleased: false } scope
-            )
-                candidate.Preparation = new ZLinkSerialWorkPreparation(
-                    scope.ReacquireAsync,
-                    scope.ReleaseDurablePermit,
-                    NotifyReadiness
-                );
+            // A returned initial reservation uses the FIFO's existing preparation path.
+            if (transferred && ZLinkApplicationJobQueueInvocation.CurrentScope is { } scope)
+            {
+                if (HasPendingDurableApplicationUnderLock)
+                    durable = scope;
+                candidate.QueuedAdmission = scope;
+            }
             CommitWorkItemUnderLock(
                 _applicationQueue,
                 candidate,
@@ -563,6 +569,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             drain = ReserveDrainUnderLock();
         }
 
+        durable?.ReleaseDurablePermit();
         if (transferred)
             _ = ZLinkApplicationJobQueueInvocation.TryTransferOwnerReservation();
         return ZLinkSerialPostAdmission.Accepted;
@@ -1607,6 +1614,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
+    internal bool IsCurrentLifecycleTurn =>
+        ZLinkSerialTurn.Current?.LifecycleOwner is { } owner
+        && ReferenceEquals(_activeLifecycle, owner);
+
     internal bool IsInsideSharedGate =>
         _sharedOwner is null
         || ZLinkSerialTurn.Current is { } turn
@@ -1973,9 +1984,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 && (applicationAvailable || !candidate.ReservationHeld)
                 && (
                     (!candidate.ReservationHeld && candidate.Mailbox is null)
-                    || (headReady ??= head.IsReady)
+                    || (headReady ??= PrepareApplicationUnderLock(head))
                 )
-                && (isHead ? (headReady ??= head.IsReady) : candidate.IsReady)
+                && (
+                    isHead
+                        ? (headReady ??= PrepareApplicationUnderLock(head))
+                        : PrepareApplicationUnderLock(candidate)
+                )
                 && (
                     _activeLifecycle is not { } owner
                     || _applicationStartAllowed?.Invoke(owner) != false
@@ -1990,6 +2005,20 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             previous = candidate;
         }
         return null;
+    }
+
+    private bool PrepareApplicationUnderLock(ZLinkSerialWorkItem item)
+    {
+        if (item.Preparation is null && item.QueuedAdmissionReturned)
+        {
+            var scope = item.QueuedAdmission!;
+            item.Preparation = new ZLinkSerialWorkPreparation(
+                scope.ReacquireAsync,
+                scope.ReleaseDurablePermit,
+                NotifyReadiness
+            );
+        }
+        return item.IsReady;
     }
 
     internal bool HasPendingAcceptedState(Func<object, bool> predicate)
@@ -2249,11 +2278,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             async _ =>
             {
                 turn.ResetSuspension();
-                resume(
-                    lifecycleOwner is not null && !turn.Item.IsExecutionAllowed
-                        ? ZLinkSerialPostAdmission.Closed
-                        : ZLinkSerialPostAdmission.Accepted
-                );
+                resume(ZLinkSerialPostAdmission.Accepted);
                 var ownerTask = turn.OwnerTask;
                 if (ownerTask is null || ownerTask.IsCompleted)
                     return;
@@ -2264,8 +2289,16 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 ? ZLinkSerialWorkLane.Application
                 : ZLinkSerialWorkLane.Lifecycle,
             reservationHeld: false,
-            relocationRelease: () => resume(ZLinkSerialPostAdmission.Closed),
-            executionAllowed: lifecycleOwner is null ? () => turn.Item.ExecutionStatus : null
+            relocationRelease: () => resume(GetResumeAdmission(turn)),
+            executionAllowed: () =>
+                GetResumeAdmission(turn) switch
+                {
+                    ZLinkSerialPostAdmission.Accepted => ZLinkObjectExecutionStatus.Allowed,
+                    ZLinkSerialPostAdmission.Paused => ZLinkObjectExecutionStatus.Paused,
+                    ZLinkSerialPostAdmission.OwnershipLost =>
+                        ZLinkObjectExecutionStatus.OwnershipLost,
+                    _ => ZLinkObjectExecutionStatus.Stopped,
+                }
         );
         Func<CancellationToken, ValueTask>? drain;
         lock (_admissionGate)
@@ -2300,6 +2333,40 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
 
         PublishDrain(drain);
+        return ZLinkSerialPostAdmission.Accepted;
+    }
+
+    private ZLinkSerialPostAdmission GetResumeAdmission(ZLinkSerialTurn turn)
+    {
+        if (Volatile.Read(ref _completed) != 0)
+            return ZLinkSerialPostAdmission.Closed;
+        if (
+            _relocated
+            || _relocation is { } relocation
+                && !(
+                    relocation.PreparationOwner is { } preparation
+                    && ReferenceEquals(turn.LifecycleOwner, preparation)
+                )
+        )
+            return ZLinkSerialPostAdmission.Sealed;
+
+        var queueStatus = _executionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed;
+        var recordStatus = turn.Item.ExecutionStatus;
+        if (
+            queueStatus == ZLinkObjectExecutionStatus.OwnershipLost
+            || recordStatus == ZLinkObjectExecutionStatus.OwnershipLost
+        )
+            return ZLinkSerialPostAdmission.OwnershipLost;
+        if (queueStatus == ZLinkObjectExecutionStatus.Stopped)
+            return ZLinkSerialPostAdmission.Closed;
+        if (
+            queueStatus == ZLinkObjectExecutionStatus.Paused
+            || recordStatus == ZLinkObjectExecutionStatus.Paused
+        )
+            return ZLinkSerialPostAdmission.Paused;
+
+        // Actor destroy closes new payload admission. The existing turn still
+        // owns its terminal; only the queue and Location can prevent its resume.
         return ZLinkSerialPostAdmission.Accepted;
     }
 
@@ -2382,4 +2449,7 @@ internal enum ZLinkSerialPostAdmission
 {
     Accepted = 0,
     Closed = 1,
+    Sealed,
+    OwnershipLost,
+    Paused,
 }

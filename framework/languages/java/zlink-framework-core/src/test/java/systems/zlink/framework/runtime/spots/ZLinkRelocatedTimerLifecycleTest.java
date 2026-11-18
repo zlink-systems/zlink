@@ -313,6 +313,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                         .completeRelocationReady(prepared)
                         .toCompletableFuture()
                         .get(3, java.util.concurrent.TimeUnit.SECONDS);
+                spot.closeRequested = spot.context().close();
                 assertEquals(0, spot.ticks);
                 assertFalse(spot.closeRequested.toCompletableFuture().isDone());
                 var hold =
@@ -369,7 +370,6 @@ final class ZLinkRelocatedTimerLifecycleTest {
 
         @Override
         public CompletionStage<Void> onInitialize() {
-            closeRequested = context().close();
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -417,6 +417,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                         lifecycle.prepareReserved(
                                 "mesh", ReadyTimerSpot.class, "ready-timer", 1, null);
                 var spot = ReadyTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                if (requestClose) spot.closeRequested = spot.context().close();
                 var due = scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
                 assertNotNull(due, "registered timer must have a platform expiration");
                 due.run();
@@ -635,6 +636,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                 var spot =
                         ReadyTimerInstance.initialized.get(
                                 3, java.util.concurrent.TimeUnit.SECONDS);
+                if (requestClose) spot.closeRequested = spot.context().close();
                 var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
                 assertNotNull(due);
                 due.run();
@@ -799,11 +801,12 @@ final class ZLinkRelocatedTimerLifecycleTest {
 
         @Override
         public CompletionStage<Void> onInitialize() {
+            var invalid = assertThrows(ZLinkFrameworkException.class, () -> context.close());
+            assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION, invalid.kind());
             return context.addTimer(
                             "instance-ready", Duration.ofNanos(1), InstanceTickHandler.class, null)
                     .thenCompose(
                             timer -> {
-                                if (requestClose) closeRequested = context.close();
                                 initialized.complete(this);
                                 return initializeRelease;
                             });
@@ -878,7 +881,6 @@ final class ZLinkRelocatedTimerLifecycleTest {
             return context.addTimer("ready", Duration.ofNanos(1), ReadyTimerHandler.class, null)
                     .thenCompose(
                             timer -> {
-                                if (requestClose) closeRequested = context.close();
                                 entered.complete(this);
                                 return creation;
                             });

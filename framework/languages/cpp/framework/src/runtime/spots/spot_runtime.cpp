@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "spot_runtime.hpp"
 
@@ -3713,6 +3713,9 @@ task_t<bool> spot_context_t::close_erased ()
         return task_t<bool> (result_t<bool>::success (false));
     const auto state = _state;
     state->ensure_relocation_turn_open ();
+    if (state->serial_queue && state->serial_queue->is_current_lifecycle_turn ())
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "A Spot cannot close itself from its lifecycle callback.");
     auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto closed = completion->task ();
     state->request_close (
@@ -7995,7 +7998,7 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
         return std::nullopt;
     const auto handoff_id = runtime::protocol::actor_join_handoff_id (prepare.relocation);
     const auto admission = _state->actor_transfer_coordinator->admission (handoff_id);
-    if (!admission || !admission->canonical_user_spot_join)
+    if (!admission || !admission->canonical_application_join)
         return std::nullopt;
     struct validation_projection_t
     {
@@ -8023,8 +8026,10 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
                                       ? _state->snapshot.routing_id->to_bytes ()
                                       : std::vector<std::uint8_t>{};
             result.matches =
-              !local_node.empty () && !target.is_entry_spot () && !target.is_instance_spot ()
-              && target.object_generation == admission->target_spot_generation
+              !local_node.empty () && !target.is_instance_spot ()
+              && (target.is_entry_spot () ? prepare.target.target_node_generation
+                                          : target.object_generation)
+                   == admission->target_spot_generation
               && prepare.object.object_id == admission->source_actor.actor_id ().value ()
               && prepare.object.object_generation == admission->source_actor.object_generation ()
               && prepare.object.expected_authority_owner_generation
@@ -9465,7 +9470,7 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
           const auto found_admission =
             target_state->actor_admissions.find (factory->second.actor_type);
           if (found_admission != target_state->actor_admissions.end ()
-              && found_admission->second.join) {
+              && (target_state->is_entry_spot () || found_admission->second.join)) {
               admission = found_admission->second;
           }
           admission_timeout =
@@ -9534,7 +9539,9 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
        completion_operation_id_high, completion_operation_id_low] {
           auto &target = *target_state;
           auto &response = outcome->response;
-          response = admission.join (target.spot_instance.get (), actor_id, request, *serializers);
+          response = target.is_entry_spot () ? spot_actor_join_result_t{true, {}}
+                                             : admission.join (target.spot_instance.get (),
+                                                               actor_id, request, *serializers);
           if (response.accepted
               && !state->actor_transfer_coordinator->try_add_admission (
                 transfer_id,
@@ -9543,9 +9550,8 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
                   .source_actor = store_actor,
                   .source_spot_id = source_spot_id,
                   .target_spot_id = target_spot_id,
-                  .canonical_user_spot_join = actor_type_from_authority_only
-                                              && !target.is_entry_spot ()
-                                              && !target.is_instance_spot (),
+                  .canonical_application_join =
+                    actor_type_from_authority_only && !target.is_instance_spot (),
                   .deadline = std::chrono::steady_clock::now () + admission_timeout,
                   .completion_operation_id_high = completion_operation_id_high,
                   .completion_operation_id_low = completion_operation_id_low,
@@ -14380,12 +14386,14 @@ task_t<void> run_actor_handler_turn_task (
   std::string actor_key)
 {
     runtime::actor_execution_scope_t actor_scope (std::move (actor_key), target.context->spot_id);
+    target.context->enter_callback ();
     try {
         outcome->emplace (co_await work (*target.actor, cancellation));
     }
     catch (...) {
         outcome->emplace (detail::current_exception_result<bool> ());
     }
+    target.context->leave_callback ();
     co_return;
 }
 
@@ -14440,16 +14448,39 @@ task_t<result_t<bool>> spot_node_runtime_t::run_actor_turn (
                                            "Actor handler-turn target is not registered");
 
     const auto actor_context = target->context;
+    if (!actor_context->admit ())
+        co_return detail::result_access_t::failure<bool> (actor_context->admission_error ());
+    const auto executor = actor_context->spot_serial_executor;
+    if (!executor)
+        co_return result_t<bool>::failure (framework_error_kind_t::not_found,
+                                           "Actor handler-turn executor is unavailable");
+    const auto key = actor_key (target->actor_ref);
     auto outcome = std::make_shared<std::optional<result_t<bool>>> ();
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
+    const auto submitted = executor->execute_actor_lifecycle (
+      key, "actor-handler-turn",
+      [target = std::move (*target), work = std::move (work), cancellation, outcome, completion,
+       key] (auto complete) mutable {
+          callback_context_scope_t callback_scope (target.context.get ());
+          auto running = std::make_shared<task_t<void>> (run_actor_handler_turn_task (
+            std::move (target), std::move (work), cancellation, outcome, std::move (key)));
+          detail::observe_task_completion (
+            *running, [running, complete, completion] (const result_t<void> &result) mutable {
+                complete ([result, completion] {
+                    completion->complete (result);
+                    result.value ();
+                });
+            });
+      },
+      [completion] {
+          completion->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                         "Actor handler-turn gate is closed"));
+      });
+    if (!submitted)
+        co_return result_t<bool>::failure (framework_error_kind_t::shutting_down,
+                                           "Actor handler-turn queue is closed");
     try {
-        co_await actor_context->run_serial_task (
-          "actor-handler-turn",
-          [target = std::move (*target), work = std::move (work), cancellation,
-           outcome] () mutable -> task_t<void> {
-              auto key = actor_key (target.actor_ref);
-              return run_actor_handler_turn_task (std::move (target), std::move (work),
-                                                  cancellation, outcome, std::move (key));
-          });
+        co_await completion->task ();
     }
     catch (...) {
         co_return detail::current_exception_result<bool> ();
@@ -15126,7 +15157,13 @@ spot_node_runtime_t::execution_queue_on_lane (const runtime::stateful::object_re
 
 void spot_node_runtime_t::bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle)
 {
-    _state->lane.run ([&] { _state->location_lifecycle = &lifecycle; }).get ();
+    _state->lane
+      .run ([&] {
+          _state->location_lifecycle = &lifecycle;
+          _state->discarded_authority_cleanup =
+            lifecycle.execution_runtime ().discarded_authority_cleanup ();
+      })
+      .get ();
 }
 
 void spot_node_runtime_t::observe_location_authority (authority_key_t key,
@@ -15202,20 +15239,38 @@ void spot_node_runtime_t::resume_location_execution ()
     });
 }
 
-void spot_node_runtime_t::request_location_execution_discard (
+task_t<void> spot_node_runtime_t::request_location_execution_discard (
   runtime::serial_execution_queue_t::execution_admission_t allowed)
 {
     using discarded_spot_t =
       std::pair<std::shared_ptr<spot_context_state_t>, std::vector<task_t<void>>>;
     struct cleanup_t
     {
+        static task_t<void> prepare (
+          std::shared_ptr<service::mesh_node_t> native,
+          runtime::serial_execution_queue_t::execution_admission_t allowed,
+          std::function<task_t<void> (authority_key_t, authority_snapshot_t, task_t<void>)> cleanup,
+          std::shared_ptr<task_completion_source_t<void>> settled)
+        {
+            if (!native)
+                co_return;
+            auto authorities =
+              co_await native->objects ().discard_location_execution (std::move (allowed));
+            if (cleanup)
+                for (auto &[key, fence] : authorities)
+                    co_await cleanup (std::move (key), std::move (fence), settled->task ());
+        }
+
         static task_t<void> run (
           std::shared_ptr<spot_node_builder_state_t> state,
+          std::shared_ptr<task_t<void>> prepared,
           std::shared_ptr<std::vector<discarded_spot_t>> spots,
           std::vector<std::pair<actor_ref_t, runtime::serial_execution_queue_t::execution_status_t>>
             actors,
           runtime::serial_execution_queue_t::execution_admission_t retained_fence)
         {
+            // Preserve authority fences before local Close removes their objects.
+            co_await *prepared;
             // Keep the discarded episode's fence until the existing cleanup continuation finishes.
             (void) retained_fence;
             for (const auto &[actor, status] : actors) {
@@ -15247,59 +15302,103 @@ void spot_node_runtime_t::request_location_execution_discard (
         }
     };
     const auto state = _state;
-    state->lane.try_post ([state, allowed = std::move (allowed)] {
-        auto spots = std::make_shared<std::vector<discarded_spot_t>> ();
-        std::vector<std::pair<actor_ref_t, runtime::serial_execution_queue_t::execution_status_t>>
-          actors;
-        for (const auto &[_, context] : state->spot_contexts_by_id) {
-            const auto spot = context._state;
-            if (!spot || !spot->spot_serial_executor)
-                continue;
-            if (!spot->is_entry_spot () && spot->serial_queue
-                && allowed (*spot->serial_queue)
-                     != runtime::serial_execution_queue_t::execution_status_t::allowed) {
-                std::vector<task_t<void>> completions;
-                spot->spot_serial_executor->close (&completions, allowed (*spot->serial_queue));
-                spots->emplace_back (spot, std::move (completions));
-                continue;
-            }
-            for (const auto &[id, type] : state->actor_types_by_id) {
-                const auto key = actor_key (type, id);
-                const auto member = state->actor_spot_ids.find (key);
-                if (member == state->actor_spot_ids.end () || member->second != spot->spot_id)
-                    continue;
-                const auto executor = spot->spot_serial_executor->find_actor_executor (key);
-                if (executor
-                    && allowed (*executor->queue ())
-                         != runtime::serial_execution_queue_t::execution_status_t::allowed) {
-                    executor->queue ()->cancel_pending (allowed (*executor->queue ()));
-                    actors.emplace_back (
-                      ::zlink::framework::detail::actor_ref_access_t::make (
-                        spot->node_rid, type, id, state->actor_generations.at (key)),
-                      allowed (*executor->queue ()));
-                }
-            }
-        }
-        if (spots->empty () && actors.empty ())
-            return;
-        // Existing Close uses its infrastructure executor outside the owner turn.
-        const auto submitted = state->worker_executor->try_submit_internal (
-          [state, spots = std::move (spots), actors = std::move (actors),
-           allowed = std::move (allowed)] () mutable {
-              auto cleanup =
-                cleanup_t::run (state, std::move (spots), std::move (actors), std::move (allowed));
-              detail::observe_task_terminal (cleanup, [state] (const result_t<void> &result) {
-                  if (!result)
-                      report_spot_close_diagnostic (state, {}, "location_discard_failed",
-                                                    result.exception ());
-              });
-          });
-        if (!submitted)
-            report_spot_close_diagnostic (
-              state, {}, "location_discard_rejected",
-              std::make_exception_ptr (detail::make_framework_origin_exception (
-                framework_error_kind_t::shutting_down, "Local discard executor is closed")));
-    });
+    auto applied = std::make_shared<task_completion_source_t<void>> ();
+    auto settled = std::make_shared<task_completion_source_t<void>> ();
+    // Publish the actual close turn before returning, even when the lane is busy.
+    // Claim waits for terminal application; repository cleanup waits for local drain.
+    auto abandon = [applied, settled] (std::exception_ptr error) {
+        const auto result = detail::result_access_t::failure<void> (std::move (error));
+        applied->complete (result);
+        settled->complete (result);
+    };
+    const auto posted = state->lane.try_post (
+      [state, allowed = std::move (allowed), applied, settled, abandon] {
+          try {
+              auto prepared = std::make_shared<task_t<void>> (cleanup_t::prepare (
+                state->native_node.lock (), allowed, state->discarded_authority_cleanup, settled));
+              auto spots = std::make_shared<std::vector<discarded_spot_t>> ();
+              std::vector<
+                std::pair<actor_ref_t, runtime::serial_execution_queue_t::execution_status_t>>
+                actors;
+              for (const auto &[_, context] : state->spot_contexts_by_id) {
+                  const auto spot = context._state;
+                  if (!spot || !spot->spot_serial_executor)
+                      continue;
+                  if (!spot->is_entry_spot () && spot->serial_queue
+                      && allowed (*spot->serial_queue)
+                           != runtime::serial_execution_queue_t::execution_status_t::allowed) {
+                      std::vector<task_t<void>> completions;
+                      const auto status = allowed (*spot->serial_queue);
+                      // Timer state can retain a queue outside the coordinator's named queues.
+                      // Apply its terminal before a new lease can reopen execution admission.
+                      for (const auto &timer : spot->timers)
+                          if (timer->serial_queue)
+                              completions.push_back (
+                                timer->serial_queue->cancel_pending_async (status));
+                      spot->spot_serial_executor->close (&completions, status);
+                      spots->emplace_back (spot, std::move (completions));
+                      continue;
+                  }
+                  for (const auto &[id, type] : state->actor_types_by_id) {
+                      const auto key = actor_key (type, id);
+                      const auto member = state->actor_spot_ids.find (key);
+                      if (member == state->actor_spot_ids.end () || member->second != spot->spot_id)
+                          continue;
+                      const auto executor = spot->spot_serial_executor->find_actor_executor (key);
+                      if (executor
+                          && allowed (*executor->queue ())
+                               != runtime::serial_execution_queue_t::execution_status_t::allowed) {
+                          executor->queue ()->cancel_pending (allowed (*executor->queue ()));
+                          actors.emplace_back (
+                            ::zlink::framework::detail::actor_ref_access_t::make (
+                              spot->node_rid, type, id, state->actor_generations.at (key)),
+                            allowed (*executor->queue ()));
+                      }
+                  }
+              }
+              if (spots->empty () && actors.empty ()) {
+                  settled->complete (result_t<void>::success ());
+              } else {
+                  // Existing Close uses its infrastructure executor outside the owner turn.
+                  const auto submitted = state->worker_executor->try_submit_internal (
+                    [state, prepared, spots = std::move (spots), actors = std::move (actors),
+                     allowed = std::move (allowed), settled] () mutable {
+                        auto cleanup = cleanup_t::run (state, prepared, std::move (spots),
+                                                       std::move (actors), std::move (allowed));
+                        detail::observe_task_terminal (
+                          cleanup, [state, settled] (const result_t<void> &result) {
+                              settled->complete (result);
+                              if (!result)
+                                  report_spot_close_diagnostic (
+                                    state, {}, "location_discard_failed", result.exception ());
+                          });
+                    });
+                  if (!submitted) {
+                      const auto result = result_t<void>::failure (
+                        framework_error_kind_t::shutting_down, "Local discard executor is closed");
+                      applied->complete (result);
+                      settled->complete (result);
+                      report_spot_close_diagnostic (
+                        state, {}, "location_discard_rejected",
+                        std::make_exception_ptr (detail::make_framework_origin_exception (
+                          framework_error_kind_t::shutting_down,
+                          "Local discard executor is closed")));
+                      return;
+                  }
+              }
+              detail::observe_task_terminal (
+                *prepared,
+                [applied, prepared] (const result_t<void> &result) { applied->complete (result); });
+          }
+          catch (...) {
+              abandon (std::current_exception ());
+          }
+      },
+      abandon);
+    if (!posted)
+        abandon (std::make_exception_ptr (detail::make_framework_origin_exception (
+          framework_error_kind_t::shutting_down, "Local discard lane is closed")));
+    return applied->task ();
 }
 
 std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs () const
@@ -15504,7 +15603,7 @@ spot_node_runtime_t::resolve_spot_generation (const zlink::routing_id_t &target_
 }
 
 result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
-  const runtime::protocol::spot_route_fence_t &fence) const
+  const runtime::protocol::spot_route_fence_t &fence, bool entry) const
 {
     if (fence.spot_id.empty () || fence.object_generation == 0
         || fence.target_node_routing_id.empty () || fence.target_node_generation == 0
@@ -15519,6 +15618,22 @@ result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
         return result_t<std::uint64_t>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor Join target Spot Authority Store is unavailable");
+    }
+    if (entry) {
+        const auto entry_id = resolve_entry_spot_id ();
+        const auto node = native_node ();
+        const auto owner =
+          services->get_required<runtime::location_runtime_t> ().current_owner_token ();
+        if (!entry_id || *entry_id != fence.spot_id || !node || !owner
+            || node->status ().routing_id ().to_bytes () != fence.target_node_routing_id
+            || node->status ().lifecycle_generation () != fence.target_node_generation
+            || fence.object_generation != fence.target_node_generation
+            || fence.authority_owner_generation != fence.target_node_generation
+            || owner->lease_generation <= 0
+            || static_cast<std::uint64_t> (owner->lease_generation) != fence.owner_lease_generation)
+            return result_t<std::uint64_t>::failure (framework_error_kind_t::unavailable,
+                                                     "Entry Spot descriptor fence is unavailable");
+        return result_t<std::uint64_t>::success (fence.object_generation);
     }
     runtime::live_location_reader_t *store = nullptr;
     try {

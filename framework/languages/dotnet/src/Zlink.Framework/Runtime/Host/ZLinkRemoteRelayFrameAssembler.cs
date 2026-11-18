@@ -240,14 +240,10 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
             expiry.ShutdownToken,
             expiry.PendingToken
         );
-        try
-        {
-            await Task.Delay(_timeout, _time, linkedExpiry.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
+        var delay = Task.Delay(_timeout, _time, linkedExpiry.Token);
+        await delay.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (delay.IsCanceled)
             return;
-        }
 
         try
         {

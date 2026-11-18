@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 
@@ -71,6 +71,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     void stop () noexcept override;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes () const;
     actor_manager_t actor_manager ();
+    task_t<mesh_node_descriptor_t> select_actor_entry_spot (actor_ref_t actor);
     task_t<zlink::submit_result_t>
     submit_local_node_send (std::shared_ptr<detail::mesh_node_runtime_t> node,
                             std::vector<zlink::message_t> parts);
@@ -103,6 +104,10 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                   spot_ref_t spot,
                                   std::chrono::steady_clock::time_point deadline,
                                   std::uint64_t wire_deadline);
+    task_t<std::vector<mesh_node_descriptor_t>>
+    actor_placement_targets (std::string mesh_name,
+                             std::string stable_type,
+                             std::shared_ptr<detail::mesh_node_runtime_t> source);
     task_t<actor_create_result_t> create_actor (bool exclusive,
                                                 actor_id_t actor_id,
                                                 std::string stable_type,

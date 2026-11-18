@@ -12,9 +12,11 @@ import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.actors.ZLinkActorClientRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -23,8 +25,11 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
@@ -60,6 +65,79 @@ final class ZLinkCommittedActorLocalIngressTest {
     private static final Map<String, CompletableFuture<ZLinkActorJoinCompletion>> PAIR_COMPLETIONS =
             new ConcurrentHashMap<>();
     private static final List<Integer> RECEIVED = new CopyOnWriteArrayList<>();
+    private static CompletableFuture<Long> sentIncarnation;
+
+    @Test
+    void cachedIdRequestReachesRecreatedActorOnTheSameOwner() throws Exception {
+        sentIncarnation = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        try (var runtime =
+                start(
+                        options(
+                                "recreated-source",
+                                locations,
+                                new InMemoryRelocationStore(),
+                                null))) {
+            var manager = runtime.actorManager();
+            var raw = node(runtime);
+            try (var routes =
+                    new ZLinkStoreLocationResolvers(
+                            ZLinkRegisteredLocationStores.fromUnified(
+                                    new ZLinkProviderLocationRepository(locations)),
+                            new ZLinkLocationOptions())) {
+                ZLinkActorClient client =
+                        new ZLinkActorClientRuntime(
+                                () -> raw,
+                                routes,
+                                new ZLinkJsonMessageSerializer(),
+                                Duration.ofSeconds(WAIT_SECONDS));
+                manager.create(ACTOR, "player")
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                var previous =
+                        manager.find(ACTOR)
+                                .toCompletableFuture()
+                                .get(WAIT_SECONDS, TimeUnit.SECONDS)
+                                .orElseThrow();
+                assertEquals(
+                        Long.toString(previous.objectGeneration()),
+                        client.requestToActor(ACTOR, new IncarnationProbe())
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                var cached = routes.resolveActor(ACTOR).toCompletableFuture().join();
+                assertTrue(
+                        manager.destroy(previous)
+                                .toCompletableFuture()
+                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                var current =
+                        assertInstanceOf(
+                                        ZLinkActorCreateResult.Created.class,
+                                        manager.create(ACTOR, "player")
+                                                .submit()
+                                                .toCompletableFuture()
+                                                .get(WAIT_SECONDS, TimeUnit.SECONDS))
+                                .actor();
+                assertNotEquals(previous.objectGeneration(), current.objectGeneration());
+                assertEquals(previous.nodeRid(), current.nodeRid());
+                assertSame(cached, routes.resolveActor(ACTOR).toCompletableFuture().join());
+                client.sendToActor(ACTOR, new IncarnationNotice())
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                assertEquals(
+                        current.objectGeneration(),
+                        sentIncarnation.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                assertEquals(
+                        Long.toString(current.objectGeneration()),
+                        client.requestToActor(ACTOR, new IncarnationProbe())
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            }
+        }
+    }
 
     @Test
     void readyPublicationAlreadyHasRawActorAndAcceptsLocalSend() throws Exception {
@@ -437,9 +515,16 @@ final class ZLinkCommittedActorLocalIngressTest {
                                     node.sendToActorAsync(route, List.of(header, payload))
                                             .toCompletableFuture()
                                             .get(WAIT_SECONDS, TimeUnit.SECONDS));
-            assertEquals(
-                    SubmitResult.NOT_FOUND,
-                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause()).getResult());
+            // Raw admission rejects a different node incarnation; a different Actor
+            // incarnation passes raw AOG matching (routing §2.6) and the unpublished
+            // staging Actor is rejected by Framework admission instead.
+            if (failure.getCause() instanceof ZlinkSubmitException submit) {
+                assertEquals(SubmitResult.NOT_FOUND, submit.getResult());
+            } else {
+                assertEquals(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            }
         }
         assertFalse(handled.isDone());
         assertEquals(List.of(), RECEIVED);
@@ -637,6 +722,8 @@ final class ZLinkCommittedActorLocalIngressTest {
         public void configure() {
             context.handlers().addHandler(JoinHandler.class);
             context.handlers().addHandler(SourceProbeHandler.class);
+            context.handlers().addHandler(IncarnationProbeHandler.class);
+            context.handlers().addHandler(IncarnationNoticeHandler.class);
         }
 
         @Override
@@ -692,6 +779,30 @@ final class ZLinkCommittedActorLocalIngressTest {
     }
 
     public record SourceProbe() {}
+
+    public record IncarnationProbe() {}
+
+    public record IncarnationNotice() {}
+
+    public static final class IncarnationNoticeHandler
+            implements ZLinkEntrySpotActorSendHandler<Lobby, Player, IncarnationNotice> {
+        @Override
+        public CompletionStage<Void> handle(
+                Lobby spot, Player actor, ZLinkMessageContext context, IncarnationNotice message) {
+            sentIncarnation.complete(actor.context().objectGeneration());
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class IncarnationProbeHandler
+            implements ZLinkEntrySpotActorRequestHandler<Lobby, Player, IncarnationProbe, String> {
+        @Override
+        public CompletionStage<String> handle(
+                Lobby spot, Player actor, ZLinkMessageContext context, IncarnationProbe request) {
+            return CompletableFuture.completedFuture(
+                    Long.toString(actor.context().objectGeneration()));
+        }
+    }
 
     public static final class SourceProbeHandler
             implements ZLinkEntrySpotActorRequestHandler<Lobby, Player, SourceProbe, String> {

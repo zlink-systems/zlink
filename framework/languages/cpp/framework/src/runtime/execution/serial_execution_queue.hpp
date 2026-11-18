@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include "runtime/dispatch/offload_executor.hpp"
@@ -259,6 +259,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
      * queue closes in the same decision and refuses later work. */
     task_t<std::shared_ptr<const void>> first_pending_message_or_close ();
     task_t<std::vector<std::shared_ptr<const void>>> pending_messages () const;
+    bool is_current_lifecycle_turn () const noexcept;
     bool allows_yield () const noexcept { return _lane_policy.allows_turn_yield (); }
     using application_start_policy_t = std::function<bool (const std::shared_ptr<const void> &)>;
     void set_application_start_policy (application_start_policy_t policy);

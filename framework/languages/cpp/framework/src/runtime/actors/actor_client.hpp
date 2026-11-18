@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 #include <zlink/framework/contracts/actors/actor.hpp>
@@ -15,7 +15,6 @@
 namespace zlink::framework::detail
 {
 class mesh_node_runtime_t;
-class delay_owner_t;
 }
 
 namespace zlink::framework::runtime
@@ -32,7 +31,6 @@ make_actor_client (live_location_reader_t &store,
                    std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
                    location_options_t options,
-                   detail::delay_owner_t &delays,
                    std::function<void ()> admit_call = {});
 
 // Internal fixture access to the production cache and prepared receiver.

@@ -336,6 +336,11 @@ export interface ZLinkBackendMeshNode {
     membershipEpoch: bigint
   ): ZLinkBackendActorRef;
   discardRelocatedActor?(actor: ZLinkBackendActorRef): void;
+  setActorMessageFollowResolver?(
+    resolver: (
+      fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence
+    ) => boolean
+  ): void;
   restoreActorSessionBinding?(
     actor: ZLinkBackendActorRef,
     sessionNodeRid: unknown,

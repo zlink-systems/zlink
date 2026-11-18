@@ -134,10 +134,15 @@ export class ZLinkSpotSerialExecutor {
   executeActor<T>(
     actorId: string,
     operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T,
-    workOptions?: ZLinkSerialWorkOptions
+    workOptions?: ZLinkSerialWorkOptions,
+    capture?: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T
   ): Promise<T> {
     const serial = this.actorSerial(actorId);
-    return this.actorExecutor(actorId).execute(() => operation(serial), workOptions);
+    return this.actorExecutor(actorId).execute(
+      () => operation(serial),
+      workOptions,
+      capture === undefined ? undefined : () => capture(serial)
+    );
   }
 
   executeTimer<T>(
@@ -146,6 +151,14 @@ export class ZLinkSpotSerialExecutor {
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
     return this.timerSerial(timerName).post(operation, workOptions);
+  }
+
+  executeActorLifecycle<T>(actorId: string, operation: () => Promise<T> | T): Promise<T> {
+    return this.executeActor(
+      actorId,
+      (serial) => serial.execute(operation, { lane: 'lifecycle' }),
+      { lane: 'lifecycle' }
+    );
   }
 
   /** Admits held packets through the same Actor FIFO as ordinary ingress. */

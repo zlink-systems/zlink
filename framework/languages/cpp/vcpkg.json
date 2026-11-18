@@ -1,6 +1,7 @@
 {
   "name": "zlink-framework-cpp",
   "version-string": "0.32.0",
+  "builtin-baseline": "2ec0f1747d8186a5c9babe276e2ad57cd2b12d2a",
   "dependencies": [
     "boost-asio",
     "boost-beast",
@@ -32,8 +33,20 @@
       ]
     }
   },
-  "builtin-baseline": "20ceb8adbf0504d4b0d5e4058a32f9d4fc896391",
   "overrides": [
+    {
+      "name": "abseil",
+      "version": "20260107.1"
+    },
+    {
+      "name": "grpc",
+      "version": "1.84.0"
+    },
+    {
+      "name": "protobuf",
+      "version": "6.33.4",
+      "port-version": 2
+    },
     {
       "name": "yyjson",
       "version": "0.12.0"

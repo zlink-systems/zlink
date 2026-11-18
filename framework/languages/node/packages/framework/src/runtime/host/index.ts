@@ -124,6 +124,7 @@ import {
   flowIfEnabled,
   messageFlowTracingEnabled,
   runWithFlow,
+  traceShutdownStep,
   ZLinkRuntimeMetrics,
   type ZLinkDiagnosticsContext,
   type ZLinkMessageFlowModeCell,
@@ -865,6 +866,11 @@ export class ZLinkFrameworkRuntimeHost
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      ensureEntryActivation: (meshName) => {
+        const runtime = this.spotNodeRuntime;
+        if (runtime === undefined) throw new Error('Relocation target runtime is not started.');
+        return runtime.ensureEntryActivation(meshName);
+      },
       requestPeerReconcile: (meshName, peerRid) =>
         this.spotNodeRuntime?.requestPeerReconcile(meshName, peerRid) ?? Promise.resolve(),
       sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),
@@ -2062,12 +2068,28 @@ export class ZLinkFrameworkRuntimeHost
             'The host stopped before the request completed.'
           )
         );
-      await waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName));
+      await traceShutdownStep(
+        'session_barrier.force_notify',
+        () => waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName)),
+        meshName
+      );
     } else {
-      await awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal);
+      await traceShutdownStep(
+        'accepted_work.actor_join_sources',
+        () => awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal),
+        meshName
+      );
     }
-    await this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline);
-    await awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal);
+    await traceShutdownStep(
+      'owner_cleanup.spots',
+      () => this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline),
+      meshName
+    );
+    await traceShutdownStep(
+      'session_barrier.notify',
+      () => awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal),
+      meshName
+    );
   }
 
   private async publishMeshRetiring(meshName: string, signal?: AbortSignal): Promise<void> {
@@ -2344,10 +2366,7 @@ export class ZLinkFrameworkRuntimeHost
         runtimeEventPublisher: this.runtimeEventPublisher,
         spotNodeRuntime: () => this.spotNodeRuntime,
         actorManager: () => this.actorManager,
-        // User Spot visibility is published only by the generic authority
-        // coordinator after application initialization. The legacy location
-        // claim would expose a Creating object before that Ready barrier.
-        locationLifecycle: () => undefined,
+        locationLifecycle: () => this.locationOwner.currentLifecycle,
         releaseInstanceAuthority: async (meshName, spotId, objectGeneration) => {
           await this.locationOwner.currentLifecycle?.releaseSpot(
             meshName,
@@ -2830,8 +2849,7 @@ export class ZLinkFrameworkRuntimeHost
                   entrySpotId,
                   entrySpotGeneration: entrySpot.lifecycleGeneration,
                   ...(reply === undefined ? {} : { reply }),
-                  onPublished: () =>
-                    actors.adoptCreatedAuthority(record.actorId, authority.authorityOwnerGeneration)
+                  onPublished: (ready) => actors.adoptCreatedAuthority(record.actorId, ready)
                 };
               },
               signal
@@ -3423,20 +3441,21 @@ export class ZLinkFrameworkRuntimeHost
       sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
       bindingGeneration: binding.bindingGeneration
     };
-    const currentBinding = state.boundSession;
-    const currentActor = state.actor;
-    if (
-      currentBinding === undefined ||
-      currentActor?.onDuplicateBind === undefined ||
-      samePhysicalSession(currentBinding, incomingTarget)
-    ) {
-      state.installBoundSessionBinding(incomingTarget);
-      replyBindingSuccess();
-      return;
-    }
     const spotManager = this.spotManager;
     if (spotManager === undefined || state.meshName === undefined) {
       replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      return;
+    }
+
+    const current = state.boundSession;
+    const actor = state.actor;
+    const duplicateCallback =
+      current !== undefined && !samePhysicalSession(current, incomingTarget)
+        ? actor?.onDuplicateBind
+        : undefined;
+    if (duplicateCallback === undefined || actor === undefined || current === undefined) {
+      state.installBoundSessionBinding(incomingTarget);
+      replyBindingSuccess();
       return;
     }
 
@@ -3454,17 +3473,6 @@ export class ZLinkFrameworkRuntimeHost
       state.actor?.context.spotId,
       state.actorId,
       async () => {
-        const current = state.boundSession;
-        const actor = state.actor;
-        const duplicateCallback =
-          current !== undefined && !samePhysicalSession(current, incomingTarget)
-            ? actor?.onDuplicateBind
-            : undefined;
-        if (duplicateCallback === undefined || actor === undefined || current === undefined) {
-          state.installBoundSessionBinding(incomingTarget);
-          replyBindingSuccess();
-          return;
-        }
         callbackStarted();
         const decision = await duplicateCallback.call(
           actor,

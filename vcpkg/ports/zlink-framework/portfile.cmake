@@ -19,7 +19,7 @@ vcpkg_cmake_configure(
         -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON
         -DZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES=OFF
         -DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=ON
-        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.25.0
+        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.25.1
         -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=1.25.0
         # Resolve the server framework's binding and Core packages from the
         # vcpkg prefix instead of the repository's local-package layout.
@@ -42,4 +42,4 @@ foreach(package zlink_framework_cpp zlink_http_client_cpp zlink_stream_connector
 endforeach()
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/lib/cmake" "${CURRENT_PACKAGES_DIR}/debug/lib/cmake")
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include" "${CURRENT_PACKAGES_DIR}/debug/share")
-vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")
+vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE" "${SOURCE_PATH}/http-client/LICENSE")

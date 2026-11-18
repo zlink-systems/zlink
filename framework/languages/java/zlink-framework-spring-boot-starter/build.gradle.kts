@@ -27,7 +27,7 @@ dependencies {
 
 tasks.named<Test>("integrationTest") {
     systemProperty("zlink.test.classpath", sourceSets["integrationTest"].runtimeClasspath.asPath)
-    inputs.property("redisEndpoint", System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT") ?: "")
+    inputs.property("redisEndpoint", System.getenv("ZLINK_REDIS_TEST_ENDPOINT") ?: "")
 }
 
 // Spring resolves Java parameter names from MethodParameters metadata.

@@ -1033,7 +1033,26 @@ public final class ZLinkActorCreationCoordinator
                                                         CompletableFuture.completedFuture(
                                                                 new ZLinkActorRuntime
                                                                         .EntrySpotTarget(
-                                                                        target.rid(), spotId)))
+                                                                        new systems.zlink.framework
+                                                                                .runtime.internal
+                                                                                .spots
+                                                                                .SpotTransportAddress(
+                                                                                target.meshName(),
+                                                                                target.rid(),
+                                                                                spotId,
+                                                                                target
+                                                                                        .lifecycleGeneration(),
+                                                                                target
+                                                                                        .lifecycleGeneration(),
+                                                                                target
+                                                                                        .lifecycleGeneration(),
+                                                                                target
+                                                                                        .leaseGeneration(),
+                                                                                systems.zlink
+                                                                                        .framework
+                                                                                        .spots
+                                                                                        .ZLinkSpotKind
+                                                                                        .ENTRY))))
                                         .orElseGet(
                                                 () ->
                                                         failed(

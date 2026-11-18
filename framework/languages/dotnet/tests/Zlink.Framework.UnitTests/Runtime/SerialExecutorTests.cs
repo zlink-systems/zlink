@@ -1,10 +1,159 @@
 using System.Collections.Concurrent;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class SerialExecutorTests
 {
+    [Fact]
+    public async Task TransferredAdmissionWithLiveLeaseAllocatesOnlyWorkItemStorage()
+    {
+        const int count = 1000;
+        await using var serial = CreateQueue(CancellationToken.None);
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        using var lease = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Local
+        );
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var running = serial
+            .RunAsync(
+                async _ =>
+                {
+                    started.TrySetResult();
+                    await finish.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
+        void Accept()
+        {
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                serial.TryPostApplicationWithAdmission(callback, 0, 0, true, out _)
+            );
+        }
+        try
+        {
+            Accept();
+            var baseline = PerCallAllocation.MinWindow(Accept, count);
+            using (ZLinkApplicationJobQueueInvocation.Enter(lease))
+            {
+                Accept();
+                var actual = PerCallAllocation.MinWindow(Accept, count);
+                Assert.Equal(baseline, actual);
+                Assert.False(lease.IsReleased);
+                finish.TrySetResult();
+                await running.WaitAsync(TimeSpan.FromSeconds(5));
+                await serial.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        finally
+        {
+            finish.TrySetResult();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AcceptedLocalRecord_ReacquiresReturnedAdmissionInItsFifoPosition(
+        bool deadline
+    )
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var serial = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var running = serial
+            .RunAsync(
+                async _ =>
+                {
+                    started.TrySetResult();
+                    await finish.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        using var cancellation = new CancellationTokenSource();
+        var lease = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Local
+        );
+        lease.BindLifetime(cancellation.Token);
+        using var record = new ZLinkApplicationJobQueueRecordOwner(null, lease);
+        using var invocation = ZLinkApplicationJobQueueInvocation.Enter(lease);
+        var scope = ZLinkApplicationJobQueueInvocation.CurrentScope!;
+        var calls = new ConcurrentQueue<string>();
+        Assert.True(
+            serial.TryPost(
+                async _ =>
+                {
+                    await scope.Lease!.ReleaseForHandlerStartAsync();
+                    Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+                    calls.Enqueue("accepted");
+                },
+                out var accepted
+            )
+        );
+        if (deadline)
+            cancellation.CancelAfter(TimeSpan.FromMilliseconds(50));
+        else
+            cancellation.Cancel();
+        await WaitUntilAsync(() => jobs.GetStatus().PermitsInUse == 0, TimeSpan.FromSeconds(5));
+        Assert.Equal(0UL, jobs.GetStatus().CapacityWaiters);
+        using var occupied = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        Assert.True(
+            serial.TryPost(
+                _ =>
+                {
+                    calls.Enqueue("following");
+                    return ValueTask.CompletedTask;
+                },
+                out var following
+            )
+        );
+        try
+        {
+            finish.TrySetResult();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(
+                () => jobs.GetStatus().CapacityWaiters == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.Empty(calls);
+            occupied.Dispose();
+            await Task.WhenAll(accepted.Completion, following.Completion)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "accepted", "following" }, calls);
+            await serial.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+            Assert.Equal(0UL, jobs.GetStatus().CapacityWaiters);
+        }
+        finally
+        {
+            occupied.Dispose();
+            finish.TrySetResult();
+        }
+    }
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(false, false, true)]
