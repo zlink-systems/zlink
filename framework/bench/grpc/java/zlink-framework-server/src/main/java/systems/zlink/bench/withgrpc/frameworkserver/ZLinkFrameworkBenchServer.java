@@ -6,8 +6,10 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.annotation.Bean;
+
 import systems.zlink.bench.withgrpc.shared.Args;
 import systems.zlink.bench.withgrpc.shared.BenchContract;
+import systems.zlink.bench.withgrpc.shared.BenchGamePayload;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 import systems.zlink.bench.withgrpc.shared.BenchTypedPayload;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
@@ -41,11 +43,10 @@ import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 /**
  * {@code zlink-framework-<lang>} server, java row.
  *
- * <p>RouteMesh ROUTER&lt;-&gt;ROUTER with node-direct request and send handlers.
- * The host is the Spring Boot starter, which is the public way
- * to stand up {@code zlink-framework-core} -- the analogue of .NET's
- * {@code Zlink.Framework.AspNetCore} and node's {@code @zlink-systems/nestjs}. No
- * internal package of the framework is touched (G4).
+ * <p>RouteMesh ROUTER&lt;-&gt;ROUTER with node-direct request and send handlers. The host is the
+ * Spring Boot starter, which is the public way to stand up {@code zlink-framework-core} -- the
+ * analogue of .NET's {@code Zlink.Framework.AspNetCore} and node's {@code @zlink-systems/nestjs}.
+ * No internal package of the framework is touched (G4).
  */
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
@@ -70,11 +71,15 @@ public class ZLinkFrameworkBenchServer {
     // and the handler never runs. This wiring is what makes the send row measurable.
     private static final BenchServerMetrics METRICS = new BenchServerMetrics();
     private static volatile String listenEndpoint = "tcp://127.0.0.1:5254";
+    private static volatile boolean jsonImplementation;
 
     public static void main(String[] args) throws Exception {
         MeasurementTiming.initialize();
         String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5254");
         String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5255");
+        jsonImplementation =
+                "zlink-framework-java-json"
+                        .equals(Args.value(args, "--implementation", "zlink-framework-java"));
         BenchServerMetrics metrics = METRICS;
         listenEndpoint = endpoint;
 
@@ -83,23 +88,33 @@ public class ZLinkFrameworkBenchServer {
             return;
         }
 
-        try (var context = new SpringApplicationBuilder(ZLinkFrameworkBenchServer.class)
-            .web(WebApplicationType.NONE)
-            .bannerMode(org.springframework.boot.Banner.Mode.OFF)
-            .run(args)) {
+        try (var context =
+                new SpringApplicationBuilder(ZLinkFrameworkBenchServer.class)
+                        .web(WebApplicationType.NONE)
+                        .bannerMode(org.springframework.boot.Banner.Mode.OFF)
+                        .run(args)) {
 
-            var stats = BenchStatsServer.start(metricsUrl, metrics,
-                "{\"implementation\":\"zlink-framework-java\","
-                + "\"host\":\"zlink-framework-spring-boot-starter\","
-                + "\"codec\":\""
-                + (System.getenv("ZLINK_BENCH_LADDER_L5_7") != null
-                        ? "framework-json-v1"
-                        : "zlink-framework-codec-protobuf")
-                + "\","
-                + "\"endpoint\":\"" + endpoint + "\"}");
+            var stats =
+                    BenchStatsServer.start(
+                            metricsUrl,
+                            metrics,
+                            "{\"implementation\":\""
+                                    + (jsonImplementation
+                                            ? "zlink-framework-java-json"
+                                            : "zlink-framework-java")
+                                    + "\","
+                                    + "\"host\":\"zlink-framework-spring-boot-starter\","
+                                    + "\"codec\":\""
+                                    + ((jsonImplementation || System.getenv("ZLINK_BENCH_LADDER_L5_7") != null)
+                                            ? "default-typed-json"
+                                            : "zlink-framework-codec-protobuf")
+                                    + "\","
+                                    + "\"endpoint\":\""
+                                    + endpoint
+                                    + "\"}");
             try {
-                System.err.println("[framework-server] endpoint=" + endpoint
-                    + " stats=" + metricsUrl);
+                System.err.println(
+                        "[framework-server] endpoint=" + endpoint + " stats=" + metricsUrl);
                 if (System.in.read() < 0) {
                     Thread.currentThread().join();
                 }
@@ -429,8 +444,7 @@ public class ZLinkFrameworkBenchServer {
     }
 
     /** Carries the listen endpoint into the configurer without a system property. */
-    public record BenchEndpoint(String value) {
-    }
+    public record BenchEndpoint(String value) {}
 
     @Bean
     BenchServerMetrics benchMetrics() {
@@ -446,7 +460,7 @@ public class ZLinkFrameworkBenchServer {
     ZLinkFrameworkConfigurer benchFramework(BenchEndpoint endpoint) {
         return options -> {
             boolean ladderL5To7 = System.getenv("ZLINK_BENCH_LADDER_L5_7") != null;
-            if (!ladderL5To7) {
+            if (!jsonImplementation && !ladderL5To7) {
                 options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             }
             // A send that finds no handler is dropped silently by default, which
@@ -454,17 +468,21 @@ public class ZLinkFrameworkBenchServer {
             // G3 counts what the SERVER received, so the server has to say when it
             // received something it could not dispatch.
             if (System.getenv("BENCH_FLOW_TRACE") != null) {
-                options.configureDispatch().messageFlow(
-                    systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
+                options.configureDispatch()
+                        .messageFlow(
+                                systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+                                        .NORMAL);
             }
             if (System.getenv("BENCH_DISPATCH_PROBE") != null) {
                 options.useFilter(BenchDispatchProbeFilter.class);
             }
-            options.configureDispatch().unhandled()
-                .setSend(ZLinkUnhandledDispatchAction.LOG_AND_DROP);
-            var mesh = options.addRouteMesh(BenchContract.MESH_NAME)
-                .listen(endpoint.value())
-                .setRoutingId(RoutingId.from(BenchContract.SERVER_ROUTING_ID));
+            options.configureDispatch()
+                    .unhandled()
+                    .setSend(ZLinkUnhandledDispatchAction.LOG_AND_DROP);
+            var mesh =
+                    options.addRouteMesh(BenchContract.MESH_NAME)
+                            .listen(endpoint.value())
+                            .setRoutingId(RoutingId.from(BenchContract.SERVER_ROUTING_ID));
             if (ladderL5To7) {
                 mesh.addRouteRequestHandler(
                                 BenchTypedEchoHandler.class,
@@ -472,25 +490,33 @@ public class ZLinkFrameworkBenchServer {
                                 BenchTypedPayload.class)
                         .addRouteSendHandler(
                                 BenchTypedCommandHandler.class, BenchTypedPayload.class);
+            } else if (jsonImplementation) {
+                mesh.addRouteRequestHandler(
+                                BenchGameEchoHandler.class,
+                                BenchGamePayload.class,
+                                BenchGamePayload.class)
+                        .addRouteSendHandler(BenchGameCommandHandler.class, BenchGamePayload.class);
             } else {
                 mesh.addRouteRequestHandler(
-                        BenchEchoHandler.class,
-                        systems.zlink.bench.withgrpc.proto.BenchPayload.class,
-                        systems.zlink.bench.withgrpc.proto.BenchPayload.class)
-                    .addRouteSendHandler(
-                        BenchCommandHandler.class,
-                        systems.zlink.bench.withgrpc.proto.BenchPayload.class);
+                                BenchEchoHandler.class,
+                                systems.zlink.bench.withgrpc.proto.BenchPayload.class,
+                                systems.zlink.bench.withgrpc.proto.BenchPayload.class)
+                        .addRouteSendHandler(
+                                BenchCommandHandler.class,
+                                systems.zlink.bench.withgrpc.proto.BenchPayload.class);
             }
-            if (!ladderL5To7) {
-                // Kotlin uses the channel namespace with protobuf BenchPayload handlers.
-                mesh.channelName(BenchContract.CHANNEL_NAME).server()
-                    .addRequestHandler(
-                        BenchEchoHandler.class,
-                        systems.zlink.bench.withgrpc.proto.BenchPayload.class,
-                        systems.zlink.bench.withgrpc.proto.BenchPayload.class)
-                    .addRouteSendHandler(
-                        BenchCommandHandler.class,
-                        systems.zlink.bench.withgrpc.proto.BenchPayload.class);
+            // Kotlin reuses this server and still addresses the channel. Both public
+            // namespaces use the same handlers, codec and metrics.
+            if (!jsonImplementation && !ladderL5To7) {
+                mesh.channelName(BenchContract.CHANNEL_NAME)
+                        .server()
+                        .addRequestHandler(
+                                BenchEchoHandler.class,
+                                systems.zlink.bench.withgrpc.proto.BenchPayload.class,
+                                systems.zlink.bench.withgrpc.proto.BenchPayload.class)
+                        .addRouteSendHandler(
+                                BenchCommandHandler.class,
+                                systems.zlink.bench.withgrpc.proto.BenchPayload.class);
             }
         };
     }
@@ -518,5 +544,15 @@ public class ZLinkFrameworkBenchServer {
     @Bean
     BenchTypedCommandHandler benchTypedCommandHandler(BenchServerMetrics metrics) {
         return new BenchTypedCommandHandler(metrics);
+    }
+
+    @Bean
+    BenchGameEchoHandler benchGameEchoHandler(BenchServerMetrics metrics) {
+        return new BenchGameEchoHandler(metrics);
+    }
+
+    @Bean
+    BenchGameCommandHandler benchGameCommandHandler(BenchServerMetrics metrics) {
+        return new BenchGameCommandHandler(metrics);
     }
 }

@@ -23,7 +23,8 @@ import type { ZLinkDomainLocationStore } from './domain-store-contract';
 export type ZLinkAuthorityStore = Pick<
   ZLinkDomainLocationStore,
   'readAuthority' | 'compareExchangeAuthority' | 'listAuthorities'
->;
+> &
+  import('./lifecycle-runtime').ZLinkDiscardedAuthorityStore;
 
 export type ZLinkObjectCreationStore = Pick<
   ZLinkDomainLocationStore,

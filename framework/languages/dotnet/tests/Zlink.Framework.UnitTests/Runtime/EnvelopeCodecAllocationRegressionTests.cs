@@ -1,9 +1,11 @@
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Xunit.Abstractions;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -11,6 +13,49 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
 {
     private const int Iterations = 128;
     private const int WindowCalls = 1024;
+
+    [Theory]
+    [InlineData(16)]
+    [InlineData(17)]
+    [InlineData(18)]
+    [InlineData(19)]
+    public void NativeServiceApplicationHeadAllocatesOnlyOneMessage(int commandId)
+    {
+        var command = (ServiceWireConstants.Command)commandId;
+        var correlation = commandId is 17 or 19 ? 1UL : 0;
+        var bytes =
+            PerCallAllocation.MinWindow(
+                () =>
+                {
+                    using var head = ZLinkServiceWireCodec.EncodeApplicationMessage(
+                        command,
+                        correlation,
+                        "bench",
+                        false
+                    );
+                },
+                WindowCalls,
+                warmup: Iterations
+            ) / WindowCalls;
+        output.WriteLine($"application command={commandId}: {bytes} B/head; budget=32 B/head");
+        Assert.True(bytes <= 32, $"Application command {commandId}: {bytes}/32 B/head.");
+    }
+
+    [Fact]
+    public void NativeServiceReplyHeadAllocatesOnlyOneMessage()
+    {
+        var bytes =
+            PerCallAllocation.MinWindow(
+                () =>
+                {
+                    using var head = ZLinkServiceWireCodec.EncodeReplyMessage(1, 0, 0);
+                },
+                WindowCalls,
+                warmup: Iterations
+            ) / WindowCalls;
+        output.WriteLine($"reply: {bytes} B/head; budget=32 B/head");
+        Assert.True(bytes <= 32, $"Reply: {bytes}/32 B/head.");
+    }
 
     [Theory]
     [InlineData(21)]

@@ -118,8 +118,10 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                 targetActor =
                         target.spotNode().createActor(ACTOR_ID, sourceActor.generation(), create);
             }
-            source.spotNode().rememberActorAuthority(sourceActor, 11, 3);
-            target.spotNode().rememberActorAuthority(targetActor, 12, 5);
+            source.spotNode()
+                    .rememberActorAuthority(sourceActor, 11, 3, source.lifecycleGeneration());
+            target.spotNode()
+                    .rememberActorAuthority(targetActor, 12, 5, target.lifecycleGeneration());
 
             AtomicReference<ZLinkAuthoritySnapshot> authority =
                     new AtomicReference<>(
@@ -142,20 +144,7 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                             clientNode::spotNode,
                             routes,
                             new ZLinkJsonMessageSerializer(),
-                            Duration.ofSeconds(2),
-                            (ignoredBackend, ignoredKey) ->
-                                    (submission, cleanup) -> {
-                                        try {
-                                            return submission.get()
-                                                    ? CompletableFuture.completedFuture(null)
-                                                    : CompletableFuture.failedFuture(
-                                                            new IllegalStateException(
-                                                                    "Actor runtime port rejected"
-                                                                            + " the send"));
-                                        } finally {
-                                            cleanup.run();
-                                        }
-                                    });
+                            Duration.ofSeconds(2));
 
             client.sendToActor(ACTOR_ID, new PrimeRoute())
                     .submit()

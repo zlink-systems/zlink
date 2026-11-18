@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/mesh/application_dispatch_terminal_owner.hpp"

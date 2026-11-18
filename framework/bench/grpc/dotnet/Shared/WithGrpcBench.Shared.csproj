@@ -8,6 +8,11 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <Compile Include="../../../../languages/dotnet/src/Shared/ZLinkJsonSerializerOptions.cs" Link="Codec/ZLinkJsonSerializerOptions.cs"/>
+        <Compile Include="../../../../languages/dotnet/src/Shared/ZLinkFrameworkJsonDocument.cs" Link="Codec/ZLinkFrameworkJsonDocument.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="Google.Protobuf"/>
         <PackageReference Include="Grpc.Core.Api"/>
         <PackageReference Include="Grpc.Tools" PrivateAssets="all"/>

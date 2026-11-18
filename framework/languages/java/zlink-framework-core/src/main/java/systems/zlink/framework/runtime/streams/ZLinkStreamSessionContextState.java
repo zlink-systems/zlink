@@ -45,7 +45,7 @@ import java.util.function.Supplier;
 
 final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
-    private final String streamNodeName;
+    private final String sessionId;
     private final ZLinkBackendStreamSocket stream;
     private final RoutingId routingId;
     private final ZLinkSessionActors actors;
@@ -95,7 +95,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             ZLinkMessageFlowTracer flow,
             Supplier<CompletionStage<Void>> closeAction,
             ScheduledExecutorService replyRetryExecutor) {
-        this.streamNodeName = streamNodeName;
+        this.sessionId = streamNodeName + ":" + routingId;
         this.stream = stream;
         this.routingId = routingId;
         this.actors = actors;
@@ -108,7 +108,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
     @Override
     public String sessionId() {
-        return streamNodeName + ":" + routingId;
+        return sessionId;
     }
 
     @Override

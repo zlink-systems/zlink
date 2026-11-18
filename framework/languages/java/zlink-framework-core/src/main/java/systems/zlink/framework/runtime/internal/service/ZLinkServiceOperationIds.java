@@ -29,8 +29,17 @@ public final class ZLinkServiceOperationIds {
 
     public static String correlationId(UUID id) {
         UUID value = Objects.requireNonNull(id, "id");
-        return HEX.toHexDigits(value.getMostSignificantBits())
-                + HEX.toHexDigits(value.getLeastSignificantBits());
+        long high = value.getMostSignificantBits();
+        long low = value.getLeastSignificantBits();
+        byte[] bytes = new byte[2 * Long.BYTES];
+        for (int index = 0; index < Long.BYTES; index++) {
+            int shift = (Long.BYTES - index - 1) * Byte.SIZE;
+            bytes[index] = (byte) (high >>> shift);
+            bytes[index + Long.BYTES] = (byte) (low >>> shift);
+        }
+        // One hex conversion builds the final string; two half strings and their
+        // concatenation cost 184 bytes per id (ZLinkServiceOperationIdsTest).
+        return HEX.formatHex(bytes);
     }
 
     private static long processPrefix() {

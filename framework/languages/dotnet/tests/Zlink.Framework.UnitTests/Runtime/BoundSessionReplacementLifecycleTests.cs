@@ -340,7 +340,18 @@ public sealed partial class BoundSessionReplacementLifecycleTests
                     {
                         using var header = Message.From([1]);
                         using var payload = Message.From([2]);
-                        return fixture.Session.TryEnqueuePacket(header, payload);
+                        return fixture.Session.TryEnqueuePacket(
+                            header,
+                            payload,
+                            decoded: new ZlinkStreamHeader(
+                                ZlinkStreamMessageKind.Send,
+                                ZlinkStreamCodec.Json,
+                                ZlinkStreamHeaderFlags.None,
+                                null,
+                                "closed",
+                                ZlinkStreamMetadata.Empty
+                            )
+                        );
                     })
                 )
         );
@@ -1397,7 +1408,8 @@ public sealed partial class BoundSessionReplacementLifecycleTests
                 ZLinkSerialPostAdmission.Accepted,
                 Session.TryEnqueuePacket(
                     Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
-                    Message.From("{}")
+                    Message.From("{}"),
+                    decoded: header
                 )
             );
         }

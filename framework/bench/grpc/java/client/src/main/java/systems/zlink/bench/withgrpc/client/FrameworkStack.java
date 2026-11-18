@@ -4,14 +4,16 @@ package systems.zlink.bench.withgrpc.client;
 
 import com.google.protobuf.UnsafeByteOperations;
 
+import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 
 import systems.zlink.bench.withgrpc.proto.BenchPayload;
 import systems.zlink.bench.withgrpc.shared.BenchContract;
+import systems.zlink.bench.withgrpc.shared.BenchGamePayload;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.BenchTypedPayload;
 import systems.zlink.contracts.core.RoutingId;
@@ -44,6 +46,7 @@ public final class FrameworkStack implements AutoCloseable {
     private final RawStack ladderBinding;
     private final int runId;
     private final Duration timeout;
+    private final boolean json;
 
     private FrameworkStack(
             ConfigurableApplicationContext context,
@@ -51,17 +54,27 @@ public final class FrameworkStack implements AutoCloseable {
             systems.zlink.contracts.core.Context ladderContext,
             RawStack ladderBinding,
             int runId,
-            Duration timeout) {
+            Duration timeout,
+            boolean json) {
         this.context = context;
         this.route = route;
         this.ladderContext = ladderContext;
         this.ladderBinding = ladderBinding;
         this.runId = runId;
         this.timeout = timeout;
+        this.json = json;
     }
 
     public static FrameworkStack create(BenchOptions options) {
-        if (ladderMode() && !ladderL5To7()) {
+        return create(options, false);
+    }
+
+    public static FrameworkStack createJson(BenchOptions options) {
+        return create(options, true);
+    }
+
+    private static FrameworkStack create(BenchOptions options, boolean json) {
+        if (!json && ladderMode() && !ladderL5To7()) {
             var bindingContext = systems.zlink.contracts.core.Zlink.createContext();
             var binding = RawStack.create(
                     bindingContext,
@@ -70,10 +83,13 @@ public final class FrameworkStack implements AutoCloseable {
                     BenchContract.SERVER_ROUTING_ID,
                     options.targetEndpoint);
             return new FrameworkStack(null, null, bindingContext, binding,
-                    options.runId, Duration.ofMillis(options.requestTimeoutMs));
+                    options.runId, Duration.ofMillis(options.requestTimeoutMs), false);
         }
         ConfigurableApplicationContext context =
-                new SpringApplicationBuilder(BenchClientFrameworkApp.class)
+                new SpringApplicationBuilder(
+                                json
+                                        ? BenchClientJsonFrameworkApp.class
+                                        : BenchClientFrameworkApp.class)
                         .web(WebApplicationType.NONE)
                         .bannerMode(org.springframework.boot.Banner.Mode.OFF)
                         .initializers(
@@ -87,11 +103,31 @@ public final class FrameworkStack implements AutoCloseable {
         ZLinkRouteClient route = context.getBean(ZLinkRouteClient.class);
         return new FrameworkStack(
                 context, route, null, null,
-                options.runId, Duration.ofMillis(options.requestTimeoutMs));
+                options.runId, Duration.ofMillis(options.requestTimeoutMs), json);
     }
 
     public BenchRequestOperation request() {
         return (payloadSize, phase, sequence) -> {
+            if (json) {
+                BenchGamePayload message = gamePayload(payloadSize, phase, sequence);
+                var submitted =
+                        route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
+                                .timeout(timeout)
+                                .submit(BenchGamePayload.class);
+                var replyCompletion =
+                        submitted
+                                .toCompletableFuture()
+                                .thenAccept(
+                                        reply -> {
+                                            if (reply == null
+                                                    || !expected(reply, phase, sequence)) {
+                                                throw new IllegalStateException(
+                                                        "framework JSON reply stamp mismatch");
+                                            }
+                                        });
+                return new BenchRequestOperation.Submission(
+                        submitted.admitted().toCompletableFuture(), replyCompletion);
+            }
             BenchPayload message = payload(payloadSize, phase, sequence);
             var submitted =
                     route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
@@ -121,6 +157,13 @@ public final class FrameworkStack implements AutoCloseable {
 
     public BenchOperation send() {
         return (payloadSize, phase, sequence) -> {
+            if (json) {
+                BenchGamePayload message = gamePayload(payloadSize, phase, sequence);
+                return route.sendToNode(BenchContract.MESH_NAME, SERVER, message)
+                        .submit()
+                        .toCompletableFuture()
+                        .thenApply(ignored -> (Void) null);
+            }
             BenchPayload message = payload(payloadSize, phase, sequence);
             return route.sendToNode(BenchContract.MESH_NAME, SERVER, message)
                     .submit()
@@ -223,6 +266,15 @@ public final class FrameworkStack implements AutoCloseable {
                 .build();
     }
 
+    private BenchGamePayload gamePayload(int payloadSize, byte phase, long sequence) {
+        return BenchGamePayload.create(
+                payloadSize, runId, phase, sequence, BenchGamePayload.timestampNow());
+    }
+
+    private boolean expected(BenchGamePayload payload, byte phase, long sequence) {
+        return payload.run() == runId && payload.phase() == phase && payload.seq() == sequence;
+    }
+
     @Override
     public void close() {
         if (context != null) {
@@ -261,7 +313,8 @@ public final class FrameworkStack implements AutoCloseable {
     }
 
     @EnableZLinkFramework
-    @SpringBootApplication(proxyBeanMethods = false)
+    @SpringBootConfiguration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
     public static class BenchClientFrameworkApp {
         @Bean
         ZLinkFrameworkConfigurer benchClientFramework(PeerEndpoint endpoint) {
@@ -281,6 +334,29 @@ public final class FrameworkStack implements AutoCloseable {
                                 .setRoutingId(RoutingId.from(BenchContract.CLIENT_ROUTING_ID));
                 mesh.channelName(BenchContract.CHANNEL_NAME).client();
                 // spec section 3: manual endpoint connection, no location store.
+                mesh.peerConnections().connect(SERVER, endpoint.value());
+            };
+        }
+    }
+
+    @EnableZLinkFramework
+    @SpringBootConfiguration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    public static class BenchClientJsonFrameworkApp {
+        @Bean
+        ZLinkFrameworkConfigurer benchClientFramework(PeerEndpoint endpoint) {
+            return options -> {
+                if (System.getenv("BENCH_FLOW_TRACE") != null) {
+                    options.configureDispatch()
+                            .messageFlow(
+                                    systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+                                            .NORMAL);
+                }
+                var mesh =
+                        options.addRouteMesh(BenchContract.MESH_NAME)
+                                .listen("tcp://127.0.0.1:0")
+                                .setRoutingId(RoutingId.from(BenchContract.CLIENT_ROUTING_ID));
+                mesh.channelName(BenchContract.CHANNEL_NAME).client();
                 mesh.peerConnections().connect(SERVER, endpoint.value());
             };
         }

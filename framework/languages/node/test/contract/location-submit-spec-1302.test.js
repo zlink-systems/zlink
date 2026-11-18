@@ -222,7 +222,7 @@ test('operation deadline cancellation completes with DeadlineExceeded instead of
     });
     await ingress({
       command: M6bServiceWireCommand.userSpotCreate, flags: 0,
-      sourceRoutingId: 'source', requestSequence: 1n,
+      sourceRoutingId: 'source', sourceNodeGeneration: 5n, requestSequence: 1n,
       applicationJobOwner: ApplicationIngressRecordOwner.create({ acquire: async () => permit }, permit, { close() {} }),
       parts: [encodeUserSpotCreateHeader({
         operation: { high: 1n, low: 2n }, correlation: 3n,
@@ -297,7 +297,7 @@ test('Instance activation does not start payload put when its deadline expires d
     });
     await ingress({
       command: M6bServiceWireCommand.instanceSpot, flags: 0,
-      sourceRoutingId: 'source',
+      sourceRoutingId: 'source', sourceNodeGeneration: 7n,
       applicationJobOwner: ApplicationIngressRecordOwner.create({ acquire: async () => permit }, permit, { close() {} }),
       parts: [encodeInstanceSpotActivationHeader({
         targetNodeRid: 'target', targetNodeGeneration: 3n,

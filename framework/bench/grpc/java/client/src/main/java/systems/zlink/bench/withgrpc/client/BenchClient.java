@@ -2,65 +2,87 @@
 
 package systems.zlink.bench.withgrpc.client;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
-import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
+import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /** One Java source-A process for one implementation/pattern/payload cell. */
 public final class BenchClient {
-    private BenchClient() {
-    }
+    private BenchClient() {}
 
     public static void main(String[] args) throws Exception {
         MeasurementTiming.initialize();
         BenchOptions options = new BenchOptions(args);
-        if (!java.util.List.of("grpc-java", "zlink-java", "zlink-framework-java")
-            .contains(options.implementation)) {
+        if (!java.util.List.of(
+                        "grpc-java",
+                        "zlink-java",
+                        "zlink-framework-java",
+                        "zlink-java-json",
+                        "zlink-framework-java-json")
+                .contains(options.implementation)) {
             throw new IllegalArgumentException("unknown Java implementation");
         }
 
         if ("request-window".equals(options.scenario)) {
-            throw new IllegalArgumentException("request-window is not a Java gRPC comparison pattern");
+            throw new IllegalArgumentException(
+                    "request-window is not a Java gRPC comparison pattern");
         }
 
         BenchDrivers drivers = new BenchDrivers(options);
         AtomicBoolean ready = new AtomicBoolean(false);
         SourceTransport[] transport = new SourceTransport[1];
         BenchHttpApplication.Controller[] holder = new BenchHttpApplication.Controller[1];
-        BenchHttpApplication.Controller controller = new BenchHttpApplication.Controller(
-            ready::get,
-            drivers::counters,
-            trigger -> {
-                Map<String, Object> result = "warmup".equals(trigger.phase())
-                    ? drivers.runWarmup(trigger, transport[0].operation())
-                    : drivers.runActive(trigger, transport[0].operation());
-                BenchResultWriter.write(options, holder[0].lastTrigger(), result, "java",
-                    streamImplementation(options), javaMetadata(options));
-                return ((Number) result.get("active_started_at_ns")).longValue();
-            });
+        BenchHttpApplication.Controller controller =
+                new BenchHttpApplication.Controller(
+                        ready::get,
+                        drivers::counters,
+                        trigger -> {
+                            Map<String, Object> result =
+                                    "warmup".equals(trigger.phase())
+                                            ? drivers.runWarmup(trigger, transport[0].operation())
+                                            : drivers.runActive(trigger, transport[0].operation());
+                            BenchResultWriter.write(
+                                    options,
+                                    holder[0].lastTrigger(),
+                                    result,
+                                    "java",
+                                    streamImplementation(options),
+                                    javaMetadata(options));
+                            return ((Number) result.get("active_started_at_ns")).longValue();
+                        });
         holder[0] = controller;
-        BenchHttpApplication http = BenchHttpApplication.start(
-            options.triggerUrl, options.statsUrl, controller);
-        Thread shutdown = new Thread(() -> {
-            try {
-                closeSource(ready, http, transport[0]);
-            } catch (Exception error) {
-                System.err.println("[source] close failed: " + error);
-            }
-        }, "bench-source-shutdown");
+        BenchHttpApplication http =
+                BenchHttpApplication.start(options.triggerUrl, options.statsUrl, controller);
+        Thread shutdown =
+                new Thread(
+                        () -> {
+                            try {
+                                closeSource(ready, http, transport[0]);
+                            } catch (Exception error) {
+                                System.err.println("[source] close failed: " + error);
+                            }
+                        },
+                        "bench-source-shutdown");
         Runtime.getRuntime().addShutdownHook(shutdown);
         try {
             transport[0] = createTransport(options);
             drivers.waitForRouteReady(transport[0].operation(), options.payloadSizes.get(0));
             ready.set(true);
-            System.err.println("[source] implementation=" + options.implementation
-                + " trigger=" + options.triggerUrl + " stats=" + options.statsUrl
-                + " target=" + options.targetEndpoint);
+            System.err.println(
+                    "[source] implementation="
+                            + options.implementation
+                            + " trigger="
+                            + options.triggerUrl
+                            + " stats="
+                            + options.statsUrl
+                            + " target="
+                            + options.targetEndpoint);
             // A byte on piped stdin requests normal cleanup. Background runners may have EOF.
             if (System.in.read() < 0) {
                 Thread.currentThread().join();
@@ -71,8 +93,9 @@ public final class BenchClient {
         }
     }
 
-    private static void closeSource(AtomicBoolean ready, BenchHttpApplication http,
-                                   SourceTransport transport) throws Exception {
+    private static void closeSource(
+            AtomicBoolean ready, BenchHttpApplication http, SourceTransport transport)
+            throws Exception {
         ready.set(false);
         try {
             http.close();
@@ -104,6 +127,24 @@ public final class BenchClient {
                     context.close();
                 });
             }
+            case "zlink-java-json" -> {
+                Context context = Zlink.createContext();
+                String peer = send ? RawWire.RAW_COMMAND_SERVER_ID : RawWire.RAW_REQUEST_SERVER_ID;
+                String endpoint = send ? options.targetCommandEndpoint : options.targetEndpoint;
+                RawStack stack =
+                        RawStack.createJson(
+                                context,
+                                options,
+                                "bench-source-" + ProcessHandle.current().pid(),
+                                peer,
+                                endpoint);
+                yield new SourceTransport(
+                        send ? stack.send() : stack.request(),
+                        () -> {
+                            stack.close();
+                            context.close();
+                        });
+            }
             case "zlink-framework-java" -> {
                 FrameworkStack stack = FrameworkStack.create(options);
                 BenchOperation operation = ladderMode()
@@ -111,37 +152,47 @@ public final class BenchClient {
                         : send ? stack.send() : stack.request();
                 yield new SourceTransport(operation, stack);
             }
+            case "zlink-framework-java-json" -> {
+                FrameworkStack stack = FrameworkStack.createJson(options);
+                yield new SourceTransport(send ? stack.send() : stack.request(), stack);
+            }
             default -> throw new IllegalArgumentException("unknown implementation");
         };
     }
 
     private static String streamImplementation(BenchOptions options) {
         if ("zlink-java".equals(options.implementation)
-            && "request-backpressure".equals(options.scenario)) {
-            return options.submitConcurrency + " Java platform submit threads; per-stream "
-                + "request submission and metrics; public completion callbacks; uncapped replies";
+                && "request-backpressure".equals(options.scenario)) {
+            return options.submitConcurrency
+                    + " Java platform submit threads; per-stream "
+                    + "request submission and metrics; public completion callbacks; uncapped replies";
         }
         if ("zlink-java".equals(options.implementation)
-            && "send-saturation".equals(options.scenario)) {
-            return options.submitConcurrency + " Java platform send-stream threads; per-stream "
-                + "submission and metrics; completion callbacks on binding resources";
+                && "send-saturation".equals(options.scenario)) {
+            return options.submitConcurrency
+                    + " Java platform send-stream threads; per-stream "
+                    + "submission and metrics; completion callbacks on binding resources";
         }
         return switch (options.scenario) {
-            case "request-serial" -> "one Java platform submit thread; sequential CompletableFuture";
+            case "request-serial" ->
+                    "one Java platform submit thread; sequential CompletableFuture";
             case "request-backpressure" ->
-                options.submitConcurrency + " Java platform submit threads; per-stream "
-                    + "uncapped CompletableFuture sets";
+                    options.submitConcurrency
+                            + " Java platform submit threads; per-stream "
+                            + "uncapped CompletableFuture sets";
             case "send-saturation" ->
-                options.submitConcurrency + " Java platform submit threads; one "
-                    + "completion-awaited send per stream";
+                    options.submitConcurrency
+                            + " Java platform submit threads; one "
+                            + "completion-awaited send per stream";
             default -> throw new IllegalArgumentException("unknown pattern");
         };
     }
 
     private static Map<String, Object> javaMetadata(BenchOptions options) {
         Map<String, Object> values = new LinkedHashMap<>();
-        values.put("grpcServerConfiguration",
-            "io.grpc.ServerBuilder.forPort defaults, plaintext IPv4 loopback");
+        values.put(
+                "grpcServerConfiguration",
+                "io.grpc.ServerBuilder.forPort defaults, plaintext IPv4 loopback");
         values.put("logicalStreamRuntime", streamImplementation(options));
         values.put("ladderProfile", System.getenv("ZLINK_BENCH_LADDER_L5_7") != null
             ? "L5_7 public Framework dispatch, activation, operation registry and completion"
@@ -169,7 +220,7 @@ public final class BenchClient {
     }
 
     private record SourceTransport(BenchOperation operation, AutoCloseable resource)
-        implements AutoCloseable {
+            implements AutoCloseable {
         @Override
         public void close() throws Exception {
             resource.close();

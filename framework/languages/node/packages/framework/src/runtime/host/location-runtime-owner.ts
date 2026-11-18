@@ -24,7 +24,7 @@ export interface ZLinkLocationRuntimeOwnerOptions {
   readonly fallbackNodeRid: RoutingId;
   readonly metrics: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly monotonicNowMs?: () => number;
-  readonly rewriteAuthorityPayloadForOwner?: import('../locations').ZLinkLocationRuntimeOptions['rewriteAuthorityPayloadForOwner'];
+  readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
 }
 
 export interface ZLinkLocationRuntimeStopSnapshot {
@@ -107,8 +107,7 @@ export class ZLinkLocationRuntimeOwner {
           kind: 'channel' as const,
           name
         }))
-      ],
-      rewriteAuthorityPayloadForOwner: this.options.rewriteAuthorityPayloadForOwner
+      ]
     });
     this.runtime = runtime;
     this.lifecycle = new ZLinkLocationLifecycle(
@@ -117,7 +116,8 @@ export class ZLinkLocationRuntimeOwner {
       primaryMeshName ?? '',
       stores.authorityStore,
       stores.spotStore,
-      (spotId) => this.spotRouteInvalidator?.(spotId)
+      (spotId) => this.spotRouteInvalidator?.(spotId),
+      this.options.observeActorAuthorityVersion
     );
     return runtime;
   }

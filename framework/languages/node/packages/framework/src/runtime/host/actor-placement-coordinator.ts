@@ -1,3 +1,4 @@
+import { sameAuthorityIncarnation } from '../locations/lifecycle-runtime';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -304,14 +305,14 @@ export class ZLinkActorPlacementCoordinator {
           readonly result: 'created';
           readonly actor: ActorRef;
           readonly reply?: Uint8Array;
-          readonly onPublished?: () => void;
+          readonly onPublished?: (authority: ZLinkAuthoritySnapshot) => void;
           readonly entrySpotId: string;
           readonly entrySpotGeneration: bigint;
         }
       | {
           readonly result: 'rejected';
           readonly reply?: Uint8Array;
-          readonly onPublished?: () => void;
+          readonly onPublished?: (authority: ZLinkAuthoritySnapshot) => void;
         }
       | { readonly result: 'failed'; readonly error: unknown }
     >,
@@ -444,7 +445,18 @@ export class ZLinkActorPlacementCoordinator {
       );
     }
     if (local.result === 'created') {
-      local.onPublished?.();
+      if (local.onPublished !== undefined) {
+        const ready =
+          completion.kind === 'created'
+            ? completion.ready
+            : await this.options.store.readAuthority(
+                encodeAuthorityKey(key.kind, key.globalId),
+                signal
+              );
+        if (ready.kind !== 'snapshot' || !sameAuthorityIncarnation(ready, current))
+          throw new Error(`Actor '${record.actorId}' completed authority changed incarnation.`);
+        local.onPublished(ready);
+      }
       return actorResult('created', local.actor, local.reply);
     }
     return actorResult('rejected', undefined, local.reply);

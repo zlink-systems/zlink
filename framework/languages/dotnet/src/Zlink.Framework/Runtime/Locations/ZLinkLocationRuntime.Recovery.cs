@@ -25,9 +25,18 @@ internal sealed partial class ZLinkLocationRuntime
         CancellationToken cancellationToken
     )
     {
-        if (GetHealthSnapshot().StoreOutage is not { } episode)
+        var recovery = await _lane
+            .RunAsync(() =>
+                (
+                    Pending: GetHealthSnapshot().StoreOutage is not null
+                        || _discardedExecutions.Count != 0,
+                    Deadline: _lastSuccessfulLease?.Deadline
+                )
+            )
+            .ConfigureAwait(false);
+        if (!recovery.Pending)
             return false;
-        var deadline = Volatile.Read(ref _ownerAdmissionDeadline);
+        var deadline = recovery.Deadline;
         // Admission excludes margin; reclaim requires lease lifetime plus margin.
         if (
             deadline is null
@@ -57,7 +66,7 @@ internal sealed partial class ZLinkLocationRuntime
             _ownerAdmissionDeadline = null;
             UpdateHealth(health => health with { StoreOutage = current with { Discarded = true } });
             ScheduleOwnerDeadlinesOnLane();
-            ExecutionsDiscarded?.Invoke(current.Executions);
+            DiscardExecutionsOnLane(current.Executions);
         });
 
     private bool IsBeforeRecoveryDeadline(
@@ -164,7 +173,9 @@ internal sealed partial class ZLinkLocationRuntime
             }
             if (!recovered)
             {
-                ExecutionsDiscarded?.Invoke(new HashSet<object> { execution });
+                await _lane
+                    .RunAsync(() => DiscardExecutionsOnLane(new HashSet<object> { execution }))
+                    .ConfigureAwait(false);
                 await _lane
                     .RunAsync(() => episode.CompleteExecution(execution))
                     .ConfigureAwait(false);
@@ -174,7 +185,9 @@ internal sealed partial class ZLinkLocationRuntime
             {
                 if (!await descriptorConfirmation.ConfigureAwait(false))
                 {
-                    ExecutionsDiscarded?.Invoke(new HashSet<object> { execution });
+                    await _lane
+                        .RunAsync(() => DiscardExecutionsOnLane(new HashSet<object> { execution }))
+                        .ConfigureAwait(false);
                     await _lane
                         .RunAsync(() => episode.CompleteExecution(execution))
                         .ConfigureAwait(false);

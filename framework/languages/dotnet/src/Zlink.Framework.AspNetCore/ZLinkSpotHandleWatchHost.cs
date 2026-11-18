@@ -152,7 +152,8 @@ internal sealed class ZLinkSpotHandleWatchHost(
             // A watch notification carries a newer store observation. Drop
             // the positive route before resolving so the update cannot be
             // satisfied by the older cached StoreVersion.
-            rows.InvalidateSpotRoute(spotKey);
+            await rows.ObserveAuthorityAsync(ZLinkAuthorityKeyCodec.EncodeSpot(spotKey.SpotId))
+                .ConfigureAwait(false);
             if (
                 change.ChangeType
                 is ZLinkLocationChangeType.Removed

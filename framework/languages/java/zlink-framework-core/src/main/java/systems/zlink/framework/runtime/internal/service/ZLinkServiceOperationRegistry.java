@@ -382,6 +382,32 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         completions.post(entry);
     }
 
+    /** Continues physical work under the original logical registration and deadline. */
+    public <T> CompletionStage<Boolean> submitRegistered(
+            UUID id,
+            Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
+            Consumer<? super T> discardValue) {
+        var continued =
+                submitOwnerTurn(
+                        () -> {
+                            @SuppressWarnings("unchecked")
+                            Entry<T> entry = (Entry<T>) pending.get(id);
+                            if (entry == null) return false;
+                            if (entry.deadlineNanos <= nanoTime.getAsLong()) {
+                                completeExceptionally(entry, timeoutFailure.get());
+                                return false;
+                            }
+                            submitOnOwner(entry, submission, discardValue);
+                            return true;
+                        },
+                        true);
+        continued.whenComplete(
+                (accepted, failure) -> {
+                    if (failure != null) completeExceptionally(id, failure);
+                });
+        return continued;
+    }
+
     private <T> void submitOnOwner(
             Entry<T> entry,
             Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,

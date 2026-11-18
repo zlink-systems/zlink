@@ -239,7 +239,7 @@ final class BoundSessionRelayOrderTest {
             try (var create = Message.from("create")) {
                 actor = spots.createActor("actor", create);
             }
-            spots.rememberActorAuthority(actor, 1, 1);
+            spots.rememberActorAuthority(actor, 1, 1, spots.localNodeGeneration());
             route = new ZLinkServiceM6BWireCodec.ActorRouteFence(actor, 1, 1, 1);
             bind(1);
             spots.entrySpot()

@@ -7,6 +7,8 @@ import jdk.jfr.consumer.RecordingFile;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.testsupport.ChildJvm;
+
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.ByteBuffer;
@@ -14,7 +16,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashSet;
 import java.util.List;
 
 /** Counts temporary heap buffer views, separately from the required wire array. */
@@ -26,45 +27,7 @@ public final class ZLinkServiceSendHeaderAllocationTest {
 
     @Test
     void sendHeadersAllocateOnlyTheirWireStorage() throws Exception {
-        runInAllocationJvm(ZLinkServiceSendHeaderAllocationTest.class);
-    }
-
-    public static void runInAllocationJvm(Class<?> fixture) throws Exception {
-        var classpath = new LinkedHashSet<String>();
-        for (ClassLoader loader = fixture.getClassLoader();
-                loader != null;
-                loader = loader.getParent()) {
-            if (loader instanceof URLClassLoader urls) {
-                for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
-            }
-        }
-        classpath.addAll(
-                List.of(System.getProperty("java.class.path").split(java.io.File.pathSeparator)));
-        Path output = Files.createTempFile("zlink-send-header-", ".log");
-        try {
-            var process =
-                    new ProcessBuilder(
-                                    Path.of(System.getProperty("java.home"), "bin", "java")
-                                            .toString(),
-                                    "--enable-native-access=ALL-UNNAMED",
-                                    "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),
-                                    "-XX:-UseTLAB",
-                                    "-XX:-DoEscapeAnalysis",
-                                    "-XX:ActiveProcessorCount=2",
-                                    "-XX:FlightRecorderOptions=stackdepth=128",
-                                    "-cp",
-                                    String.join(java.io.File.pathSeparator, classpath),
-                                    fixture.getName())
-                            .redirectErrorStream(true)
-                            .redirectOutput(output.toFile())
-                            .start();
-            int exit = process.waitFor();
-            String log = Files.readString(output);
-            System.out.print(log);
-            assertEquals(0, exit, log);
-        } finally {
-            Files.deleteIfExists(output);
-        }
+        ChildJvm.runInAllocationJvm(ZLinkServiceSendHeaderAllocationTest.class);
     }
 
     public static void main(String[] args) throws Exception {

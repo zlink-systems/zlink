@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #define main bench_source_entry
 #include "../client/bench_cpp_client.cpp"
 #undef main

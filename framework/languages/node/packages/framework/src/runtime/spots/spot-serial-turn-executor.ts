@@ -186,10 +186,9 @@ export class ZLinkSpotSerialTurnExecutor {
       if (admission?.signal?.aborted === true) {
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
-      const boundOperation = bindApplicationJobPermit(operation);
       const submitted = hasApplicationJobPermit()
-        ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
-        : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
+        ? this.scheduler.submitPreAdmitted(operation, workOptions, barrierClaim)
+        : this.scheduler.submit(bindApplicationJobPermit(operation), workOptions, barrierClaim);
       void submitted.catch((error) => {
         barrierClaim?.release();
         onError(error);
@@ -212,7 +211,13 @@ export class ZLinkSpotSerialTurnExecutor {
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.enqueueFrameworkTurn(operation, workOptions);
+    const scheduler = this.scheduler;
+    return this.enqueueFrameworkTurn(operation, {
+      ...workOptions,
+      get lifecycleOwner() {
+        return scheduler.activeLifecycle;
+      }
+    });
   }
 
   /** Admits membership work and holds the lifecycle FIFO until its result settles. */
@@ -341,24 +346,28 @@ export class ZLinkSpotSerialTurnExecutor {
     workOptions: ZLinkSerialWorkOptions | undefined,
     barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>
   ): Promise<T> {
-    const boundOperation = bindApplicationJobPermit(operation);
     if (barrierClaim instanceof Promise) {
       const context: Partial<ZLinkExecutionBarrierClaim> = {};
-      return this.scheduler.admitDurablePrefix(boundOperation, workOptions, context, {
-        prepare: async (signal) => {
-          const claim = await barrierClaim;
-          if (signal.aborted) {
-            claim.release();
-            throw signal.reason;
-          }
-          Object.defineProperties(context, Object.getOwnPropertyDescriptors(claim));
-        },
-        cancel: () => {}
-      });
+      return this.scheduler.admitDurablePrefix(
+        bindApplicationJobPermit(operation),
+        workOptions,
+        context,
+        {
+          prepare: async (signal) => {
+            const claim = await barrierClaim;
+            if (signal.aborted) {
+              claim.release();
+              throw signal.reason;
+            }
+            Object.defineProperties(context, Object.getOwnPropertyDescriptors(claim));
+          },
+          cancel: () => {}
+        }
+      );
     }
     return hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
-      : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
+      ? this.scheduler.submitPreAdmitted(operation, workOptions, barrierClaim)
+      : this.scheduler.submit(bindApplicationJobPermit(operation), workOptions, barrierClaim);
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
@@ -368,7 +377,7 @@ export class ZLinkSpotSerialTurnExecutor {
       const executor = this;
       const work = record;
       return Promise.resolve(executor.executionBarrier?.enter()).then((claim) =>
-        executor.runTurn(work.operation, work.resolve, work.reject, claim, work.release)
+        executor.runTurn(work.operation, work.resolve, work.reject, claim, work.release, work)
       );
     }
     return this.runTurn(
@@ -376,7 +385,8 @@ export class ZLinkSpotSerialTurnExecutor {
       record.resolve,
       record.reject,
       record.context as ZLinkExecutionBarrierClaim | undefined,
-      record.release
+      record.release,
+      record
     );
   }
 
@@ -393,12 +403,14 @@ export class ZLinkSpotSerialTurnExecutor {
     resolve: (value: T) => void,
     reject: (reason: unknown) => void,
     barrierClaim?: ZLinkExecutionBarrierClaim,
-    release?: () => void
+    release?: () => void,
+    work?: ZLinkSerialWorkRecord<unknown>
   ): Promise<void> {
     const turn = new ZLinkSpotSerialTurn(
       (resumeTurn, resume, resumeReject) => this.postResume(resumeTurn, resume, resumeReject),
       barrierClaim,
-      this.yieldAllowed
+      this.yieldAllowed,
+      work
     );
     const wrapped = async () => {
       this.depth += 1;

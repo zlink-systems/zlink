@@ -14,8 +14,7 @@ public final class ZLinkSpotHandlerRegistrationTestAccess {
     public static Object load(
             Class<?> spotType, List<Class<?>> handlerTypes, List<?> configuredSubscriptions) {
         ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
-        ZLinkSpotActorHandlerCatalog actorHandlers =
-                new ZLinkSpotActorHandlerCatalog(scannedHandlers, null);
+        ZLinkSpotActorHandlerCatalog actorHandlers = new ZLinkSpotActorHandlerCatalog(null);
         ZLinkSpotHandlerLoader loader =
                 new ZLinkSpotHandlerLoader(scannedHandlers, actorHandlers, handlerType -> null);
         return loader.load(

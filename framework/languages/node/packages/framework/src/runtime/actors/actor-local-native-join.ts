@@ -316,7 +316,11 @@ export class ZLinkLocalNativeActorJoin {
     if (completionOperationKey === relocationId) {
       throw new Error('Actor Join OperationId must be distinct from RelocationId.');
     }
-    const actorAuthorityFence = remoteJoinAuthorityFence(node, state);
+    const actorAuthorityFence = remoteJoinAuthorityFence(
+      node,
+      state,
+      this.options.locationLifecycle?.currentOwnerToken?.leaseGeneration
+    );
     // Command 28 is usable only when both the source Actor authority fence
     // and the backend's canonical entry point are present.  Until then keep
     // the existing internal admission route (wire protocol §10); fabricating
@@ -532,7 +536,8 @@ export class ZLinkLocalNativeActorJoin {
 
 function remoteJoinAuthorityFence(
   node: ZLinkBackendMeshNode,
-  state: ZLinkActorRuntimeState
+  state: ZLinkActorRuntimeState,
+  ownerLeaseGeneration: bigint | undefined
 ):
   | {
       readonly nodeGeneration: bigint;
@@ -540,13 +545,13 @@ function remoteJoinAuthorityFence(
       readonly ownerLeaseGeneration: bigint;
     }
   | undefined {
-  if (state.locationGeneration === undefined || state.ownerLeaseGeneration === undefined) {
+  if (state.locationGeneration === undefined || ownerLeaseGeneration === undefined) {
     return undefined;
   }
   return {
     nodeGeneration: node.status().lifecycleGeneration,
     authorityOwnerGeneration: state.locationGeneration,
-    ownerLeaseGeneration: state.ownerLeaseGeneration
+    ownerLeaseGeneration
   };
 }
 

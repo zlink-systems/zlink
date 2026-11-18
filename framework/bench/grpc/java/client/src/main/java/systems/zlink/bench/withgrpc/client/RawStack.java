@@ -2,11 +2,8 @@
 
 package systems.zlink.bench.withgrpc.client;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.List;
-import java.util.concurrent.ExecutionException;
+import systems.zlink.bench.withgrpc.shared.BenchGameJson;
+import systems.zlink.bench.withgrpc.shared.BenchGamePayload;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.BenchTypedPayload;
 import systems.zlink.bench.withgrpc.shared.RawWire;
@@ -27,6 +24,12 @@ import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.bench.withgrpc.shared.BenchContract;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+
 /** Raw binding client: ROUTER&lt;-&gt;ROUTER with an explicit target routing ID. */
 public final class RawStack implements AutoCloseable {
     private static final ZLinkServiceM6AWireCodec SERVICE_WIRE = new ZLinkServiceM6AWireCodec();
@@ -36,19 +39,40 @@ public final class RawStack implements AutoCloseable {
     private final RoutingId peer;
     private final int runId;
     private final Duration timeout;
+    private final boolean json;
 
     private RawStack(
-        RouterSocket router, Poller completionPoller, RoutingId peer,
-        int runId, Duration timeout) {
+            RouterSocket router,
+            Poller completionPoller,
+            RoutingId peer,
+            int runId,
+            Duration timeout,
+            boolean json) {
         this.router = router;
         this.completionPoller = completionPoller;
         this.peer = peer;
         this.runId = runId;
         this.timeout = timeout;
+        this.json = json;
     }
 
     public static RawStack create(
-        Context context, BenchOptions options, String selfId, String peerId, String endpoint) {
+            Context context, BenchOptions options, String selfId, String peerId, String endpoint) {
+        return create(context, options, selfId, peerId, endpoint, false);
+    }
+
+    public static RawStack createJson(
+            Context context, BenchOptions options, String selfId, String peerId, String endpoint) {
+        return create(context, options, selfId, peerId, endpoint, true);
+    }
+
+    private static RawStack create(
+            Context context,
+            BenchOptions options,
+            String selfId,
+            String peerId,
+            String endpoint,
+            boolean json) {
         SERVICE_WIRE.prepareChannelNames(List.of(BenchContract.CHANNEL_NAME));
         RoutingId peer = RoutingId.from(peerId.getBytes(StandardCharsets.US_ASCII));
         RoutingId self = RoutingId.from(selfId.getBytes(StandardCharsets.US_ASCII));
@@ -62,7 +86,7 @@ public final class RawStack implements AutoCloseable {
         try {
             completionPoller = Zlink.createPoller();
             completionPoller.add(router, 0, PollEventFlags.POLLCOMPLETION);
-            return new RawStack(router, completionPoller, peer, options.runId, timeout);
+            return new RawStack(router, completionPoller, peer, options.runId, timeout, json);
         } catch (RuntimeException | Error error) {
             if (completionPoller != null) {
                 completionPoller.close();
@@ -77,23 +101,30 @@ public final class RawStack implements AutoCloseable {
             @Override
             public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
                 var operation = router.request(peer);
-                try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
-                     Message body = RawWire.encodeBenchPayloadMessage(
-                         payloadSize, runId, phase, sequence)) {
-                    var submission = operation
-                        .message(header)
-                        .message(body)
-                        .timeout(timeout)
-                        .submit();
-                    var admitted = submission.result() == SubmitResult.BACKPRESSURED
-                        ? submission.admitted().toCompletableFuture()
-                        : java.util.concurrent.CompletableFuture.<Void>completedFuture(
-                            null);
-                    return new RawSubmission(submission.result(),
-                        admitted,
-                        submission.reply().toCompletableFuture().thenAccept(
-                            parts -> validate(parts, runId, phase, payloadSize,
-                                sequence)));
+                try (Message header = Message.from(requestEnvelope());
+                        Message body = encodeBody(payloadSize, phase, sequence)) {
+                    var submission =
+                            operation.message(header).message(body).timeout(timeout).submit();
+                    var admitted =
+                            submission.result() == SubmitResult.BACKPRESSURED
+                                    ? submission.admitted().toCompletableFuture()
+                                    : java.util.concurrent.CompletableFuture.<Void>completedFuture(
+                                            null);
+                    return new RawSubmission(
+                            submission.result(),
+                            admitted,
+                            submission
+                                    .reply()
+                                    .toCompletableFuture()
+                                    .thenAccept(
+                                            parts ->
+                                                    validate(
+                                                            parts,
+                                                            runId,
+                                                            phase,
+                                                            payloadSize,
+                                                            sequence,
+                                                            json)));
                 }
             }
         };
@@ -244,10 +275,9 @@ public final class RawStack implements AutoCloseable {
 
     public class RawSendOperation extends RawOperation {
         public PreparedSend prepareRaw(int payloadSize, byte phase, long sequence) {
-            Message header = Message.from(RawWire.REQUEST_ENVELOPE);
+            Message header = Message.from(requestEnvelope());
             try {
-                Message body = RawWire.encodeBenchPayloadMessage(
-                    payloadSize, runId, phase, sequence);
+                Message body = encodeBody(payloadSize, phase, sequence);
                 return new PreparedSend(header, body);
             } catch (RuntimeException | Error failure) {
                 header.close();
@@ -268,11 +298,11 @@ public final class RawStack implements AutoCloseable {
                     ? submission.admitted().toCompletableFuture()
                     : java.util.concurrent.CompletableFuture.<Void>completedFuture(null);
                 return new RawSubmission(
-                    submission.result(),
-                    admitted,
-                    submission.result() == SubmitResult.OK
-                        ? java.util.concurrent.CompletableFuture.completedFuture(null)
-                        : admitted);
+                        submission.result(),
+                        admitted,
+                        submission.result() == SubmitResult.OK
+                                ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                                : admitted);
             } finally {
                 prepared.close();
             }
@@ -350,7 +380,9 @@ public final class RawStack implements AutoCloseable {
             completionPoller.wait(events, timeout);
         }
 
-        /** Drives this socket's completion poller: one non-blocking pass, then waits for the rest. */
+        /**
+         * Drives this socket's completion poller: one non-blocking pass, then waits for the rest.
+         */
         @Override
         public boolean await(
                 java.util.concurrent.CompletableFuture<Void> completion, Duration timeout)
@@ -377,19 +409,48 @@ public final class RawStack implements AutoCloseable {
 
     /** Initial result, conditional admission wait, and independent completion. */
     public record RawSubmission(
-        SubmitResult result,
-        java.util.concurrent.CompletableFuture<Void> admitted,
-        java.util.concurrent.CompletableFuture<Void> completion) {
+            SubmitResult result,
+            java.util.concurrent.CompletableFuture<Void> admitted,
+            java.util.concurrent.CompletableFuture<Void> completion) {}
+
+    private byte[] requestEnvelope() {
+        return json ? RawWire.JSON_REQUEST_ENVELOPE : RawWire.REQUEST_ENVELOPE;
+    }
+
+    private Message encodeBody(int payloadSize, byte phase, long sequence) {
+        if (!json) {
+            return RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence);
+        }
+        BenchGamePayload payload =
+                BenchGamePayload.create(
+                        payloadSize, runId, phase, sequence, BenchGamePayload.timestampNow());
+        return Message.from(BenchGameJson.encode(payload));
     }
 
     private static void validate(
-        List<Message> parts, int runId, byte phase, int payloadSize, long sequence) {
+            List<Message> parts,
+            int runId,
+            byte phase,
+            int payloadSize,
+            long sequence,
+            boolean json) {
         try {
             if (parts.isEmpty()) {
                 throw new IllegalStateException("raw request returned no reply parts");
             }
-            ByteBuffer body = RawWire.decodeBenchPayloadBody(
-                parts.get(parts.size() - 1).dataBuffer());
+            ByteBuffer body = parts.get(parts.size() - 1).dataBuffer();
+            if (json) {
+                byte[] bytes = new byte[body.remaining()];
+                body.get(bytes);
+                BenchGamePayload decoded = BenchGameJson.decode(bytes);
+                if (decoded.run() != runId
+                        || decoded.phase() != phase
+                        || decoded.seq() != sequence) {
+                    throw new IllegalStateException("raw JSON reply stamp mismatch");
+                }
+                return;
+            }
+            body = RawWire.decodeBenchPayloadBody(body);
             BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(body);
             if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
                 throw new IllegalStateException("raw reply header mismatch");

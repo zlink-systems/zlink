@@ -468,6 +468,12 @@ async function objectScenario(t, provider, mode, providerResolver, statefulAdmis
       actorFactories: new Map([['Player', { create: (context) => new Player(context) }]]),
       actorMeshNameProvider: () => 'mesh',
       actorCreatedNodeRidProvider: () => 'node',
+      nativeActorNode: {
+        actorLookup: () => undefined,
+        createActor: (actorId) => ({ nodeRid: 'node', actorId, generation: 7n }),
+        status: () => ({ routingId: 'node', lifecycleGeneration: 1n }),
+        async destroyActor() {}
+      },
       locationLifecycle: lifecycle,
       admission,
       discardActorActivation: (actor, error) => spots.discardActorActivation(actor, error)

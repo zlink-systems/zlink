@@ -1316,6 +1316,10 @@ assert.deepEqual(relocation.adapterContract.observationFields, [
 
 assert.equal(boundSessionRelocation.fixture, 'zlink.framework.bound-session-relocation');
 assert.equal(boundSessionRelocation.version, 1);
+assert.deepEqual(boundSessionRelocation.sameNodeDuplicateBind, [
+  { name: 'accept', rejectionMessage: '', callbackCount: 1, accepted: true, replacementCount: 1 },
+  { name: 'reject', rejectionMessage: 'already signed in', callbackCount: 1, accepted: false, replacementCount: 0 }
+]);
 assert.equal(
   boundSessionRelocation.behaviorFixture,
   'framework/runtime/conformance/relocation-behavior-v1.json'
@@ -3811,6 +3815,33 @@ for (const corrupt of [
 assert.equal(spotClose.invariants.contextCloseReturnsValue, true);
 assert.equal(spotClose.invariants.onClosingCallsPerAcceptedClose, 1);
 assert.equal(spotClose.invariants.onClosingFailureChangesCloseResult, false);
+function validateJoinFailureCases(fixture) {
+  uniqueNames(fixture.joinFailureCases, 'name');
+  assert.equal(fixture.joinFailureCases.length, 6);
+  for (const [target, kind] of [
+    ['closing', 'NotFound'], ['absent', 'Unavailable'], ['missing', 'NotFound']
+  ]) {
+    for (const warm of [false, true]) {
+      const rows = fixture.joinFailureCases.filter(
+        (row) => row.target === target && row.warmRoute === warm
+      );
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].errorKind, kind);
+    }
+  }
+}
+validateJoinFailureCases(spotClose);
+console.log('Join failure contract: valid cold/warm table accepted');
+for (const [name, corrupt] of [
+  ['InternalFailure kind', (fixture) => { fixture.joinFailureCases[2].errorKind = 'InternalFailure'; }],
+  ['missing row', (fixture) => { fixture.joinFailureCases.pop(); }],
+  ['duplicate cold row', (fixture) => { fixture.joinFailureCases[1].warmRoute = false; }]
+]) {
+  const invalid = structuredClone(spotClose);
+  corrupt(invalid);
+  assert.throws(() => validateJoinFailureCases(invalid));
+  console.log(`Join failure contract: invalid ${name} rejected`);
+}
 uniqueNames(spotClose.scenarios, 'name');
 const spotCloseResults = new Set([
   true, false, 'failure', 'InvalidOperation', 'Unavailable'

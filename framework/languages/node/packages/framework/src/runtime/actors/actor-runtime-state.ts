@@ -9,6 +9,7 @@ import {
 
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend/contracts';
+import { ZLinkConfigurationException } from '../configuration';
 import { isStructuralGuardEnabled } from '../execution/state-lane';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -172,14 +173,15 @@ export class ZLinkActorRuntimeState {
   private spotIdValue: RoutingId | undefined;
   private spotGenerationValue: bigint | undefined;
   private spotMembershipEpochValue = 0n;
+  // Preserve the exact incarnation until teardown finalization, even after native removal.
   private nativeActorRefValue: ZLinkBackendActorRef | undefined;
+  private nativeActorDestroyed = false;
   private entryNodeRidValue: RoutingId | undefined;
   boundSessionValue: ZLinkRemoteBoundSessionTarget | undefined;
   private remoteActorPacketTargetValue: ZLinkRemoteActorPacketTarget | undefined;
   private createRequestPayloadValue: Buffer | undefined;
   private ownsLocationValue = false;
   private locationGenerationValue: bigint | undefined;
-  private ownerLeaseGenerationValue: bigint | undefined;
   private movingValue = false;
   private deferredJoinPendingValue = false;
   private destroyTask: Promise<void> | undefined;
@@ -232,6 +234,15 @@ export class ZLinkActorRuntimeState {
     return this.nativeActorRefValue;
   }
 
+  currentActorRef(): ZLinkBackendActorRef {
+    if (this.nativeActorRefValue === undefined) {
+      throw new ZLinkConfigurationException(
+        `Actor '${this.actorId}' lifecycle identity is not initialized.`
+      );
+    }
+    return this.nativeActorRefValue;
+  }
+
   get boundSessionBindingGeneration(): bigint {
     return this.boundSessionValue?.bindingGeneration ?? 0n;
   }
@@ -278,10 +289,6 @@ export class ZLinkActorRuntimeState {
 
   get locationGeneration(): bigint | undefined {
     return this.locationGenerationValue;
-  }
-
-  get ownerLeaseGeneration(): bigint | undefined {
-    return this.ownerLeaseGenerationValue;
   }
 
   get isSteadyReady(): boolean {
@@ -348,10 +355,6 @@ export class ZLinkActorRuntimeState {
     this.locationGenerationValue = generation;
   }
 
-  setOwnerLeaseGeneration(generation: bigint): void {
-    this.ownerLeaseGenerationValue = generation;
-  }
-
   getOrStartDestroy(
     entryNodeRid: RoutingId,
     destroy: (actorRef: ZLinkBackendActorRef | undefined) => Promise<void>
@@ -370,22 +373,24 @@ export class ZLinkActorRuntimeState {
       );
     }
 
-    const task = Promise.resolve().then(() => destroy(actorRef));
+    const task = Promise.resolve()
+      .then(() => destroy(this.nativeActorDestroyed ? undefined : actorRef))
+      .catch((error: unknown) => {
+        // A caller may start another attempt only after this attempt has failed.
+        if (this.destroyTask === task) {
+          this.destroyTask = undefined;
+          this.movingValue = false;
+        }
+        throw error;
+      });
     this.destroyTask = task;
     return task;
   }
 
   markNativeActorDestroyed(actorRef: ZLinkBackendActorRef): void {
     if (this.nativeActorRefValue === actorRef) {
-      this.nativeActorRefValue = undefined;
+      this.nativeActorDestroyed = true;
     }
-  }
-
-  clearFailedDestroy(task: Promise<void>): void {
-    if (this.destroyTask === task) {
-      this.destroyTask = undefined;
-    }
-    this.movingValue = false;
   }
 
   ensureContext(createContext: () => ZLinkActorContext): ZLinkActorContext {
@@ -440,6 +445,7 @@ export class ZLinkActorRuntimeState {
       this.createRequestPayloadValue = undefined;
       this.configured = false;
       this.nativeActorRefValue = undefined;
+      this.nativeActorDestroyed = false;
       this.entryNodeRidValue = undefined;
       return true;
     }
@@ -489,6 +495,7 @@ export class ZLinkActorRuntimeState {
 
   setNativeActorRef(actorRef: ZLinkBackendActorRef): void {
     this.nativeActorRefValue = actorRef;
+    this.nativeActorDestroyed = false;
     this.entryNodeRidValue ??= toFrameworkRoutingId(actorRef.nodeRid);
   }
 
@@ -571,13 +578,13 @@ export class ZLinkActorRuntimeState {
     this.spotGenerationValue = undefined;
     this.spotMembershipEpochValue = 0n;
     this.nativeActorRefValue = undefined;
+    this.nativeActorDestroyed = false;
     this.entryNodeRidValue = undefined;
     this.boundSessionValue = undefined;
     this.remoteActorPacketTargetValue = undefined;
     this.createRequestPayloadValue = undefined;
     this.ownsLocationValue = false;
     this.locationGenerationValue = undefined;
-    this.ownerLeaseGenerationValue = undefined;
     this.movingValue = false;
     this.deferredJoinPendingValue = false;
     this.destroyTask = undefined;
@@ -594,12 +601,12 @@ export class ZLinkActorRuntimeState {
     this.spotValue = undefined;
     this.spotIdValue = undefined;
     this.nativeActorRefValue = undefined;
+    this.nativeActorDestroyed = false;
     // The arriving relocation installs the binding it carries.
     this.boundSessionValue = undefined;
     this.remoteActorPacketTargetValue = undefined;
     this.createRequestPayloadValue = undefined;
     this.locationGenerationValue = undefined;
-    this.ownerLeaseGenerationValue = undefined;
     this.movingValue = false;
     this.deferredJoinPendingValue = false;
     this.destroyTask = undefined;

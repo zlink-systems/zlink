@@ -280,12 +280,18 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             //  attempted the same object is evicted first — newest
             //  attempt wins (spec 15 §4.2 "같은 object의 relocation
             //  temporary queue는 하나만 존재한다").
-            actors.resolveActorFactoryType(admission.actorType());
-            prewarm.register(
-                    admission.relocationId(),
-                    admission.actorId(),
-                    admission.objectGeneration(),
-                    evicted -> {});
+            try {
+                actors.resolveActorFactoryType(admission.actorType());
+                prewarm.register(
+                        admission.relocationId(),
+                        admission.actorId(),
+                        admission.objectGeneration(),
+                        () -> requireTargetExecution(admission.targetSpot()),
+                        evicted -> {});
+            } catch (RuntimeException | Error failure) {
+                admissions.remove(admission.relocationId(), admission);
+                throw failure;
+            }
             spots.scheduleRelocationCleanup(
                     Instant.now().plus(admission.timeout()),
                     () -> prewarm.expire(admission.relocationId()));
@@ -304,15 +310,42 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             }
             return;
         }
-        actors.resolveActorFactoryType(admission.actorType());
-        prewarm.register(
-                admission.relocationId(),
-                admission.actorId(),
-                admission.objectGeneration(),
-                evicted -> {});
+        try {
+            actors.resolveActorFactoryType(admission.actorType());
+            prewarm.register(
+                    admission.relocationId(),
+                    admission.actorId(),
+                    admission.objectGeneration(),
+                    () -> requireTargetExecution(admission.targetSpot()),
+                    evicted -> {});
+        } catch (RuntimeException | Error failure) {
+            canonicalAdmissions.remove(admission.relocationId(), admission);
+            throw failure;
+        }
         spots.scheduleRelocationCleanup(
                 Instant.now().plus(admission.timeout()),
                 () -> prewarm.expire(admission.relocationId()));
+    }
+
+    private static void requireTargetExecution(Object targetSpot) {
+        ((DefaultSpotContext) ((systems.zlink.framework.spots.ZLinkSpot<?>) targetSpot).context())
+                .serials.requireExecution(true);
+    }
+
+    @Override
+    public CompletionStage<Void> discardTargetJoins(Object targetSpot) {
+        return CompletableFuture.allOf(
+                java.util.stream.Stream.concat(
+                                canonicalAdmissions.values().stream()
+                                        .filter(admission -> admission.targetSpot() == targetSpot)
+                                        .map(CanonicalAdmission::relocationId),
+                                admissions.values().stream()
+                                        .filter(admission -> admission.targetSpot() == targetSpot)
+                                        .map(Admission::relocationId))
+                        .distinct()
+                        .map(prewarm::discard)
+                        .map(CompletionStage::toCompletableFuture)
+                        .toArray(CompletableFuture[]::new));
     }
 
     CompletionStage<Void> beginTarget(

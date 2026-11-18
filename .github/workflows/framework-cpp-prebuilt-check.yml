@@ -14,6 +14,11 @@ on:
         default: all
         type: choice
         options: [all, linux-x64, linux-arm64, macos-arm64, windows-x64]
+      update_lock:
+        description: 'Regenerate the Conan pin files on each runner and upload them instead of building the archive'
+        required: false
+        default: false
+        type: boolean
   # Only the inputs that decide how the prebuilt archive is built and verified (#997). A runtime or
   # sample change does not re-run four platforms here; the release job builds all four again.
   pull_request:
@@ -132,6 +137,7 @@ jobs:
           echo "binding_prefix=${binding_prefix}" >>"${GITHUB_OUTPUT}"
 
       - name: Build and verify the prebuilt archive
+        if: ${{ !inputs.update_lock }}
         shell: bash
         env:
           ZLINK_PLATFORM: ${{ matrix.platform }}
@@ -145,6 +151,30 @@ jobs:
             --platform "${ZLINK_PLATFORM}" dist/framework-cpp-prebuilt
 
       - uses: actions/upload-artifact@v6
+        if: ${{ !inputs.update_lock }}
         with:
           name: framework-cpp-check-${{ matrix.platform }}
           path: dist/framework-cpp-prebuilt/*
+
+      # Pin files are created on the platform they describe (package-prebuilt.sh:269). A pin
+      # change dispatches this workflow with update_lock and commits the uploaded files (#4077).
+      - name: Regenerate the Conan pin files
+        if: ${{ inputs.update_lock }}
+        shell: bash
+        env:
+          ZLINK_PLATFORM: ${{ matrix.platform }}
+          ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX: ${{ steps.inputs.outputs.core_prefix }}
+          ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX: ${{ steps.inputs.outputs.binding_prefix }}
+        run: |
+          set -euo pipefail
+          bash framework/languages/cpp/scripts/package-prebuilt.sh \
+            --update-lock --platform "${ZLINK_PLATFORM}"
+
+      - uses: actions/upload-artifact@v6
+        if: ${{ inputs.update_lock }}
+        with:
+          name: framework-cpp-conan-pins-${{ matrix.platform }}
+          path: |
+            framework/languages/cpp/packaging/conan/conan.${{ matrix.platform }}.lock
+            framework/languages/cpp/packaging/conan/conan.${{ matrix.platform }}.packages.json
+          if-no-files-found: error

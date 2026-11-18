@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${HERE}/../../../.." && pwd)"
 # shellcheck source=../runner_common.sh
 source "${HERE}/../runner_common.sh"
-BUILD_DIR="${HERE}/build"
+BUILD_DIR="${BUILD_DIR:-${HERE}/build}"
 
 bench_require_low_load
 # The C++ Framework resolves its dependencies through its vcpkg manifest, as the Framework's
@@ -26,6 +26,10 @@ CMAKE_ARGS=(
   -DVCPKG_MANIFEST_FEATURES=bench
   -DVCPKG_OVERLAY_PORTS="${REPO_ROOT}/vcpkg/ports"
 )
+if [[ "${USE_BINDINGS_SOURCE:-OFF}" == ON \
+      || "${ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE:-OFF}" == ON ]]; then
+  CMAKE_ARGS+=(-DZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE=ON)
+fi
 
 CMAKE_CACHE_FILE="${BUILD_DIR}/CMakeCache.txt"
 if [[ -f "${CMAKE_CACHE_FILE}" ]]; then
@@ -66,4 +70,4 @@ if [[ -f "${CMAKE_CACHE_FILE}" ]]; then
 fi
 
 cmake "${CMAKE_ARGS[@]}"
-cmake --build "${BUILD_DIR}" --parallel 2
+cmake --build "${BUILD_DIR}" --parallel "${BUILD_PARALLEL:-2}"

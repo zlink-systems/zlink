@@ -117,6 +117,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                                                                 .submit(String.class)
                                                                 .toCompletableFuture());
                 var result = submitted.get(2, TimeUnit.SECONDS);
+                var atPublication = result.handle((value, error) -> queue.snapshot());
                 var failure =
                         assertThrows(
                                 ExecutionException.class, () -> result.get(2, TimeUnit.SECONDS));
@@ -138,6 +139,8 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                                             + " cause="
                                             + failure.getCause().getCause());
                 }
+                assertEquals(0, atPublication.join().capacityWaiters());
+                assertEquals(1, atPublication.join().permitsInUse());
                 assertEquals(0, handled.get());
                 assertEquals(1, queue.snapshot().permitsInUse());
                 assertEquals(0, queue.snapshot().capacityWaiters());
@@ -647,6 +650,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                             RoutingId.from("local-deadline"),
                             target.spotId(),
                             target.lifecycleGeneration(),
+                            0L,
                             null,
                             java.util.List.of(part),
                             Duration.ofMillis(100),

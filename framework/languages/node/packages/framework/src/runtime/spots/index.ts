@@ -5,7 +5,13 @@ import { encodeActorReply } from '../actors/actor-reply';
 import { boundSessionErrorPayload } from '../streams/bound-session-response-target';
 import { RELOCATED_REQUEST_OWNED_BY_REQUESTER } from '../actors/actor-handoff';
 import { routingIdsEqual } from '../routing-id';
+import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
+import type {
+  ZLinkActorDispatchOwner,
+  ZLinkActorIngressMembership
+} from './spot-actor-ingress-admission';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
+import { toFrameworkActorRef } from '../actors';
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
   ActorRef,
@@ -232,10 +238,7 @@ export interface ZLinkSpotManagerOptions {
     meshName: string,
     spotType: Type<ZLinkSpot>
   ) => import('../../contracts').ZLinkSpotRelocationCoordinationMode;
-  readonly actorDispatchOwnerResolver?: (actorId: string) => {
-    readonly actorRef?: ActorRef;
-    readonly spotId?: RoutingId;
-  };
+  readonly actorDispatchOwnerResolver?: (actorId: string) => ZLinkActorDispatchOwner;
   readonly channelClient?: ZLinkChannelClient;
   readonly fanoutClient?: ZLinkFanoutClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
@@ -338,6 +341,7 @@ interface ZLinkTargetSpotCloseOperation {
 }
 
 export class DefaultZLinkSpotManager {
+  readonly actorIngressMembership: ZLinkActorIngressMembership;
   [inspectRuntime]() {
     return Object.freeze({
       activeActivationCount: this.activations.activeActivations().length,
@@ -416,6 +420,10 @@ export class DefaultZLinkSpotManager {
       spotRouteResolver: options.spotRouteResolver,
       actorTransferRuntime: options.actorTransferRuntime
     });
+    this.actorIngressMembership = {
+      resolveOwner: options.actorDispatchOwnerResolver,
+      dispatchToOwner: (spotId, delivery) => this.dispatchActorPacketToOwner(spotId, delivery)
+    };
     this.activationLifecycle = new ZLinkSpotActivationLifecycle({
       timerClock,
       spotTimerHandlers: options.spotTimerHandlers,
@@ -446,6 +454,7 @@ export class DefaultZLinkSpotManager {
       createTopicMessage: options.createTopicMessage,
       nativeSpotNodeProvider: options.nativeSpotNodeProvider,
       actorResolver: options.actorResolver,
+      actorIngressMembership: this.actorIngressMembership,
       detachedTaskRunner: options.detachedTaskRunner,
       actorTransferRuntime: options.actorTransferRuntime,
       boundSessionRuntime: options.boundSessionRuntime,
@@ -496,9 +505,14 @@ export class DefaultZLinkSpotManager {
           activation.serialExecutor.discardPendingApplication(error);
           activation.discardLocalMembers((actor) => lifecycle.discardSteadyExecution(actor));
           this.activations.finishClose(activation.meshName, activation.spotId);
-          this.options.detachedTaskRunner.runDetached('Discard Spot execution', () =>
-            this.activationLifecycle.discard(activation)
-          );
+          activation.serial.closeAdmission();
+          const disposal = activation.serial.whenIdle().then(async () => {
+            // An already submitted Join can commit while the discard closes admission.
+            activation.discardLocalMembers((actor) => lifecycle.discardSteadyExecution(actor));
+            await this.activationLifecycle.discard(activation);
+          });
+          this.options.detachedTaskRunner.runDetached('Discard Spot execution', () => disposal);
+          return disposal;
         });
         const published = this.activations.register(activation);
         this.scheduleIdleSweep();
@@ -1230,6 +1244,16 @@ export class DefaultZLinkSpotManager {
     objectGeneration: bigint,
     signal?: AbortSignal
   ): Promise<boolean> {
+    if (
+      activation.serial.isCurrentTurn &&
+      (activation.serial.currentTurn?.work?.lane === 'lifecycle' ||
+        activation.serial.currentTurn?.work?.lifecycleOwner !== undefined)
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        'A Spot cannot close itself from its lifecycle callback.'
+      );
+    }
     const { meshName, spotId } = activation;
     const operation = this.closeOperations.get(`${meshName}\0${String(spotId)}`);
     const current =
@@ -1533,6 +1557,8 @@ export class DefaultZLinkSpotManager {
   async publishUserSpot(meshName: string, spotId: RoutingId): Promise<void> {
     this.options.admission?.requireRequest('Spot Ready confirmation', meshName);
     const published = this.activations.publish(meshName, spotId);
+    if (published !== undefined)
+      this.options.locationLifecycle?.bindSpotExecution(meshName, spotId, published.spot);
     await published?.serialExecutor.finishPreparation();
   }
 
@@ -1667,6 +1693,28 @@ export class DefaultZLinkSpotManager {
     );
   }
 
+  private dispatchActorPacketToOwner(
+    spotId: RoutingId | undefined,
+    delivery: ZLinkActorPacketDelivery
+  ): Promise<unknown> {
+    const args = [
+      delivery.actorId,
+      delivery.parts,
+      delivery.returnResponse,
+      delivery.remoteBoundSessionTarget,
+      delivery.fallbackActorRef,
+      delivery.requestTerminal,
+      delivery.messageFollowOrigin
+    ] as const;
+    if (spotId !== undefined) {
+      return this.dispatchRoutedActorPacket(delivery.origin, spotId, ...args);
+    }
+    if (this.options.dispatchEntryActorPacket === undefined) {
+      throw new ZLinkConfigurationException('Actor ingress requires an Entry FIFO port.');
+    }
+    return this.options.dispatchEntryActorPacket(delivery.origin, ...args);
+  }
+
   /** @internal Replays a record already owned by the Actor handoff queue. */
   dispatchRoutedActorPacketDirect(
     origin: ApplicationJobOrigin,
@@ -1705,20 +1753,28 @@ export class DefaultZLinkSpotManager {
     return this.activationLifecycle.admitActorPacketPrefix(activation, actorId, records);
   }
 
+  /** Transfers accepted source packets into the handoff before target ingress opens. */
+  captureSourceActorPacketPrefix(actor: ZLinkActor): void {
+    const spotId = actor.context.spotId;
+    if (spotId === undefined) return;
+    const activation = this.activations.resolve(actor.context.meshName, spotId);
+    activation?.serialExecutor.actorExecutors.get(actor.context.actorId)?.capturePacketPrefix();
+  }
+
   /** Resolves the current Actor FIFO owner for both Entry and User membership. */
   admitSourceActorPacketPrefix(
     actorId: string,
     records: readonly ZLinkActorHandoffPrefixRecord[]
   ): ZLinkActorHandoffPrefixAdmission {
     const owner = this.options.actorDispatchOwnerResolver?.(actorId);
-    if (owner?.actorRef === undefined) {
+    if (owner?.nativeActorRef === undefined) {
       throw new ZLinkConfigurationException(`Actor '${actorId}' has no local FIFO owner.`);
     }
     if (owner.spotId === undefined) {
       if (this.options.admitEntryActorPacketPrefix === undefined) {
         throw new ZLinkConfigurationException(`Actor '${actorId}' has no Entry FIFO port.`);
       }
-      return this.options.admitEntryActorPacketPrefix(owner.actorRef.meshName, actorId, records);
+      return this.options.admitEntryActorPacketPrefix(owner.meshName, actorId, records);
     }
     return this.admitRoutedActorPacketPrefix(owner.spotId, actorId, records);
   }
@@ -2172,14 +2228,19 @@ export class DefaultZLinkSpotManager {
     const request = record.kind === ReceiveKind.ActorRequest;
     const nativeTarget = record.messageFollowOrigin?.target;
     const ingressActor = nativeTarget?.actor ?? actor;
-    const resolvedActorRef = (nativeTarget === undefined
-      ? this.options.actorDispatchOwnerResolver?.(actor.actorId).actorRef
-      : undefined) ?? {
-      actorId: ingressActor.actorId,
-      objectGeneration: ingressActor.generation,
-      meshName,
-      nodeRid: ingressActor.nodeRid
-    };
+    const dispatchOwner =
+      nativeTarget === undefined
+        ? this.options.actorDispatchOwnerResolver?.(actor.actorId)
+        : undefined;
+    const resolvedActorRef: ActorRef =
+      dispatchOwner?.nativeActorRef === undefined
+        ? {
+            actorId: ingressActor.actorId,
+            objectGeneration: ingressActor.generation,
+            meshName,
+            nodeRid: ingressActor.nodeRid
+          }
+        : toFrameworkActorRef(dispatchOwner.nativeActorRef, dispatchOwner.meshName);
     const responseActorRef =
       record.sourceBindingGeneration > 0n
         ? ({
@@ -2428,11 +2489,14 @@ export class DefaultZLinkSpotManager {
     let accepted = false;
     let committedAdmissionReplay = isRemoteCommit && admissionRecord?.state === 'committed';
     const actorJoinIsCurrent = (): boolean =>
+      (activation === undefined || this.activations.resolve(meshName, spotId!) === activation) &&
       (record.deadlineUnixMs === undefined || record.deadlineUnixMs > BigInt(Date.now())) &&
       (record.isPending?.() ?? true);
     const abandonStaleAdmission = (): void => {
       if (isRemoteAdmission && transferRequest !== undefined) {
         this.formalRemoteActorAdmissions.abort(transferRequest.transferId);
+      } else if (control.canonicalActorJoin !== undefined) {
+        this.formalRemoteActorAdmissions.abort(control.canonicalActorJoin.handoffId);
       }
     };
     try {
@@ -2520,6 +2584,10 @@ export class DefaultZLinkSpotManager {
             } finally {
               encodedReply?.close();
             }
+          }
+          if (!actorJoinIsCurrent()) {
+            abandonStaleAdmission();
+            return;
           }
           this.formalRemoteActorAdmissions.complete(
             control.canonicalActorJoin.handoffId,

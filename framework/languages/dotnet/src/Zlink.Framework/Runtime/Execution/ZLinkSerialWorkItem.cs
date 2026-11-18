@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.Runtime.Execution;
@@ -109,6 +110,12 @@ internal sealed class ZLinkSerialWorkItem
             ? record.ExecutionStatus
             : ExecutionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed;
     internal ZLinkSerialWorkPreparation? Preparation { get; set; }
+    internal ZLinkApplicationJobQueueInvocation.Scope? QueuedAdmission;
+
+    // The caller terminal returned the admission this accepted record was queued with.
+    internal bool QueuedAdmissionReturned =>
+        QueuedAdmission is { } scope && Volatile.Read(ref scope.Lease) is not { IsReleased: false };
+
     internal Action<Exception>? ErrorReporter { get; set; }
     internal bool IsReady => Ready?.Invoke() != false && Preparation?.IsReady != false;
 
@@ -192,9 +199,14 @@ internal sealed class ZLinkSerialWorkItem
         if (executionStatus != ZLinkObjectExecutionStatus.Allowed)
         {
             _relocationRelease?.Invoke();
+            // Ownership loss ends with NotFound whether or not stop cleanup has cancelled the queue yet
+            // (Location runtime spec §5.1).
             if (
-                executionStatus == ZLinkObjectExecutionStatus.Stopped
-                || cancellationToken.IsCancellationRequested
+                executionStatus != ZLinkObjectExecutionStatus.OwnershipLost
+                && (
+                    executionStatus == ZLinkObjectExecutionStatus.Stopped
+                    || cancellationToken.IsCancellationRequested
+                )
             )
                 _completion!.TrySetCanceled(cancellationToken);
             else

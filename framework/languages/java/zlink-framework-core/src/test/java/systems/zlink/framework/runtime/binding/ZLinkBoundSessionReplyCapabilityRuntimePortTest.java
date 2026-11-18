@@ -103,8 +103,12 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
             try (Message create = Message.from("create")) {
                 actor = actorNode.spotNode().createActor("reply-capability-actor", create);
             }
-            actorNode.spotNode().rememberActorAuthority(actor, 73, 1);
-            sessionNode.spotNode().rememberActorAuthority(actor, 73, 1);
+            actorNode
+                    .spotNode()
+                    .rememberActorAuthority(actor, 73, 1, actorNode.lifecycleGeneration());
+            sessionNode
+                    .spotNode()
+                    .rememberActorAuthority(actor, 73, 1, actorNode.lifecycleGeneration());
 
             originalSession.startSessionService();
             replacementSession.startSessionService();

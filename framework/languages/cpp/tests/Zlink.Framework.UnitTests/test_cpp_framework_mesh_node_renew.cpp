@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "../support/location_reclaim_clock.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"

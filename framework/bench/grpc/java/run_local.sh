@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+# Optional controls: SOURCE_CPUS and TARGET_CPUS (taskset CPU lists).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_common.sh
 source "${HERE}/../runner_common.sh"
-bench_init java "grpc-java,zlink-java,zlink-framework-java" \
+bench_init java "grpc-java,zlink-java,zlink-framework-java,zlink-java-json,zlink-framework-java-json" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 cd "${HERE}"
 
@@ -65,6 +66,24 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_url="http://127.0.0.1:5255"
         target_command=("${FW_BIN}" --endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
         ;;
+      zlink-java-json)
+        trigger_url="http://127.0.0.1:5245"
+        source_stats_url="http://127.0.0.1:5246"
+        target_endpoint="tcp://127.0.0.1:5247"
+        target_command_endpoint="tcp://127.0.0.1:5248"
+        target_stats_url="http://127.0.0.1:5249"
+        target_command=("${RAW_BIN}" --implementation "${impl}" --endpoint "${target_endpoint}" \
+          --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
+        ;;
+      zlink-framework-java-json)
+        trigger_url="http://127.0.0.1:5252"
+        source_stats_url="http://127.0.0.1:5253"
+        target_endpoint="tcp://127.0.0.1:5254"
+        target_command_endpoint=""
+        target_stats_url="http://127.0.0.1:5255"
+        target_command=("${FW_BIN}" --implementation "${impl}" --endpoint "${target_endpoint}" \
+          --metrics-url "${target_stats_url}")
+        ;;
     esac
 
     for pattern in "${patterns[@]}"; do
@@ -78,7 +97,11 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_file="${cell_dir}/target-stats.json"
         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
 
-        setsid "${target_command[@]}" >"${target_log}" 2>&1 &
+        target_process=("${target_command[@]}")
+        if [[ -n "${TARGET_CPUS:-}" ]]; then
+          target_process=(taskset -c "${TARGET_CPUS}" "${target_process[@]}")
+        fi
+        setsid "${target_process[@]}" >"${target_log}" 2>&1 &
         b_pid=$!
         wait_for_stats "${target_stats_url}" 0
 
@@ -96,7 +119,11 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${target_command_endpoint}" ]]; then
           source_args+=(--target-command-endpoint "${target_command_endpoint}")
         fi
-        setsid "${SOURCE_BIN}" "${source_args[@]}" >"${source_log}" 2>&1 &
+        source_process=("${SOURCE_BIN}" "${source_args[@]}")
+        if [[ -n "${SOURCE_CPUS:-}" ]]; then
+          source_process=(taskset -c "${SOURCE_CPUS}" "${source_process[@]}")
+        fi
+        setsid "${source_process[@]}" >"${source_log}" 2>&1 &
         a_pid=$!
         wait_for_stats "${source_stats_url}" 1
 

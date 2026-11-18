@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
 // Perf spec §15.4: sequence originals of the PS cells (`publisher-sequences.json`, `subscriber-<id>-sequences.json`) and the

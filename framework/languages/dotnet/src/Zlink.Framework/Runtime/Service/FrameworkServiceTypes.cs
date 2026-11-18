@@ -735,7 +735,10 @@ internal sealed class MeshReceiveBatch : IDisposable
         var entry = _entries[index];
         return entry.Record.ApplicationPayloadView is { } view
             ? view.RetainMessages()
-            : entry.Parts.Select(Message.From).ToArray();
+            : ZLinkRawRouterServicePort.CreateMessages(
+                entry.Parts,
+                static part => Message.From(part)
+            );
     }
 
     internal IReadOnlyList<Message> TakeMessage(int index)

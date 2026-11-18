@@ -16,10 +16,11 @@ import {
 import { ZLinkSpotKind } from '../../contracts/Spots';
 import { ZLinkLocationKeyCodec } from './key-codec';
 import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
-import type { ZLinkAuthorityStore, ZLinkSpotLocationStore } from './internal-store-contracts';
+import type { ZLinkAuthorityStore } from './internal-store-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { routingIdsEqual } from '../routing-id';
 import {
+  decodeServiceReadySpotAuthority,
   decodeServiceInstanceAuthorityPayload,
   encodeServiceInstanceAuthorityPayload
 } from '../foundation/service-authority-payload-codec';
@@ -35,7 +36,6 @@ export class ZLinkSpotLocationClaims {
   constructor(
     private readonly runtime: IZLinkLocationLifecycleRuntime,
     private readonly authorityStore?: ZLinkAuthorityStore,
-    private readonly spotStore?: ZLinkSpotLocationStore,
     private readonly invalidateSpotRoute?: (spotId: RoutingId) => void
   ) {}
 
@@ -245,6 +245,26 @@ export class ZLinkSpotLocationClaims {
     ) {
       tracked.storeVersion = authority.storeVersion.value;
       tracked.ownerLeaseGeneration = authority.ownerLeaseGeneration;
+    } else if (tracked === undefined && expectedStoreVersion === undefined) {
+      const spot = decodeServiceReadySpotAuthority(authority.payload);
+      if (spot === undefined || spot.kind !== 'user_spot') return;
+      this.spots.set(ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId }), {
+        kind: 'legacy',
+        authority,
+        generation: authority.authorityOwnerGeneration,
+        row: {
+          meshName,
+          spotId,
+          spotType: spot.stableType,
+          spotGeneration: authority.objectGeneration,
+          ownerNodeRid: authority.allocation.descriptor.rid,
+          ownerNodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+          spotKind: ZLinkSpotKind.User,
+          ownerId: authority.ownerId,
+          leaseGeneration: authority.ownerLeaseGeneration,
+          updatedAt: authority.storeNow
+        }
+      });
     }
   }
 
@@ -307,9 +327,9 @@ export class ZLinkSpotLocationClaims {
       return;
     }
     const tracked = this.spots.get(event.key);
-    this.forget(event.key);
     const executionOwner = tracked?.executionOwner?.deref();
     if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
+    this.forget(event.key);
     if (tracked !== undefined) {
       this.invalidateSpotRoute?.(
         tracked.kind === 'authority' ? tracked.spotId : tracked.row.spotId
@@ -317,126 +337,6 @@ export class ZLinkSpotLocationClaims {
     }
     if (tracked?.deactivate !== undefined) {
       void tracked.deactivate().catch(() => undefined);
-    }
-  }
-
-  async reclaimOwnerRows(
-    excluded?: import('./lifecycle-runtime').ZLinkPreservedAuthority
-  ): Promise<void> {
-    const owner = this.runtime.currentOwnerToken;
-    if (owner === undefined) {
-      throw new Error('Spot location recovery requires a claimed owner token.');
-    }
-    const failures: unknown[] = [];
-    for (const [canonical, tracked] of [...this.spots]) {
-      if (
-        excluded?.(
-          encodeAuthorityKey(
-            'user_spot',
-            String(tracked.kind === 'legacy' ? tracked.row.spotId : tracked.spotId)
-          ),
-          tracked.kind === 'legacy' ? tracked.authority : tracked
-        ) === true
-      )
-        continue;
-      try {
-        if (tracked.kind === 'legacy') {
-          const current = await this.spotStore?.resolveSpot({
-            meshName: tracked.row.meshName,
-            spotId: tracked.row.spotId
-          });
-          if (this.spots.get(canonical) !== tracked) continue;
-          if (
-            current === undefined ||
-            current.ownerId !== owner.ownerId ||
-            (current.leaseGeneration !== tracked.row.leaseGeneration &&
-              current.leaseGeneration !== owner.leaseGeneration)
-          ) {
-            if (this.spots.get(canonical) !== tracked) continue;
-            this.forget(canonical);
-            const executionOwner = tracked.executionOwner?.deref();
-            if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
-            await tracked.deactivate?.();
-            continue;
-          }
-          if (current.leaseGeneration === owner.leaseGeneration) {
-            if (this.spots.get(canonical) !== tracked) continue;
-            tracked.row = { ...current };
-            continue;
-          }
-          if (this.spots.get(canonical) !== tracked) continue;
-          const result = await this.runtime.writeSpot(current, ZLinkLocationWriteIntent.Takeover);
-          if (result.status !== ZLinkLocationWriteStatus.Stored) {
-            failures.push(
-              new Error(
-                `Spot location recovery for '${tracked.row.spotId}' was rejected with status ${result.status}.`
-              )
-            );
-            continue;
-          }
-          if (this.spots.get(canonical) !== tracked) continue;
-          tracked.row = {
-            ...current,
-            ownerId: owner.ownerId,
-            leaseGeneration: owner.leaseGeneration,
-            updatedAt: result.updatedAt
-          };
-          tracked.generation = result.generation;
-          continue;
-        }
-
-        const key = encodeAuthorityKey('instance_spot', String(tracked.spotId));
-        const current = await this.authorityStore?.readAuthority(key);
-        if (this.spots.get(canonical) !== tracked) continue;
-        if (
-          current === undefined ||
-          current.kind === 'missing' ||
-          !matchesTrackedAuthorityIdentity(current, tracked) ||
-          current.ownerId !== owner.ownerId
-        ) {
-          if (this.spots.get(canonical) !== tracked) continue;
-          this.forget(canonical);
-          const executionOwner = tracked.executionOwner?.deref();
-          if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
-          await tracked.deactivate?.();
-          continue;
-        }
-        if (current.ownerLeaseGeneration !== owner.leaseGeneration) {
-          if (this.spots.get(canonical) !== tracked) continue;
-          const rebound = await this.authorityStore!.compareExchangeAuthority(
-            key,
-            current.storeVersion,
-            {
-              kind: 'rebindOwnerLease',
-              expectedOwner: {
-                ownerId: current.ownerId,
-                leaseGeneration: current.ownerLeaseGeneration
-              },
-              targetOwner: owner,
-              payload: Buffer.from(current.payload)
-            }
-          );
-          if (rebound.kind !== 'stored') {
-            failures.push(
-              new Error(
-                `Instance Spot '${String(tracked.spotId)}' authority recovery returned '${rebound.kind}'.`
-              )
-            );
-            continue;
-          }
-          if (this.spots.get(canonical) !== tracked) continue;
-          tracked.storeVersion = rebound.storeVersion.value;
-          tracked.ownerLeaseGeneration = owner.leaseGeneration;
-        } else {
-          if (this.spots.get(canonical) !== tracked) continue;
-          tracked.storeVersion = current.storeVersion.value;
-        }
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, 'One or more Spot locations failed lease recovery.');
     }
   }
 
@@ -533,22 +433,6 @@ function matchesTrackedAuthority(
     snapshot.authorityOwnerGeneration === tracked.authorityOwnerGeneration &&
     snapshot.ownerId === tracked.ownerId &&
     snapshot.ownerLeaseGeneration === tracked.ownerLeaseGeneration &&
-    snapshot.allocation.state === 'active' &&
-    snapshot.allocation.objectKind === 'instance_spot' &&
-    snapshot.allocation.stableType === tracked.stableType &&
-    snapshot.allocation.descriptor.meshName === tracked.meshName &&
-    routingIdsEqual(snapshot.allocation.descriptor.rid, tracked.nodeRid) &&
-    snapshot.allocation.descriptorLifecycleGeneration === tracked.nodeGeneration
-  );
-}
-
-function matchesTrackedAuthorityIdentity(
-  snapshot: ZLinkAuthoritySnapshot,
-  tracked: TrackedAuthoritySpot
-): boolean {
-  return (
-    snapshot.objectGeneration === tracked.objectGeneration &&
-    snapshot.authorityOwnerGeneration === tracked.authorityOwnerGeneration &&
     snapshot.allocation.state === 'active' &&
     snapshot.allocation.objectKind === 'instance_spot' &&
     snapshot.allocation.stableType === tracked.stableType &&

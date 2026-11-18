@@ -4,6 +4,8 @@ namespace Zlink.Framework.UnitTests;
 
 internal abstract class ZLinkLocationStoreTestDouble : IZLinkLocationRepository
 {
+    public virtual Func<ZLinkAuthorityKey, string?, ValueTask>? AuthorityObservedAsync { get; set; }
+
     public virtual ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,
@@ -83,6 +85,13 @@ internal abstract class ZLinkLocationStoreTestDouble : IZLinkLocationRepository
         ZLinkLocationOwnerToken token,
         CancellationToken cancellationToken = default
     ) => Unsupported<ZLinkOwnerLeaseReleaseResult>();
+
+    public virtual ValueTask<bool> CleanupDiscardedAuthorityAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot discarded,
+        ZLinkLocationOwnerToken owner,
+        CancellationToken cancellationToken = default
+    ) => Unsupported<bool>();
 
     public virtual ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
         ZLinkAuthorityKey key,

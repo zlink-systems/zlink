@@ -115,7 +115,6 @@ async function startTarget() {
     meshName: 'play.route',
     nativeActorRef: { actorId, generation: 5n, nodeRid: 'source' },
     locationGeneration: 11n,
-    ownerLeaseGeneration: 13n,
     boundSession: remoteTarget,
     remoteBoundSessionTarget: remoteTarget,
     beginMove() {
@@ -287,7 +286,6 @@ async function targetCommand(action) {
     authority = authoritySnapshot('target', 4n, 'target-owner', 14n, 12n, 'store-v18');
     transferState.nativeActorRef = { actorId, generation: 5n, nodeRid: 'target' };
     transferState.locationGeneration = 12n;
-    transferState.ownerLeaseGeneration = 14n;
     await preparedRelocation.commit(
       {
         routerChannelId: 'play.route',

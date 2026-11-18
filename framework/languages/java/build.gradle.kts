@@ -143,6 +143,12 @@ subprojects {
             if (singleWorker) {
                 systemProperty("junit.jupiter.execution.parallel.enabled", "false")
             }
+            // CI logs must show the failure message (expected/actual), not only the
+            // exception type: a rerun replaces the uploaded result XML.
+            testLogging {
+                events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            }
         }
 
         fun registerSourceSetTestTask(taskName: String, sourceSetName: String) {
@@ -203,8 +209,8 @@ subprojects {
                                 }
                             } else {
                                 license {
-                                    name.set("zlink License 1.0")
-                                    url.set("https://github.com/zlink-systems/zlink/blob/main/framework/LICENSE")
+                                    name.set("Elastic License 2.0")
+                                    url.set("https://www.elastic.co/licensing/elastic-license")
                                 }
                             }
                         }

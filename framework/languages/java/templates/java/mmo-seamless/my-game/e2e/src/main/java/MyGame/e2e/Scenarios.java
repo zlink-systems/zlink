@@ -39,13 +39,11 @@ public final class Scenarios {
                     var step = client.moveRejected(11, 1);
                     require(step.reason().equals("step-too-large"), "Expected step-too-large rejection");
                     require(client.state().equals(before), "Step rejection changed state");
-                    var responses = client.moveWithImmediateBudgetRejection(2, 1, 10, 2);
-                    var first = responses.accepted();
-                    var budget = responses.rejected();
-                    require(budget.reason().equals("move-budget"), "Expected move-budget rejection");
-                    require(budget.retryAfterMs() > 0, "Move budget rejection omitted RetryAfterMs");
-                    require(client.state().equals(first), "Budget rejection changed state");
+                    client.move(2, 1);
                     var after = client.move(10, 2);
+                    var stale = client.moveRejected(10, 2);
+                    require(stale.reason().equals("stale-sequence") && stale.retryAfterMs() == 0, "Expected stale movement rejection");
+                    require(client.state().equals(after), "Stale movement changed state");
                     require(
                             after.zoneId().equals("zone-4")
                                     && after.nodeId().equals("zoneB")

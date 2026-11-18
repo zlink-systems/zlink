@@ -2,4 +2,3 @@
 .kotlin/
 **/build/
 .logs/
-**/zlink.license

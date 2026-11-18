@@ -44,7 +44,7 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
             try (var create = Message.from("create")) {
                 actor = spots.createActor("relay-actor", create);
             }
-            spots.rememberActorAuthority(actor, 11, 3);
+            spots.rememberActorAuthority(actor, 11, 3, spots.localNodeGeneration());
             var dispatches = new AtomicInteger();
             spots.entrySpot()
                     .onDispatchEvent(
@@ -97,8 +97,10 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
         }
     }
 
-    @org.junit.jupiter.api.Test
-    void drainWaitsForTheActualActorRequestTerminalAndPreservesItsFailure() throws Exception {
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void drainWaitsForTheActualActorRequestTerminalAndPreservesItsFailure(boolean deadline)
+            throws Exception {
         try (var context = Zlink.createContext();
                 var owner = new ZLinkJavaRawMeshNode(context, "mesh")) {
             owner.setRoutingId(RoutingId.from("audit-drain-owner"));
@@ -140,22 +142,43 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
                                         spots.actorAuthorityOwnerLeaseGeneration(actor)),
                                 List.of(payload),
                                 systems.zlink.contracts.sockets.SendFlags.DONT_WAIT,
-                                Duration.ofSeconds(5),
+                                deadline ? Duration.ofMillis(500) : Duration.ofSeconds(5),
                                 null);
             }
             entered.get(1, TimeUnit.SECONDS);
             var drain = spots.awaitPendingActorRequests().toCompletableFuture();
             assertFalse(drain.isDone());
-            var failure = new IllegalStateException("request handler failed");
-            handler.completeExceptionally(failure);
-            assertSame(
-                    failure,
-                    assertThrows(
+            try {
+                if (deadline) {
+                    var failure =
+                            assertThrows(
                                     ExecutionException.class,
-                                    () -> request.toCompletableFuture().get(1, TimeUnit.SECONDS))
-                            .getCause());
-            drain.get(1, TimeUnit.SECONDS);
-            assertFalse(spots.hasPendingActorRequests());
+                                    () -> request.toCompletableFuture().get(2, TimeUnit.SECONDS));
+                    assertEquals(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                    .DEADLINE_EXCEEDED,
+                            assertInstanceOf(
+                                            systems.zlink.framework.errors.ZLinkFrameworkException
+                                                    .class,
+                                            failure.getCause())
+                                    .kind());
+                } else {
+                    var failure = new IllegalStateException("request handler failed");
+                    handler.completeExceptionally(failure);
+                    assertSame(
+                            failure,
+                            assertThrows(
+                                            ExecutionException.class,
+                                            () ->
+                                                    request.toCompletableFuture()
+                                                            .get(1, TimeUnit.SECONDS))
+                                    .getCause());
+                }
+                drain.get(1, TimeUnit.SECONDS);
+                assertFalse(spots.hasPendingActorRequests());
+            } finally {
+                handler.complete(null);
+            }
         }
     }
 
@@ -179,7 +202,7 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
             try (var create = Message.from("create")) {
                 actor = spots.createActor("reply-actor", create);
             }
-            spots.rememberActorAuthority(actor, 11, 3);
+            spots.rememberActorAuthority(actor, 11, 3, spots.localNodeGeneration());
             var handler = new CompletableFuture<Void>();
             var ingress = new CompletableFuture<ZLinkBackendActorReceived>();
             spots.entrySpot()
