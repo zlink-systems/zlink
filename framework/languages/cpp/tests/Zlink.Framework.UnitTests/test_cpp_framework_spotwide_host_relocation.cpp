@@ -307,6 +307,10 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
         auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
         const auto configure = [&] (host_t &host, const char *rid) {
             auto &options = host.app.add_zlink_framework ();
+            options.configure_locations ().owner_lease_renew_interval =
+              std::chrono::milliseconds (10);
+            options.configure_locations ().owner_lease_fencing_margin =
+              std::chrono::milliseconds (1);
             options.add_location_store (locations);
             options.add_relocation_store (relocations);
             options.add_route_mesh (mesh_name)
