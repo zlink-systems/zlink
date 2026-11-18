@@ -980,6 +980,92 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     }
 
     @Test
+    void targetRejectsChangedCoordinatorOwner() throws Exception {
+        assertTargetCoordinatorFence("owner");
+    }
+
+    @Test
+    void targetRejectsChangedCoordinatorLease() throws Exception {
+        assertTargetCoordinatorFence("lease");
+    }
+
+    @Test
+    void targetRejectsChangedCoordinatorBaseline() throws Exception {
+        assertTargetCoordinatorFence("baseline");
+    }
+
+    @Test
+    void targetAcceptsMatchingCoordinatorFence() throws Exception {
+        assertTargetCoordinatorFence("matching");
+    }
+
+    private void assertTargetCoordinatorFence(String changed) throws Exception {
+        Fixture f = fixture();
+        var request = f.request(new byte[] {1});
+        var original = prepare(f, request);
+        var coordinator = original.coordinator();
+        var submitted =
+                new ZLinkCanonicalRelocationProtocol.Prepare(
+                        original.id(),
+                        original.targetAttemptGeneration(),
+                        new ZLinkCanonicalRelocationProtocol.Coordinator(
+                                coordinator.ownerId() + (changed.equals("owner") ? "-changed" : ""),
+                                coordinator.ownerLeaseGeneration()
+                                        + (changed.equals("lease") ? 1 : 0),
+                                coordinator.nodeRid(),
+                                coordinator.nodeGeneration(),
+                                coordinator.expectedAuthorityStoreVersion()
+                                        + (changed.equals("baseline") ? "-changed" : "")),
+                        original.target(),
+                        original.initiatorRole(),
+                        original.object(),
+                        original.sourceNodeRid(),
+                        original.sourceNodeGeneration(),
+                        original.manifest(),
+                        original.applicationVersion(),
+                        original.deadlineUnixMs());
+        var reply =
+                f.target
+                        .apply(
+                                f.sourceRid,
+                                1L,
+                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                ZLinkCanonicalRelocationProtocol.encodePrepare(submitted))
+                        .toCompletableFuture();
+        f.target
+                .apply(
+                        f.sourceRid,
+                        ServiceWireConstants.COMMAND_RELOCATION_STATE,
+                        ZLinkCanonicalRelocationProtocol.encodeState(
+                                new ZLinkCanonicalRelocationProtocol.State(
+                                        submitted.id(),
+                                        submitted.targetAttemptGeneration(),
+                                        submitted.coordinator(),
+                                        ZLinkCanonicalRelocationProtocol.SOURCE,
+                                        submitted.object(),
+                                        0,
+                                        request.relocationPayload())))
+                .toCompletableFuture()
+                .join();
+        byte[] encodedReply = reply.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        if (changed.equals("matching")) {
+            assertEquals(
+                    submitted.id(),
+                    ZLinkCanonicalRelocationProtocol.decodeReady(encodedReply).id());
+            assertEquals(1, f.endpoint.staged.get());
+            assertEquals(1, f.prepareInvocations.get());
+        } else {
+            assertEquals(
+                    ServiceWireConstants.COMMAND_RELOCATION_FAILED,
+                    Byte.toUnsignedInt(encodedReply[3]),
+                    changed);
+            assertEquals(0, f.endpoint.staged.get(), changed + " must not stage dispatch");
+            assertEquals(0, f.prepareInvocations.get(), changed + " must not prepare aggregate");
+        }
+        assertEquals(0, f.endpoint.published.get(), "PREPARE must not publish NewOwner");
+    }
+
+    @Test
     void conflictingPrepareRepliesFailedWithoutReplacingTheOriginalStage() {
         Fixture fixture = fixture();
         var request = fixture.request(new byte[] {1});
