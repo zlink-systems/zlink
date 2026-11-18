@@ -6,7 +6,6 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -63,32 +62,27 @@ public final class TicTacToeReadinessReporter implements ApplicationRunner, Auto
     }
 
     private void report() {
-        try {
-            // User Spot placement requires this host's published descriptor.
-            if (expectedPeerRoutingId != null && !host.status().isReady()) return;
-            var snapshot = meshes.snapshot(SampleNames.SpotMesh);
-            boolean ready =
-                    expectedPeerRoutingId == null
-                            ? snapshot.readyPeerCount() >= 2
-                            : snapshot.peers().stream()
-                                    .anyMatch(
-                                            peer ->
-                                                    peer.nodeRid().equals(expectedPeerRoutingId)
-                                                            && peer.state()
-                                                                    == ZLinkPeerState.READY);
-            if (!ready) return;
-            if (expectedPeerRoutingId == null) {
-                LOGGER.info(
-                        "tictactoe-ready kind=spot-route node={} mesh={}",
-                        nodeId,
-                        SampleNames.SpotMesh);
-            } else {
-                LOGGER.info("tictactoe-ready kind=peer-route node={} peer={}", nodeId, peerNodeId);
-            }
-            reporter.shutdown();
-        } catch (IllegalStateException | ZLinkConfigurationException ignored) {
-            // The public runtime view is not available until Framework startup completes.
+        // User Spot placement requires this host's published descriptor.
+        if (expectedPeerRoutingId != null && !host.status().isReady()) return;
+        var snapshot = meshes.snapshot(SampleNames.SpotMesh);
+        boolean ready =
+                expectedPeerRoutingId == null
+                        ? snapshot.readyPeerCount() >= 2
+                        : snapshot.peers().stream()
+                                .anyMatch(
+                                        peer ->
+                                                peer.nodeRid().equals(expectedPeerRoutingId)
+                                                        && peer.state() == ZLinkPeerState.READY);
+        if (!ready) return;
+        if (expectedPeerRoutingId == null) {
+            LOGGER.info(
+                    "tictactoe-ready kind=spot-route node={} mesh={}",
+                    nodeId,
+                    SampleNames.SpotMesh);
+        } else {
+            LOGGER.info("tictactoe-ready kind=peer-route node={} peer={}", nodeId, peerNodeId);
         }
+        reporter.shutdown();
     }
 
     @Override

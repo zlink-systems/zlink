@@ -436,11 +436,13 @@ export class ZLinkFrameworkRuntimeHost
     );
     this.clientServerRuntime = new ZLinkClientServerRuntimeProjection(
       () => this.channelRuntime,
-      () => this.runtimeState
+      () => this.runtimeState,
+      options.registration
     );
     this.fanoutRuntime = new ZLinkFanoutRuntimeProjection(
       () => this.channelRuntime,
-      () => this.runtimeState
+      () => this.runtimeState,
+      options.registration
     );
     this.meshRouters = new MeshRouterResolver(options.registration);
     this.spotRouterChannelIdForMesh = this.meshRouters.spotRouterChannelIdByMesh();

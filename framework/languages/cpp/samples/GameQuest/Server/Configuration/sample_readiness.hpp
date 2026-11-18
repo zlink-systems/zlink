@@ -80,12 +80,8 @@ class spot_route_readiness_service_t final : public framework::hosted_service_t
                                 node_name = _node_name,
                                 target_rids = _target_rids] () mutable {
             while (!state->stopping.load (std::memory_order_acquire)) {
-                try {
-                    report_if_ready (
-                      state, node_name, mesh_name, target_rids, runtime->snapshot (mesh_name));
-                }
-                catch (...) {
-                }
+                report_if_ready (
+                  state, node_name, mesh_name, target_rids, runtime->snapshot (mesh_name));
                 if (state->reported.load (std::memory_order_acquire))
                     return;
                 std::this_thread::sleep_for (std::chrono::milliseconds (50));

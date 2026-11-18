@@ -3,7 +3,6 @@ package systems.zlink.samples.supportchat.server.configuration;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 
@@ -33,23 +32,19 @@ public final class SupportChatReadinessReporter implements ApplicationRunner, Au
     }
 
     private void report() {
-        try {
-            boolean supportRouteReady =
-                    meshes.snapshot(SampleNames.SupportActorMesh).peers().stream()
-                            .anyMatch(
-                                    peer ->
-                                            peer.nodeRid().equals(SampleNames.SupportNodeRoutingId)
-                                                    && peer.state() == ZLinkPeerState.READY);
-            if (!supportRouteReady) {
-                return;
-            }
-            System.out.printf(
-                    "supportchat-ready kind=spot-route node=%s mesh=%s%n",
-                    nodeId, SampleNames.SupportActorMesh);
-            reporter.shutdown();
-        } catch (IllegalStateException | ZLinkConfigurationException ignored) {
-            // The public runtime view is not available until Framework startup completes.
+        boolean supportRouteReady =
+                meshes.snapshot(SampleNames.SupportActorMesh).peers().stream()
+                        .anyMatch(
+                                peer ->
+                                        peer.nodeRid().equals(SampleNames.SupportNodeRoutingId)
+                                                && peer.state() == ZLinkPeerState.READY);
+        if (!supportRouteReady) {
+            return;
         }
+        System.out.printf(
+                "supportchat-ready kind=spot-route node=%s mesh=%s%n",
+                nodeId, SampleNames.SupportActorMesh);
+        reporter.shutdown();
     }
 
     @Override

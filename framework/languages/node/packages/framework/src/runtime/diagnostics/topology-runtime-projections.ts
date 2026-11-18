@@ -13,8 +13,8 @@ import {
   ZLinkTopologyReason,
   ZLinkTopologyState
 } from '../../contracts';
-import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkChannelRuntimeManager } from '../channels/channel-runtime-manager';
+import { ZLinkConfigurationException, type ZLinkFrameworkRegistration } from '../configuration';
+import { ZLinkChannelRuntimeManager } from '../channels/channel-runtime-manager';
 import {
   RuntimeEventQueue,
   ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
@@ -45,7 +45,10 @@ class TopologyStatusSources<T extends TopologyStatus> {
 
   constructor(
     private readonly read: (channelName: string, sequence: bigint) => T,
-    private readonly subscribe: (channelName: string, changed: () => void) => () => void,
+    private readonly subscribe: (
+      channelName: string,
+      changed: () => void
+    ) => (() => void) | undefined,
     private readonly equivalent: (left: T, right: T) => boolean
   ) {}
 
@@ -162,14 +165,14 @@ function sameFanoutStatus(left: ZLinkFanoutStatus, right: ZLinkFanoutStatus): bo
 export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRuntime {
   private readonly sources = new TopologyStatusSources<ZLinkClientServerStatus>(
     (channelName, sequence) => this.snapshotCore(channelName, sequence),
-    (channelName, changed) =>
-      this.requireRuntime().observeClientServerTopology(channelName, changed),
+    (channelName, changed) => this.runtime()?.observeClientServerTopology(channelName, changed),
     sameClientServerStatus
   );
 
   constructor(
     private readonly runtime: RuntimeAccessor,
-    private readonly hostState: HostStateAccessor = () => ZLinkFrameworkRuntimeState.Serving
+    private readonly hostState: HostStateAccessor = () => ZLinkFrameworkRuntimeState.Serving,
+    private readonly registration?: ZLinkFrameworkRegistration
   ) {}
 
   snapshot(channelName: string): ZLinkClientServerStatus {
@@ -177,7 +180,13 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
   }
 
   private snapshotCore(channelName: string, sequence: bigint): ZLinkClientServerStatus {
-    const topology = this.requireRuntime().clientServerTopology(channelName);
+    const topology = this.runtime()?.clientServerTopology(channelName) ?? {
+      localRole:
+        this.registration === undefined
+          ? undefined
+          : ZLinkChannelRuntimeManager.clientServerRole(this.registration, channelName),
+      descriptors: []
+    };
     if (topology.localRole === undefined) {
       throw new ZLinkConfigurationException(
         `ClientServer channel '${channelName}' is not registered.`
@@ -222,25 +231,19 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
   isReady(channelName: string): boolean {
     return this.snapshot(channelName).isReady;
   }
-
-  private requireRuntime(): ZLinkChannelRuntimeManager {
-    const runtime = this.runtime();
-    if (runtime === undefined)
-      throw new ZLinkConfigurationException('ClientServer runtime has not started.');
-    return runtime;
-  }
 }
 
 export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
   private readonly sources = new TopologyStatusSources<ZLinkFanoutStatus>(
     (channelName, sequence) => this.snapshotCore(channelName, sequence),
-    (channelName, changed) => this.requireRuntime().observeFanoutTopology(channelName, changed),
+    (channelName, changed) => this.runtime()?.observeFanoutTopology(channelName, changed),
     sameFanoutStatus
   );
 
   constructor(
     private readonly runtime: RuntimeAccessor,
-    private readonly hostState: HostStateAccessor = () => ZLinkFrameworkRuntimeState.Serving
+    private readonly hostState: HostStateAccessor = () => ZLinkFrameworkRuntimeState.Serving,
+    private readonly registration?: ZLinkFrameworkRegistration
   ) {}
 
   snapshot(channelName: string): ZLinkFanoutStatus {
@@ -248,11 +251,14 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
   }
 
   private snapshotCore(channelName: string, sequence: bigint): ZLinkFanoutStatus {
-    const publishers = this.requireRuntime()
-      .fanoutTopology(channelName)
-      .descriptors.map((descriptor) =>
-        peerStatusForAvailability(descriptor, ZLinkTopologyReason.NoReadyPeer)
+    const channel = this.registration?.channels.get(channelName);
+    if (this.registration !== undefined && channel?.subscriber === undefined)
+      throw new ZLinkConfigurationException(
+        `Automatic fanout channel '${channelName}' is not registered.`
       );
+    const publishers = (this.runtime()?.fanoutTopology(channelName).descriptors ?? []).map(
+      (descriptor) => peerStatusForAvailability(descriptor, ZLinkTopologyReason.NoReadyPeer)
+    );
     const readyPublisherCount = publishers.filter(
       (publisher) => publisher.state === ZLinkPeerState.Ready
     ).length;
@@ -287,13 +293,6 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
 
   stopObservers(): void {
     this.sources.stopObservers();
-  }
-
-  private requireRuntime(): ZLinkChannelRuntimeManager {
-    const runtime = this.runtime();
-    if (runtime === undefined)
-      throw new ZLinkConfigurationException('Fanout runtime has not started.');
-    return runtime;
   }
 }
 
