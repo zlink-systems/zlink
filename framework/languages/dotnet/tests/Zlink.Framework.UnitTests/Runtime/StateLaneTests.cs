@@ -8,6 +8,118 @@ namespace Zlink.Framework.UnitTests;
 /// </summary>
 public sealed class StateLaneTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SynchronousPost_RestoresContextAndDefersItsOwnFollowup(bool suppress)
+    {
+        await using var lane = new ZLinkStateLane();
+        var ambient = new AsyncLocal<int> { Value = 7 };
+        var order = new List<int>();
+        if (suppress)
+        {
+            using (ExecutionContext.SuppressFlow())
+                Post();
+        }
+        else
+            Post();
+        Assert.Equal(new[] { 1, 2, 3 }, order);
+        Assert.Equal(7, ambient.Value);
+        Assert.Null(ZLinkStateLane.Current);
+        Assert.False(ExecutionContext.IsFlowSuppressed());
+
+        void Post()
+        {
+            var context = ExecutionContext.Capture();
+            Assert.True(
+                lane.TryPost(() =>
+                {
+                    Assert.True(lane.IsOnLane);
+                    Assert.Throws<InvalidOperationException>(() => lane.RunAsync(static () => 0));
+                    ambient.Value = 9;
+                    order.Add(1);
+                    Assert.True(
+                        lane.TryPost(() =>
+                        {
+                            Assert.True(lane.IsOnLane);
+                            Assert.Equal(9, ambient.Value);
+                            order.Add(3);
+                        })
+                    );
+                    order.Add(2);
+                })
+            );
+            Assert.Equal(suppress, ExecutionContext.IsFlowSuppressed());
+            Assert.Same(context, ExecutionContext.Capture());
+        }
+    }
+
+    [Fact]
+    public async Task AcceptedPost_RunsEvenWhenCloseRacesItsInlineTurn()
+    {
+        // TryPost true hands the caller's release work to the lane, so an accepted
+        // post must run even when DisposeAsync lands between entry and the turn.
+        const int attempts = 20_000;
+        var lost = 0;
+        var accepted = 0;
+        using var start = new Barrier(2);
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            var lane = new ZLinkStateLane();
+            var ran = 0;
+            var post = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                return lane.TryPost(() => Interlocked.Exchange(ref ran, 1));
+            });
+            var close = Task.Run(async () =>
+            {
+                start.SignalAndWait();
+                await lane.DisposeAsync();
+            });
+            var posted = await post.WaitAsync(TimeSpan.FromSeconds(5));
+            await close.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!posted)
+                continue;
+            accepted++;
+            if (Volatile.Read(ref ran) == 0)
+                lost++;
+        }
+        Assert.True(accepted > 0, "no post was accepted; the race was not exercised");
+        Assert.Equal(0, lost);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SynchronousCancellationException_RemainsFaultedInlineAndQueued(bool queued)
+    {
+        await using var lane = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (queued)
+        {
+            _ = lane.RunAsync(async () =>
+            {
+                entered.SetResult();
+                await release.Task;
+            });
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        var failure = new OperationCanceledException("synchronous lane failure");
+        var operation = lane.RunAsync<int>(() => throw failure);
+        release.TrySetResult();
+        var task = operation.AsTask();
+        Assert.Same(
+            failure,
+            await Assert.ThrowsAsync<OperationCanceledException>(async () => await task)
+        );
+        Assert.True(task.IsFaulted);
+        Assert.False(task.IsCanceled);
+        Assert.Equal(42, await lane.RunAsync(static () => 42));
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
     [Fact]
     public async Task AsynchronousPost_PreservesFailureAndContinuesLaterTurns()
     {

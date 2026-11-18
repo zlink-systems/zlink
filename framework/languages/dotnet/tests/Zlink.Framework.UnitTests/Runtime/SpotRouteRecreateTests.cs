@@ -45,6 +45,13 @@ public sealed class SpotRouteRecreateTests(Xunit.Abstractions.ITestOutputHelper 
         Assert.NotEqual(previous.Value.ObjectGeneration, current.ObjectGeneration);
         Assert.Equal(previous.Value.NodeRid, current.NodeRid);
         Assert.Same(cached, await routes.ResolveActorRowAsync(new ZLinkActorLocationKey(actorId)));
+        await client.SendToActor(actorId, new SpotCloseActorGenerationSend()).Async();
+        Assert.Equal(
+            current.ObjectGeneration,
+            await host
+                .Runtime.Services.GetRequiredService<SpotCloseProbeState>()
+                .SentActorGeneration.Task.WaitAsync(cancellation.Token)
+        );
         var second = await client
             .RequestToActor(actorId, new SpotCloseActorGeneration())
             .Async<SpotCloseProbeReply>();

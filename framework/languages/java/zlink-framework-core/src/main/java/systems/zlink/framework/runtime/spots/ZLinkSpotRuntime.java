@@ -5382,7 +5382,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 + target.id()));
                     }
                     if (activation instanceof EntrySpotActivation entry)
-                        return entry.admitCanonicalActorJoin(request, sourcePeerRid);
+                        return entry.admitCanonicalActorJoin(request, sourcePeerRid, join);
                     SpotActivation spot = (SpotActivation) activation;
                     Message payload =
                             Message.from(
@@ -5611,15 +5611,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private SpotActorPacketHandlerRegistration resolveActorPacketHandler(
             String packetName, Object spotSurface, ZLinkScannedHandlerKind kind) {
-        Object context =
-                spotSurface instanceof ZLinkSpot<?> spot
-                        ? spot.context()
-                        : spotSurface instanceof ZLinkEntrySpot<?> entrySpot
-                                ? entrySpot.context()
-                                : null;
-        if (!(context instanceof SpotDispatchLine dispatchLine)) {
-            return null;
-        }
+        SpotDispatchLine dispatchLine = SpotDispatchLine.from(spotSurface);
+        if (dispatchLine == null) return null;
         List<SpotActorPacketHandlerRegistration> handlers =
                 dispatchLine.handlerCatalog().actorPacketHandlers(packetName);
         if (handlers.isEmpty()) {

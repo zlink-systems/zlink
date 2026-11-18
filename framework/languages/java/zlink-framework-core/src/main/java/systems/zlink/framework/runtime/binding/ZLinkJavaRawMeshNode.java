@@ -2156,6 +2156,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             "canonical actorJoin request is invalid",
                             invalid));
         }
+        PeerAdmissionExpectation target = observePeerRoute(request.targetNodeRid()).expectation();
+        if (request.entry()
+                && target != null
+                && target.lifecycleGeneration() != request.targetNodeGeneration())
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Entry Spot descriptor lifecycle changed"));
         return requestDurable(
                 request.targetNodeRid(),
                 () -> canRequestCanonicalActorJoin(request) ? frames : null,
@@ -2177,9 +2185,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 && request.actorNodeGeneration() != 0
                 && request.actorAuthorityOwnerGeneration() > 0
                 && request.actorOwnerLeaseGeneration() > 0
-                && request.targetSpotGeneration() > 0
+                && (request.entry()
+                        ? request.targetSpotGeneration() != 0
+                        : request.targetSpotGeneration() > 0)
                 && request.targetNodeGeneration() != 0
-                && request.targetAuthorityOwnerGeneration() > 0
+                && (request.entry()
+                        ? request.targetAuthorityOwnerGeneration() != 0
+                        : request.targetAuthorityOwnerGeneration() > 0)
                 && request.targetOwnerLeaseGeneration() > 0;
     }
 

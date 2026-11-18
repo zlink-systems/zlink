@@ -2864,6 +2864,16 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
         outcome.failure = actor_join_wire_failure_t::protocol_error;
         co_return outcome;
     }
+    auto peer_observer = observe_request_peer (target_routing_id);
+    if (request.entry) {
+        const auto observation = peer_observer ();
+        if (observation.expectation && observation.expectation->lifecycle_generation != 0
+            && observation.expectation->lifecycle_generation
+                 != request.target_spot.target_node_generation) {
+            outcome.failure = actor_join_wire_failure_t::unavailable;
+            co_return outcome;
+        }
+    }
     detail::backend::raw_message_t parts;
     try {
         parts = protocol::encode_actor_join_28 (
@@ -2907,10 +2917,9 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
         co_return outcome;
     }
     (void) co_await submit_registered_request (
-      std::move (port), observe_request_peer (target_routing_id), _operations, id,
-      request.correlation, target_routing_id, std::move (parts),
-      protocol::pack_infrastructure_reply, deadline, completion->task (), {}, {}, {},
-      request.target_spot.target_node_generation);
+      std::move (port), std::move (peer_observer), _operations, id, request.correlation,
+      target_routing_id, std::move (parts), protocol::pack_infrastructure_reply, deadline,
+      completion->task (), {}, {}, {}, request.target_spot.target_node_generation);
     const auto [terminal, packed] = co_await pending;
     if (terminal != foundation::operation_terminal_t::completed) {
         outcome.failure = terminal == foundation::operation_terminal_t::timed_out

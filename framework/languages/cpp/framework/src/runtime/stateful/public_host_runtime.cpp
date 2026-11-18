@@ -4275,7 +4275,7 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
     const auto join_prepare = _actor_join_relocation_prepare_validator
                                 ? _actor_join_relocation_prepare_validator (attempt.prepare)
                                 : std::optional<bool>{};
-    const auto canonical_user_spot_join = join_prepare && *join_prepare;
+    const auto canonical_application_join = join_prepare && *join_prepare;
     for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
         const auto &target = attempt.targets[index];
         if (target.kind != stateful::object_kind_t::actor)
@@ -4283,7 +4283,7 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
         const auto advanced = co_await advance_local_actor_authority (
           target, index < attempt.ready.size () ? attempt.ready[index] : std::nullopt);
         if (advanced != stateful::stateful_error_t::none
-            || (canonical_user_spot_join
+            || (canonical_application_join
                 && (!_actor_join_committed_authority_adopter
                     || !_actor_join_committed_authority_adopter (
                       target, attempt.prepare.target.target_node_generation,

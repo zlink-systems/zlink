@@ -1844,6 +1844,28 @@ internal sealed class ZLinkActorRuntimeState(
         await operation(cancellationToken).ConfigureAwait(false);
     }
 
+    internal async ValueTask<T> ExecuteLifecycleCallbackAsync<T>(
+        Func<CancellationToken, ValueTask<T>> operation,
+        CancellationToken cancellationToken
+    )
+    {
+        using var turn = await _dispatchMailbox
+            .EnterLifecycleAsync(cancellationToken)
+            .ConfigureAwait(false);
+        EnsureDispatchAvailable();
+        return Activation is { } activation
+            ? await activation
+                ._serial.ExecuteActorLifecycleAsync(ActorId, InvokeCallbackAsync, cancellationToken)
+                .ConfigureAwait(false)
+            : await InvokeCallbackAsync(cancellationToken).ConfigureAwait(false);
+
+        async ValueTask<T> InvokeCallbackAsync(CancellationToken ct)
+        {
+            using var dispatch = EnterDispatch();
+            return await operation(ct).ConfigureAwait(false);
+        }
+    }
+
     public async ValueTask ExecuteRelocationCompletionAsync(
         ulong objectGeneration,
         Func<CancellationToken, ValueTask> operation,

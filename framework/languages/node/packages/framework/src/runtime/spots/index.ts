@@ -1809,7 +1809,7 @@ export class DefaultZLinkSpotManager {
         `Actor '${actorId}' has no active Spot execution gate for '${String(spotId)}'.`
       );
     }
-    return activation.executeActor(actorId, operation);
+    return activation.serialExecutor.executeActorLifecycle(actorId, operation);
   }
 
   async dispatchRoutedSpotSend(

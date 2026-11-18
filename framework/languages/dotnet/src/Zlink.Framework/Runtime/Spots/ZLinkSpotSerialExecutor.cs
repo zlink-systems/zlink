@@ -450,13 +450,49 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         await item.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    internal async ValueTask<T> ExecuteActorLifecycleAsync<T>(
+        string actorId,
+        Func<CancellationToken, ValueTask<T>> operation,
+        CancellationToken cancellationToken
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var lane = RunBarrierState(() =>
+            GetLaneOnStateLane(
+                _actorLanes,
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                _actorLanePolicy
+            )
+        );
+        T result = default!;
+        var admission = PostLifecycle(
+            _ =>
+                ExecuteActorOperationAsync(
+                    actorId,
+                    async (_, _, ct) => result = await operation(ct).ConfigureAwait(false),
+                    0,
+                    cancellationToken
+                ),
+            out var item,
+            lane: lane
+        );
+        if (admission != ZLinkAcceptedWorkAdmission.Accepted)
+            throw new ZLinkFrameworkException(
+                admission.ErrorKind(),
+                "Actor lifecycle admission is sealed."
+            );
+        await item.Completion.ConfigureAwait(false);
+        return result;
+    }
+
     // Lifecycle admission is decided with the seal in one state-lane turn: a
     // Close seal (spec 06 §7 step 2) and a committed relocation end it; a
     // relocation or quiescent seal keeps it.
     private ZLinkAcceptedWorkAdmission PostLifecycle(
         Func<CancellationToken, ValueTask> callback,
         out ZLinkSerialWorkItem item,
-        Action? onSkipped = null
+        Action? onSkipped = null,
+        ZLinkSerialExecutionQueue? lane = null
     )
     {
         var transferred = ZLinkApplicationJobQueueInvocation.HasTransferableOwnerReservation();
@@ -465,7 +501,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             var admission = LifecycleAdmission;
             if (admission != ZLinkAcceptedWorkAdmission.Accepted)
                 return (admission, (ZLinkSerialWorkItem?)null);
-            var posted = _queue.TryPostNextWithAdmission(
+            var posted = (lane ?? _queue).TryPostNextWithAdmission(
                 ct =>
                 {
                     if (LifecycleAdmission != ZLinkAcceptedWorkAdmission.Closing)
