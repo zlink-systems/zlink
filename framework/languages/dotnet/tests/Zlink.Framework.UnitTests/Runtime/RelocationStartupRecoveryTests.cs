@@ -9,7 +9,7 @@ public sealed class RelocationStartupRecoveryTests
     [Theory]
     [InlineData((byte)2)]
     [InlineData((byte)3)]
-    public async Task StandaloneActorSourceOwnedPrecommitRootIsRecovered(byte phase)
+    public async Task ExactPublishedActorSourceOwnedPrecommitRootIsRecovered(byte phase)
     {
         var relocation = new InMemoryRelocationStore();
         var canonical = CreateCanonicalActorRoot();
@@ -33,19 +33,11 @@ public sealed class RelocationStartupRecoveryTests
         var authority = new RecoveryAuthorityStore([
             CanonicalEntry(canonical.Participant, payload),
         ]);
-        ZLinkRelocationRecoveryCandidate? recovered = null;
-
-        await new ZLinkRelocationStartupRecovery(
+        var recovered = await new ZLinkRelocationStartupRecovery(
             new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             authority,
             relocation
-        ).RecoverAsync(
-            (candidate, _) =>
-            {
-                recovered = candidate;
-                return ValueTask.CompletedTask;
-            }
-        );
+        ).TryReadExactPublishedAsync(canonical.Envelope);
 
         Assert.NotNull(recovered);
         Assert.Equal(canonical.Envelope.AggregateId, recovered.Envelope.AggregateId);
@@ -60,7 +52,7 @@ public sealed class RelocationStartupRecoveryTests
     }
 
     [Fact]
-    public async Task StandaloneActorPreparingWithoutRootIsNotPublishedRecovery()
+    public async Task ExactPublishedActorPreparingWithoutRootIsNotPublishedRecovery()
     {
         var canonical = CreateCanonicalActorRoot();
         var payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
@@ -81,162 +73,9 @@ public sealed class RelocationStartupRecoveryTests
             authority,
             new InMemoryRelocationStore()
         );
-        var offered = 0;
-        ZLinkAuthorityEntry? preparing = null;
-
-        await recovery.RecoverAsync(
-            (_, _) =>
-            {
-                offered++;
-                return ValueTask.CompletedTask;
-            },
-            (entry, _) =>
-            {
-                preparing = entry;
-                return ValueTask.CompletedTask;
-            }
-        );
-
-        await recovery.RecoverAsync(
-            (_, _) =>
-            {
-                offered++;
-                return ValueTask.CompletedTask;
-            }
-        );
         var exact = await recovery.TryReadExactPublishedAsync(canonical.Envelope);
 
-        Assert.Equal(0, offered);
-        Assert.NotNull(preparing);
-        Assert.Equal(canonical.Participant.AuthorityKey, preparing.Key);
         Assert.Null(exact);
-    }
-
-    [Fact]
-    public async Task ActorAndUserSpotAuthoritiesResumeOneAggregatePerScan()
-    {
-        var fixture = await RecoveryFixture.CreateAsync();
-        var offered = 0;
-        var applied = new HashSet<Guid>();
-        var recovery = new ZLinkRelocationStartupRecovery(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            fixture.Authority,
-            fixture.Relocation
-        );
-
-        async ValueTask Resume(
-            ZLinkRelocationRecoveryCandidate candidate,
-            CancellationToken cancellationToken
-        )
-        {
-            await Task.Yield();
-            cancellationToken.ThrowIfCancellationRequested();
-            offered++;
-            applied.Add(candidate.Envelope.AggregateId);
-            Assert.Equal(2, candidate.Authorities.Count);
-            Assert.Equal(candidate.Envelope.AggregateId, candidate.Reference.AggregateId);
-        }
-
-        await recovery.RecoverAsync(Resume);
-        await recovery.RecoverAsync(Resume); // process restart/repeated scan
-
-        Assert.Equal(2, offered);
-        Assert.Single(applied);
-    }
-
-    [Fact]
-    public async Task InstanceSpotAuthorityUsesTheSharedSpotPrefixAndIsRecovered()
-    {
-        var fixture = await RecoveryFixture.CreateAsync(ZLinkPlacementObjectKind.InstanceSpot);
-        ZLinkRelocationRecoveryCandidate? recovered = null;
-
-        await new ZLinkRelocationStartupRecovery(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            fixture.Authority,
-            fixture.Relocation
-        ).RecoverAsync(
-            (candidate, _) =>
-            {
-                recovered = candidate;
-                return ValueTask.CompletedTask;
-            }
-        );
-
-        Assert.NotNull(recovered);
-        Assert.Contains(
-            recovered.Authorities,
-            static authority =>
-                authority.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
-        );
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task StartupScanFencesOnlyExpiredPendingCreation(bool expired)
-    {
-        var storeNow = DateTimeOffset.UnixEpoch.AddHours(1);
-        var owner = new ZLinkLocationOwnerToken("abandoned-owner", 9);
-        var entry = new ZLinkAuthorityEntry(
-            new ZLinkAuthorityKey("zla1:s:4:abandoned-spot"),
-            new ZLinkAuthoritySnapshot(
-                "reservation-version",
-                new byte[] { 0x01 },
-                4,
-                7,
-                owner.OwnerId,
-                owner.LeaseGeneration,
-                new ZLinkPlacementAllocation(
-                    ZLinkPlacementAllocationState.Reserved,
-                    ZLinkPlacementObjectKind.UserSpot,
-                    "Game.Room",
-                    new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("abandoned-node")),
-                    2,
-                    new ZLinkCapacityVector(
-                        0,
-                        1,
-                        new ZLinkSpotTypeCapacityDelta(
-                            ZLinkPlacementObjectKind.UserSpot,
-                            "Game.Room",
-                            1
-                        )
-                    )
-                ),
-                new ZLinkReservedObjectCreation(
-                    "abandoned-reservation",
-                    "inline:abandoned-spot",
-                    new byte[32],
-                    1
-                ),
-                storeNow
-            )
-        );
-        var authority = new RecoveryAuthorityStore(
-            [entry],
-            new ZLinkOwnerLeaseReadResult.Found(
-                owner,
-                expired ? storeNow : storeNow.AddMinutes(1),
-                storeNow
-            )
-        );
-
-        await new ZLinkRelocationStartupRecovery(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            new InMemoryRelocationStore()
-        ).RecoverAsync(static (_, _) => ValueTask.CompletedTask);
-
-        if (!expired)
-        {
-            Assert.Empty(authority.AbortedReservations);
-            return;
-        }
-
-        var aborted = Assert.Single(authority.AbortedReservations);
-        Assert.Equal(entry.Key, aborted.Key);
-        Assert.Equal(entry.Snapshot.StoreVersion, aborted.StoreVersion);
-        Assert.Equal(entry.Snapshot.ReservedCreation!.ReservationId, aborted.ReservationVersion);
-        Assert.Equal(owner, aborted.TargetOwner);
     }
 
     [Fact]
@@ -289,7 +128,7 @@ public sealed class RelocationStartupRecoveryTests
     }
 
     [Fact]
-    public async Task PublishedMissingRootFailsAsNonRetriableRelocationDataLost()
+    public async Task ExactPublishedMissingRootFailsAsNonRetriableRelocationDataLost()
     {
         var fixture = await RecoveryFixture.CreateAsync();
         fixture.Relocation.Remove(fixture.Reference);
@@ -300,7 +139,7 @@ public sealed class RelocationStartupRecoveryTests
         );
 
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await recovery.RecoverAsync(static (_, _) => ValueTask.CompletedTask)
+            await recovery.TryReadExactPublishedAsync(fixture.Envelope)
         );
 
         Assert.Equal(ZLinkFrameworkErrorKind.DataLost, error.Kind);
@@ -583,12 +422,9 @@ public sealed class RelocationStartupRecoveryTests
             )
         );
 
-    private sealed class RecoveryAuthorityStore(
-        IReadOnlyList<ZLinkAuthorityEntry> entries,
-        ZLinkOwnerLeaseReadResult? ownerLease = null
-    ) : ZLinkLocationStoreTestDouble
+    private sealed class RecoveryAuthorityStore(IReadOnlyList<ZLinkAuthorityEntry> entries)
+        : ZLinkLocationStoreTestDouble
     {
-        internal List<ZLinkObjectReservation> AbortedReservations { get; } = [];
         internal List<ZLinkAuthorityKey> CompareExchangeCalls { get; } = [];
         internal List<ZLinkAuthorityKey> ReadCalls { get; } = [];
         internal IReadOnlyList<ZLinkAuthorityEntry> Entries => entries;
@@ -627,25 +463,6 @@ public sealed class RelocationStartupRecoveryTests
             );
         }
 
-        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
-            string ownerId,
-            CancellationToken cancellationToken = default
-        ) =>
-            ownerLease is null
-                ? base.ReadOwnerLeaseAsync(ownerId, cancellationToken)
-                : ValueTask.FromResult(ownerLease);
-
-        public override ValueTask<ZLinkObjectAbortResult> AbortAsync(
-            ZLinkObjectReservation reservation,
-            CancellationToken cancellationToken = default
-        )
-        {
-            AbortedReservations.Add(reservation);
-            return ValueTask.FromResult<ZLinkObjectAbortResult>(
-                new ZLinkObjectAbortResult.Aborted()
-            );
-        }
-
         public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
             string prefix,
             ZLinkAuthorityScanCursor? cursor,
@@ -654,18 +471,8 @@ public sealed class RelocationStartupRecoveryTests
         )
         {
             ScanCalls++;
-            return ValueTask.FromResult<ZLinkAuthorityScanResult>(
-                new ZLinkAuthorityScanResult.Page(
-                    new ZLinkAuthorityPage(
-                        entries
-                            .Where(item =>
-                                item.Key.Value.StartsWith(prefix, StringComparison.Ordinal)
-                            )
-                            .Take(limit)
-                            .ToArray(),
-                        null
-                    )
-                )
+            throw new InvalidOperationException(
+                "Exact relocation reconciliation must not scan authorities."
             );
         }
     }

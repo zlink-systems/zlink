@@ -176,7 +176,7 @@ void aggregate_page_read_keeps_source_version_until_commit (location_store_t &st
     auto cursor = std::optional<authority_scan_cursor_t>{};
     bool scanned = false;
     do {
-        const auto scan = repository.list_authorities (key.value, cursor, 10).result ().value ();
+        const auto scan = repository.list_authorities ("zla1:s:", cursor, 10).result ().value ();
         const auto &page = std::get<authority_page_t> (scan);
         for (const auto &entry : page.items) {
             if (entry.key.value == key.value) {
