@@ -18,16 +18,30 @@ export async function runSample(ctx) {
   const flowDir = path.join(ctx.logDir, 'flow');
   fs.mkdirSync(flowDir, { recursive: true });
   const apiAConfig = ctx.writeConfig('api-a', {
-    ...common, nodeId: 'api-a', apiEndpoint: apiA, apiMatchmakingEndpoint: apiMatchmakingA, logDir: flowDir
+    ...common,
+    nodeId: 'api-a',
+    apiEndpoint: apiA,
+    apiMatchmakingEndpoint: apiMatchmakingA,
+    logDir: flowDir
   });
   const apiBConfig = ctx.writeConfig('api-b', {
-    ...common, nodeId: 'api-b', apiEndpoint: apiB, apiMatchmakingEndpoint: apiMatchmakingB, logDir: flowDir
+    ...common,
+    nodeId: 'api-b',
+    apiEndpoint: apiB,
+    apiMatchmakingEndpoint: apiMatchmakingB,
+    logDir: flowDir
   });
   const matchmakingConfig = ctx.writeConfig('matchmaking', {
-    ...common, nodeId: 'matchmaking', matchmakingEndpoint: matchmaking, logDir: flowDir
+    ...common,
+    nodeId: 'matchmaking',
+    matchmakingEndpoint: matchmaking,
+    logDir: flowDir
   });
 
-  await ctx.start('matchmaking', 'dist/Server/Matchmaking/main.js', ['--config', matchmakingConfig]);
+  await ctx.start('matchmaking', 'dist/Server/Matchmaking/main.js', [
+    '--config',
+    matchmakingConfig
+  ]);
   await ctx.waitTcp(matchmaking);
   await ctx.start('api-b', 'dist/Server/Api/main.js', ['--config', apiBConfig]);
   await ctx.waitTcp(apiB);
@@ -71,14 +85,16 @@ export async function runSample(ctx) {
     ['bingo-lifecycle entry-leave actor=observer', 1],
     ['bingo-lifecycle entry-destroy-complete actor=player-1', 1],
     ['bingo-lifecycle entry-destroy-complete actor=player-2', 1],
-    ['bingo-lifecycle entry-destroy-complete actor=observer', 0]
+    ['bingo-lifecycle entry-destroy-complete actor=observer', 0],
+    // The game room and the observer room each close once from their close timer.
+    ['bingo-lifecycle room-close spot=', 2]
   ];
   const sessionEvidence = [
     ['bingo-lifecycle session-disconnect actor=player-1 destroy=false', 1],
     ['bingo-lifecycle session-disconnect actor=player-2 destroy=false', 1]
   ];
   for (const [marker, expected] of playEvidence) {
-    if (expected > 0) await waitCombinedLog(ctx, ['play-a', 'play-b'], marker);
+    if (expected > 0) await waitCombinedLogCount(ctx, ['play-a', 'play-b'], marker, expected);
   }
   for (const [marker, expected] of sessionEvidence) {
     if (expected > 0) await waitCombinedLog(ctx, ['session-a', 'session-b'], marker);
@@ -127,13 +143,26 @@ async function waitCombinedLog(ctx, roles, marker) {
   await ctx.waitAnyLog(roles.map((name) => ({ name, marker })));
 }
 
-function assertCombinedLogCount(ctx, roles, marker, expected) {
-  const actual = roles.reduce((count, role) => {
+async function waitCombinedLogCount(ctx, roles, marker, expected) {
+  await waitCombinedLog(ctx, roles, marker);
+  const deadline = Date.now() + 30_000;
+  while (combinedLogCount(ctx, roles, marker) < expected && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 100));
+}
+
+function combinedLogCount(ctx, roles, marker) {
+  return roles.reduce((count, role) => {
     const file = path.join(ctx.logDir, `${role}.log`);
     if (!fs.existsSync(file)) return count;
     return count + fs.readFileSync(file, 'utf8').split(marker).length - 1;
   }, 0);
+}
+
+function assertCombinedLogCount(ctx, roles, marker, expected) {
+  const actual = combinedLogCount(ctx, roles, marker);
   if (actual !== expected) {
-    throw new Error(`${roles.join('/')} logs marker '${marker}' count was ${actual}; expected ${expected}.`);
+    throw new Error(
+      `${roles.join('/')} logs marker '${marker}' count was ${actual}; expected ${expected}.`
+    );
   }
 }
