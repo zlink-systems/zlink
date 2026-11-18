@@ -5881,7 +5881,7 @@ TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturn
 TEST (ActorMaintenanceJoin, TargetRejectsChangedCoordinatorFence)
 {
     namespace stateful = fw::runtime::stateful;
-    for (const auto changed : {"none", "owner", "lease", "baseline"}) {
+    for (const auto changed : {"none", "owner", "lease", "baseline", "empty-baseline"}) {
         SCOPED_TRACE (changed);
         auto evidence = std::make_shared<observations_t> ();
         auto store = std::make_shared<observed_location_store_t> ();
@@ -5903,19 +5903,21 @@ TEST (ActorMaintenanceJoin, TargetRejectsChangedCoordinatorFence)
         const auto key = fw::runtime::actor_authority_key (actor_id);
         const auto original =
           std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
-        const auto nodes = repository.list_mesh_nodes (original.allocation.target.mesh_name)
-                             .result ().value ();
-        const auto destination = std::find_if (nodes.items.begin (), nodes.items.end (),
-          [] (const auto &node) { return node.rid.to_string () == second_rid; });
+        const auto nodes =
+          repository.list_mesh_nodes (original.allocation.target.mesh_name).result ().value ();
+        const auto destination =
+          std::find_if (nodes.items.begin (), nodes.items.end (),
+                        [] (const auto &node) { return node.rid.to_string () == second_rid; });
         ASSERT_NE (destination, nodes.items.end ());
         const fw::location_owner_token_t target_owner{destination->owner_id,
-                                                       destination->lease_generation};
+                                                      destination->lease_generation};
         const fw::object_creation_target_t placement{
           destination->mesh_name, fw::node_rid_t::from_string (second_rid),
           destination->lifecycle_generation, target_owner};
         const stateful::object_ref_t source_ref{
-          stateful::object_kind_t::actor, actor_id, original.object_generation,
-          original.authority_owner_generation, original.allocation.target.mesh_name, first_rid};
+          stateful::object_kind_t::actor,       actor_id,
+          original.object_generation,           original.authority_owner_generation,
+          original.allocation.target.mesh_name, first_rid};
         auto target_ref = source_ref;
         target_ref.node_id = second_rid;
         auto payload = fw::runtime::decode_direct_actor_authority_payload (original.payload);
@@ -5932,6 +5934,8 @@ TEST (ActorMaintenanceJoin, TargetRejectsChangedCoordinatorFence)
             ++coordinator.lease_generation;
         if (std::string_view (changed) == "baseline")
             baseline += "-other";
+        if (std::string_view (changed) == "empty-baseline")
+            baseline.clear ();
         stateful::public_authority_store_adapter_t adapter (repository);
         const stateful::relocation_authority_fence_t fence{
           source_ref.kind, source_ref.key, baseline, coordinator, target_owner, {4718, 2}};
@@ -5939,12 +5943,12 @@ TEST (ActorMaintenanceJoin, TargetRejectsChangedCoordinatorFence)
         EXPECT_EQ (adapter.observe_relocation (fence),
                    accepted ? stateful::relocation_authority_t::unsettled
                             : stateful::relocation_authority_t::source_preserved);
-        const auto published = adapter.publish (
-          source_ref, target_ref, target_owner, placement, "target-fence", 1, {},
-          fw::runtime::encode_actor_authority_payload (*payload), baseline, fence.relocation,
-          coordinator);
+        const auto published =
+          adapter.publish (source_ref, target_ref, target_owner, placement, "target-fence", 1, {},
+                           fw::runtime::encode_actor_authority_payload (*payload), baseline,
+                           fence.relocation, coordinator);
         EXPECT_EQ (published.status, accepted ? stateful::authority_publish_status_t::published
-                                             : stateful::authority_publish_status_t::conflict);
+                                              : stateful::authority_publish_status_t::conflict);
         const auto after =
           std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
         if (!accepted) {

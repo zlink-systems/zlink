@@ -4170,6 +4170,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   private async readTargetParticipantAuthorities(
+    prepare: ServiceMaintenanceRelocationPrepare,
     envelope: ServiceRelocationEnvelope,
     signal?: AbortSignal
   ): Promise<ReadonlyMap<string, ZLinkAuthoritySnapshot>> {
@@ -4180,12 +4181,34 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         { value: participant.key } as ZLinkAuthorityKey,
         signal
       );
+      const recorded = this.codec.read(current.payload);
+      const coordinator = prepare.coordinator;
       if (
         current.objectGeneration !== participant.objectGeneration ||
         current.authorityOwnerGeneration !== participant.authorityOwnerGeneration ||
         current.allocation.objectKind !== participant.objectKind ||
         current.allocation.stableType !== participant.stableType ||
-        current.allocation.state !== 'active'
+        current.allocation.state !== 'active' ||
+        current.ownerId !== coordinator.ownerId ||
+        current.ownerLeaseGeneration !== coordinator.leaseGeneration ||
+        !routingIdsEqual(current.allocation.descriptor.rid, coordinator.nodeRid) ||
+        current.allocation.descriptorLifecycleGeneration !== coordinator.nodeGeneration ||
+        (recorded?.canonical === true &&
+          (recorded.canonicalPhase !== 2 ||
+            recorded.aggregateId !== envelope.aggregateId ||
+            recorded.aggregateGeneration !== envelope.aggregateGeneration ||
+            recorded.sourceOwnerId !== coordinator.ownerId ||
+            recorded.sourceOwnerLeaseGeneration !== coordinator.leaseGeneration ||
+            !routingIdsEqual(recorded.sourceNodeRid!, coordinator.nodeRid) ||
+            recorded.sourceNodeGeneration !== coordinator.nodeGeneration ||
+            recorded.coordinatorOwnerId !== coordinator.ownerId ||
+            recorded.coordinatorLeaseGeneration !== coordinator.leaseGeneration ||
+            !routingIdsEqual(recorded.coordinatorNodeRid!, coordinator.nodeRid) ||
+            recorded.coordinatorNodeGeneration !== coordinator.nodeGeneration)) ||
+        (recorded?.canonical === true
+          ? recorded.coordinatorExpectedStoreVersion !== coordinator.expectedAuthorityStoreVersion
+          : participant.key === primaryKey(envelope) &&
+            current.storeVersion.value !== coordinator.expectedAuthorityStoreVersion)
       ) {
         throw new Error(
           `Relocation participant '${participant.key}' authority changed before reservation.`
@@ -4202,7 +4225,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     envelope: ServiceRelocationEnvelope,
     signal?: AbortSignal
   ): Promise<TargetRelocationReservation> {
-    const authorities = await this.readTargetParticipantAuthorities(envelope, signal);
+    const authorities = await this.readTargetParticipantAuthorities(prepare, envelope, signal);
     const publication = relocationPublication(prepare, envelope);
     const participants = envelope.participants.map((participant) => {
       const expected = authorities.get(participant.key)!;
@@ -4235,7 +4258,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           nodeGeneration: prepare.target.nodeGeneration,
           objectGeneration: expected.objectGeneration,
           targetAttemptGeneration: prepare.targetAttemptGeneration,
-          coordinatorExpectedStoreVersion: expected.storeVersion.value,
+          coordinatorExpectedStoreVersion: prepare.coordinator.expectedAuthorityStoreVersion,
           ...(membership ??
             (expected.allocation.objectKind === 'actor'
               ? {

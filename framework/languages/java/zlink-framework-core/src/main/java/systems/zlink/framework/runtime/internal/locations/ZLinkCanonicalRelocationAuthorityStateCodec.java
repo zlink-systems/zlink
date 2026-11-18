@@ -92,7 +92,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         return replace(replaceOwner(applicationPayload, request), state);
     }
 
-    static Published decode(byte[] authorityPayload) {
+    public static Published decode(byte[] authorityPayload) {
         try {
             return decodeStrict(authorityPayload);
         } catch (RuntimeException invalid) {
@@ -527,7 +527,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         }
     }
 
-    record Published(
+    public record Published(
             UUID aggregateId,
             long aggregateGeneration,
             long targetAttemptGeneration,
@@ -550,7 +550,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             long applicationVersion,
             int sourceCleanupState,
             byte[] applicationPayload) {
-        Published {
+        public Published {
             applicationPayload = applicationPayload.clone();
         }
 

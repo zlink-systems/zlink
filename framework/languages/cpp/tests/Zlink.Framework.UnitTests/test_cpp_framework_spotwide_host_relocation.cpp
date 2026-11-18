@@ -6,6 +6,7 @@
 #include "runtime/locations/relocation_authority_payload.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 #include <gtest/gtest.h>
 #include <chrono>
 #include <atomic>
@@ -294,6 +295,112 @@ TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
     ASSERT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "");
     EXPECT_EQ (reply.value ().spot, room_id);
     EXPECT_EQ (requests.load (), 1u);
+}
+
+TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregatePrepare)
+{
+    namespace stateful = fw::runtime::stateful;
+    for (const auto changed : {"none", "owner", "lease", "baseline"}) {
+        SCOPED_TRACE (changed);
+        joins_t joins;
+        auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+        auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+        const auto configure = [&] (host_t &host, const char *rid) {
+            auto &options = host.app.add_zlink_framework ();
+            options.add_location_store (locations);
+            options.add_relocation_store (relocations);
+            options.add_route_mesh (mesh_name)
+              .set_object_role (fw::object_role_t::server)
+              .set_routing_id (zlink::routing_id_t::from (rid))
+              .listen ("tcp://127.0.0.1:0")
+              .add_entry_spot<entry_t> ([] (fw::entry_spot_context_t context) {
+                  return std::make_shared<entry_t> (std::move (context));
+              })
+              .add_actor_factory<member_t, member_factory_t> (
+                actor_type, std::make_shared<member_factory_t> (joins),
+                [] (auto &factory) { factory.recreate_on_relocation (); })
+              .add_spot_factory<room_t> (
+                room_type,
+                [] (fw::spot_context_t context) {
+                    return std::make_shared<room_t> (std::move (context));
+                },
+                [] (auto &factory) { factory.recreate_on_relocation (); });
+        };
+        host_t source, target;
+        configure (source, source_rid);
+        source.start ();
+        ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+        auto services = source.app.advanced ().services ().build_provider ();
+        ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                       .get_or_create (fw::spot_id_t (room_id), room_type)
+                       .async ()
+                       .result ());
+        ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                       .get_or_create (fw::actor_id_t ("fenced-member"), actor_type)
+                       .async ()
+                       .result ());
+        ASSERT_TRUE (services.get_required<fw::actor_client_t> ()
+                       .send (fw::actor_id_t ("fenced-member"), enter_t{room_id})
+                       .async ()
+                       .result ());
+        {
+            std::unique_lock lock (joins.mutex);
+            ASSERT_TRUE (
+              joins.changed.wait_for (lock, wait_budget, [&] { return joins.accepted == 1; }));
+        }
+        configure (target, target_rid);
+        target.start ();
+        ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+        auto &repository = services.get_required<fw::location_repository_t> ();
+        const auto spot = std::get<fw::authority_snapshot_t> (
+          repository.read_authority (fw::runtime::spot_authority_key (room_id)).result ().value ());
+        const auto actor = std::get<fw::authority_snapshot_t> (
+          repository.read_authority (fw::runtime::actor_authority_key ("fenced-member"))
+            .result ()
+            .value ());
+        const auto nodes = repository.list_mesh_nodes (mesh_name).result ().value ();
+        const auto destination =
+          std::find_if (nodes.items.begin (), nodes.items.end (),
+                        [] (const auto &node) { return node.rid.to_string () == target_rid; });
+        ASSERT_NE (destination, nodes.items.end ());
+        const fw::location_owner_token_t target_owner{destination->owner_id,
+                                                      destination->lease_generation};
+        const std::vector<stateful::object_ref_t> participants{
+          {stateful::object_kind_t::user_spot, room_id, spot.object_generation,
+           spot.authority_owner_generation, mesh_name, source_rid},
+          {stateful::object_kind_t::actor, "fenced-member", actor.object_generation,
+           actor.authority_owner_generation, mesh_name, source_rid}};
+        stateful::relocation_authority_fence_t fence{participants.front ().kind,
+                                                     room_id,
+                                                     spot.store_version,
+                                                     spot.owner,
+                                                     target_owner,
+                                                     {4718, 2}};
+        if (std::string_view (changed) == "owner")
+            fence.source_owner.owner_id += "-other";
+        if (std::string_view (changed) == "lease")
+            ++fence.source_owner.lease_generation;
+        if (std::string_view (changed) == "baseline")
+            fence.expected_store_version += "-other";
+        stateful::public_aggregate_authority_adapter_t adapter (repository);
+        const auto prepared =
+          adapter.prepare (participants, target_rid, target_owner, "fenced-unit", 1, {}, fence);
+        const bool accepted = std::string_view (changed) == "none";
+        EXPECT_EQ (prepared.status, accepted ? stateful::aggregate_publish_status_t::prepared
+                                             : stateful::aggregate_publish_status_t::conflict);
+        if (prepared.status == stateful::aggregate_publish_status_t::prepared)
+            adapter.abort (prepared.fence);
+        for (const auto &entry : participants) {
+            const auto key = entry.kind == stateful::object_kind_t::actor
+                               ? fw::runtime::actor_authority_key (entry.key)
+                               : fw::runtime::spot_authority_key (entry.key);
+            const auto current = std::get<fw::authority_snapshot_t> (
+              repository.read_authority (key).result ().value ());
+            EXPECT_EQ (current.owner.owner_id, spot.owner.owner_id);
+            EXPECT_EQ (current.owner.lease_generation, spot.owner.lease_generation);
+            EXPECT_EQ (current.authority_owner_generation, entry.authority_owner_generation);
+        }
+    }
 }
 
 TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
