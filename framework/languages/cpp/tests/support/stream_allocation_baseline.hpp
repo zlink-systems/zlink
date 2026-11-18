@@ -624,7 +624,7 @@ class stream_allocation_test_access_t
             auto dispatch_payload =
               std::make_shared<zlink::message_t> (std::move (handler_payload));
             return dispatch_application_async (
-              stream, "packet:" + std::string (header.packet_name ()),
+              stream,
               [session = &session, dispatch_stream = std::move (dispatch_stream),
                dispatch_header = std::move (dispatch_header),
                dispatch_context = std::move (dispatch_context),
