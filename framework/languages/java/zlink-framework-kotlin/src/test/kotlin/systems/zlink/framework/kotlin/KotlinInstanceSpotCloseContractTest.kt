@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory
@@ -33,41 +34,42 @@ import systems.zlink.framework.testsupport.ZLinkHostServing
 
 class KotlinInstanceSpotCloseContractTest {
     @Test
+    // Bounds host startup and Serving, which run outside the scenario deadline.
+    @Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     fun suspendingClosingReplaysTheOriginalIntentRequestOnceInTheNewIncarnation() = runBlocking {
-        withTimeout(TEST_TIMEOUT.toMillis()) {
-            val suffix = UUID.randomUUID().toString()
-            val spotId = "kotlin-close-$suffix"
-            val nodeRid = RoutingId.from("kotlin-close-node-$suffix")
-            val observation = CloseObservation()
-            currentObservation = observation
-            val options = DefaultZLinkFrameworkOptions()
-            // This case checks closing replay, not the fixed-RID release wait (MeshNode §3.3).
-            options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1))
-            options.addLocationStore(ZLinkInMemoryLocationStore())
-            options.addRelocationStore(systems.zlink.framework.runtime.InMemoryRelocationStore())
-            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-            val node = options.addRouteMesh(MESH_NAME)
-            node.listen("inproc://kotlin-close-$suffix").setRoutingId(nodeRid)
-            node.objects().server().addInstanceSpotFactory(
-                INSTANCE_TYPE,
-                ClosingInstance::class.java,
-            ) { factory ->
-                factory.disableRelocation()
-            }
-            val lifecycle =
-                ZLinkFrameworkLifecycle(
-                    options,
-                    ZLinkJavaBackendAdapterFactory(),
-                    ZLinkHandlerActivator.reflection(),
-                )
-            val logger = Logger.getLogger(FLOW_LOGGER)
-            val flow = OwnerArrivalLog(spotId, suffix)
-            logger.addHandler(flow)
-            try {
-                lifecycle.start()
-                ZLinkHostServing.await(lifecycle.runtimeBean())
-                val outbound =
-                    (lifecycle as systems.zlink.framework.channels.ZLinkRouteClient).kotlin()
+        val suffix = UUID.randomUUID().toString()
+        val spotId = "kotlin-close-$suffix"
+        val nodeRid = RoutingId.from("kotlin-close-node-$suffix")
+        val observation = CloseObservation()
+        currentObservation = observation
+        val options = DefaultZLinkFrameworkOptions()
+        // This case checks closing replay, not the fixed-RID release wait (MeshNode §3.3).
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1))
+        options.addLocationStore(ZLinkInMemoryLocationStore())
+        options.addRelocationStore(systems.zlink.framework.runtime.InMemoryRelocationStore())
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+        val node = options.addRouteMesh(MESH_NAME)
+        node.listen("inproc://kotlin-close-$suffix").setRoutingId(nodeRid)
+        node.objects().server().addInstanceSpotFactory(
+            INSTANCE_TYPE,
+            ClosingInstance::class.java,
+        ) { factory ->
+            factory.disableRelocation()
+        }
+        val lifecycle =
+            ZLinkFrameworkLifecycle(
+                options,
+                ZLinkJavaBackendAdapterFactory(),
+                ZLinkHandlerActivator.reflection(),
+            )
+        val logger = Logger.getLogger(FLOW_LOGGER)
+        val flow = OwnerArrivalLog(spotId, suffix)
+        logger.addHandler(flow)
+        try {
+            lifecycle.start()
+            ZLinkHostServing.await(lifecycle.runtimeBean())
+            val outbound = (lifecycle as systems.zlink.framework.channels.ZLinkRouteClient).kotlin()
+            withTimeout(TEST_TIMEOUT.toMillis()) {
                 val originalGeneration =
                     outbound
                         .requestToSpot(spotId, InitialProbe("initial"), Long::class)
@@ -110,12 +112,12 @@ class KotlinInstanceSpotCloseContractTest {
                 assertEquals(1, observation.closingCalls.get())
                 assertEquals(1, observation.pendingCalls.get())
                 assertEquals(1, completions.get())
-            } finally {
-                observation.closingRelease.complete(Unit)
-                lifecycle.stop()
-                logger.removeHandler(flow)
-                flow.close()
             }
+        } finally {
+            observation.closingRelease.complete(Unit)
+            lifecycle.stop()
+            logger.removeHandler(flow)
+            flow.close()
         }
     }
 
