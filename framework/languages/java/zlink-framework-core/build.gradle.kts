@@ -236,7 +236,7 @@ dependencies {
 }
 
 shadow {
-    addShadowVariantIntoJavaComponent = true
+    addShadowVariantIntoJavaComponent = false
 }
 
 tasks.shadowJar {
