@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -103,9 +102,14 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void actorJoin28UsesStructuralFlavorSelectionAndReturnsTypedReplies(boolean withReply)
-            throws Exception {
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false",
+        "true,false",
+        "false,true",
+        "true,true"
+    })
+    void actorJoin28UsesStructuralFlavorSelectionAndReturnsTypedReplies(
+            boolean withReply, boolean entry) throws Exception {
         String endpoint = "inproc://jvm-canonical-actor-join-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-canonical-source");
         RoutingId targetRid = RoutingId.from("jvm-canonical-target");
@@ -156,7 +160,7 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                             5L,
                             9L,
                             11L,
-                            false,
+                            entry,
                             "ZLinkFrameworkActorJoinRequest",
                             "application/json",
                             "{\"transferId\":\"canonical-text\"}".getBytes(StandardCharsets.UTF_8));
@@ -182,6 +186,7 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
             }
             reply.applicationReply().forEach(Message::close);
             ServiceWirePilotCodec.ActorJoin28 join = received.get();
+            assertEquals(entry, join.entry());
             assertEquals("actor-a", join.actor().id());
             assertEquals(source.lifecycleGeneration(), join.actor().targetNodeGeneration());
             assertEquals("target-room", join.targetSpot().id());
@@ -253,6 +258,75 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
             ServiceWirePilotCodec.ActorJoin28 join = received.get();
             assertEquals(10L, join.targetSpot().expectedAuthorityOwnerGeneration());
             assertEquals(12L, join.targetSpot().expectedOwnerLeaseGeneration());
+        }
+    }
+
+    @Test
+    void entryJoinWithOldLifecycleIsUnavailableBeforeSubmission() throws Exception {
+        RoutingId targetRid = RoutingId.from("entry-restarted-target");
+        AtomicInteger submissions = new AtomicInteger();
+        try (var context = Zlink.createContext();
+                var source = new ZLinkJavaRawMeshNode(context, "mesh");
+                var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            source.setRoutingId(RoutingId.from("entry-source"));
+            source.setBind("inproc://entry-source-" + System.nanoTime());
+            target.setRoutingId(targetRid);
+            target.setBind("inproc://entry-target-" + System.nanoTime());
+            source.start();
+            target.start();
+            long oldGeneration = target.lifecycleGeneration();
+            target.close();
+            try (var replacement = new ZLinkJavaRawMeshNode(context, "mesh")) {
+                replacement.setRoutingId(targetRid);
+                String endpoint = "inproc://entry-replacement-" + System.nanoTime();
+                replacement.setBind(endpoint);
+                replacement.setCanonicalActorJoinHandler(
+                        (peer, request) -> {
+                            submissions.incrementAndGet();
+                            return CompletableFuture.completedFuture(
+                                    new ZLinkInternalMeshNode.CanonicalActorJoinResponse(
+                                            true, 0L, List.of()));
+                        });
+                replacement.start();
+                source.observePeerAdmissionExpectation(
+                                targetRid,
+                                endpoint,
+                                replacement.lifecycleGeneration(),
+                                "default",
+                                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER)
+                        .toCompletableFuture()
+                        .get(1, TimeUnit.SECONDS);
+                var request =
+                        new ZLinkInternalMeshNode.CanonicalActorJoinRequest(
+                                new ZLinkBackendActorRef(source.routingId(), "existing-actor", 3L),
+                                source.lifecycleGeneration(),
+                                1L,
+                                2L,
+                                targetRid,
+                                oldGeneration,
+                                targetRid.toString(),
+                                oldGeneration,
+                                oldGeneration,
+                                1L,
+                                true,
+                                "ZLinkFrameworkActorJoinRequest",
+                                "application/json",
+                                new byte[0]);
+                var failure =
+                        org.junit.jupiter.api.Assertions.assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () ->
+                                        source.requestCanonicalActorJoin(
+                                                        request, Duration.ofMillis(200))
+                                                .toCompletableFuture()
+                                                .get(1, TimeUnit.SECONDS));
+                assertEquals(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        org.junit.jupiter.api.Assertions.assertInstanceOf(
+                                        ZLinkFrameworkException.class, failure.getCause())
+                                .kind());
+                assertEquals(0, submissions.get());
+            }
         }
     }
 

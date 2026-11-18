@@ -45,6 +45,54 @@ final class ZLinkBoundActorReturnTest {
     private static final CompletableFuture<String> relayed = new CompletableFuture<>();
 
     @Test
+    void existingActorJoinsEntrySpotOnAnotherNode() throws Exception {
+        joined = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        try (var sourceHost =
+                readyHost(
+                        ZLinkFrameworkRuntimeTestAccess.start(
+                                options("entry-source", locations, relocations, null)))) {
+            var source = sourceHost.runtime();
+            var created =
+                    assertInstanceOf(
+                            ZLinkActorCreateResult.Created.class,
+                            source.actorManager()
+                                    .create("player-return", "player")
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+            assertEquals(RoutingId.from("entry-source"), created.actor().nodeRid());
+            ((systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions)
+                            source.routeMeshRuntime())
+                    .mesh(MESH)
+                    .setPlacementWeight(0);
+            String endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var targetHost =
+                            readyHost(
+                                    ZLinkFrameworkRuntimeTestAccess.start(
+                                            options(
+                                                    "entry-target",
+                                                    locations,
+                                                    relocations,
+                                                    endpoint)));
+                    var sourceReady =
+                            observe(
+                                    source.routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0);
+                    var targetReady =
+                            observe(
+                                    targetHost.runtime().routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0)) {
+                sourceReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                targetReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                var completion = moveTo(source, "__remote-entry-join");
+                assertEquals(RoutingId.from("entry-target"), completion.actor().nodeRid());
+            }
+        }
+    }
+
+    @Test
     void boundActorReturnsToItsFirstNodeWithoutSealTimeout() throws Exception {
         joined = new CompletableFuture<>();
         var locations = new ZLinkInMemoryLocationStore();
@@ -751,7 +799,9 @@ final class ZLinkBoundActorReturnTest {
         @Override
         public CompletionStage<String> handle(
                 Lobby spot, Player actor, ZLinkMessageContext context, Join request) {
-            actor.context().joinSpot(request.spotId()).defer();
+            if (request.spotId().equals("__remote-entry-join"))
+                actor.context().joinEntrySpot().defer();
+            else actor.context().joinSpot(request.spotId()).defer();
             return CompletableFuture.completedFuture("scheduled");
         }
     }
@@ -761,7 +811,9 @@ final class ZLinkBoundActorReturnTest {
         @Override
         public CompletionStage<String> handle(
                 Room spot, Player actor, ZLinkMessageContext context, Join request) {
-            actor.context().joinSpot(request.spotId()).defer();
+            if (request.spotId().equals("__remote-entry-join"))
+                actor.context().joinEntrySpot().defer();
+            else actor.context().joinSpot(request.spotId()).defer();
             return CompletableFuture.completedFuture("scheduled");
         }
     }

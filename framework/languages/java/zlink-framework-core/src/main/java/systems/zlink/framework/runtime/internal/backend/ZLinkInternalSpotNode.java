@@ -279,9 +279,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return joinActor(actor, targetNodeRid, targetSpotId, parts, timeout);
     }
 
-    CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
-            ZLinkBackendActorRef actor, RoutingId targetNodeRid, Message request, Duration timeout);
-
     CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout);
 
     /** Destroys only the native stay with this authority generation. */

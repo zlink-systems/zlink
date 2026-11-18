@@ -1363,9 +1363,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             //  this attempt (spec 15 §4.2 "이전 identity의 늦은 chunk와
                             //  Restore는 조립에 연결하지 않고 폐기한다").
                             UUID relocationId = request.fence().aggregateId();
-                            DefaultSpotContext context =
-                                    (DefaultSpotContext)
-                                            ((ZLinkSpot<?>) directAdmission.targetSpot()).context();
+                            SpotDispatchLine context =
+                                    Objects.requireNonNull(
+                                            SpotDispatchLine.from(directAdmission.targetSpot()));
                             context.enqueueLifecycle(
                                             () ->
                                                     ZLinkSerialExecutionQueue.yieldCurrent(

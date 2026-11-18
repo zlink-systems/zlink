@@ -3384,15 +3384,6 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
-                ZLinkBackendActorRef actor,
-                RoutingId targetNodeRid,
-                Message request,
-                Duration timeout) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout) {
             throw new UnsupportedOperationException();
         }
