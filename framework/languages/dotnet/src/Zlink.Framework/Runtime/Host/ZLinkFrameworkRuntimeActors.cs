@@ -3223,7 +3223,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
         var decision = 0;
         var callbackTask = state
-            .ExecuteDispatchAsync(
+            .ExecuteLifecycleCallbackAsync(
                 async _ =>
                 {
                     var actor =
@@ -3283,7 +3283,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                         Rejected: false
                     );
                 },
-                countAsPendingRequest: false,
                 cancellationToken
             )
             .AsTask();

@@ -11,6 +11,165 @@ const { createBrowserSafeStreamApp } = require('./helpers/browser-safe-stream-ap
 const cases = JSON.parse(
   readFileSync('../../runtime/conformance/bound-session-relocation-v1.json', 'utf8')
 ).sameNodeDuplicateBind;
+
+for (const mode of ['SpotWide', 'PerActor', 'Entry']) {
+  test(`duplicate bind callback owns its lifecycle turn: ${mode}`, async () => {
+    const {
+      ZLinkSpotSerialTurnExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+    const {
+      ZLinkSpotSerialExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+    const {
+      SubmitResult
+    } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+    const serial = new ZLinkSpotSerialTurnExecutor(mode === 'SpotWide');
+    const executor = new ZLinkSpotSerialExecutor(
+      serial,
+      framework.ZLinkUserSpotExecutionMode[mode === 'Entry' ? 'PerActor' : mode],
+      'spot-a'
+    );
+    const activation = { serialExecutor: executor };
+    const manager = {
+      options: {
+        executeEntryActor: (_mesh, actorId, operation) =>
+          framework.ZLinkEntrySpotActivation.prototype.executeActor.call(
+            { spotSerialExecutor: executor },
+            actorId,
+            operation
+          )
+      },
+      resolveApplicationActivation: () => activation,
+      executeActorTurn: framework.DefaultZLinkSpotManager.prototype.executeActorTurn
+    };
+    let release;
+    let entered;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const events = [];
+    const actor = { actorId: 'actor-a', nodeRid: 'node-a', generation: 1n };
+    const incoming = {
+      sessionNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      sessionRid: 'session-new',
+      sessionOwnerId: 'owner',
+      sessionOwnerLeaseGeneration: 1n,
+      bindingGeneration: 5n
+    };
+    const current = { ...incoming, sessionRid: 'session-old', bindingGeneration: 3n };
+    const turns = [];
+    const state = {
+      nativeActorRef: actor,
+      actorId: 'actor-a',
+      meshName: 'mesh-a',
+      locationGeneration: 3n,
+      isMoving: false,
+      boundSession: current,
+      actor: {
+        context: { spotId: mode === 'Entry' ? undefined : 'spot-a' },
+        async onDuplicateBind() {
+          turns.push(
+            require('../../packages/framework/dist/runtime/execution').captureZLinkSpotSerialTurn()
+          );
+          events.push('callback:start');
+          entered();
+          await held;
+          turns.push(
+            require('../../packages/framework/dist/runtime/execution').captureZLinkSpotSerialTurn()
+          );
+          events.push('callback:end');
+        }
+      },
+      installBoundSessionBinding(binding) {
+        this.boundSession = binding;
+      }
+    };
+    const host = {
+      actorManager: { getState: () => state },
+      spotNodeRuntime: {
+        meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 2n }) })
+      },
+      boundSessionRelay: { boundSessions: { resolveRemoteBoundSessionTarget: () => incoming } },
+      spotManager: manager,
+      options: { registration: { sessionReplacementCallbackTimeoutMs: 30000 } }
+    };
+    let replies = 0;
+    const binding = framework.ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding.call(
+      host,
+      'mesh-a',
+      {
+        kindData: {
+          kind: 'actorBinding',
+          transition: 'active',
+          actor,
+          actorNodeGeneration: 2n,
+          authorityOwnerGeneration: 3n,
+          ...incoming
+        },
+        reply() {
+          replies++;
+          return SubmitResult.Ok;
+        },
+        replyFailure() {
+          assert.fail('valid binding was rejected');
+        }
+      }
+    );
+    await started;
+    const siblings = [
+      executor.executeActor('actor-b', (actorSerial) =>
+        actorSerial.execute(async () => {
+          events.push('actor');
+        })
+      ),
+      executor.executeSpot(async () => {
+        events.push('spot');
+      }),
+      executor.executeTimer('timer', async () => {
+        events.push('timer');
+      })
+    ];
+    const sameActor = executor.executeActor('actor-a', (actorSerial) =>
+      actorSerial.execute(async () => {
+        events.push('same-actor');
+      })
+    );
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(replies, 0);
+      assert.equal(state.boundSession, current);
+      if (mode === 'SpotWide') {
+        assert.deepEqual(events, ['callback:start']);
+      } else {
+        await Promise.all(siblings);
+        assert.deepEqual([...events].sort(), ['actor', 'callback:start', 'spot', 'timer']);
+      }
+      assert.ok(turns[0], 'callback must enter a framework handler turn');
+      assert.equal(turns[0].work.lane, 'lifecycle');
+      assert.equal(
+        executor.actorExecutors.get('actor-a').scheduler.activeLifecycle.lane,
+        'lifecycle'
+      );
+    } finally {
+      release();
+      await binding;
+      await Promise.all(siblings);
+      await sameActor;
+      await executor.closeChildren();
+    }
+    assert.ok(turns[1], 'async continuation must retain its framework handler turn');
+    assert.equal(turns[0], turns[1]);
+    assert.equal(replies, 1);
+    assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
+    if (mode === 'SpotWide') assert.equal(events[1], 'callback:end');
+    assert.ok(events.indexOf('same-actor') > events.indexOf('callback:end'));
+  });
+}
+
 for (const scenario of cases) {
   test(`public same-node duplicate bind: ${scenario.name}`, { timeout: 20000 }, async (t) => {
     let callbacks = 0;

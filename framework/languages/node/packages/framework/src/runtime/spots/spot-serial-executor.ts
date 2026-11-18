@@ -153,6 +153,14 @@ export class ZLinkSpotSerialExecutor {
     return this.timerSerial(timerName).post(operation, workOptions);
   }
 
+  executeActorLifecycle<T>(actorId: string, operation: () => Promise<T> | T): Promise<T> {
+    return this.executeActor(
+      actorId,
+      (serial) => serial.execute(operation, { lane: 'lifecycle' }),
+      { lane: 'lifecycle' }
+    );
+  }
+
   /** Admits held packets through the same Actor FIFO as ordinary ingress. */
   admitActorPacketPrefix(
     actorId: string,

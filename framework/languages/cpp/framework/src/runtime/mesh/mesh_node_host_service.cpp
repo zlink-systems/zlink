@@ -60,6 +60,28 @@ namespace zlink::framework::runtime
 
 namespace
 {
+mesh_node_descriptor_t
+choose_placement_target (const std::vector<mesh_node_descriptor_t> &candidates,
+                         std::string_view identity)
+{
+    const auto total_weight =
+      std::accumulate (candidates.begin (), candidates.end (), std::uint64_t{0},
+                       [] (std::uint64_t total, const auto &candidate) {
+                           return total + static_cast<std::uint64_t> (candidate.placement_weight);
+                       });
+    auto choice = std::hash<std::string>{}(std::string (identity)) % total_weight;
+    auto selected = candidates.front ();
+    for (const auto &candidate : candidates) {
+        const auto weight = static_cast<std::uint64_t> (candidate.placement_weight);
+        if (choice < weight) {
+            selected = candidate;
+            break;
+        }
+        choice -= weight;
+    }
+    return selected;
+}
+
 location_write_intent_t mesh_new_claim_intent (
   const std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> &registrations,
   const mesh_node_descriptor_t &descriptor)
@@ -901,6 +923,56 @@ actor_manager_t mesh_node_host_service_t::actor_manager ()
       [this] (actor_ref_t actor) { return destroy_actor (std::move (actor)); });
 }
 
+task_t<std::vector<mesh_node_descriptor_t>> mesh_node_host_service_t::actor_placement_targets (
+  std::string mesh_name,
+  std::string stable_type,
+  std::shared_ptr<detail::mesh_node_runtime_t> source)
+{
+    auto listed = co_await await_result (
+      _services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (mesh_name));
+    if (!listed)
+        co_return detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
+          listed, "Actor target lookup failed");
+    const auto source_rid = source->status ().routing_id ();
+    std::vector<mesh_node_descriptor_t> candidates;
+    for (auto &descriptor : std::move (listed).value ()) {
+        const auto capability = std::find_if (
+          descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
+          [&] (const object_capability_t &value) {
+              return value.object_kind == placement_object_kind_t::actor
+                     && value.stable_type == stable_type;
+          });
+        if (descriptor.mesh_name != mesh_name
+            || descriptor.state != framework_runtime_state_t::serving
+            || descriptor.object_role != object_role_t::server || descriptor.placement_weight <= 0
+            || capability == descriptor.object_capabilities.end () || !capability->entry_accepted)
+            continue;
+        if (descriptor.rid == source_rid
+            || source->has_admitted_peer (descriptor.rid, descriptor.lifecycle_generation))
+            candidates.push_back (std::move (descriptor));
+    }
+    co_return candidates;
+}
+
+task_t<mesh_node_descriptor_t> mesh_node_host_service_t::select_actor_entry_spot (actor_ref_t actor)
+{
+    const auto source = co_await find_local_actor_node_async (actor.node_rid ());
+    if (!source)
+        co_return result_t<mesh_node_descriptor_t>::failure (
+          framework_error_kind_t::unavailable, "Actor source MeshNode is unavailable");
+    const auto identity = co_await source->identity_async ();
+    auto candidates = co_await actor_placement_targets (
+      identity.first, std::string (detail::actor_ref_access_t::actor_type (actor)), source);
+    std::erase_if (candidates, [] (const auto &descriptor) {
+        return !descriptor.entry_spot_id || descriptor.lifecycle_generation == 0
+               || descriptor.lease_generation <= 0;
+    });
+    if (candidates.empty ())
+        co_return result_t<mesh_node_descriptor_t>::failure (
+          framework_error_kind_t::unavailable, "No compatible Entry Spot target is available");
+    co_return choose_placement_target (candidates, actor.actor_id ().value ());
+}
+
 task_t<actor_create_result_t>
 mesh_node_host_service_t::create_actor (bool exclusive,
                                         actor_id_t actor_id,
@@ -955,56 +1027,29 @@ mesh_node_host_service_t::create_actor (bool exclusive,
     {
         static task_t<std::vector<mesh_node_descriptor_t>>
         run (mesh_node_host_service_t *self,
-             std::decay_t<decltype (selected_mesh)> selected_mesh,
-             std::decay_t<decltype (mesh_name)> mesh_name,
-             std::decay_t<decltype (stable_type)> stable_type,
-             std::decay_t<decltype (unavailable_targets)> unavailable_targets,
-             std::decay_t<decltype (source_node)> source_node,
-             std::decay_t<decltype (source_rid)> source_rid)
+             std::string selected_mesh,
+             std::string stable_type,
+             std::set<unavailable_target_t> unavailable_targets,
+             std::shared_ptr<detail::mesh_node_runtime_t> source_node)
         {
-            std::vector<mesh_node_descriptor_t> candidates;
-            auto listed = co_await await_result (
-              self->_services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (
-                selected_mesh));
-            if (!listed.has_value ())
-                co_return detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
-                  listed, "Actor target lookup failed");
-            for (auto &descriptor : std::move (listed).value ()) {
-                if (mesh_name && descriptor.mesh_name != *mesh_name)
-                    continue;
-                const auto capability = std::find_if (
-                  descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-                  [&] (const object_capability_t &value) {
-                      return value.object_kind == placement_object_kind_t::actor
-                             && value.stable_type == stable_type;
-                  });
-                //  Actor model §6.3: a new Actor is created only where an Entry Spot accepts its type.
-                if (descriptor.state != framework_runtime_state_t::serving
-                    || descriptor.object_role != object_role_t::server
-                    || descriptor.placement_weight <= 0
-                    || capability == descriptor.object_capabilities.end ()
-                    || !capability->entry_accepted)
-                    continue;
+            auto refreshed = co_await self->actor_placement_targets (
+              std::move (selected_mesh), std::move (stable_type), source_node);
+            std::erase_if (refreshed, [&] (const mesh_node_descriptor_t &descriptor) {
                 if (unavailable_targets.contains (
                       {descriptor.rid.to_hex (), descriptor.lifecycle_generation, std::nullopt}))
-                    continue;
-                if (descriptor.rid == source_rid) {
-                    candidates.push_back (std::move (descriptor));
-                    continue;
-                }
+                    return true;
                 const auto epoch = source_node->admitted_peer_epoch (
                   descriptor.rid, descriptor.lifecycle_generation);
-                if (epoch
-                    && !unavailable_targets.contains (
-                      {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch}))
-                    candidates.push_back (std::move (descriptor));
-            }
-            co_return candidates;
+                return epoch
+                       && unavailable_targets.contains (
+                         {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch});
+            });
+            co_return refreshed;
         }
     };
-    auto refresh_candidates = [&] () -> task_t<std::vector<mesh_node_descriptor_t>> {
-        return refresh_actor_candidates_t::run (this, selected_mesh, mesh_name, stable_type,
-                                                unavailable_targets, source_node, source_rid);
+    auto refresh_candidates = [&] () {
+        return refresh_actor_candidates_t::run (this, selected_mesh, stable_type,
+                                                unavailable_targets, source_node);
     };
     candidates = co_await refresh_candidates ();
     if (candidates.empty ()) {
@@ -1029,22 +1074,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
           "No eligible Actor target has an admitted RouteMesh peer");
     }
     const auto choose_target = [&] {
-        const auto total_weight = std::accumulate (
-          candidates.begin (), candidates.end (), std::uint64_t{0},
-          [] (std::uint64_t total, const auto &candidate) {
-              return total + static_cast<std::uint64_t> (candidate.placement_weight);
-          });
-        auto choice = std::hash<std::string>{}(std::string (actor_id.value ())) % total_weight;
-        auto selected = candidates.front ();
-        for (const auto &candidate : candidates) {
-            const auto weight = static_cast<std::uint64_t> (candidate.placement_weight);
-            if (choice < weight) {
-                selected = candidate;
-                break;
-            }
-            choice -= weight;
-        }
-        return selected;
+        return choose_placement_target (candidates, actor_id.value ());
     };
     mesh_node_descriptor_t target;
     using actor_target_selection_t =
@@ -1754,22 +1784,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
         return candidates;
     };
     const auto choose_target = [&] (const std::vector<mesh_node_descriptor_t> &candidates) {
-        const auto total_weight = std::accumulate (
-          candidates.begin (), candidates.end (), std::uint64_t{0},
-          [] (std::uint64_t total, const auto &candidate) {
-              return total + static_cast<std::uint64_t> (candidate.placement_weight);
-          });
-        auto choice = std::hash<std::string>{}(*spot_id) % total_weight;
-        auto selected = candidates.front ();
-        for (const auto &candidate : candidates) {
-            const auto weight = static_cast<std::uint64_t> (candidate.placement_weight);
-            if (choice < weight) {
-                selected = candidate;
-                break;
-            }
-            choice -= weight;
-        }
-        return selected;
+        return choose_placement_target (candidates, *spot_id);
     };
     mesh_node_descriptor_t target;
     std::vector<std::byte> application_bytes;

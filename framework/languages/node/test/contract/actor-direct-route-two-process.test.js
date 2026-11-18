@@ -147,15 +147,20 @@ for (const scenario of [
         assert.equal(current.nodeRid, nextRoutingId);
         assert.notEqual(current.nodeRid, previous.nodeRid);
         assert.equal(current.objectGeneration, previous.objectGeneration);
-        // Preserve the old owner's actual terminal without resubmission. Only
-        // the next application call may use the new authority record.
-        await assert.rejects(
-          source.command('resumeDelivery'),
-          (error) =>
-            JSON.parse(error.message).kind === ZLinkFrameworkErrorKind.NotFound &&
-            JSON.parse(error.message).internalKind ===
-              ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-        );
+        // The request fixed to the old owner arrives after relocation commit. The
+        // old owner relays it over the committed Message Follow route to the new
+        // owner without resubmission (01-location-runtime §7.3).
+        assert.equal((await source.command('resumeDelivery')).node, nextRoutingId);
+        // A valid messageFollow notice invalidates the sender cache so the next
+        // lookup reaches the new owner directly (08-routing:505). The notice is a
+        // one-way command with no order against the relayed reply, so observe its
+        // arrival rather than the cache state at the reply.
+        const invalidateDeadline = Date.now() + 5_000;
+        while (
+          (await source.command('actorRouteCached')) !== false &&
+          Date.now() < invalidateDeadline
+        )
+          await new Promise((resolve) => setTimeout(resolve, 20));
         assert.equal(await source.command('actorRouteCached'), false);
         assert.equal((await source.command('ask')).node, nextRoutingId);
       }

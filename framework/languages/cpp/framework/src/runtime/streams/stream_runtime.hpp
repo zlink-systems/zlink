@@ -5,7 +5,6 @@
 #include <zlink/framework/contracts/streams/stream.hpp>
 
 #include <atomic>
-#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -56,7 +55,6 @@ class stream_state_t
     std::optional<std::string> remote_address;
     std::atomic_bool closed{false};
     std::atomic<stream_codec_t> application_codec{stream_codec_t::raw};
-    std::deque<std::string> serial_log;
     std::vector<stream_header_t> written_headers;
     std::vector<zlink::message_t> written_payloads;
     mutable std::mutex state_mutex;
@@ -167,7 +165,6 @@ class stream_runtime_t
       stream_t &stream,
       std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer) const;
 
-    std::vector<std::string> serial_log (const stream_t &stream) const;
     std::vector<stream_header_t> written_headers (const stream_t &stream) const;
     std::vector<zlink::message_t> written_payloads (const stream_t &stream) const;
 
@@ -179,30 +176,22 @@ class stream_runtime_t
                              std::string_view diagnostic = {},
                              std::function<void ()> completed = {}) const noexcept;
     result_t<void> dispatch_application (stream_t &stream,
-                                         std::string operation,
                                          std::function<task_t<void> ()> callback) const;
     result_t<void> dispatch_application_async (stream_t &stream,
-                                               std::string operation,
                                                std::function<task_t<void> ()> callback,
                                                async_dispatch_completion_t completion,
                                                async_dispatch_started_t started = {},
                                                async_dispatch_cancel_t cancelled = {}) const;
     result_t<void> dispatch_control_async (stream_t &stream,
-                                           std::string operation,
                                            std::function<task_t<void> ()> callback,
                                            async_dispatch_completion_t completion) const;
     result_t<void> dispatch_infrastructure (stream_t &stream,
-                                            std::string operation,
                                             std::function<task_t<void> ()> callback) const;
     result_t<void> dispatch_infrastructure_async (stream_t &stream,
-                                                  std::string operation,
                                                   std::function<task_t<void> ()> callback,
                                                   async_dispatch_completion_t completion) const;
-    result_t<void> dispatch_final (stream_t &stream,
-                                   std::string operation,
-                                   std::function<task_t<void> ()> callback) const;
+    result_t<void> dispatch_final (stream_t &stream, std::function<task_t<void> ()> callback) const;
     result_t<void> dispatch_final_async (stream_t &stream,
-                                         std::string operation,
                                          std::function<task_t<void> ()> callback,
                                          async_dispatch_completion_t completion) const;
 

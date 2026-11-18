@@ -59,8 +59,10 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
     private static final AtomicReference<ZLinkActorContext> PLAYER_CONTEXT =
             new AtomicReference<>();
 
-    @Test
-    void entrySpotJoinKeepsRequestUntilAsynchronousTargetResolutionSubmitsIt() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(longs = {11L, Long.MIN_VALUE})
+    void entrySpotJoinKeepsRequestUntilAsynchronousTargetResolutionSubmitsIt(long generation)
+            throws Exception {
         PLAYER_CONTEXT.set(null);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
@@ -98,37 +100,59 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
                             ZLinkActorRuntime.DefaultActorContext.class, PLAYER_CONTEXT.get());
 
             AtomicReference<String> submitted = new AtomicReference<>();
-            ZLinkInternalSpotNode spotNode =
-                    (ZLinkInternalSpotNode)
+            var actors = ZLinkFrameworkRuntimeTestAccess.actors(runtime);
+            ZLinkInternalMeshNode canonical =
+                    (ZLinkInternalMeshNode)
                             Proxy.newProxyInstance(
-                                    ZLinkInternalSpotNode.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkInternalSpotNode.class},
+                                    ZLinkInternalMeshNode.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkInternalMeshNode.class},
                                     (proxy, method, args) -> {
-                                        if (method.getName().equals("joinActorEntrySpot")) {
-                                            Message request = (Message) args[2];
+                                        if (method.getName().equals("requestCanonicalActorJoin")) {
+                                            var join =
+                                                    (ZLinkInternalMeshNode
+                                                                    .CanonicalActorJoinRequest)
+                                                            args[0];
+                                            assertTrue(join.entry());
+                                            assertEquals(generation, join.targetNodeGeneration());
+                                            assertEquals(generation, join.targetSpotGeneration());
+                                            assertEquals(
+                                                    generation,
+                                                    join.targetAuthorityOwnerGeneration());
+                                            assertEquals(13L, join.targetOwnerLeaseGeneration());
                                             submitted.set(
-                                                    StandardCharsets.UTF_8
-                                                            .decode(request.dataBuffer())
-                                                            .toString());
+                                                    new String(
+                                                            join.applicationPayload(),
+                                                            StandardCharsets.UTF_8));
                                             return CompletableFuture.failedFuture(
                                                     new IllegalStateException("submitted"));
                                         }
                                         throw new UnsupportedOperationException(method.getName());
                                     });
+            actors.setActorJoinCanonicalMeshNode(canonical);
             CompletableFuture<ZLinkActorRuntime.EntrySpotTarget> target = new CompletableFuture<>();
             CompletionStage<?> outcome =
-                    new ZLinkActorEntrySpotJoinCall(
+                    new ZLinkActorSpotJoinCall(
                                     context,
-                                    timeout -> target,
+                                    timeout ->
+                                            target.thenApply(
+                                                    ZLinkActorRuntime.EntrySpotTarget::address),
                                     Message.from("entry-join-payload"),
                                     Duration.ofSeconds(5),
-                                    new ZLinkActorEntrySpotJoinCall.Services(
-                                            spotNode, null, null, null))
+                                    context.spotJoinServices(),
+                                    true)
                             .execute();
 
             target.complete(
                     new ZLinkActorRuntime.EntrySpotTarget(
-                            RoutingId.from("entry-target"), "entry-spot"));
+                            new SpotTransportAddress(
+                                    "entry-join",
+                                    RoutingId.from("entry-target"),
+                                    "entry-spot",
+                                    generation,
+                                    generation,
+                                    generation,
+                                    13L,
+                                    systems.zlink.framework.spots.ZLinkSpotKind.ENTRY)));
             assertThrows(
                     Exception.class, () -> outcome.toCompletableFuture().get(5, TimeUnit.SECONDS));
             assertEquals("entry-join-payload", submitted.get());

@@ -411,6 +411,9 @@ export class ZLinkSpotNodeRuntimeManager {
         }
         node.setMessageFollowHandler?.((record) => this.options.messageFollowReceiver?.(record));
         node.start('preparing');
+        node.setActorMessageFollowResolver?.(
+          (fence) => this.options.actorHandoffRuntime?.acceptsDepartedRoute?.(fence) === true
+        );
         this.publishers.set(spotNodeName, node.createPublisher());
         for (const endpoint of spotNode.router?.manualConnections ?? []) {
           await node.connectPeer({ endpoint });
@@ -1086,7 +1089,7 @@ export class ZLinkSpotNodeRuntimeManager {
     return true;
   }
 
-  private async ensureEntryActivation(spotNodeName: string): Promise<void> {
+  async ensureEntryActivation(spotNodeName: string): Promise<void> {
     if (this.entryActivations.has(spotNodeName)) {
       return;
     }
