@@ -347,6 +347,10 @@ export class ZLinkActorHandoffCoordinator {
     this.startHandoff(actorId, oldGeneration, 'relocating');
   }
 
+  acceptsDepartedRoute(fence: ServiceActorRouteFence): boolean {
+    return this.findMessageFollowRoute(fence.actor.actorId, undefined, fence) !== undefined;
+  }
+
   beginProvisional(actorId: string, oldGeneration: bigint): void {
     this.startHandoff(actorId, oldGeneration, 'provisional');
   }
@@ -902,6 +906,7 @@ export class ZLinkActorHandoffCoordinator {
       if (
         handoff.phase === 'releasing' &&
         handoff.prefixRelease !== undefined &&
+        handoff.prefixRelease.startOpen &&
         handoff.pending.at(-1)?.withdraw === undefined
       )
         return undefined;

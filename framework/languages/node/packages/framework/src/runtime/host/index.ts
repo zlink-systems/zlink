@@ -866,6 +866,11 @@ export class ZLinkFrameworkRuntimeHost
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      ensureEntryActivation: (meshName) => {
+        const runtime = this.spotNodeRuntime;
+        if (runtime === undefined) throw new Error('Relocation target runtime is not started.');
+        return runtime.ensureEntryActivation(meshName);
+      },
       requestPeerReconcile: (meshName, peerRid) =>
         this.spotNodeRuntime?.requestPeerReconcile(meshName, peerRid) ?? Promise.resolve(),
       sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),

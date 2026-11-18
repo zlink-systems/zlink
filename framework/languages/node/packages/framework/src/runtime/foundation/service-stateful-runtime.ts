@@ -479,6 +479,7 @@ export class ServiceStatefulRuntime {
   private static readonly detachedIngressScope = AsyncLocalStorage.snapshot();
 
   readonly registry: ServiceStatefulRegistry;
+  private actorMessageFollowResolver?: (fence: ServiceActorRouteFence) => boolean;
 
   readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult, bigint>;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
@@ -5563,7 +5564,11 @@ export class ServiceStatefulRuntime {
     return actor;
   }
 
-  validateActorMessageFence(fence: ServiceActorRouteFence): ServiceActorState {
+  setActorMessageFollowResolver(resolver: (fence: ServiceActorRouteFence) => boolean): void {
+    this.actorMessageFollowResolver = resolver;
+  }
+
+  validateActorMessageFence(fence: ServiceActorRouteFence): Pick<ServiceActorState, 'ref'> {
     if (
       fence.actor.nodeRid !== this.nodeRid ||
       fence.targetNodeGeneration !== this.nodeGeneration
@@ -5571,6 +5576,11 @@ export class ServiceStatefulRuntime {
       throw new ServiceStaleGenerationError('actor', fence.actor.actorId);
     }
     const actor = this.registry.actor(fence.actor.actorId);
+    if (
+      (actor === undefined || actor.ref.generation === fence.actor.generation) &&
+      this.actorMessageFollowResolver?.(fence) === true
+    )
+      return { ref: fence.actor };
     if (actor === undefined) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
