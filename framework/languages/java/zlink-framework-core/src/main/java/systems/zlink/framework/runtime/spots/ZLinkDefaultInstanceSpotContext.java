@@ -91,7 +91,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                         (timerName, operation) ->
                                 enqueueDispatch(() -> host.runWithOutbound(outbound, operation)));
         execution = host.execution(this);
-        dispatchQueue.executionPolicy(execution);
+        ZLinkSpotCloseCallAccess.executionPolicy(dispatchQueue, execution);
     }
 
     void bind(ZLinkInstanceSpot value, ZLinkInstanceSpotActivation owner) {

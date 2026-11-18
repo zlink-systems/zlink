@@ -8,6 +8,7 @@ import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueueTesting;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -97,7 +98,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                             .join();
             var calls = new ArrayList<Integer>();
             var admitted =
-                    actor.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    actor,
                                     List.of(
                                             new ZLinkSerialExecutionQueue.QueuedRecord(
                                                     1, new byte[] {1}),
@@ -156,7 +158,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                             .join();
             var calls = new ArrayList<String>();
             var terminal =
-                    source.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    source,
                                     List.of(
                                             new ZLinkSerialExecutionQueue.QueuedRecord(
                                                     1, new byte[] {1}),
@@ -178,7 +181,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                     seal.captured().stream().map(record -> (int) record.payload()[0]).toList());
             assertEquals(0, jobs.snapshot().capacityWaiters());
             var next =
-                    target.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    target,
                                     seal.captured(),
                                     (record, terminalResult) ->
                                             () -> {
@@ -244,7 +248,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                             .join();
             var calls = new ArrayList<Integer>();
             var prefix =
-                    actor.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    actor,
                                     List.of(
                                             new ZLinkSerialExecutionQueue.QueuedRecord(
                                                     1, new byte[] {1})),
@@ -317,7 +322,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                     spot.enqueue(
                                     () -> {
                                         var prefix =
-                                                actor.admitDurablePrefix(
+                                                ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                                                actor,
                                                                 List.of(
                                                                         new ZLinkSerialExecutionQueue
                                                                                 .QueuedRecord(
@@ -398,7 +404,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                                     () -> {
                                         if (durablePrefix) {
                                             var admitted =
-                                                    actor.admitDurablePrefix(
+                                                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                                                    actor,
                                                                     List.of(
                                                                             new ZLinkSerialExecutionQueue
                                                                                     .QueuedRecord(
@@ -537,7 +544,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                             .join();
             var calls = new ArrayList<String>();
             var previous =
-                    source.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    source,
                                     move
                                             ? List.of(
                                                     new ZLinkSerialExecutionQueue.QueuedRecord(
@@ -569,7 +577,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                     var seal =
                             source.trySealRelocation().toCompletableFuture().join().orElseThrow();
                     next =
-                            target.admitDurablePrefix(
+                            ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                            target,
                                             seal.captured(),
                                             (record, terminalResult) ->
                                                     () -> {
@@ -1152,7 +1161,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                         OptionalLong.of(1),
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null))) {
             var admission =
-                    serial.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    serial,
                                     List.of(
                                             new ZLinkSerialExecutionQueue.QueuedRecord(
                                                     1, new byte[] {1}),
@@ -1195,7 +1205,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                         OptionalLong.of(1),
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null))) {
             var accepted =
-                    serial.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    serial,
                                     List.of(
                                             new ZLinkSerialExecutionQueue.QueuedRecord(
                                                     1, new byte[] {1}),
@@ -1241,7 +1252,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                                                     i + 1, new byte[] {(byte) i}))
                             .toList();
             var accepted =
-                    serial.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    serial,
                                     records,
                                     (record, terminalResult) ->
                                             () -> {
@@ -1287,7 +1299,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                             .toCompletableFuture()
                             .join();
             var admitted =
-                    spot.admitDurablePrefix(
+                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                    spot,
                                     List.of(
                                             new ZLinkSerialExecutionQueue.QueuedRecord(
                                                     1, new byte[] {1})),

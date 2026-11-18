@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
@@ -308,8 +309,9 @@ public final class ZLinkLocationStoreOutageTest {
                     var actorExecution = f.runtime.execution(() -> true, () -> discard(actor));
                     spotExecution.ready().toCompletableFuture().join();
                     actorExecution.ready().toCompletableFuture().join();
-                    spot.executionPolicy(spotExecution);
-                    actor.executionPolicy(
+                    ZLinkSpotCloseCallAccess.executionPolicy(spot, spotExecution);
+                    ZLinkSpotCloseCallAccess.executionPolicy(
+                            actor,
                             application -> {
                                 spotExecution.check(application);
                                 actorExecution.check(application);
@@ -646,7 +648,7 @@ public final class ZLinkLocationStoreOutageTest {
             Runnable cleanup) {
         var execution = runtime.execution(steady, cleanup);
         execution.ready().toCompletableFuture().join();
-        queue.executionPolicy(execution);
+        ZLinkSpotCloseCallAccess.executionPolicy(queue, execution);
     }
 
     private static void discard(systems.zlink.framework.execution.ZLinkSerialExecutionQueue queue) {

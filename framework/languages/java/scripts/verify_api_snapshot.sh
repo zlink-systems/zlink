@@ -83,13 +83,11 @@ MAVEN_REPOSITORY_URL="file://$maven_dir" \
 source_jars=()
 package_jars=()
 for artifact in "${artifacts[@]}"; do
-    source_jar="$(find "$root_dir/$artifact/build/libs" -maxdepth 1 -type f \
-        -name "$artifact-*.jar" ! -name '*-sources.jar' ! -name '*-javadoc.jar' \
-        | sort -V | tail -n 1)"
     package_jar="$(find "$maven_dir/systems/zlink/$artifact" -type f \
         -name "$artifact-*.jar" ! -name '*-sources.jar' ! -name '*-javadoc.jar' \
         | sort -V | tail -n 1)"
-    if [[ -z "$source_jar" || -z "$package_jar" ]]; then
+    source_jar="$root_dir/$artifact/build/libs/$(basename "$package_jar")"
+    if [[ ! -s "$source_jar" || -z "$package_jar" ]]; then
         echo "api_snapshot_artifact_not_found artifact=$artifact" >&2
         exit 1
     fi

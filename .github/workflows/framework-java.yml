@@ -161,6 +161,10 @@ jobs:
         if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
         run: bash framework/languages/java/scripts/verify_packaged_contract.sh java
 
+      - name: Verify the packaged Kotlin public contract and API snapshot
+        if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
+        run: bash framework/languages/java/scripts/verify_packaged_contract.sh kotlin
+
       - name: Fetch Core and build the checkout Java binding package on Windows
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'win-')) }}
         shell: pwsh
