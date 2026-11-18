@@ -3009,6 +3009,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_stream_framework --reader-retirement-tracked
     LABELS "framework-unit;stream;stream-session"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stream_write_terminal_shutdown
+    COMMAND test_cpp_framework_stream_framework --write-terminal-shutdown
+    LABELS "framework-unit;stream;stream-session"
+    TIMEOUT 30)
   zlink_framework_cpp_add_boost_headers(
     test_cpp_framework_stream_framework)
   target_include_directories(test_cpp_framework_stream_framework PRIVATE

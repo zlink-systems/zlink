@@ -8,6 +8,102 @@ public sealed class MeshNodeHelloSubmissionTests
     private const string MeshName = "hello-submission";
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(2);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdmitBeforeFirstHello_RetainsSnapshotUntilRemoteAdmit(bool admitBeforeHello)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var peer = context.CreateRouterSocket();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        var suffix = Guid.NewGuid().ToString("N");
+        var peerRid = RoutingId.From($"snapshot-peer-{suffix}");
+        var endpoint = $"inproc://snapshot-peer-{suffix}";
+        peer.SetRoutingId(peerRid);
+        peer.Bind(endpoint);
+        poller.Add(peer, PollEventFlags.PollIn, 1);
+        node.SetRoutingId(RoutingId.From($"snapshot-local-{suffix}"));
+        var bytes = ZLinkServiceWireCodec.EncodeRouteAdmission(
+            ServiceWireConstants.Command.Hello,
+            MeshName,
+            endpoint,
+            17,
+            1,
+            new Dictionary<string, uint> { [MeshName] = 100 }
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeRouteAdmission(bytes, out _, out var hello, out _)
+        );
+        var injected = 0;
+        node.SetPeerAdmissionSealGate(() =>
+        {
+            if (Interlocked.Exchange(ref injected, 1) == 0)
+            {
+                node.ProcessAdmission(
+                    peerRid,
+                    node.ObservePeerRoute(peerRid).SelectedGeneration,
+                    ServiceWireConstants.Command.Hello,
+                    hello,
+                    node._socket!.Send(peerRid)
+                );
+                node.AddChannel("publication");
+                if (admitBeforeHello)
+                    node.ProcessAdmission(
+                        peerRid,
+                        node.ObservePeerRoute(peerRid).SelectedGeneration,
+                        ServiceWireConstants.Command.Admit,
+                        hello,
+                        null
+                    );
+            }
+            return false;
+        });
+        node.Start();
+        node.ConnectPeer(endpoint, peerRid);
+        var admit = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Admit, admit.Command);
+        Assert.Equal(1UL, admit.Record.DescriptorRevision);
+        if (!admitBeforeHello)
+        {
+            var firstHello = ReceiveAdmission(peer, poller);
+            Assert.Equal(ServiceWireConstants.Command.Hello, firstHello.Command);
+            Assert.Equal(1UL, firstHello.Record.DescriptorRevision);
+            Assert.Equal(
+                admit.Bytes,
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Admit,
+                    firstHello.Record
+                )
+            );
+            node.ProcessAdmission(
+                peerRid,
+                node.ObservePeerRoute(peerRid).SelectedGeneration,
+                ServiceWireConstants.Command.Admit,
+                hello,
+                null
+            );
+        }
+        var update = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Update, update.Command);
+        Assert.Equal(2UL, update.Record.DescriptorRevision);
+        node.ProcessAdmission(
+            peerRid,
+            node.ObservePeerRoute(peerRid).SelectedGeneration,
+            ServiceWireConstants.Command.Hello,
+            hello,
+            node._socket!.Send(peerRid)
+        );
+        var duplicateResponse = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Admit, duplicateResponse.Command);
+        Assert.Equal(2UL, duplicateResponse.Record.DescriptorRevision);
+        node.AddChannel("after-admission");
+        var laterUpdate = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Update, laterUpdate.Command);
+        Assert.Equal(3UL, laterUpdate.Record.DescriptorRevision);
+        await CompleteSubmissions(node);
+    }
+
     [Fact]
     public async Task HelloBeforeFirstSubmission_DoesNotSuppressLocalHello()
     {
@@ -162,10 +258,17 @@ public sealed class MeshNodeHelloSubmissionTests
             node.RemovePeerConnection(unrelated);
             node.PublishDraining();
             await CompleteSubmissions(node);
-            Assert.Equal(
-                ServiceWireConstants.Command.Update,
-                ReceiveAdmission(peer, poller).Command
-            );
+            // Publication waits for the remote ADMIT; the inbound exchange retains its snapshot.
+            using var received = Received.Create();
+            while (peer.Recv(received, RecvFlags.DontWait))
+                Assert.False(
+                    ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                        received.FirstPart().AsSpan(),
+                        out _,
+                        out _,
+                        out _
+                    )
+                );
         }
         for (var period = 0; period < 2; period++)
         {
