@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Locations;
 
@@ -11,6 +12,12 @@ namespace Zlink.Framework.UnitTests;
 /// </summary>
 public sealed class LocationRuntimeQueryTests
 {
+    private static readonly JsonSerializerOptions ObjectPageJsonOptions = new(
+        JsonSerializerDefaults.Web
+    )
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
     private const string LiveOwner = "live-owner";
     private const string DeadOwner = "dead-owner";
     private static readonly TimeSpan ShortLease = TimeSpan.FromSeconds(15);
@@ -222,6 +229,354 @@ public sealed class LocationRuntimeQueryTests
         Assert.Single(second.Items);
         Assert.NotEqual(first.Items[0].GlobalId, second.Items[0].GlobalId);
         Assert.Equal("spot-a", Assert.Single(spots.Items).GlobalId);
+    }
+
+    private static JsonDocument ObjectPageFixture()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var path = Path.Combine(
+                directory.FullName,
+                "framework/runtime/conformance/object-location-pages-v1.json"
+            );
+            if (File.Exists(path))
+                return JsonDocument.Parse(File.ReadAllText(path));
+            directory = directory.Parent;
+        }
+        throw new FileNotFoundException("object-location-pages-v1.json");
+    }
+
+    public static IEnumerable<object[]> ObjectPageCases()
+    {
+        using var fixture = ObjectPageFixture();
+        foreach (var scenario in fixture.RootElement.GetProperty("cases").EnumerateArray())
+            yield return [scenario.GetProperty("name").GetString()!];
+    }
+
+    [Theory]
+    [MemberData(nameof(ObjectPageCases))]
+    public async Task Object_Location_Pages_Follow_Shared_Fixture(string name)
+    {
+        var encodingProbe = new ZLinkLocationObjectEntry(
+            "actor-é\"\\\b\t\n\f\r\u0001\u00a0\u2028\u2029\ue000",
+            1,
+            "mesh-é\"\\\b\t\n\f\r\u0001",
+            RoutingId.From("node-1"),
+            ZLinkLocationObjectState.Ready,
+            "type-é\"\\\b\t\n\f\r\u0001"
+        );
+        var encodedProbe = JsonSerializer.SerializeToUtf8Bytes(
+            new
+            {
+                globalId = encodingProbe.GlobalId,
+                objectGeneration = encodingProbe.ObjectGeneration,
+                meshName = encodingProbe.MeshName,
+                nodeRid = encodingProbe.NodeRid.ToString(),
+                state = encodingProbe.State.ToString(),
+                stableType = encodingProbe.StableType,
+            },
+            ObjectPageJsonOptions
+        );
+        Assert.Equal(
+            encodedProbe.Length,
+            ZLinkLocationObjectQuery.EncodedObjectSize(encodingProbe)
+        );
+        using var fixture = ObjectPageFixture();
+        var root = fixture.RootElement;
+        var scenario = root.GetProperty("cases")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == name);
+        var ids = new Dictionary<string, string>();
+        var entries = root.GetProperty("datasets")
+            .GetProperty(scenario.GetProperty("dataset").GetString()!)
+            .EnumerateArray()
+            .Select(row =>
+            {
+                var profile = root.GetProperty("profiles")
+                    .GetProperty(row.GetProperty("profile").GetString()!);
+                var id = row.GetProperty("id").GetString()!;
+                var globalId =
+                    profile.GetProperty("idPrefix").GetString()!
+                    + row.GetProperty("globalIdSuffix").GetString()!;
+                ids.Add(id, globalId);
+                var kind = row.GetProperty("kind").GetString() switch
+                {
+                    "actor" => ZLinkPlacementObjectKind.Actor,
+                    "user_spot" => ZLinkPlacementObjectKind.UserSpot,
+                    _ => ZLinkPlacementObjectKind.InstanceSpot,
+                };
+                var allocation = new ZLinkPlacementAllocation(
+                    ZLinkPlacementAllocationState.Active,
+                    kind,
+                    profile.GetProperty("stableType").GetString()!,
+                    new ZLinkMeshNodeDescriptorKey(
+                        profile.GetProperty("meshName").GetString()!,
+                        RoutingId.From(profile.GetProperty("nodeRid").GetString()!)
+                    ),
+                    1,
+                    new ZLinkCapacityVector(0, 0, null)
+                );
+                return new ZLinkAuthorityEntry(
+                    kind == ZLinkPlacementObjectKind.Actor
+                        ? ZLinkAuthorityKeyCodec.EncodeActor(globalId)
+                        : ZLinkAuthorityKeyCodec.EncodeSpot(globalId),
+                    new ZLinkAuthoritySnapshot(
+                        "v1",
+                        ReadOnlyMemory<byte>.Empty,
+                        1,
+                        1,
+                        LiveOwner,
+                        1,
+                        allocation,
+                        null,
+                        DateTimeOffset.UtcNow
+                    )
+                );
+            })
+            .ToArray();
+        var store = new ObjectPageFixtureStore(
+            entries,
+            scenario.GetProperty("storePageSize").GetInt32()
+        );
+        var options = new ZLinkLocationOptions();
+        var query = new ZLinkLocationRuntimeQueryService(
+            options,
+            store,
+            RegisteredMeshes,
+            new ZLinkOwnerLeaseTracker(store, options),
+            new ZLinkLocationRuntime(options, store)
+        );
+        var kind = scenario.GetProperty("objectKind").GetString() switch
+        {
+            "actor" => ZLinkLocationObjectKind.Actor,
+            "user_spot" => ZLinkLocationObjectKind.UserSpot,
+            _ => ZLinkLocationObjectKind.InstanceSpot,
+        };
+        var all = new List<string>();
+        string? cursor = null;
+        List<ZLinkLocationObjectEntry>? previousBoundaryItems = null;
+        string? previousBoundaryCursor = null;
+        foreach (var expected in scenario.GetProperty("expectedPages").EnumerateArray())
+        {
+            var page = await query.ListObjectLocationsAsync(
+                new ZLinkLocationObjectFilter(kind),
+                new ZLinkPageRequest(scenario.GetProperty("pageSize").GetInt32(), cursor)
+            );
+            var encodedPage = JsonSerializer.SerializeToUtf8Bytes(
+                new
+                {
+                    items = page.Items.Select(EncodedEntry),
+                    continuationToken = page.ContinuationToken,
+                },
+                ObjectPageJsonOptions
+            );
+            var calculatedItemsBytes = page.Items.Sum(ZLinkLocationObjectQuery.EncodedObjectSize);
+            var boundaryItemsBytes = calculatedItemsBytes + 4 * 1024 * 1024 - encodedPage.Length;
+            Assert.True(
+                ZLinkLocationObjectQuery.EncodedPageFits(
+                    boundaryItemsBytes,
+                    page.Items.Count,
+                    page.ContinuationToken
+                )
+            );
+            Assert.False(
+                ZLinkLocationObjectQuery.EncodedPageFits(
+                    boundaryItemsBytes + 1,
+                    page.Items.Count,
+                    page.ContinuationToken
+                )
+            );
+            Assert.True(encodedPage.Length <= 4 * 1024 * 1024, $"{name} encoded page size");
+            if (
+                previousBoundaryItems is not null
+                && scenario.GetProperty("pageSize").GetInt32() == 1000
+                && page.Items.Count > 0
+                && previousBoundaryItems.Count < 1000
+            )
+            {
+                var candidate = JsonSerializer.SerializeToUtf8Bytes(
+                    new
+                    {
+                        items = previousBoundaryItems.Append(page.Items[0]).Select(EncodedEntry),
+                        continuationToken = previousBoundaryCursor,
+                    },
+                    ObjectPageJsonOptions
+                );
+                Assert.True(candidate.Length > 4 * 1024 * 1024, $"{name} next item crosses 4 MiB");
+            }
+            previousBoundaryItems = page.Items.ToList();
+            previousBoundaryCursor = page.ContinuationToken;
+            Assert.Equal(
+                expected.EnumerateArray().Select(id => ids[id.GetString()!]),
+                page.Items.Select(entry => entry.GlobalId)
+            );
+            all.AddRange(page.Items.Select(entry => entry.GlobalId));
+            cursor = page.ContinuationToken;
+        }
+        Assert.Null(cursor);
+        Assert.Equal(
+            scenario.TryGetProperty("expectedScanCallsWithStoreLimit256", out var scans)
+                ? scans.GetInt32()
+                : scenario.GetProperty("expectedScanCalls").GetInt32(),
+            store.ScanCalls
+        );
+        Assert.Equal(
+            scenario.GetProperty("expectedAll").EnumerateArray().Select(id => ids[id.GetString()!]),
+            all
+        );
+        Assert.Equal(all.Count, all.Distinct().Count());
+
+        static object EncodedEntry(ZLinkLocationObjectEntry entry) =>
+            new
+            {
+                globalId = entry.GlobalId,
+                objectGeneration = entry.ObjectGeneration,
+                meshName = entry.MeshName,
+                nodeRid = entry.NodeRid.ToString(),
+                state = entry.State.ToString().ToLowerInvariant(),
+                stableType = entry.StableType,
+            };
+    }
+
+    [Fact]
+    public async Task Object_List_Rechecks_The_Cursor_Returned_For_Consumed_Rows()
+    {
+        var stableType = new string('r', 4000);
+        var expected = Enumerable
+            .Range(0, 1050)
+            .Select(index => $"room-{index:D4}-{new string('%', 240)}")
+            .ToArray();
+        var entries = expected
+            .Select(globalId =>
+            {
+                var allocation = new ZLinkPlacementAllocation(
+                    ZLinkPlacementAllocationState.Active,
+                    ZLinkPlacementObjectKind.UserSpot,
+                    stableType,
+                    new ZLinkMeshNodeDescriptorKey("play", RoutingId.From("node-1")),
+                    1,
+                    new ZLinkCapacityVector(0, 0, null)
+                );
+                return new ZLinkAuthorityEntry(
+                    ZLinkAuthorityKeyCodec.EncodeSpot(globalId),
+                    new ZLinkAuthoritySnapshot(
+                        "v1",
+                        ReadOnlyMemory<byte>.Empty,
+                        1,
+                        1,
+                        LiveOwner,
+                        1,
+                        allocation,
+                        null,
+                        DateTimeOffset.UtcNow
+                    )
+                );
+            })
+            .ToArray();
+        var store = new ObjectPageFixtureStore(entries, 2, inflateRequeryCursor: true);
+        var options = new ZLinkLocationOptions();
+        var query = new ZLinkLocationRuntimeQueryService(
+            options,
+            store,
+            RegisteredMeshes,
+            new ZLinkOwnerLeaseTracker(store, options),
+            new ZLinkLocationRuntime(options, store)
+        );
+        var actual = new List<string>();
+        string? cursor = null;
+        do
+        {
+            var page = await query.ListObjectLocationsAsync(
+                new ZLinkLocationObjectFilter(ZLinkLocationObjectKind.UserSpot),
+                new ZLinkPageRequest(1000, cursor)
+            );
+            if (
+                store.FirstRowRequeryOffset is int expectedOffset
+                && cursor is not null
+                && int.Parse(cursor.Split(':', 2)[0]) == expectedOffset
+            )
+                Assert.Equal(expected[expectedOffset], page.Items[0].GlobalId);
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+                new
+                {
+                    items = page.Items.Select(entry => new
+                    {
+                        globalId = entry.GlobalId,
+                        objectGeneration = entry.ObjectGeneration,
+                        meshName = entry.MeshName,
+                        nodeRid = entry.NodeRid.ToString(),
+                        state = entry.State.ToString().ToLowerInvariant(),
+                        stableType = entry.StableType,
+                    }),
+                    continuationToken = page.ContinuationToken,
+                },
+                ObjectPageJsonOptions
+            );
+            Assert.True(bytes.Length <= 4 * 1024 * 1024);
+            actual.AddRange(page.Items.Select(entry => entry.GlobalId));
+            cursor = page.ContinuationToken;
+        } while (cursor is not null);
+        Assert.NotNull(store.FirstRowRequeryOffset);
+        Assert.True(store.RequeryCalls > 0);
+        Assert.Equal(expected, actual);
+        Assert.Equal(actual.Count, actual.Distinct().Count());
+    }
+
+    private sealed class ObjectPageFixtureStore(
+        ZLinkAuthorityEntry[] entries,
+        int storePageSize,
+        bool inflateRequeryCursor = false
+    ) : ZLinkLocationStoreTestDouble
+    {
+        private readonly Dictionary<int, int> callsByOffset = [];
+
+        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
+            string ownerId,
+            CancellationToken cancellationToken = default
+        ) =>
+            ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
+                new ZLinkOwnerLeaseReadResult.Missing()
+            );
+
+        public int ScanCalls { get; private set; }
+        public int RequeryCalls { get; private set; }
+        public int? FirstRowRequeryOffset { get; private set; }
+
+        public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
+            string prefix,
+            ZLinkAuthorityScanCursor? cursor,
+            int limit,
+            CancellationToken cancellationToken = default
+        )
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+            ScanCalls++;
+            Assert.True(prefix is "zla1:a:" or "zla1:s:");
+            var rows = entries
+                .Where(entry => entry.Key.Value.StartsWith(prefix, StringComparison.Ordinal))
+                .ToArray();
+            var offset = cursor is null ? 0 : int.Parse(cursor.Value.Encoded.Split(':', 2)[0]);
+            var callCount = callsByOffset.GetValueOrDefault(offset);
+            callsByOffset[offset] = callCount + 1;
+            if (callCount > 0)
+                RequeryCalls++;
+            if (callCount > 0 && limit == 1)
+                FirstRowRequeryOffset ??= offset;
+            var end = Math.Min(offset + Math.Min(limit, storePageSize), rows.Length);
+            var nextCursor = end < rows.Length ? end.ToString() : null;
+            if (inflateRequeryCursor && callCount > 0 && nextCursor is not null)
+                nextCursor +=
+                    ":" + new string('c', Math.Min(rows[end - 1].Key.Value.Length * 4, 3000));
+            return ValueTask.FromResult<ZLinkAuthorityScanResult>(
+                new ZLinkAuthorityScanResult.Page(
+                    new ZLinkAuthorityPage(
+                        rows[offset..end],
+                        nextCursor is null ? null : new ZLinkAuthorityScanCursor(nextCursor)
+                    )
+                )
+            );
+        }
     }
 
     [Fact]
@@ -563,7 +918,7 @@ public sealed class LocationRuntimeQueryTests
             var allocation = new ZLinkPlacementAllocation(
                 ZLinkPlacementAllocationState.Reserved,
                 ZLinkPlacementObjectKind.Actor,
-                new string('t', 800_000),
+                new string('t', 5 * 1024 * 1024),
                 new ZLinkMeshNodeDescriptorKey("play", RoutingId.From("node-1")),
                 1,
                 new ZLinkCapacityVector(1, 0, null)
