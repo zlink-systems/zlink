@@ -22,6 +22,15 @@ public sealed partial class StatefulServiceRuntimeTests
         bool authorityChanged
     )
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                nameof(
+                    ApplicationRequest_OtherGenerationAdmittedPeerPreservesTerminalWithoutSubmission
+                )
+            )
+        )
+            return;
         var time = new ControllableTimeProvider();
         await using var native = Systems.Zlink.Zlink.CreateContext();
         var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
@@ -115,6 +124,13 @@ public sealed partial class StatefulServiceRuntimeTests
         bool authorityChanged
     )
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                nameof(InstanceSpotRequest_OtherGenerationAdmittedPeerWaitsForTargetGeneration)
+            )
+        )
+            return;
         var time = new ControllableTimeProvider();
         await using var native = Systems.Zlink.Zlink.CreateContext();
         var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
@@ -321,6 +337,13 @@ public sealed partial class StatefulServiceRuntimeTests
     [InlineData(true)]
     public async Task InfrastructureAdmission_WaitsForAuthorityLifecycleDescriptor(bool olderPeer)
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                nameof(InfrastructureAdmission_WaitsForAuthorityLifecycleDescriptor)
+            )
+        )
+            return;
         var time = new ControllableTimeProvider();
         await using var native = Systems.Zlink.Zlink.CreateContext();
         var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
@@ -421,6 +444,13 @@ public sealed partial class StatefulServiceRuntimeTests
         bool authorityChanged
     )
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                nameof(NativeSessionBind_AbsentDescriptorPreservesTerminalWithoutSubmission)
+            )
+        )
+            return;
         var time = new ControllableTimeProvider();
         await using var native = Systems.Zlink.Zlink.CreateContext();
         var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
@@ -491,6 +521,15 @@ public sealed partial class StatefulServiceRuntimeTests
         bool authorityChanged
     )
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                nameof(
+                    NativeSessionBind_OtherGenerationAdmittedPeerPreservesTerminalWithoutSubmission
+                )
+            )
+        )
+            return;
         var time = new ControllableTimeProvider();
         await using var native = Systems.Zlink.Zlink.CreateContext();
         var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
