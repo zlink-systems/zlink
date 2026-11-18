@@ -236,7 +236,7 @@ dependencies {
 }
 
 shadow {
-    addShadowVariantIntoJavaComponent = false
+    addShadowVariantIntoJavaComponent = true
 }
 
 tasks.shadowJar {
@@ -244,6 +244,13 @@ tasks.shadowJar {
     excludes.remove("module-info.class")
     archiveClassifier.set("")
     relocate("com.google.protobuf", "systems.zlink.framework.internal.shaded.protobuf")
+}
+
+listOf("apiElements", "runtimeElements").forEach { variantName ->
+    configurations.named(variantName) {
+        outgoing.artifacts.clear()
+        outgoing.artifact(tasks.shadowJar)
+    }
 }
 
 tasks.jar {
