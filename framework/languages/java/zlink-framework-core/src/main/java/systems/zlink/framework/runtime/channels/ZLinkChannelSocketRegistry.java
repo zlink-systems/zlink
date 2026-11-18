@@ -612,7 +612,7 @@ final class ZLinkChannelSocketRegistry {
             if (owner.isOnLane()) return submission.get();
             var flow = ZLinkFlowContext.current();
             if (!ZLinkBlockingCalls.isRuntimeExecutionContext()) {
-                return owner.awaitTurn(() -> ZLinkFlowContext.call(flow, submission));
+                return owner.awaitResult(() -> ZLinkFlowContext.call(flow, submission));
             }
             return owner.runNowOrQueue(() -> ZLinkFlowContext.call(flow, submission))
                     .thenCompose(stage -> stage);
