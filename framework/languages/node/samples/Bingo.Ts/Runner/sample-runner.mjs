@@ -94,7 +94,7 @@ export async function runSample(ctx) {
     ['bingo-lifecycle session-disconnect actor=player-2 destroy=false', 1]
   ];
   for (const [marker, expected] of playEvidence) {
-    if (expected > 0) await waitCombinedLogCount(ctx, ['play-a', 'play-b'], marker, expected);
+    if (expected > 0) await ctx.waitLogCount(['play-a', 'play-b'], marker, expected);
   }
   for (const [marker, expected] of sessionEvidence) {
     if (expected > 0) await waitCombinedLog(ctx, ['session-a', 'session-b'], marker);
@@ -143,23 +143,12 @@ async function waitCombinedLog(ctx, roles, marker) {
   await ctx.waitAnyLog(roles.map((name) => ({ name, marker })));
 }
 
-async function waitCombinedLogCount(ctx, roles, marker, expected) {
-  await waitCombinedLog(ctx, roles, marker);
-  const deadline = Date.now() + 30_000;
-  while (combinedLogCount(ctx, roles, marker) < expected && Date.now() < deadline)
-    await new Promise((resolve) => setTimeout(resolve, 100));
-}
-
-function combinedLogCount(ctx, roles, marker) {
-  return roles.reduce((count, role) => {
+function assertCombinedLogCount(ctx, roles, marker, expected) {
+  const actual = roles.reduce((count, role) => {
     const file = path.join(ctx.logDir, `${role}.log`);
     if (!fs.existsSync(file)) return count;
     return count + fs.readFileSync(file, 'utf8').split(marker).length - 1;
   }, 0);
-}
-
-function assertCombinedLogCount(ctx, roles, marker, expected) {
-  const actual = combinedLogCount(ctx, roles, marker);
   if (actual !== expected) {
     throw new Error(
       `${roles.join('/')} logs marker '${marker}' count was ${actual}; expected ${expected}.`
