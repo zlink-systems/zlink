@@ -5881,7 +5881,9 @@ TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturn
 TEST (ActorMaintenanceJoin, TargetRejectsChangedCoordinatorFence)
 {
     namespace stateful = fw::runtime::stateful;
-    for (const auto changed : {"none", "owner", "lease", "baseline", "empty-baseline"}) {
+    // A join commit has no relocation: only the source StoreVersion fences it.
+    for (const auto changed : {"none", "owner", "lease", "baseline", "empty-baseline", "join",
+                               "join-baseline"}) {
         SCOPED_TRACE (changed);
         auto evidence = std::make_shared<observations_t> ();
         auto store = std::make_shared<observed_location_store_t> ();
@@ -5932,21 +5934,26 @@ TEST (ActorMaintenanceJoin, TargetRejectsChangedCoordinatorFence)
             coordinator.owner_id += "-other";
         if (std::string_view (changed) == "lease")
             ++coordinator.lease_generation;
-        if (std::string_view (changed) == "baseline")
+        const bool join = std::string_view (changed).starts_with ("join");
+        if (std::string_view (changed) == "baseline"
+            || std::string_view (changed) == "join-baseline")
             baseline += "-other";
         if (std::string_view (changed) == "empty-baseline")
             baseline.clear ();
         stateful::public_authority_store_adapter_t adapter (repository);
         const stateful::relocation_authority_fence_t fence{
           source_ref.kind, source_ref.key, baseline, coordinator, target_owner, {4718, 2}};
-        const bool accepted = std::string_view (changed) == "none";
-        EXPECT_EQ (adapter.observe_relocation (fence),
-                   accepted ? stateful::relocation_authority_t::unsettled
-                            : stateful::relocation_authority_t::source_preserved);
+        const bool accepted =
+          std::string_view (changed) == "none" || std::string_view (changed) == "join";
+        if (!join)
+            EXPECT_EQ (adapter.observe_relocation (fence),
+                       accepted ? stateful::relocation_authority_t::unsettled
+                                : stateful::relocation_authority_t::source_preserved);
         const auto published =
           adapter.publish (source_ref, target_ref, target_owner, placement, "target-fence", 1, {},
                            fw::runtime::encode_actor_authority_payload (*payload), baseline,
-                           fence.relocation, coordinator);
+                           join ? decltype (fence.relocation){} : fence.relocation,
+                           join ? fw::location_owner_token_t{} : coordinator);
         EXPECT_EQ (published.status, accepted ? stateful::authority_publish_status_t::published
                                               : stateful::authority_publish_status_t::conflict);
         const auto after =

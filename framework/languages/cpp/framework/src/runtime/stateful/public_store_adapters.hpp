@@ -133,8 +133,14 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             || target_placement.node_rid.value () != target.node_id
             || !same_owner (target_placement.owner, target_owner))
             return {authority_publish_status_t::failed, std::nullopt};
-        if (!holds_source_fence (*snapshot, source.key, relocation, source_owner,
-                                 expected_store_version))
+        // A Spot Actor join commit fences only the source StoreVersion
+        // (05-spot-actor-membership :48); a relocation carries its coordinator fence
+        // (04-relocation-flow §3, §4.5).
+        const bool relocating = relocation.high != 0 || relocation.low != 0;
+        if (relocating ? !holds_source_fence (*snapshot, source.key, relocation, source_owner,
+                                              expected_store_version)
+                       : !expected_store_version.empty ()
+                           && snapshot->store_version != expected_store_version)
             return {authority_publish_status_t::conflict, decode_current (read)};
         const std::string cas_version = snapshot->store_version;
         std::vector<std::byte> application_payload = target_application_payload;
