@@ -16,10 +16,12 @@ struct outage_lease_profile_t
         if (!path || !*path)
             throw std::runtime_error ("ZLINK_OUTAGE_LEASE_PROFILE is required");
         std::ifstream input (path);
-        if (!input) throw std::runtime_error ("cannot read outage lease profile");
+        if (!input)
+            throw std::runtime_error ("cannot read outage lease profile");
         std::string line;
         while (std::getline (input, line)) {
-            if (!line.empty () && line.back () == '\r') line.pop_back ();
+            if (!line.empty () && line.back () == '\r')
+                line.pop_back ();
             const auto equal = line.find ('=');
             if (equal != std::string::npos && line.front () != '#')
                 values.emplace (line.substr (0, equal), line.substr (equal + 1));
@@ -28,7 +30,9 @@ struct outage_lease_profile_t
             throw std::runtime_error ("outage profile requires StoreOutageRetention");
     }
     std::chrono::milliseconds duration (const std::string &key) const
-    { return std::chrono::milliseconds (std::stoll (values.at (key))); }
+    {
+        return std::chrono::milliseconds (std::stoll (values.at (key)));
+    }
 };
 
 // Observation uses the repository's own key and record codecs. The overlay is
@@ -37,7 +41,7 @@ class outage_observation_store_t final : public fw::location_store_t
 {
   public:
     explicit outage_observation_store_t (fw::location_store_t *inner = nullptr,
-                                          const fw::store_write_request_t *overlay = nullptr) :
+                                         const fw::store_write_request_t *overlay = nullptr) :
         _inner (inner), _overlay (overlay)
     {
     }
@@ -49,9 +53,11 @@ class outage_observation_store_t final : public fw::location_store_t
             for (const auto &mutation : _overlay->mutations) {
                 if (const auto *put = std::get_if<fw::store_put_t> (&mutation);
                     put && put->key.value == key.value) {
-                    co_return fw::store_found_t{fw::store_value_t{
-                      put->bytes, {"outage-observation"}, std::nullopt,
-                      std::chrono::system_clock::now ()}};
+                    co_return fw::store_found_t{
+                      fw::store_value_t{put->bytes,
+                                        {"outage-observation"},
+                                        std::nullopt,
+                                        std::chrono::system_clock::now ()}};
                 }
                 if (const auto *removed = std::get_if<fw::store_delete_t> (&mutation);
                     removed && removed->key.value == key.value)
@@ -89,26 +95,31 @@ class outage_location_store_t final : public fw::location_store_t
     static std::int64_t now_nanos ()
     {
         return std::chrono::duration_cast<std::chrono::nanoseconds> (
-          std::chrono::steady_clock::now ().time_since_epoch ()).count ();
+                 std::chrono::steady_clock::now ().time_since_epoch ())
+          .count ();
     }
     void timing_event (const std::string &stage, std::int64_t nanos)
     {
-        if (events) events ("outage-timing|event=" + stage + "|monotonicMs="
-                            + std::to_string (nanos / 1000000.0));
+        if (events)
+            events ("outage-timing|event=" + stage
+                    + "|monotonicMs=" + std::to_string (nanos / 1000000.0));
     }
     void set_cutoff (std::chrono::steady_clock::time_point cutoff)
     {
-        cutoff_nanos.store (std::chrono::duration_cast<std::chrono::nanoseconds> (
-          cutoff.time_since_epoch ()).count ());
+        cutoff_nanos.store (
+          std::chrono::duration_cast<std::chrono::nanoseconds> (cutoff.time_since_epoch ())
+            .count ());
         const auto lifetime = profile.duration ("ttlMs") + 2 * profile.duration ("fencingMarginMs");
-        timing_event ("t0", cutoff_nanos.load ()
-          - std::chrono::duration_cast<std::chrono::nanoseconds> (lifetime).count ());
+        timing_event ("t0",
+                      cutoff_nanos.load ()
+                        - std::chrono::duration_cast<std::chrono::nanoseconds> (lifetime).count ());
         timing_event ("cutoff", cutoff_nanos.load ());
     }
     void check_timing () const
     {
         if (failure.load () == 1)
-            throw std::runtime_error ("deadline-exceeded|Preserve submission or confirmation exceeded cutoff");
+            throw std::runtime_error (
+              "deadline-exceeded|Preserve submission or confirmation exceeded cutoff");
         if (failure.load () == 2)
             throw std::runtime_error ("discarded|actor authority Delete during recovery");
         if (recovering.load () && (!descriptor_delivered.load () || !cas_delivered.load ())
@@ -123,29 +134,37 @@ class outage_location_store_t final : public fw::location_store_t
             failure.store (1);
             check_timing ();
         }
-        if (descriptor) descriptor_delivered.store (true);
-        else cas_delivered.store (true);
+        if (descriptor)
+            descriptor_delivered.store (true);
+        else
+            cas_delivered.store (true);
     }
     std::function<void (const std::string &)> events;
     outage_lease_profile_t profile;
     std::atomic<std::int64_t> cutoff_nanos{0}, cas_submitted_nanos{0};
     std::atomic<int> failure{0};
     explicit outage_location_store_t (std::shared_ptr<fw::location_store_t> inner,
-                                       std::string actor_id,
-                                       std::string mesh,
-                                       std::string node,
-                                       bool target) :
-        inner (std::move (inner)), repository (*this->inner),
-        actor_key (runtime::actor_authority_key (actor_id)), target (target),
-        mesh (std::move (mesh)), node (std::move (node))
+                                      std::string actor_id,
+                                      std::string mesh,
+                                      std::string node,
+                                      bool target) :
+        inner (std::move (inner)),
+        repository (*this->inner),
+        actor_key (runtime::actor_authority_key (actor_id)),
+        target (target),
+        mesh (std::move (mesh)),
+        node (std::move (node))
     {
         outage_observation_store_t capture;
         runtime::provider_location_repository_t codecs (capture);
         codecs.read_authority_core (actor_key).result ().value ();
         authority_store_key = capture.observed_key;
-        codecs.remove_mesh_node (
-          fw::mesh_node_descriptor_key_t{this->mesh, zlink::routing_id_t::from (this->node)},
-          fw::location_owner_token_t{"observation", 1}).result ().value ();
+        codecs
+          .remove_mesh_node (
+            fw::mesh_node_descriptor_key_t{this->mesh, zlink::routing_id_t::from (this->node)},
+            fw::location_owner_token_t{"observation", 1})
+          .result ()
+          .value ();
         descriptor_store_key = capture.observed_key;
     }
 
@@ -181,10 +200,11 @@ class outage_location_store_t final : public fw::location_store_t
         }
 
         if (recovering.load () && (!descriptor_delivered.load () || !cas_delivered.load ())
-            && std::any_of (request.mutations.begin (), request.mutations.end (), [&] (const auto &mutation) {
-                const auto *removed = std::get_if<fw::store_delete_t> (&mutation);
-                return removed && removed->key.value == authority_store_key.value;
-            })) {
+            && std::any_of (request.mutations.begin (), request.mutations.end (),
+                            [&] (const auto &mutation) {
+                                const auto *removed = std::get_if<fw::store_delete_t> (&mutation);
+                                return removed && removed->key.value == authority_store_key.value;
+                            })) {
             failure.store (2);
             check_timing ();
         }
@@ -193,8 +213,11 @@ class outage_location_store_t final : public fw::location_store_t
         if (recovering.load () && authority && !cas_delivered.load ()) {
             cas_submitted_nanos.store (submitted_at);
             timing_event ("cas-submit", submitted_at);
-            if (submitted_at + std::chrono::duration_cast<std::chrono::nanoseconds> (
-                  profile.duration ("renewTimeoutMs")).count () > cutoff_nanos.load ()) {
+            if (submitted_at
+                  + std::chrono::duration_cast<std::chrono::nanoseconds> (
+                      profile.duration ("renewTimeoutMs"))
+                      .count ()
+                > cutoff_nanos.load ()) {
                 failure.store (1);
                 check_timing ();
             }
@@ -209,8 +232,10 @@ class outage_location_store_t final : public fw::location_store_t
                 cas_held.store (true);
                 co_await cas_release.task ();
             }
-            if (descriptor && !descriptor_delivered.load ()) confirm (true);
-            if (authority && !cas_delivered.load ()) confirm (false);
+            if (descriptor && !descriptor_delivered.load ())
+                confirm (true);
+            if (authority && !cas_delivered.load ())
+                confirm (false);
         }
         co_return result;
     }
@@ -257,8 +282,7 @@ class outage_location_store_t final : public fw::location_store_t
         }
     }
 
-    static bool contains_put (const fw::store_write_request_t &request,
-                               const fw::store_key_t &key)
+    static bool contains_put (const fw::store_write_request_t &request, const fw::store_key_t &key)
     {
         return std::any_of (request.mutations.begin (), request.mutations.end (),
                             [&] (const auto &mutation) {

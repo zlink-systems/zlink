@@ -210,9 +210,14 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             );
         var retained = !episode.Discarded && episode.Executions.Count > 0;
         var preserved = episode.Executions.Contains(execution!);
-        var member = execution is ZLinkActorRuntimeState { Activation: { } parent }
+        var member =
+            execution is ZLinkActorRuntimeState { Activation: { } parent }
             && episode.Executions.Contains(parent);
-        if (retained && (execution is null || preserved || member) && Volatile.Read(ref episode.Recovering) != 0)
+        if (
+            retained
+            && (execution is null || preserved || member)
+            && Volatile.Read(ref episode.Recovering) != 0
+        )
             return ZLinkObjectExecutionStatus.Paused;
         if (execution is null)
             return Status(retained || IsOwnerAdmissionOpenOnLane());

@@ -751,11 +751,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.RelocationMoving;
             }
-            TryCommitAcceptedWorkUnderLock(
-                candidate,
-                out item,
-                out var scheduleDrain
-            );
+            TryCommitAcceptedWorkUnderLock(candidate, out item, out var scheduleDrain);
             drain = scheduleDrain ? ReserveDrainUnderLock() : null;
         }
 

@@ -462,7 +462,11 @@ internal sealed class UserSpotTargetHostedService(
                 break;
             }
 
-            if (observed.Status.State is ZLinkFrameworkRuntimeState.Error or ZLinkFrameworkRuntimeState.Stopped)
+            if (
+                observed.Status.State
+                is ZLinkFrameworkRuntimeState.Error
+                    or ZLinkFrameworkRuntimeState.Stopped
+            )
             {
                 throw new InvalidOperationException(
                     $"Framework runtime reached {observed.Status.State} before serving."
@@ -471,7 +475,9 @@ internal sealed class UserSpotTargetHostedService(
         }
         if (!serving)
         {
-            throw new InvalidOperationException("Framework runtime observation ended before serving.");
+            throw new InvalidOperationException(
+                "Framework runtime observation ended before serving."
+            );
         }
 
         var created = await spots
@@ -615,9 +621,12 @@ internal sealed class UserSpotSourceHostedService(
 
         if (startFilePath is not null)
         {
-            using var startDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var startDeadline = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken
+            );
             startDeadline.CancelAfter(TimeSpan.FromSeconds(60));
-            while (!File.Exists(startFilePath)) await Task.Delay(10, startDeadline.Token);
+            while (!File.Exists(startFilePath))
+                await Task.Delay(10, startDeadline.Token);
         }
 
         var created = await actors
@@ -656,7 +665,8 @@ internal sealed class UserSpotSourceHostedService(
         );
         if (outage is not null)
         {
-            if (!reply.Accepted) throw new InvalidOperationException("Outage relocation Join was rejected.");
+            if (!reply.Accepted)
+                throw new InvalidOperationException("Outage relocation Join was rejected.");
             outage.JoinCompleted.TrySetResult();
         }
     }

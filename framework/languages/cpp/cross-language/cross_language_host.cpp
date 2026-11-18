@@ -1210,12 +1210,19 @@ class user_spot_discovery_probe_handler_t
 class outage_control_t
 {
   public:
-    outage_control_t (event_sink_t &sink, fw::actor_manager_t &manager,
-                       fw::actor_client_t &actors, runtime::location_runtime_t &location,
-                       std::atomic_bool &stopping) :
-        _sink (sink), _manager (manager), _actors (actors), _location (location),
-        _stopping (stopping), _prefix (option ("outage-control-prefix")),
-        _run (option ("outage-run-id")), _actor (require ("actor-id"))
+    outage_control_t (event_sink_t &sink,
+                      fw::actor_manager_t &manager,
+                      fw::actor_client_t &actors,
+                      runtime::location_runtime_t &location,
+                      std::atomic_bool &stopping) :
+        _sink (sink),
+        _manager (manager),
+        _actors (actors),
+        _location (location),
+        _stopping (stopping),
+        _prefix (option ("outage-control-prefix")),
+        _run (option ("outage-run-id")),
+        _actor (require ("actor-id"))
     {
         g_outage_store->events = [&sink] (const std::string &line) { sink.append (line); };
     }
@@ -1231,9 +1238,11 @@ class outage_control_t
                 if (command == "steady") {
                     if (g_outage_store->target) {
                         _initial = g_outage_store->authority ();
-                        const auto found = _manager.find (fw::actor_id_t (_actor)).result ().value ();
-                        check (found && found->node_rid ().value ()
-                                         == _initial.allocation.target.node_rid.value ()
+                        const auto found =
+                          _manager.find (fw::actor_id_t (_actor)).result ().value ();
+                        check (found
+                                 && found->node_rid ().value ()
+                                      == _initial.allocation.target.node_rid.value ()
                                  && found->node_rid ().value () != g_user_spot_node_rid,
                                "target steady Find did not return source");
                         check (g_outage_probe_calls.load () == 0,
@@ -1242,7 +1251,9 @@ class outage_control_t
                         continue;
                     }
                     wait ([&] {
-                        return _location.observation_status_task ().result ().value ()
+                        return _location.observation_status_task ()
+                          .result ()
+                          .value ()
                           .owner_lease_healthy;
                     });
                     _initial = g_outage_store->authority ();
@@ -1255,40 +1266,47 @@ class outage_control_t
                            "steady Actor probe did not execute on source");
                     _instance = g_outage_actor_instance.load ();
                     _instances = g_outage_instances.load ();
-                    _sink.append ("outage-steady|instance=" + std::to_string (_instance)
-                                  + "|creations=" + std::to_string (_instances)
-                                  + "|objectGeneration="
-                                  + std::to_string (_initial.object_generation)
-                                  + "|authorityOwnerGeneration="
-                                  + std::to_string (_initial.authority_owner_generation)
-                                  + "|lease="
-                                  + std::to_string (_initial.owner.lease_generation));
+                    _sink.append (
+                      "outage-steady|instance=" + std::to_string (_instance)
+                      + "|creations=" + std::to_string (_instances) + "|objectGeneration="
+                      + std::to_string (_initial.object_generation) + "|authorityOwnerGeneration="
+                      + std::to_string (_initial.authority_owner_generation)
+                      + "|lease=" + std::to_string (_initial.owner.lease_generation));
                 } else if (command == "outage") {
                     g_outage_store->unavailable.store (true);
                     wait ([&] { return g_outage_store->failure_observed.load (); });
                     wait ([&] {
-                        return _location.observation_status_task ().result ().value ().store_outage_cutoff.has_value ();
+                        return _location.observation_status_task ()
+                          .result ()
+                          .value ()
+                          .store_outage_cutoff.has_value ();
                     });
-                    g_outage_store->set_cutoff (*_location.observation_status_task ().result ().value ().store_outage_cutoff);
+                    g_outage_store->set_cutoff (
+                      *_location.observation_status_task ().result ().value ().store_outage_cutoff);
                 } else if (command == "expired") {
                     wait ([&] {
-                        const auto lease = g_outage_store->repository
-                          .read_owner_lease (_initial.owner.owner_id).result ().value ();
+                        const auto lease =
+                          g_outage_store->repository.read_owner_lease (_initial.owner.owner_id)
+                            .result ()
+                            .value ();
                         return std::holds_alternative<fw::owner_lease_missing_t> (lease);
                     });
                 } else if (command == "recover") {
                     g_outage_store->begin_recovery ();
                     wait ([&] {
-                        const auto lease = g_outage_store->repository
-                          .read_owner_lease (_initial.owner.owner_id).result ().value ();
+                        const auto lease =
+                          g_outage_store->repository.read_owner_lease (_initial.owner.owner_id)
+                            .result ()
+                            .value ();
                         const auto *found = std::get_if<fw::owner_lease_found_t> (&lease);
-                        if (!found || found->token.lease_generation
-                                        == _initial.owner.lease_generation)
+                        if (!found
+                            || found->token.lease_generation == _initial.owner.lease_generation)
                             return false;
                         _recovered_lease = found->token.lease_generation;
                         return true;
                     });
-                    g_outage_store->timing_event ("new-claim", outage_location_store_t::now_nanos ());
+                    g_outage_store->timing_event ("new-claim",
+                                                  outage_location_store_t::now_nanos ());
                     _sink.append ("outage-recovered-lease|lease="
                                   + std::to_string (_recovered_lease));
                 } else if (command == "release-descriptor") {
@@ -1308,7 +1326,8 @@ class outage_control_t
                     });
                     const auto calls = g_outage_probe_calls.load ();
                     const auto reply = probe ("outage-partial");
-                    check (!reply && reply.error_kind () == fw::framework_error_kind_t::shutting_down,
+                    check (!reply
+                             && reply.error_kind () == fw::framework_error_kind_t::shutting_down,
                            "partial recovery operation must return ShuttingDown");
                     check (g_outage_probe_calls.load () == calls,
                            "partial recovery executed an application handler");
@@ -1316,7 +1335,8 @@ class outage_control_t
                 } else if (command == "resumed") {
                     g_outage_store->check_timing ();
                     check (g_outage_store->cas_submitted_nanos.load () != 0
-                             && g_outage_store->descriptor_delivered.load () && g_outage_store->cas_delivered.load (),
+                             && g_outage_store->descriptor_delivered.load ()
+                             && g_outage_store->cas_delivered.load (),
                            "Preserve confirmations missing");
                     wait ([&] {
                         const auto status = _location.observation_status_task ().result ().value ();
@@ -1332,8 +1352,10 @@ class outage_control_t
                              && authority.owner.owner_id == _initial.owner.owner_id
                              && authority.owner.lease_generation == _recovered_lease,
                            "recovery changed incarnation or did not preserve the new lease");
-                    const auto descriptors = g_outage_store->repository
-                      .list_mesh_nodes_core (require ("mesh-name")).result ().value ();
+                    const auto descriptors =
+                      g_outage_store->repository.list_mesh_nodes_core (require ("mesh-name"))
+                        .result ()
+                        .value ();
                     const auto descriptor = std::find_if (
                       descriptors.items.begin (), descriptors.items.end (), [&] (const auto &item) {
                           return item.rid.to_string () == g_user_spot_node_rid;
@@ -1358,8 +1380,9 @@ class outage_control_t
                 } else if (command == "staged") {
                     wait ([&] { return g_outage_store->staged.load (); });
                     auto found = _manager.find (fw::actor_id_t (_actor)).result ().value ();
-                    check (found && found->node_rid ().value ()
-                                     == _initial.allocation.target.node_rid.value (),
+                    check (found
+                             && found->node_rid ().value ()
+                                  == _initial.allocation.target.node_rid.value (),
                            "public Find exposed the staged target");
                     check (g_outage_probe_calls.load () == 0,
                            "staged target executed an application handler");
@@ -1379,8 +1402,8 @@ class outage_control_t
                             std::rethrow_exception (reply.exception ());
                         throw std::runtime_error (
                           std::string ("relocation target probe failed|kind=")
-                          + error_kind_wire_name (reply.error_kind ()) + "|error="
-                          + reply.error ()->what ());
+                          + error_kind_wire_name (reply.error_kind ())
+                          + "|error=" + reply.error ()->what ());
                     }
                     const auto owner = _manager.find (fw::actor_id_t (_actor)).result ().value ();
                     check (owner.has_value (), "relocation public Find returned no Actor");
@@ -1389,11 +1412,10 @@ class outage_control_t
                              + reply.value ().spot_id + "|expected=" + require ("spot-id"));
                     check (reply.value ().node_rid == owner->node_rid ().value (),
                            "relocation target probe disagreed with public Find|reply="
-                             + reply.value ().node_rid + "|owner="
-                             + std::string (owner->node_rid ().value ()));
-                    check (g_outage_store->target
-                             ? reply.value ().node_rid == g_user_spot_node_rid
-                             : reply.value ().node_rid != g_user_spot_node_rid,
+                             + reply.value ().node_rid
+                             + "|owner=" + std::string (owner->node_rid ().value ()));
+                    check (g_outage_store->target ? reply.value ().node_rid == g_user_spot_node_rid
+                                                  : reply.value ().node_rid != g_user_spot_node_rid,
                            "relocation target probe executed on unexpected node|node="
                              + reply.value ().node_rid + "|local=" + g_user_spot_node_rid);
                     const auto followup = probe ("outage-followup");
@@ -1406,7 +1428,8 @@ class outage_control_t
                 }
                 ack (sequence, command);
             }
-        } catch (const std::exception &error) {
+        }
+        catch (const std::exception &error) {
             _sink.append ("outage-error|run=" + _run + "|seq=" + std::to_string (_sequence)
                           + "|phase=" + _phase + "|error=" + std::string (error.what ()));
         }
@@ -1433,8 +1456,7 @@ class outage_control_t
             g_outage_store->check_timing ();
             std::ifstream input (_prefix + ".command");
             std::string run, encoded_sequence;
-            if (std::getline (input, run, '\t')
-                && std::getline (input, encoded_sequence, '\t')
+            if (std::getline (input, run, '\t') && std::getline (input, encoded_sequence, '\t')
                 && std::getline (input, command) && run == _run) {
                 sequence = std::stoull (encoded_sequence);
                 if (sequence > _sequence) {
@@ -1458,7 +1480,9 @@ class outage_control_t
     fw::result_t<user_spot_probe_res_t> probe (const std::string &marker)
     {
         return _actors.request (fw::actor_id_t (_actor), user_spot_probe_req_t{marker})
-          .timeout (std::chrono::seconds (5)).async<user_spot_probe_res_t> ().result ();
+          .timeout (std::chrono::seconds (5))
+          .async<user_spot_probe_res_t> ()
+          .result ();
     }
 
     static void check (bool condition, const std::string &message)
@@ -1683,12 +1707,11 @@ class user_spot_source_service_t final : public fw::hosted_service_t
         auto &actors = services.get_required<fw::actor_client_t> ();
         auto &mesh_runtime = services.get_required<fw::route_mesh_runtime_t> ();
         auto &runtime_options = services.get_required<fw::route_mesh_runtime_options_t> ();
-        auto *location = g_outage_store
-          ? &services.get_required<runtime::location_runtime_t> () : nullptr;
+        auto *location =
+          g_outage_store ? &services.get_required<runtime::location_runtime_t> () : nullptr;
         write_ready ();
-        _worker =
-          std::thread ([this, &sink, &actor_manager, &actors, &mesh_runtime, &runtime_options,
-                        location] {
+        _worker = std::thread (
+          [this, &sink, &actor_manager, &actors, &mesh_runtime, &runtime_options, location] {
               run (sink, actor_manager, actors, mesh_runtime, runtime_options, location);
           });
         co_return;
@@ -1791,8 +1814,8 @@ class user_spot_source_service_t final : public fw::hosted_service_t
 
         std::unique_ptr<outage_control_t> outage;
         if (g_outage_store) {
-            outage = std::make_unique<outage_control_t> (
-              sink, actor_manager, actors, *location, _stopping);
+            outage = std::make_unique<outage_control_t> (sink, actor_manager, actors, *location,
+                                                         _stopping);
             if (!outage->run (true))
                 return;
         }
@@ -1831,8 +1854,8 @@ void configure_user_spot_stores (fw::zlink_framework_options_t &options, bool ta
 {
     const auto endpoint = require ("redis-endpoint");
     const auto prefix = option ("redis-key-prefix", "zlink-cross-user-spot-join");
-    auto location = std::make_shared<fw::redis::redis_location_store_t> (
-      fw::redis::redis_location_options_t{
+    auto location =
+      std::make_shared<fw::redis::redis_location_store_t> (fw::redis::redis_location_options_t{
         .connection_string = endpoint, .key_prefix = prefix + ":location"});
     if (!option ("outage-control-prefix").empty ()) {
         require ("outage-run-id");
@@ -1840,8 +1863,7 @@ void configure_user_spot_stores (fw::zlink_framework_options_t &options, bool ta
         if (order != "descriptor-first" && order != "cas-first")
             throw std::invalid_argument ("invalid outage confirmation order");
         g_outage_store = std::make_shared<outage_location_store_t> (
-          location, require ("actor-id"), require ("mesh-name"), require ("node-rid"),
-          target);
+          location, require ("actor-id"), require ("mesh-name"), require ("node-rid"), target);
         options.add_location_store (g_outage_store);
         auto &locations = options.configure_locations ();
         const auto &profile = g_outage_store->profile;
