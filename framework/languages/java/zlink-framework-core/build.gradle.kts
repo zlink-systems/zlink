@@ -246,6 +246,13 @@ tasks.shadowJar {
     relocate("com.google.protobuf", "systems.zlink.framework.internal.shaded.protobuf")
 }
 
+listOf("apiElements", "runtimeElements").forEach { variantName ->
+    configurations.named(variantName) {
+        outgoing.artifacts.clear()
+        outgoing.artifact(tasks.shadowJar)
+    }
+}
+
 tasks.jar {
     archiveClassifier.set("plain")
 }

@@ -128,19 +128,29 @@ public sealed class ChannelEnvelopeHandoffTests
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         var flowId = invalidFlow ? "invalid-flow" : "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
-        var protoHeader = new global::Zlink.Framework.Channel.V1.ChannelHeader
+        var protoHeader = new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader
         {
-            Kind = global::Zlink.Framework.Channel.V1.ChannelKind.Request,
+            Kind = global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelKind.Request,
             ChannelName = "work",
             MessageName = "missing-handler",
             ContentType = "application/json",
             CorrelationId = "handoff-request",
             FlowId = flowId,
-            FlowOrigin = global::Zlink.Framework.Channel.V1.FlowOrigin.Inbound,
+            FlowOrigin = global::Zlink
+                .Framework
+                .Runtime
+                .Protocol
+                .ChannelHeaderV1
+                .FlowOrigin
+                .Inbound,
         };
         if (malformed)
             protoHeader.Metadata.Add(
-                new global::Zlink.Framework.Channel.V1.MetadataEntry { Key = "", Value = "invalid" }
+                new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry
+                {
+                    Key = "",
+                    Value = "invalid",
+                }
             );
         using var headerFrame = Message.From(protoHeader.ToByteArray());
         var replyTask = dealer.Request().Message(headerFrame).Async(CancellationToken.None).Reply;

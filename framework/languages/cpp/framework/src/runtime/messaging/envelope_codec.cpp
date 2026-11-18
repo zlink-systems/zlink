@@ -276,8 +276,8 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
               1
               + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (
                 entry.ByteSizeLong ());
-            if (entry_size
-                > protocol::metadataBytes - std::min (encoded_size, protocol::metadataBytes)) {
+            if (entry_size > protocol::metadataBytes
+                               - std::min<std::uint64_t> (encoded_size, protocol::metadataBytes)) {
                 if (metadata_invalid)
                     *metadata_invalid = true;
                 return result_t<void>::failure (framework_error_kind_t::protocol_error,
@@ -334,6 +334,13 @@ void copy_optional (const std::optional<header_text_t> &source, Setter &&set)
 {
     if (source)
         std::forward<Setter> (set) (std::string (*source));
+}
+
+channel_header_proto_t &channel_header_encode_scratch ()
+{
+    thread_local channel_header_proto_t value;
+    value.Clear ();
+    return value;
 }
 
 channel_header_proto_t &channel_header_scratch ()
@@ -407,7 +414,8 @@ zlink::message_t serialize_header (const channel_header_proto_t &proto)
 result_t<envelope_header_t>
 decode_header_bytes (std::span<const std::byte> bytes,
                      bool capture_flow,
-                     std::optional<envelope_header_t> *rejection_context)
+                     std::optional<envelope_header_t> *rejection_context,
+                     bool view_text = false)
 {
     if (rejection_context)
         rejection_context->reset ();
@@ -467,15 +475,17 @@ decode_header_bytes (std::span<const std::byte> bytes,
         }
         return result_t<envelope_header_t>::failure (valid.error_kind (), valid.error ()->what ());
     }
-    // Keep parser capacity for the next frame; the returned header owns the
-    // fields that outlive this decode.
-    header.channel_name = std::string (proto.channel_name ());
-    header.message_name = std::string (proto.message_name ());
-    header.content_type = std::string (proto.content_type ());
-    if (proto.has_correlation_id ())
-        header.correlation_id = std::string (proto.correlation_id ());
-    if (proto.has_deadline ())
-        header.deadline = header_text_t (std::string (proto.deadline ()));
+    if (!view_text) {
+        // Keep parser capacity for the next frame; the returned header owns the
+        // fields that outlive this decode.
+        header.channel_name = std::string (proto.channel_name ());
+        header.message_name = std::string (proto.message_name ());
+        header.content_type = std::string (proto.content_type ());
+        if (proto.has_correlation_id ())
+            header.correlation_id = std::string (proto.correlation_id ());
+        if (proto.has_deadline ())
+            header.deadline = header_text_t (std::string (proto.deadline ()));
+    }
     if (proto.has_error_code ())
         header.error_code = std::move (*proto.mutable_error_code ());
     if (proto.has_error_message ())
@@ -486,7 +496,7 @@ decode_header_bytes (std::span<const std::byte> bytes,
         header.topic = std::move (*proto.mutable_topic ());
     if (capture_flow && proto.has_flow_id ())
         header.flow_id = std::move (*proto.mutable_flow_id ());
-    if (rejection_context)
+    if (rejection_context && !view_text)
         *rejection_context = header;
     for (int index = 0; index < proto.metadata_size (); ++index) {
         auto *entry = proto.mutable_metadata (index);
@@ -498,6 +508,24 @@ decode_header_bytes (std::span<const std::byte> bytes,
         header.flow_origin.reset ();
     }
     return result_t<envelope_header_t>::success (std::move (header));
+}
+
+result_t<envelope_header_t>
+decode_header_bytes_result (std::span<const std::byte> bytes,
+                            bool capture_flow,
+                            std::optional<envelope_header_t> *rejection_context,
+                            bool view_text)
+{
+    try {
+        return decode_header_bytes (bytes, capture_flow, rejection_context, view_text);
+    }
+    catch (const framework_exception_t &error) {
+        return result_t<envelope_header_t>::failure (error.kind (), error.what ());
+    }
+    catch (const std::exception &error) {
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     error.what ());
+    }
 }
 
 std::pair<const std::string *, std::optional<flow_origin_t>>
@@ -526,7 +554,7 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
                                                   std::string_view content_type) const
 {
     const auto [flow_id, origin] = validate_outgoing_header (header);
-    auto &proto = channel_header_scratch ();
+    auto &proto = channel_header_encode_scratch ();
     to_proto (proto, header, content_type, flow_id, origin);
     auto valid = validate_protocol_header (header, true, &proto);
     if (!valid)
@@ -582,7 +610,7 @@ envelope_codec_t::decode_header_view (const zlink::message_t &message,
                                       bool capture_flow,
                                       std::optional<envelope_header_t> *rejection_context) const
 {
-    return decode_header (message, capture_flow, rejection_context);
+    return decode_header_bytes_result (message.bytes (), capture_flow, rejection_context, true);
 }
 
 result_t<envelope_header_t>
@@ -590,7 +618,16 @@ envelope_codec_t::decode_header_view (const message_parts_t &parts,
                                       bool capture_flow,
                                       std::optional<envelope_header_t> *rejection_context) const
 {
-    return decode_header (parts, capture_flow, rejection_context);
+    if (parts.size () == 0) {
+        if (rejection_context)
+            rejection_context->reset ();
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     "ZLink envelope header part is missing");
+    }
+    if (std::holds_alternative<std::span<const std::span<const std::byte>>> (parts._parts))
+        return decode_header_bytes_result (parts.part_bytes (0), capture_flow, rejection_context,
+                                           true);
+    return decode_header_view (parts[0], capture_flow, rejection_context);
 }
 
 result_t<envelope_header_t>
@@ -598,16 +635,7 @@ envelope_codec_t::decode_header (std::span<const std::byte> bytes,
                                  bool capture_flow,
                                  std::optional<envelope_header_t> *rejection_context) const
 {
-    try {
-        return decode_header_bytes (bytes, capture_flow, rejection_context);
-    }
-    catch (const framework_exception_t &error) {
-        return result_t<envelope_header_t>::failure (error.kind (), error.what ());
-    }
-    catch (const std::exception &error) {
-        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
-                                                     error.what ());
-    }
+    return decode_header_bytes_result (bytes, capture_flow, rejection_context, false);
 }
 
 result_t<envelope_header_t>

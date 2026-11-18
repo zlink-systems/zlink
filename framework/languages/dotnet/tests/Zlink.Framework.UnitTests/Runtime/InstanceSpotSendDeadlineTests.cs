@@ -20,6 +20,13 @@ public sealed partial class EntrySpotActorDispatchTests
     [InlineData(true)]
     public async Task InstanceRequestSuccessAllocationDoesNotDependOnErrorTracing(bool ready)
     {
+        var fixedUtcNow = DateTimeOffset.UtcNow.AddMinutes(10);
+        fixedUtcNow = new DateTimeOffset(
+            fixedUtcNow.Ticks - fixedUtcNow.Ticks % TimeSpan.TicksPerSecond,
+            TimeSpan.Zero
+        );
+        var timeProvider = new FixedTimeProvider(fixedUtcNow);
+
         async Task<(Action Call, Func<Task> Stop)> Prepare(ZLinkDiagnosticsLevel level)
         {
             var node = new SuccessfulInstanceNode();
@@ -44,10 +51,16 @@ public sealed partial class EntrySpotActorDispatchTests
                 relocationStore: new InMemoryRelocationStore(),
                 meshResolverWrapper: inner => new AllocationMeshResolver(
                     new ColdTypeResolver(inner, 1, 100)
-                )
+                ),
+                joinTimeProvider: timeProvider
             );
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-                ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "entry", "Probe"),
+                ZLinkClientCallCodec.CreateEnvelope(
+                    timeProvider,
+                    ZLinkMessageKind.Request,
+                    "entry",
+                    "Probe"
+                ),
                 new ProbeRouteMessage("probe"),
                 runtime.Registration.Codecs
             );
@@ -129,13 +142,16 @@ public sealed partial class EntrySpotActorDispatchTests
                 baseline.Call();
                 errors.Call();
             }
+            // Each window runs both sides; S1 protobuf headers allocate about 4.4 KB per
+            // request, so 2 x 1000 calls overlapped a gen0 GC in every window.
+            const int callsPerWindow = 500;
             var (baselineBytes, errorsBytes) = PerCallAllocation.MinWindowPair(
                 _ => baseline.Call(),
                 _ => errors.Call(),
-                callsPerWindow: 1000
+                callsPerWindow
             );
             Console.WriteLine(
-                $"instance-request success ready={ready} Off={baselineBytes / 1000.0} Errors={errorsBytes / 1000.0} B/op"
+                $"instance-request success ready={ready} Off={baselineBytes / (double)callsPerWindow} Errors={errorsBytes / (double)callsPerWindow} B/op"
             );
             Assert.Equal(baselineBytes, errorsBytes);
         }
@@ -144,6 +160,22 @@ public sealed partial class EntrySpotActorDispatchTests
             await baseline.Stop();
             await errors.Stop();
         }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+
+        public override long GetTimestamp() => TimeProvider.System.GetTimestamp();
+
+        public override long TimestampFrequency => TimeProvider.System.TimestampFrequency;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period
+        ) => TimeProvider.System.CreateTimer(callback, state, dueTime, period);
     }
 
     private sealed class SuccessfulInstanceNode : CapturingSpotNode, IZLinkBackendSpotNode
@@ -525,6 +557,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
                     ZLinkMessageKind.Request,
                     "entry",
                     ZLinkMessageNameResolver.ResolveFromMessage(message)
@@ -704,6 +737,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var message = new ProbeRouteMessage(Guid.NewGuid().ToString("N"));
             var encoded = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
                     ZLinkMessageKind.Request,
                     "entry",
                     ZLinkMessageNameResolver.ResolveFromMessage(message)
@@ -1157,6 +1191,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var flowId = ZlinkStreamFlowId.Create();
         using var header = ZLinkEnvelopeCodec.EncodeHeader(
             ZLinkClientCallCodec.CreateEnvelope(
+                TimeProvider.System,
                 ZLinkMessageKind.Command,
                 "entry",
                 "ProbeRouteMessage"

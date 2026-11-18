@@ -62,10 +62,6 @@ const CHANNEL_HEADER_CODEC = (
 const CHANNEL_HEADER_WRITER = CHANNEL_HEADER_CODEC.encode({});
 const CHANNEL_HEADER_READER = protobuf.Reader.create(Buffer.alloc(0));
 const CHANNEL_HEADER_TARGET = CHANNEL_HEADER_CODEC.create();
-const PREPARED_COMMAND_HEADERS = new WeakMap<
-  ReadonlyMap<string, ZLinkMessageSerializer>,
-  Map<string, Buffer>
->();
 const EMPTY_PROTOBUF_METADATA: readonly Readonly<{ key: string; value: string }>[] = Object.freeze(
   []
 );
@@ -532,8 +528,7 @@ function encodePayload(
       undefined,
       applicationMetadataRecord(metadata),
       flow?.flowId,
-      flow?.flowOrigin,
-      codecs
+      flow?.flowOrigin
     ),
     message
   ];
@@ -565,78 +560,6 @@ function encodeJsonText(value: unknown, schema?: ZLinkJsonSchema): string {
 }
 
 function encodeChannelHeader(
-  kind: ZLinkChannelMessageKind,
-  channelName: string,
-  messageName: string,
-  contentType: string,
-  correlationId: string | null,
-  deadline: string | null,
-  topic: string | null,
-  errorCode: string | null | undefined,
-  errorMessage: string | null | undefined,
-  source: string | null | undefined,
-  metadata: Readonly<Record<string, string>>,
-  flowId: string | undefined,
-  flowOrigin: ZLinkFlowOrigin | undefined,
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
-): Buffer {
-  if (
-    codecs !== undefined &&
-    kind === ZLinkChannelMessageKind.Command &&
-    correlationId === null &&
-    deadline === null &&
-    topic === null &&
-    errorCode == null &&
-    errorMessage == null &&
-    source === undefined &&
-    flowId === undefined &&
-    flowOrigin === undefined &&
-    Object.keys(metadata).length === 0
-  ) {
-    let headers = PREPARED_COMMAND_HEADERS.get(codecs.serializers);
-    if (headers === undefined) {
-      headers = new Map();
-      PREPARED_COMMAND_HEADERS.set(codecs.serializers, headers);
-    }
-    const key = `${channelName}\0${messageName}\0${contentType}`;
-    const prepared = headers.get(key);
-    if (prepared !== undefined) return prepared;
-    const bytes = encodeChannelHeaderBytes(
-      kind,
-      channelName,
-      messageName,
-      contentType,
-      correlationId,
-      deadline,
-      topic,
-      errorCode,
-      errorMessage,
-      source,
-      metadata,
-      flowId,
-      flowOrigin
-    );
-    headers.set(key, bytes);
-    return bytes;
-  }
-  return encodeChannelHeaderBytes(
-    kind,
-    channelName,
-    messageName,
-    contentType,
-    correlationId,
-    deadline,
-    topic,
-    errorCode,
-    errorMessage,
-    source,
-    metadata,
-    flowId,
-    flowOrigin
-  );
-}
-
-function encodeChannelHeaderBytes(
   kind: ZLinkChannelMessageKind,
   channelName: string,
   messageName: string,

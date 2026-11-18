@@ -953,6 +953,7 @@ public sealed partial class EntrySpotActorDispatchTests
         return new ZLinkBackendRouteReceived(
             ZLinkClientCallCodec.EncodeEnvelopeParts(
                 ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
                     ZLinkMessageKind.Command,
                     "entry",
                     nameof(ProbeRouteMessage)

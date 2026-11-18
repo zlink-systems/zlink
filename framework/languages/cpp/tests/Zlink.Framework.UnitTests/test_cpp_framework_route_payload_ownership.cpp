@@ -2442,7 +2442,7 @@ TEST (RouteHandlerBoundary, CsitesInternalRequestKeepsTerminalThroughSynchronous
                                   .correlation_id = "internal-rejection"};
     std::vector<zlink::message_t> parts;
     parts.push_back (msg::envelope_codec_t{}.encode_header (header));
-    auto decoded = runtime::decode_mesh_record_header_view (record, parts, false);
+    auto decoded = runtime::decode_mesh_record_header (record, parts, false);
     ASSERT_TRUE (decoded);
     ASSERT_TRUE (decoded.value ());
     host::ready_record_t ready;

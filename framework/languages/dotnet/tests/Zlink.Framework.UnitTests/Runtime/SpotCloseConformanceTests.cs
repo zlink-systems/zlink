@@ -1670,6 +1670,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         );
         var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
             ZLinkClientCallCodec.CreateEnvelope(
+                TimeProvider.System,
                 ZLinkMessageKind.Request,
                 SpotCloseHost.MeshName,
                 nameof(SpotCloseProbeRequest),

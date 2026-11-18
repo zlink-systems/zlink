@@ -328,8 +328,7 @@ public sealed class StartupStoreStallTests
 
         internal bool RejectDescriptorRenew { get; init; }
 
-        internal Channel<int> CompletedWrites { get; } =
-            global::System.Threading.Channels.Channel.CreateUnbounded<int>();
+        internal Channel<int> CompletedWrites { get; } = Channel.CreateUnbounded<int>();
 
         internal DescriptorFault DescriptorFault
         {

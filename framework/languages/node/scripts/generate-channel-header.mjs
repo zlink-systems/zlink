@@ -12,7 +12,7 @@ const generatedDirectory = join(
   workspace,
   'packages/framework/src/runtime/channels/generated'
 );
-const generatedModule = join(generatedDirectory, 'channel-header-v1.js');
+const generatedModule = join(workspace, 'packages/framework/generated/channel-header-v1.js');
 const generatedTypes = join(generatedDirectory, 'channel-header-v1.d.ts');
 const check = process.argv.includes('--check');
 
@@ -53,6 +53,7 @@ try {
     }
   } else {
     const { mkdirSync } = await import('node:fs');
+    mkdirSync(dirname(generatedModule), { recursive: true });
     mkdirSync(generatedDirectory, { recursive: true });
     copyFileSync(modulePath, generatedModule);
     copyFileSync(typesPath, generatedTypes);

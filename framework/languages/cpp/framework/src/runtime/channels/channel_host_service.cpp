@@ -306,7 +306,7 @@ class channel_host_service_t::server_loop_t
         auto parts = messaging::message_parts_t (record.take_parts ());
         detail::message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
         if (flow.enabled_for (message_flow_outcome_t::received)) {
-            auto header = messaging::envelope_codec_t{}.decode_header (parts, true);
+            auto header = messaging::envelope_codec_t{}.decode_header_view (parts, true);
             if (header && header.value ().kind != messaging::message_kind_t::publish) {
                 auto flow_scope =
                   flow_context_t::enter (header.value ().flow_id, header.value ().flow_origin,
@@ -459,7 +459,7 @@ class channel_host_service_t::server_loop_t
     void report_dispatch_rejection (const messaging::message_parts_t &parts)
     {
         detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
-            auto decoded = messaging::envelope_codec_t{}.decode_header (
+            auto decoded = messaging::envelope_codec_t{}.decode_header_view (
               parts,
               detail::message_flow_tracer_t (_runtime.dispatch_options_ref ()).flow_tracing ());
             message_dispatch_error_event_t event{
@@ -489,7 +489,7 @@ class channel_host_service_t::server_loop_t
                                   std::exception_ptr failure)
     {
         detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
-            auto decoded = messaging::envelope_codec_t{}.decode_header (
+            auto decoded = messaging::envelope_codec_t{}.decode_header_view (
               parts,
               detail::message_flow_tracer_t (_runtime.dispatch_options_ref ()).flow_tracing ());
             message_dispatch_error_event_t event{

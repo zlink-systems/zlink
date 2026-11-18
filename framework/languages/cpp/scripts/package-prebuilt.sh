@@ -540,7 +540,7 @@ case "$platform" in
       while IFS= read -r dependency; do
         dependency_lower="$(tr '[:upper:]' '[:lower:]' <<<"$dependency")"
         case "$dependency_lower" in
-          api-ms-win-*|ext-ms-win-*|kernel32.dll|user32.dll|advapi32.dll|ws2_32.dll|mswsock.dll|bcrypt.dll|crypt32.dll|secur32.dll|shell32.dll|ole32.dll|oleaut32.dll|gdi32.dll|ntdll.dll|rpcrt4.dll|shlwapi.dll|normaliz.dll|comdlg32.dll|winmm.dll|version.dll|iphlpapi.dll|psapi.dll|userenv.dll|wintrust.dll|ncrypt.dll|dnsapi.dll|combase.dll|cfgmgr32.dll|setupapi.dll|msvcp*.dll|vcruntime*.dll|ucrtbase.dll) ;;
+          api-ms-win-*|ext-ms-win-*|kernel32.dll|user32.dll|advapi32.dll|ws2_32.dll|mswsock.dll|bcrypt.dll|crypt32.dll|secur32.dll|shell32.dll|ole32.dll|oleaut32.dll|gdi32.dll|ntdll.dll|rpcrt4.dll|shlwapi.dll|normaliz.dll|comdlg32.dll|winmm.dll|dbghelp.dll|version.dll|iphlpapi.dll|psapi.dll|userenv.dll|wintrust.dll|ncrypt.dll|dnsapi.dll|combase.dll|cfgmgr32.dll|setupapi.dll|msvcp*.dll|vcruntime*.dll|ucrtbase.dll) ;;
           *)
             resolved=0
             while IFS= read -r packaged_dll; do

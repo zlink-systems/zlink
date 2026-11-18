@@ -41,6 +41,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationA
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
@@ -289,7 +290,11 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             String contentType = envelope.contentType();
             Map<String, String> metadata;
             try {
-                metadata = envelope.metadata();
+                metadata =
+                        !envelope.metadata().isEmpty()
+                                ? envelope.metadata()
+                                : ZLinkApplicationMetadata.decode(
+                                        record.receive().applicationMetadata());
             } catch (IllegalArgumentException error) {
                 recordDrop(record, ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED);
                 reject(record, error.getMessage(), claim);
@@ -346,7 +351,10 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         Message payload = null;
         try {
             payload = Message.from(parts.get(1));
-            Map<String, String> metadata = envelope.metadata();
+            Map<String, String> metadata =
+                    !envelope.metadata().isEmpty()
+                            ? envelope.metadata()
+                            : ZLinkApplicationMetadata.decode(metadataBytes);
             String contentType = envelope.contentType();
             Message ownedPayload = payload;
             CompletableFuture<ZLinkApplicationJobQueue.Permit> acquisition =

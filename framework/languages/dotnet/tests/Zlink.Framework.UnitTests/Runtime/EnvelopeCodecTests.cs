@@ -9,9 +9,9 @@ public sealed class EnvelopeCodecTests
     [Fact]
     public void Off_decode_drops_flow_fields_without_changing_protocol_correlation()
     {
-        var proto = new Zlink.Framework.Channel.V1.ChannelHeader
+        var proto = new Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader
         {
-            Kind = Zlink.Framework.Channel.V1.ChannelKind.Request,
+            Kind = Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelKind.Request,
             ChannelName = "route",
             MessageName = "request",
             ContentType = "application/json",
@@ -59,7 +59,7 @@ public sealed class EnvelopeCodecTests
     {
         var kind = (ZLinkMessageKind)kindValue;
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkClientCallCodec.CreateEnvelope(kind, "route", "message")
+            ZLinkClientCallCodec.CreateEnvelope(TimeProvider.System, kind, "route", "message")
         );
     }
 
@@ -79,9 +79,9 @@ public sealed class EnvelopeCodecTests
     [Fact]
     public void Decode_accepts_non_spec_error_fields_and_deadline_text()
     {
-        var proto = new Zlink.Framework.Channel.V1.ChannelHeader
+        var proto = new Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader
         {
-            Kind = Zlink.Framework.Channel.V1.ChannelKind.Request,
+            Kind = Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelKind.Request,
             ChannelName = "route",
             MessageName = "request",
             ContentType = "application/json",
@@ -139,9 +139,10 @@ public sealed class EnvelopeCodecTests
         );
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-        var parsed = Zlink.Framework.Channel.V1.ChannelHeader.Parser.ParseFrom(
-            encoded.AsReadOnlySpan()
-        );
+        var parsed =
+            Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader.Parser.ParseFrom(
+                encoded.AsReadOnlySpan()
+            );
 
         Assert.Equal(expected, parsed.Deadline);
     }

@@ -261,6 +261,7 @@ public sealed class ActorRelocationProtocolTests
         {
             admissionParts = ZLinkRemoteActorJoinPackets.EncodeAdmissionRequest(
                 ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
                     ZLinkMessageKind.Request,
                     "actor-route",
                     ZLinkRemoteActorJoinPackets.AdmissionPacketName,
@@ -282,6 +283,7 @@ public sealed class ActorRelocationProtocolTests
             );
             commitParts = ZLinkRemoteActorJoinPackets.EncodeJoinRequest(
                 ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
                     ZLinkMessageKind.Request,
                     "actor-route",
                     ZLinkRemoteActorJoinPackets.CommitPacketName,
@@ -333,6 +335,7 @@ public sealed class ActorRelocationProtocolTests
                 {
                     using var encoded = ZLinkEnvelopeCodec.EncodeHeader(
                         ZLinkClientCallCodec.CreateEnvelope(
+                            TimeProvider.System,
                             ZLinkMessageKind.Command,
                             "actor-route",
                             "target-continuation"
@@ -386,6 +389,7 @@ public sealed class ActorRelocationProtocolTests
     {
         var codecs = new ZLinkCodecRegistryBuilder();
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
             ZLinkMessageKind.Request,
             "router",
             ZLinkRemoteActorJoinPackets.RequestPacketName,
@@ -862,6 +866,7 @@ public sealed class ActorRelocationProtocolTests
         using var flow = ZLinkFlowContext.Enter(null, null, true, ZLinkFlowOrigin.Lifecycle);
         var expected = Assert.IsType<ZLinkFlowValue>(ZLinkFlowContext.Current);
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
             ZLinkMessageKind.Request,
             "router",
             ZLinkRemoteActorJoinPackets.HandoffCompletionPacketName,
