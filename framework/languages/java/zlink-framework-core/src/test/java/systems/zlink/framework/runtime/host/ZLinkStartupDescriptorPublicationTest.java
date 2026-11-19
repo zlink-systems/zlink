@@ -88,9 +88,9 @@ final class ZLinkStartupDescriptorPublicationTest {
             assertTrue(descriptors(store.inner).isEmpty());
             var placement =
                     ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime()).mesh("game");
-            var rejected =
-                    assertThrows(RuntimeException.class, () -> placement.setPlacementWeight(90));
-            assertTrue(rejected.getCause().getMessage().contains("admission deadline has expired"));
+            // The setter records the value; the publisher publishes it when startup ends.
+            assertDoesNotThrow(() -> placement.setPlacementWeight(90));
+            assertEquals(90, placement.placementWeight());
 
             store.available.set(true);
             monotonicNanos.set(3);
@@ -316,6 +316,77 @@ final class ZLinkStartupDescriptorPublicationTest {
             assertEquals(ZLinkFrameworkRuntimeState.ERROR, runtime.state());
         } finally {
             store.losing.set(false);
+        }
+    }
+
+    @Test
+    void placementWeightChangeInsideTheFixedRidReleaseWaitIsPublishedByTheRenewSchedule()
+            throws Exception {
+        var clock = new MutableClock(Instant.parse("2026-11-06T00:00:00Z"));
+        var inner = new ZLinkInMemoryProviderLocationStore(clock);
+        var store = new FixedRidWaitStore(inner);
+        var monotonicNanos = new AtomicLong();
+        try (var runtime =
+                start(
+                        options(store, "fixed-rid-weight-in-wait", Duration.ofSeconds(2)),
+                        store,
+                        monotonicNanos)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+            assertTrue(descriptors(store).isEmpty());
+            var placement =
+                    ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime()).mesh("game");
+
+            assertDoesNotThrow(() -> placement.setPlacementWeight(77));
+
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+            assertTrue(descriptors(store).isEmpty());
+            monotonicNanos.set(3);
+            assertTrue(renew(runtime));
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.state());
+            assertEquals(77, descriptors(store).getFirst().placementWeight());
+        }
+    }
+
+    @Test
+    void servingPlacementWeightChangeStaysPendingUntilARenewalPublishesIt() throws Exception {
+        var store =
+                new LostDescriptorResponseStore(ZLinkFrameworkRuntimeState.SERVING, false, true);
+        store.losing.set(false);
+        var monotonicNanos = new AtomicLong();
+        try (var runtime =
+                start(
+                        options(store, "serving-weight", Duration.ofSeconds(10)),
+                        store,
+                        monotonicNanos)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            for (int renewal = 0;
+                    renewal < 3 && runtime.state() != ZLinkFrameworkRuntimeState.SERVING;
+                    renewal++) {
+                monotonicNanos.addAndGet(3);
+                assertTrue(renew(runtime));
+            }
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.state());
+            var placement =
+                    ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime()).mesh("game");
+            int before = descriptors(store.inner).getFirst().placementWeight();
+
+            store.losing.set(true);
+            assertDoesNotThrow(() -> placement.setPlacementWeight(before + 1));
+            monotonicNanos.addAndGet(3);
+            assertTrue(renew(runtime));
+            assertEquals(before, descriptors(store.inner).getFirst().placementWeight());
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.state());
+
+            store.losing.set(false);
+            monotonicNanos.addAndGet(3);
+            assertTrue(renew(runtime));
+            assertEquals(before + 1, descriptors(store.inner).getFirst().placementWeight());
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.state());
         }
     }
 
