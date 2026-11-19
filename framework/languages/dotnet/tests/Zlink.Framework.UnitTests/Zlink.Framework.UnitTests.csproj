@@ -3,6 +3,9 @@
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
+        <!-- Allocation comparisons require a fixed JIT code version throughout all windows.
+             Tier promotion can remove allocations between the baseline and comparison. -->
+        <TieredCompilation>false</TieredCompilation>
         <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
         <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
     </PropertyGroup>
@@ -15,6 +18,7 @@
         <Compile Include="../../samples/Bingo/Server/Play/Domain/Bingo/*.cs" Link="Bingo/Domain/%(Filename)%(Extension)"/>
         <Compile Include="../../samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/Notifications/*.cs" Link="Bingo/Notifications/%(Filename)%(Extension)"/>
         <Compile Include="../../samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/BingoRoomDrawTimerHandler.cs" Link="Bingo/BingoRoomDrawTimerHandler.cs"/>
+        <Compile Include="../../samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/BingoRoomCloseTimerHandler.cs" Link="Bingo/BingoRoomCloseTimerHandler.cs"/>
         <Compile Include="../../samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoomSettingsPayloadMapper.cs" Link="Bingo/BingoRoomSettingsPayloadMapper.cs"/>
         <Compile Include="../../samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs" Link="Bingo/BingoRoom.cs"/>
         <Compile Include="../../samples/Bingo/Server/Play/Infrastructure/ZLink/Actors/PlayerActor.cs" Link="Bingo/PlayerActor.cs"/>
@@ -136,7 +140,6 @@
         <Compile Include="Runtime/MeshOutboundPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
         <Compile Include="Runtime/MeshChannelSelectionHotPathTests.cs"/>
-        <Compile Include="Runtime/EnvelopeHeaderCacheHotPathTests.cs"/>
         <Compile Include="Runtime/MeshApplicationWorkerTests.cs"/>
         <Compile Include="Runtime/MeshReceiveHandoffTests.cs"/>
         <Compile Include="Runtime/MeshWorkerWaitCostTests.cs"/>
@@ -186,6 +189,7 @@
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
         <Compile Include="Runtime/FanoutSubscriptionTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
+        <Compile Include="Runtime/ChannelHeaderGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecAllocationRegressionTests.cs"/>
         <Compile Include="Runtime/MessagingHotPathWireTests.cs"/>
         <Compile Include="Runtime/ErrorReplyWireConvergenceTests.cs"/>

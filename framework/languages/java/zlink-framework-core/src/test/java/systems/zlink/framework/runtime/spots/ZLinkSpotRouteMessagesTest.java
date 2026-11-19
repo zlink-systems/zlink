@@ -195,7 +195,7 @@ final class ZLinkSpotRouteMessagesTest {
                             state);
             try {
                 assertEquals(2, withFlow.size());
-                ZLinkFlowContext.State decoded = ZLinkSpotFlowFrame.decode(withFlow);
+                ZLinkFlowContext.State decoded = flow(withFlow);
                 assertEquals(state.flowId(), decoded.flowId());
                 assertEquals(ZLinkFlowOrigin.APPLICATION, decoded.origin());
             } finally {
@@ -213,7 +213,7 @@ final class ZLinkSpotRouteMessagesTest {
                                 null);
                 try {
                     assertEquals(2, withoutFlow.size());
-                    assertNull(ZLinkSpotFlowFrame.decode(withoutFlow));
+                    assertNull(flow(withoutFlow));
                 } finally {
                     withoutFlow.get(0).close();
                 }
@@ -245,5 +245,10 @@ final class ZLinkSpotRouteMessagesTest {
 
     private static Message message(String value) {
         return Message.from(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static ZLinkFlowContext.State flow(List<Message> parts) {
+        return ZLinkSpotFlowFrame.fromEnvelopeHeader(
+                ZLinkChannelEnvelope.decodeDispatchHeader(parts, true));
     }
 }

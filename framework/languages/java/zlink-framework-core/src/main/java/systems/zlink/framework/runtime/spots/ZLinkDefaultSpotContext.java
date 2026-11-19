@@ -280,6 +280,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {
@@ -289,6 +290,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                 actorId,
                 payloadBytes,
                 () -> runApplicationExecution(actorId, false, operation),
+                release,
                 admission,
                 header,
                 payload);
@@ -591,7 +593,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                                                 timerName,
                                                 () -> host.runWithOutbound(outbound, operation))));
         execution = instanceSpot ? null : host.execution(this);
-        serials.spotQueue.executionPolicy(execution);
+        ZLinkSpotCloseCallAccess.executionPolicy(serials.spotQueue, execution);
         if (execution != null)
             execution.onResume(
                     () -> {
@@ -862,6 +864,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {
@@ -871,6 +874,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 actorId,
                 payloadBytes,
                 () -> runActorApplication(actorId, serials.usesSharedExecutionGate(), operation),
+                release,
                 admission,
                 header,
                 payload);
@@ -973,9 +977,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 () -> {
                     if (closeCommitted.getAsBoolean()) {
                         return CompletableFuture.failedFuture(
-                                ZLinkFrameworkErrorOrigin.framework(
-                                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                                        "Spot incarnation is closing (committed Close)"));
+                                ZLinkFrameworkErrorOrigin.closingSpot());
                     }
                     return runLifecycleExecution(operation);
                 });

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const zlink = require('@zlink-systems/zlink');
+const { encodeChannelHeader } = require('./helpers/protobuf-channel-header');
 const framework = require('../../packages/framework/dist/internal');
 const spots = require('../../packages/framework/dist/runtime/spots');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
@@ -493,8 +494,7 @@ test('Entry Spot routed bound session command decodes registered channel seriali
   await activation.configure();
   await activation.initialize();
 
-  const header = zlink.Message.from(Buffer.from(JSON.stringify({
-    formatMarker: 0xf2,
+  const header = zlink.Message.from(encodeChannelHeader({
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
     flowOrigin: 1,
     kind: 3,
@@ -506,7 +506,7 @@ test('Entry Spot routed bound session command decodes registered channel seriali
     topic: null,
     errorCode: null,
     errorMessage: null
-  })));
+  }));
   const payload = zlink.Message.from(Buffer.from('encoded-bound-session'));
 
   dispatchHandler({

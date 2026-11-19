@@ -140,6 +140,7 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
             runtime.IsClientServerClientChannel(channelName)
         );
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            runtime.Registration.TimeProvider,
             ZLinkMessageKind.Command,
             channelName,
             ZLinkMessageNameResolver.ResolveFromMessage(message),
@@ -222,6 +223,7 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                 runtime.IsClientServerClientChannel(channelName)
             );
             var header = ZLinkClientCallCodec.CreateEnvelope(
+                runtime.Registration.TimeProvider,
                 ZLinkMessageKind.Request,
                 channelName,
                 packetName,
@@ -342,6 +344,7 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
     private IReadOnlyList<Message> EncodePayloadParts()
     {
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            runtime.Registration.TimeProvider,
             ZLinkMessageKind.Command,
             meshName,
             _messageName
@@ -430,6 +433,7 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
                 packetName
             );
             var header = ZLinkClientCallCodec.CreateEnvelope(
+                runtime.Registration.TimeProvider,
                 ZLinkMessageKind.Request,
                 meshName,
                 packetName,
@@ -527,6 +531,7 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
         _submission.Claim();
         var snapshot = target.Snapshot;
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            runtime.Registration.TimeProvider,
             ZLinkMessageKind.Command,
             snapshot.RouterChannelId,
             ZLinkMessageNameResolver.ResolveFromMessage(message)
@@ -665,6 +670,7 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                     _timeout
                     ?? runtime.Registration.ResolveMeshRequestTimeout(snapshot.RouterChannelId);
                 var header = ZLinkClientCallCodec.CreateEnvelope(
+                    runtime.Registration.TimeProvider,
                     ZLinkMessageKind.Request,
                     snapshot.RouterChannelId,
                     packetName,

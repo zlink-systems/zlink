@@ -11,6 +11,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
@@ -217,7 +218,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
                             actor
                                     ? ZLinkExecutionLanePolicy.actorDelivery()
                                     : ZLinkExecutionLanePolicy.spot());
-            queue.executionPolicy(f.execution);
+            ZLinkSpotCloseCallAccess.executionPolicy(queue, f.execution);
             var timer = ZLinkSerialExecutionQueue.spotTimer(scheduled::add, queue);
             f.execution.onResume(
                     () -> {
@@ -497,7 +498,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
                                 disposed.incrementAndGet();
                             });
             await(execution.ready());
-            queue.executionPolicy(execution);
+            ZLinkSpotCloseCallAccess.executionPolicy(queue, execution);
             var entered = new CompletableFuture<Void>();
             var remote = new CompletableFuture<Void>();
             var active =
@@ -558,7 +559,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
             var freshQueue =
                     new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
             try {
-                freshQueue.executionPolicy(fresh);
+                ZLinkSpotCloseCallAccess.executionPolicy(freshQueue, fresh);
                 await(freshQueue.enqueue(callback, null));
                 assertEquals(1, called.get());
             } finally {
@@ -641,7 +642,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
                                         timer.discardApplications();
                                     });
                     await(execution.ready());
-                    queue.executionPolicy(execution);
+                    ZLinkSpotCloseCallAccess.executionPolicy(queue, execution);
                     var entered = new CompletableFuture<Void>();
                     var remote = new CompletableFuture<Void>();
                     var active =
@@ -696,7 +697,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
                     var execution =
                             f.runtime.execution(() -> true, () -> queue.discardApplications());
                     await(execution.ready());
-                    queue.executionPolicy(execution);
+                    ZLinkSpotCloseCallAccess.executionPolicy(queue, execution);
                     var remote = new CompletableFuture<Void>();
                     var entered = new CompletableFuture<Void>();
                     var resumed = new AtomicInteger();

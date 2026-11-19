@@ -236,7 +236,9 @@ class envelope_codec_t
     decode_header (std::span<const std::byte> bytes,
                    bool capture_flow = true,
                    std::optional<envelope_header_t> *rejection_context = nullptr) const;
-    // The caller retains the input frame until it moves into the invocation.
+    // Text views borrow the encoded header bytes and remain valid while those bytes do. A copied
+    // header_text_t owns its text; do not retain an uncopied view past the input lifetime or a
+    // co_await.
     result_t<envelope_header_t>
     decode_header_view (const zlink::message_t &message,
                         bool capture_flow = true,
@@ -253,13 +255,11 @@ class envelope_codec_t
     zlink::message_t encode_header (const envelope_header_t &header,
                                     std::string_view content_type) const;
     zlink::message_t encode_header (const envelope_header_t &header,
-                                    const detail::request_type_plan_t &type,
-                                    const detail::prepared_header_fragment_t &channel) const;
-    protocol::application_envelope_encoder_t prepare_service_payload (
-      envelope_header_t &&header,
-      zlink::message_t body,
-      std::shared_ptr<const detail::request_type_plan_t> type,
-      std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+                                    const detail::request_type_plan_t &type) const;
+    protocol::application_envelope_encoder_t
+    prepare_service_payload (envelope_header_t &&header,
+                             zlink::message_t body,
+                             std::shared_ptr<const detail::request_type_plan_t> type) const;
 };
 
 } // namespace zlink::framework::runtime::messaging

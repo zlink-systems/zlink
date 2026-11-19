@@ -20,47 +20,64 @@ internal sealed partial class ZLinkLocationRuntime
         ValueTask<IReadOnlyDictionary<ZLinkMeshNodeDescriptorKey, Task<bool>>>
     >? SubmitRecoveryDescriptorsAsync { get; set; }
 
-    private async ValueTask<bool> CanReclaimExpiredOwnerAsync(
+    private async ValueTask<ZLinkOwnerLeaseRecovery> EvaluateOwnerRecoveryAsync(
         ZLinkLocationOwnerToken owner,
-        CancellationToken cancellationToken
+        ZLinkStoreOutageEpisode? episode,
+        CancellationToken cancellationToken,
+        ZLinkOwnerLeaseReadResult? exact = null
     )
     {
         var recovery = await _lane
             .RunAsync(() =>
-                (
-                    Pending: GetHealthSnapshot().StoreOutage is not null
-                        || _discardedExecutions.Count != 0,
-                    Deadline: _lastSuccessfulLease?.Deadline
-                )
+                GetHealthSnapshot().StoreOutage is not null || _discardedExecutions.Count != 0
             )
             .ConfigureAwait(false);
-        if (!recovery.Pending)
-            return false;
-        var deadline = recovery.Deadline;
-        // Admission excludes margin; reclaim requires lease lifetime plus margin.
-        if (
-            deadline is null
-            || _time.GetElapsedTime(deadline.LeaseOperationStartedAt)
-                < deadline.Lifetime
-                    + _options.OwnerLeaseFencingMargin
-                    + _options.OwnerLeaseFencingMargin
-        )
-            return false;
-        var exact = await _store
+        if (!recovery)
+            return ZLinkOwnerLeaseRecovery.NotYet;
+        exact ??= await _store
             .ReadOwnerLeaseAsync(owner.OwnerId, cancellationToken)
             .ConfigureAwait(false);
-        return exact is ZLinkOwnerLeaseReadResult.Missing
-            || exact is ZLinkOwnerLeaseReadResult.Found found
-                && found.Token == owner
-                && found.LeaseExpiresAt <= found.StoreNow;
+        return await _lane
+            .RunAsync(() =>
+            {
+                // Reads cannot decide recovery for a replaced owner or outage episode.
+                if (
+                    _ownerToken != owner
+                    || GetHealthSnapshot().StoreOutage?.ObservedAt != episode?.ObservedAt
+                )
+                    return ZLinkOwnerLeaseRecovery.NotYet;
+                if (exact is ZLinkOwnerLeaseReadResult.Found changed && changed.Token != owner)
+                    return ZLinkOwnerLeaseRecovery.Impossible;
+                var deadline = _lastSuccessfulLease?.Deadline;
+                // Admission excludes margin; reclaim requires lease lifetime plus margin.
+                if (
+                    deadline is null
+                    || _time.GetElapsedTime(deadline.LeaseOperationStartedAt)
+                        < deadline.Lifetime
+                            + _options.OwnerLeaseFencingMargin
+                            + _options.OwnerLeaseFencingMargin
+                )
+                    return ZLinkOwnerLeaseRecovery.NotYet;
+                return
+                    exact is ZLinkOwnerLeaseReadResult.Missing
+                    || exact is ZLinkOwnerLeaseReadResult.Found found
+                        && found.LeaseExpiresAt <= found.StoreNow
+                    ? ZLinkOwnerLeaseRecovery.Reclaimable
+                    : ZLinkOwnerLeaseRecovery.NotYet;
+            })
+            .ConfigureAwait(false);
     }
 
-    private ValueTask DiscardRecoveryAsync(ZLinkStoreOutageEpisode episode) =>
+    private ValueTask DiscardRecoveryAsync(
+        ZLinkStoreOutageEpisode episode,
+        ZLinkLocationOwnerToken owner
+    ) =>
         _lane.RunAsync(() =>
         {
             if (
                 GetHealthSnapshot().StoreOutage is not { Discarded: false } current
                 || current.ObservedAt != episode.ObservedAt
+                || _ownerToken != owner
             )
                 return;
             _ownerAdmissionDeadline = null;

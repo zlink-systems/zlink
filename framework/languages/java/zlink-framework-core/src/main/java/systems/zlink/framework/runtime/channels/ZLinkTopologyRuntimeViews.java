@@ -23,14 +23,71 @@ import java.util.Objects;
 import java.util.concurrent.Flow;
 import java.util.function.Supplier;
 
+public final class ZLinkTopologyRuntimeViews {
+    private final ZLinkClientServerRuntimeView clientServer;
+    private final ZLinkFanoutRuntimeView fanout;
+
+    public ZLinkTopologyRuntimeViews(
+            List<ChannelRegistration> registrations,
+            Supplier<ZLinkChannelRuntime> runtime,
+            Supplier<ZLinkFrameworkRuntimeState> hostState) {
+        Supplier<ZLinkChannelSocketRegistry> sockets =
+                () -> runtime.get() == null ? null : runtime.get().channelSocketRegistry();
+        java.util.function.Function<String, ChannelRegistration> registration =
+                name ->
+                        registrations.stream()
+                                .filter(channel -> channel.name().equals(name))
+                                .findFirst()
+                                .orElse(null);
+        clientServer = new ZLinkClientServerRuntimeView(sockets, registration, hostState);
+        fanout =
+                new ZLinkFanoutRuntimeView(
+                        registration,
+                        () ->
+                                runtime.get() == null
+                                        ? null
+                                        : runtime.get().monitoringFanoutLocation(),
+                        () -> runtime.get() == null ? null : runtime.get().monitoringManualFanout(),
+                        hostState);
+    }
+
+    public ZLinkClientServerRuntime clientServer() {
+        return clientServer;
+    }
+
+    public ZLinkFanoutRuntime fanout() {
+        return fanout;
+    }
+
+    public void signalAll() {
+        clientServer.signalAll();
+        fanout.signalAll();
+    }
+
+    public void attach(ZLinkChannelRuntime runtime) {
+        runtime.channelSocketRegistry().onTopologyChanged(this::signalAll);
+        signalAll();
+    }
+}
+
 final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
-    private final ZLinkChannelSocketRegistry sockets;
+    private final Supplier<ZLinkChannelSocketRegistry> sockets;
+    private final java.util.function.Function<String, ChannelRegistration> registration;
     private final Supplier<ZLinkFrameworkRuntimeState> hostState;
     private final ZLinkTopologyStatusSource<ZLinkClientServerStatus> statuses;
 
     ZLinkClientServerRuntimeView(
             ZLinkChannelSocketRegistry sockets, Supplier<ZLinkFrameworkRuntimeState> hostState) {
+        this(() -> sockets, sockets::registration, hostState);
+        sockets.onTopologyChanged(this::signalAll);
+    }
+
+    ZLinkClientServerRuntimeView(
+            Supplier<ZLinkChannelSocketRegistry> sockets,
+            java.util.function.Function<String, ChannelRegistration> registration,
+            Supplier<ZLinkFrameworkRuntimeState> hostState) {
         this.sockets = Objects.requireNonNull(sockets, "sockets");
+        this.registration = registration;
         this.hostState = Objects.requireNonNull(hostState, "hostState");
         statuses =
                 new ZLinkTopologyStatusSource<>(
@@ -57,7 +114,10 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
                                 status.state() == ZLinkTopologyState.STOPPED
                                         || status.state() == ZLinkTopologyState.FAILED,
                         status -> status.state() == ZLinkTopologyState.STOPPING);
-        sockets.onTopologyChanged(statuses::signalAll);
+    }
+
+    void signalAll() {
+        statuses.signalAll();
     }
 
     @Override
@@ -89,23 +149,26 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
                         ? ZLinkClientServerRole.CLIENT_AND_SERVER
                         : client ? ZLinkClientServerRole.CLIENT : ZLinkClientServerRole.SERVER;
         List<ZLinkClientServerTargetStatus> targets =
-                sockets.clientServerTargetSnapshots(channelName).stream()
-                        .map(
-                                target -> {
-                                    var peer =
-                                            ZLinkTopologyRuntimeProjection.snapshot(
-                                                    target.nodeRid(),
-                                                    target.hostState(),
-                                                    target.ready(),
-                                                    target.connecting(),
-                                                    ZLinkTopologyReason.NO_READY_TARGET);
-                                    return new ZLinkClientServerTargetStatus(
-                                            peer.nodeRid(),
-                                            target.weight(),
-                                            peer.state(),
-                                            peer.unavailableReason());
-                                })
-                        .toList();
+                (sockets.get() == null
+                                ? List.<ZLinkChannelSocketRegistry.ClientServerTargetSnapshot>of()
+                                : sockets.get().clientServerTargetSnapshots(channelName))
+                        .stream()
+                                .map(
+                                        target -> {
+                                            var peer =
+                                                    ZLinkTopologyRuntimeProjection.snapshot(
+                                                            target.nodeRid(),
+                                                            target.hostState(),
+                                                            target.ready(),
+                                                            target.connecting(),
+                                                            ZLinkTopologyReason.NO_READY_TARGET);
+                                            return new ZLinkClientServerTargetStatus(
+                                                    peer.nodeRid(),
+                                                    target.weight(),
+                                                    peer.state(),
+                                                    peer.unavailableReason());
+                                        })
+                                .toList();
         int readyTargetCount =
                 Math.toIntExact(
                         targets.stream()
@@ -144,7 +207,7 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
         if (channelName == null || channelName.isBlank()) {
             throw new IllegalArgumentException("channelName is required");
         }
-        ChannelRegistration registration = sockets.registration(channelName);
+        ChannelRegistration registration = this.registration.apply(channelName);
         if (registration == null || registration.kind() != kind) {
             throw new ZLinkConfigurationException(
                     "ClientServer channel is not configured: " + channelName);
@@ -154,7 +217,7 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
 }
 
 final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
-    private final ZLinkChannelSocketRegistry sockets;
+    private final java.util.function.Function<String, ChannelRegistration> registration;
     private final Supplier<ZLinkFanoutLocationRuntime> locationRuntime;
     private final Supplier<ZLinkManualFanoutRuntime> manualRuntime;
     private final Supplier<ZLinkFrameworkRuntimeState> hostState;
@@ -165,7 +228,16 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
             Supplier<ZLinkFanoutLocationRuntime> locationRuntime,
             Supplier<ZLinkManualFanoutRuntime> manualRuntime,
             Supplier<ZLinkFrameworkRuntimeState> hostState) {
-        this.sockets = Objects.requireNonNull(sockets, "sockets");
+        this(sockets::registration, locationRuntime, manualRuntime, hostState);
+        sockets.onTopologyChanged(this::signalAll);
+    }
+
+    ZLinkFanoutRuntimeView(
+            java.util.function.Function<String, ChannelRegistration> registration,
+            Supplier<ZLinkFanoutLocationRuntime> locationRuntime,
+            Supplier<ZLinkManualFanoutRuntime> manualRuntime,
+            Supplier<ZLinkFrameworkRuntimeState> hostState) {
+        this.registration = registration;
         this.locationRuntime = Objects.requireNonNull(locationRuntime, "locationRuntime");
         this.manualRuntime = Objects.requireNonNull(manualRuntime, "manualRuntime");
         this.hostState = Objects.requireNonNull(hostState, "hostState");
@@ -192,7 +264,10 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
                                 status.state() == ZLinkTopologyState.STOPPED
                                         || status.state() == ZLinkTopologyState.FAILED,
                         status -> status.state() == ZLinkTopologyState.STOPPING);
-        sockets.onTopologyChanged(statuses::signalAll);
+    }
+
+    void signalAll() {
+        statuses.signalAll();
     }
 
     @Override
@@ -275,7 +350,7 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
         if (channelName == null || channelName.isBlank()) {
             throw new IllegalArgumentException("channelName is required");
         }
-        ChannelRegistration registration = sockets.registration(channelName);
+        ChannelRegistration registration = this.registration.apply(channelName);
         if (registration == null || registration.kind() != ChannelKind.FANOUT) {
             throw new ZLinkConfigurationException(
                     "Automatic fanout channel is not configured: " + channelName);

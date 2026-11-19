@@ -3763,7 +3763,7 @@ internal static class ServiceWireCodec
                 break;
             case 6:
                 ProtocolCapabilities = ReadSortedText8Vector(ref item, context);
-                if (!ProtocolCapabilities.Value.Items.Any(item => item.Value == "framework-service-v13")) throw Error("required capability");
+                if (!ProtocolCapabilities.Value.Items.Any(item => item.Value == "framework-service-v14")) throw Error("required capability");
                 item.End("protocolCapabilities");
                 break;
             case 7:
@@ -3870,7 +3870,7 @@ internal static class ServiceWireCodec
         if (value.ProtocolCapabilities is null) throw Error("protocolCapabilities: required");
         if (value.ProtocolCapabilities is not null)
         {
-            if (!value.ProtocolCapabilities.Value.Items.Any(item => item.Value == "framework-service-v13")) throw Error("required capability");
+            if (!value.ProtocolCapabilities.Value.Items.Any(item => item.Value == "framework-service-v14")) throw Error("required capability");
             WriteU8(ref writer, new U8(6), context);
             var itemOffset = writer.Length;
             writer.Reserve(4);

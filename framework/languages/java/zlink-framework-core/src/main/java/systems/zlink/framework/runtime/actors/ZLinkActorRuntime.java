@@ -42,6 +42,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -3895,7 +3896,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
-        return submitActorDispatch(target, actorId, payloadBytes, operation, null, null, null);
+        return submitActorDispatch(
+                target, actorId, payloadBytes, operation, () -> {}, null, null, null);
     }
 
     public CompletionStage<Void> submitActorDispatch(
@@ -3903,6 +3905,19 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return submitActorDispatch(
+                target, actorId, payloadBytes, operation, () -> {}, admission, header, payload);
+    }
+
+    public CompletionStage<Void> submitActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {
@@ -3916,7 +3931,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 turn,
                                 payloadBytes,
                                 operation,
-                                () -> {},
+                                release,
                                 admission,
                                 header,
                                 payload));
@@ -4114,16 +4129,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         new ZLinkActorDispatchTarget.ActivationSnapshot(target, prepared.context))
                 .thenCompose(
                         turn ->
-                                turn.activation()
-                                        .relocationLane()
-                                        .admitDurablePrefix(
-                                                records,
-                                                (record, terminal) -> {
-                                                    var operation = replay.apply(record, terminal);
-                                                    return () ->
-                                                            dispatches.runTurn(turn, operation);
-                                                },
-                                                jobs));
+                                ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                        turn.activation().relocationLane(),
+                                        records,
+                                        (record, terminal) -> {
+                                            var operation = replay.apply(record, terminal);
+                                            return () -> dispatches.runTurn(turn, operation);
+                                        },
+                                        jobs));
     }
 
     public CompletionStage<ZLinkSerialExecutionQueue> actorRelocationLaneAsync(String actorId) {

@@ -282,11 +282,26 @@ class state_lane_t
         return result;
     }
 
-    // The caller executes its own synchronous work in FIFO order. A contended
-    // caller may wait for its turn. Debug diagnoses infrastructure dependencies
-    // through the existing wait guard (execution gate 10, serial executor 6.5).
+    // Keeps the existing caller-grant behavior for synchronous callers whose
+    // lane turn is also their caller-thread boundary.
     template <typename Work>
     auto run_sync (Work &&work) -> std::invoke_result_t<std::decay_t<Work> &>
+    {
+        return run_sync_impl<false> (std::forward<Work> (work));
+    }
+
+    // Completes a synchronous source submission on the lane. If the lane is
+    // busy, its existing drain executes this turn and the caller observes only
+    // its result.
+    template <typename Work>
+    auto run_sync_result (Work &&work) -> std::invoke_result_t<std::decay_t<Work> &>
+    {
+        return run_sync_impl<true> (std::forward<Work> (work));
+    }
+
+  private:
+    template <bool drain_contended, typename Work>
+    auto run_sync_impl (Work &&work) -> std::invoke_result_t<std::decay_t<Work> &>
     {
         using value_t = std::invoke_result_t<std::decay_t<Work> &>;
         using stored_t = std::conditional_t<
@@ -316,6 +331,23 @@ class state_lane_t
             }
         };
         if (!schedule_drain (true, invoke_work)) {
+            if constexpr (drain_contended) {
+                // The lane's existing drain runs this turn in FIFO order.
+                auto completed = run (std::forward<Work> (work));
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+                if (offload_executor_t::current_worker_executor () == &_executor || current ()) {
+                    infrastructure_wait_guard::infrastructure_scope_t scope (this);
+                    infrastructure_wait_guard::before_condition_wait (
+                      infrastructure_wait_guard::wait_relation_t::dependent_completion,
+                      [&] {
+                          return completed.wait_for (std::chrono::seconds::zero ())
+                                 == std::future_status::ready;
+                      },
+                      "state-lane/run_sync_result");
+                }
+#endif
+                return completed.get ();
+            }
             auto grant = std::make_shared<std::promise<void>> ();
             auto granted = grant->get_future ();
             if (!enqueue ({}, [grant] (std::exception_ptr error) {
@@ -356,6 +388,7 @@ class state_lane_t
             return;
     }
 
+  public:
     template <typename Work> auto run_checked (Work &&work)
     {
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD

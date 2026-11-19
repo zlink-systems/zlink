@@ -45,6 +45,99 @@ final class ZLinkRouteMeshRuntimeViewTest {
     private static final String MESH = "mesh";
     private static final Duration WAIT = Duration.ofSeconds(30);
 
+    @Test
+    void registeredStatusPrecedesStartupAndRetainsThePublisherAfterShutdown() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh(MESH).listen("tcp://127.0.0.1:0");
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addClientServerChannel("work").client();
+        options.addFanoutChannel("events")
+                .enableSubscriber()
+                .addPublishHandler(StatusEventHandler.class, String.class);
+        var startupHeld = new CountDownLatch(1);
+        var finishStartup = new CountDownLatch(1);
+        var construction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .callServicesPublication(
+                                publication -> {
+                                    publication.run();
+                                    startupHeld.countDown();
+                                    try {
+                                        finishStartup.await();
+                                    } catch (InterruptedException failure) {
+                                        Thread.currentThread().interrupt();
+                                        throw new IllegalStateException(failure);
+                                    }
+                                });
+        var runtime =
+                ZLinkFrameworkRuntimeTestAccess.prepareWithConstruction(options, construction);
+        try {
+            var mesh = runtime.routeMeshRuntime();
+            var before = mesh.snapshot(MESH);
+            assertEquals(ZLinkTopologyState.STARTING, before.state());
+            assertFalse(before.isReady());
+            assertEquals(before.sequence(), mesh.snapshot(MESH).sequence());
+            assertEquals(
+                    ZLinkTopologyState.STARTING,
+                    runtime.clientServerRuntime().snapshot("work").state());
+            assertFalse(runtime.clientServerRuntime().snapshot("work").isReady());
+            assertEquals(
+                    ZLinkTopologyState.STARTING,
+                    runtime.fanoutRuntime().snapshot("events").state());
+            assertFalse(runtime.fanoutRuntime().snapshot("events").isReady());
+            var observed = new LinkedBlockingQueue<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>();
+            mesh.observe(MESH, 8).subscribe(subscriber(observed::add, Long.MAX_VALUE));
+            assertEquals(before.sequence(), observed.poll(5, TimeUnit.SECONDS).status().sequence());
+            assertThrows(
+                    systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                    () -> mesh.snapshot("missing"));
+            assertThrows(
+                    systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                    () -> runtime.clientServerRuntime().snapshot("missing"));
+            assertThrows(
+                    systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                    () -> runtime.fanoutRuntime().snapshot("missing"));
+            var startup =
+                    CompletableFuture.runAsync(
+                            () ->
+                                    ZLinkFrameworkRuntimeTestAccess.startPreparedWithConstruction(
+                                            runtime,
+                                            options,
+                                            new ZLinkJavaBackendAdapterFactory(),
+                                            construction));
+            try {
+                assertTrue(startupHeld.await(5, TimeUnit.SECONDS));
+                assertEquals(ZLinkTopologyState.STARTING, mesh.snapshot(MESH).state());
+                assertFalse(mesh.snapshot(MESH).isReady());
+                assertEquals(
+                        ZLinkTopologyState.STARTING,
+                        runtime.clientServerRuntime().snapshot("work").state());
+                assertEquals(
+                        ZLinkTopologyState.STARTING,
+                        runtime.fanoutRuntime().snapshot("events").state());
+            } finally {
+                finishStartup.countDown();
+            }
+            startup.get(5, TimeUnit.SECONDS);
+            assertTrue(mesh.snapshot(MESH).isReady());
+            runtime.close();
+            var stopped = mesh.snapshot(MESH);
+            assertEquals(ZLinkTopologyState.STOPPED, stopped.state());
+            assertFalse(stopped.isReady());
+            assertEquals(
+                    ZLinkTopologyState.STOPPED,
+                    runtime.clientServerRuntime().snapshot("work").state());
+            assertEquals(
+                    ZLinkTopologyState.STOPPED, runtime.fanoutRuntime().snapshot("events").state());
+            var terminal = new LinkedBlockingQueue<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>();
+            mesh.observe(MESH, 8).subscribe(subscriber(terminal::add, Long.MAX_VALUE));
+            assertEquals(
+                    stopped.sequence(), terminal.poll(5, TimeUnit.SECONDS).status().sequence());
+        } finally {
+            runtime.close();
+        }
+    }
+
     @org.junit.jupiter.api.RepeatedTest(30)
     void terminalSourceRemainsQueryableAndObservableAfterNativeTeardown() throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
@@ -796,6 +889,16 @@ final class ZLinkRouteMeshRuntimeViewTest {
             @Override
             public void onComplete() {}
         };
+    }
+
+    public static final class StatusEventHandler
+            implements systems.zlink.framework.channels.ZLinkFanoutHandler<String> {
+        @Override
+        public java.util.concurrent.CompletionStage<Void> handle(
+                String message,
+                systems.zlink.framework.channels.ZLinkPublishMessageContext context) {
+            return CompletableFuture.completedFuture(null);
+        }
     }
 
     /** An Entry Spot that accepts every Actor type, so the node can create new Actors. */

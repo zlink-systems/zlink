@@ -7145,13 +7145,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {
         return actorSessions
                 .runtime()
                 .submitActorDispatch(
-                        target, actorId, payloadBytes, operation, admission, header, payload);
+                        target,
+                        actorId,
+                        payloadBytes,
+                        operation,
+                        release,
+                        admission,
+                        header,
+                        payload);
     }
 
     @Override
@@ -7338,6 +7346,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 pendingHeader ? headerPart : copyActorReceived(headerPart);
         Message payloadCopy =
                 bodyPart == null ? Message.from(new byte[0]) : Message.from(bodyPart.message());
+        Runnable release =
+                () -> {
+                    payloadCopy.close();
+                    headerCopy.close();
+                };
+        CompletableFuture<Void> admission =
+                requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
+        admission.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) release.run();
+                });
         CompletionStage<Void> queued =
                 enqueueLocalActorPacket(
                         dispatchLine,
@@ -7345,11 +7364,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         packetHeader,
                         headerCopy,
                         payloadCopy,
-                        requestAdmission);
+                        admission,
+                        release);
         queued.whenComplete(
-                (ignored, error) -> {
-                    payloadCopy.close();
-                    headerCopy.close();
+                (ignored, failure) -> {
+                    if (failure != null) admission.completeExceptionally(failure);
                 });
         return queued;
     }
@@ -7386,7 +7405,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerCopy,
             Message payloadCopy,
-            CompletableFuture<Void> requestAdmission) {
+            CompletableFuture<Void> requestAdmission,
+            Runnable release) {
         ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply = null;
         try {
             boolean noBindRequest = isNoBindActorRequest(packetHeader, headerCopy);
@@ -7489,11 +7509,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     registered);
                         }
                     };
+            Supplier<CompletionStage<Void>> ownedOperation =
+                    () ->
+                            ZLinkHandlerStages.fromStageSupplier(operation)
+                                    .whenComplete((ignored, failure) -> release.run());
             return relocationReply == null
                     ? dispatchLine.enqueueActorDispatch(
                             actor.context().actorId(),
                             payloadCopy.size(),
-                            operation,
+                            ownedOperation,
+                            release,
                             requestAdmission,
                             headerCopy,
                             payloadCopy)
@@ -7501,8 +7526,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             actor.context().actorId(),
                             relocationReply::record,
                             headerCopy.message().size() + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
-                            operation,
-                            relocationReply::releaseForRelocation,
+                            ownedOperation,
+                            () -> {
+                                try {
+                                    registered.releaseForRelocation();
+                                } finally {
+                                    release.run();
+                                }
+                            },
                             requestAdmission,
                             headerCopy,
                             payloadCopy);
@@ -7775,29 +7806,28 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return reason + " for packet '" + packetName + "'";
     }
 
-    /**
-     * Parses an inbound SPOT route message. A shared cross-language envelope ({@code [JSON header,
-     * body]}, formatMarker 0xF2) yields the header's messageName and body; legacy internal raw
-     * parts keep the packet-name/payload frames. A first frame that is a JSON object but not a
-     * valid envelope throws {@code PROTOCOL_ERROR}.
-     */
+    /** Parses an inbound SPOT route message from its ChannelHeader or internal Actor packet. */
     static ParsedPacket parsePacket(List<Message> parts) {
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
-                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(
-                        parts, false);
-        return parsePacket(parts, header);
+        return parsePacket(parts, false);
     }
 
-    static ParsedPacket parsePacket(
-            List<Message> parts,
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
-        if (header != null) {
-            return new ParsedPacket(header.messageName(), parts.get(1), header);
+    static ParsedPacket parsePacket(List<Message> parts, boolean captureFlow) {
+        if (parts.size() < 2) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "SPOT route envelope payload is missing");
         }
-        if (parts.size() >= 2) {
-            return new ParsedPacket(parts.get(0).toUtf8String(), parts.get(1));
+        if (parts.getFirst().size() > 0 && parts.getFirst().dataBuffer().get(0) == '_') {
+            String internalPacket = parts.getFirst().toUtf8String();
+            if (ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(internalPacket)
+                    || ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(internalPacket)) {
+                return new ParsedPacket(internalPacket, parts.get(1), null);
+            }
         }
-        return new ParsedPacket("", parts.get(0));
+        var decoded =
+                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(
+                        parts, captureFlow);
+        return new ParsedPacket(decoded.messageName(), parts.get(1), decoded);
     }
 
     static boolean isProbeFrame(List<Message> parts) {

@@ -5,12 +5,13 @@
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
-#include <nlohmann/json.hpp>
-#include <zlink/detail/json_profile/string_primitives.hpp>
+#include <channel-header-v1.pb.h>
 #include <service_wire_constants.hpp>
+#include <google/protobuf/wire_format_lite.h>
+#include <google/protobuf/io/coded_stream.h>
+#include <google/protobuf/io/zero_copy_stream_impl_lite.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -160,338 +161,470 @@ message_parts_t envelope_codec_t::encode_parts (const envelope_header_t &header,
 namespace
 {
 
-bool valid_error_code (const std::string &value) noexcept
+bool valid_utf8 (std::string_view text) noexcept
 {
-    return value == "not_found" || value == "already_exists" || value == "type_mismatch"
-           || value == "not_configured" || value == "rejected" || value == "unavailable"
-           || value == "deadline_exceeded" || value == "shutting_down" || value == "protocol_error"
-           || value == "invalid_operation" || value == "data_lost" || value == "internal_failure";
+    for (std::size_t index = 0; index < text.size ();) {
+        const auto lead = static_cast<unsigned char> (text[index++]);
+        if (lead < 0x80)
+            continue;
+        const std::size_t remaining = lead >= 0xc2 && lead <= 0xdf   ? 1
+                                      : lead >= 0xe0 && lead <= 0xef ? 2
+                                      : lead >= 0xf0 && lead <= 0xf4 ? 3
+                                                                     : 0;
+        if (remaining == 0 || text.size () - index < remaining)
+            return false;
+        const auto second = static_cast<unsigned char> (text[index]);
+        if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second >= 0xa0)
+            || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second >= 0x90))
+            return false;
+        for (std::size_t part = 0; part < remaining; ++part) {
+            const auto byte = static_cast<unsigned char> (text[index++]);
+            if (byte < 0x80 || byte > 0xbf)
+                return false;
+        }
+    }
+    return true;
 }
 
-result_t<void> validate_protocol_header (const envelope_header_t &header,
-                                         int format_marker,
-                                         const std::string *flow_id,
-                                         const std::optional<flow_origin_t> &flow_origin)
+bool valid_string (std::string_view value) noexcept
 {
+    return value.find ('\0') == std::string_view::npos && valid_utf8 (value);
+}
+
+// Wire parsing checks UTF-8; rejection context also excludes strings containing NUL.
+bool valid_nul_free_string (std::string_view value) noexcept
+{
+    return value.find ('\0') == std::string_view::npos;
+}
+
+bool valid_correlation_id (std::string_view value) noexcept
+{
+    return !value.empty () && value.size () <= 64
+           && std::all_of (value.begin (), value.end (),
+                           [] (unsigned char character) { return character <= 0x7f; });
+}
+
+using channel_header_proto_t = zlink::framework::channel::v1::ChannelHeader;
+
+struct header_presence_t
+{
+    bool correlation_id = false;
+    bool deadline = false;
+    bool error_code = false;
+    bool error_message = false;
+    bool flow_id = false;
+    bool flow_origin = false;
+    bool source = false;
+    bool topic = false;
+    bool metadata_duplicate = false;
+    std::size_t metadata_encoded_size = 0;
+};
+
+result_t<void> validate_protocol_header (const envelope_header_t &header,
+                                         bool capture_flow,
+                                         std::string_view content_type,
+                                         const std::string *flow_id_override = nullptr,
+                                         std::optional<flow_origin_t> flow_origin_override = {},
+                                         bool *metadata_invalid = nullptr,
+                                         const header_presence_t *presence = nullptr)
+{
+    if (metadata_invalid)
+        *metadata_invalid = false;
+    const auto valid_text = [] (std::string_view value) { return valid_string (value); };
+    const auto valid_optional = [&valid_text] (bool present, std::string_view value) {
+        return !present || valid_text (value);
+    };
     if (header.kind < message_kind_t::request || header.kind > message_kind_t::error)
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "ZLink envelope header kind is invalid");
-
-    if (!header.correlation_id.empty () && !header.can_correlate_reply ())
+    const auto has_deadline = presence ? presence->deadline : header.deadline.has_value ();
+    const auto has_error_code = presence ? presence->error_code : header.error_code.has_value ();
+    const auto has_error_message =
+      presence ? presence->error_message : header.error_message.has_value ();
+    const auto has_source = presence ? presence->source : header.source.has_value ();
+    const auto has_topic = presence ? presence->topic : header.topic.has_value ();
+    if (!valid_text (header.channel_name) || !valid_text (header.message_name)
+        || !valid_text (content_type)
+        || !valid_optional (has_deadline, header.deadline ? std::string_view (*header.deadline)
+                                                          : std::string_view{})
+        || !valid_optional (has_error_code, header.error_code.value_or (""))
+        || !valid_optional (has_error_message, header.error_message.value_or (""))
+        || !valid_optional (has_source, header.source.value_or (""))
+        || !valid_optional (has_topic, header.topic.value_or ("")))
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "ZLink envelope correlationId must be 1..64 byte ASCII");
-    if (format_marker != static_cast<int> (flow_id_t::format_marker)) {
+                                        "ZLink envelope header string is invalid");
+    std::size_t encoded_metadata_size = 0;
+    const auto validate_metadata_entry = [&] (std::string_view key, std::string_view value,
+                                              std::size_t entry_size) -> result_t<void> {
+        if (key.empty () || !valid_string (key) || !valid_string (value)) {
+            if (metadata_invalid)
+                *metadata_invalid = true;
+            return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                            "ZLink envelope metadata key/value is invalid");
+        }
+        if (entry_size
+            > protocol::metadataBytes
+                - std::min<std::uint64_t> (encoded_metadata_size, protocol::metadataBytes)) {
+            if (metadata_invalid)
+                *metadata_invalid = true;
+            return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                            "ZLink envelope metadata exceeds 1024 bytes");
+        }
+        encoded_metadata_size += entry_size;
+        return result_t<void>::success ();
+    };
+    if (presence && presence->metadata_duplicate) {
+        if (metadata_invalid)
+            *metadata_invalid = true;
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "ZLink envelope format marker is invalid");
+                                        "ZLink envelope metadata key is duplicated");
     }
-    if ((flow_id != nullptr) != flow_origin.has_value ()) {
-        return result_t<void>::failure (
-          framework_error_kind_t::protocol_error,
-          "ZLink envelope flow id and origin must be present together");
+    for (const auto &[key, value] : header.metadata) {
+        const auto nested_size =
+          1 + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (key.size ()) + 1
+          + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (value.size ());
+        const auto entry_size =
+          1 + google::protobuf::internal::WireFormatLite::LengthDelimitedSize (nested_size);
+        auto valid = validate_metadata_entry (key, value, presence ? 0 : entry_size);
+        if (!valid)
+            return valid;
     }
-    if (flow_id && !flow_id_t::is_valid (*flow_id)) {
+    if (presence && presence->metadata_encoded_size > protocol::metadataBytes) {
+        if (metadata_invalid)
+            *metadata_invalid = true;
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "ZLink envelope flow id must be UUIDv7");
+                                        "ZLink envelope metadata exceeds 1024 bytes");
     }
-    if (flow_origin) {
-        const auto raw = static_cast<std::uint8_t> (*flow_origin);
-        if (raw < 1 || raw > 4) {
+    if (capture_flow) {
+        const bool has_flow_id =
+          presence ? presence->flow_id : (flow_id_override || header.flow_id.has_value ());
+        const bool has_flow_origin =
+          presence ? presence->flow_origin : (flow_origin_override || header.flow_origin);
+        const auto flow_id = flow_id_override ? std::string_view (*flow_id_override)
+                             : header.flow_id ? std::string_view (*header.flow_id)
+                                              : std::string_view{};
+        const auto flow_origin = static_cast<std::uint8_t> (flow_origin_override.value_or (
+          header.flow_origin.value_or (static_cast<flow_origin_t> (0))));
+        if (has_flow_id != has_flow_origin)
+            return result_t<void>::failure (
+              framework_error_kind_t::protocol_error,
+              "ZLink envelope flow id and origin must be present together");
+        if (has_flow_id && !flow_id_t::is_valid (flow_id))
+            return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                            "ZLink envelope flow id must be UUIDv7");
+        if (has_flow_origin && (flow_origin < 1 || flow_origin > 4))
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "ZLink envelope flow origin is invalid");
-        }
     }
-    if (header.kind == message_kind_t::error
-        && (!header.error_code || !valid_error_code (*header.error_code))) {
+    const bool has_correlation_id =
+      presence ? presence->correlation_id : !header.correlation_id.empty ();
+    if (has_correlation_id && !valid_correlation_id (header.correlation_id))
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "ZLink error envelope requires a recognized errorCode");
-    }
+                                        "ZLink envelope correlationId must be 1..64 byte ASCII");
     return result_t<void>::success ();
 }
 
-using zlink::detail::json_profile::consume_utf8;
-using zlink::detail::json_profile::plain_ascii_prefix;
+using metadata_entry_proto_t = zlink::framework::channel::v1::MetadataEntry;
 
-// The envelope has a fixed field order. Count the escaped bytes first, then
-// write directly into the destination frame.
-template <typename Output = std::nullptr_t> class header_writer_t
+bool read_wire_string_view (google::protobuf::io::CodedInputStream &input, std::string_view &value)
 {
-  public:
-    explicit header_writer_t (Output output = {}) : _output (output) {}
-    explicit header_writer_t (std::string &output)
-        requires std::is_same_v<Output, std::string *>
-        : _output (&output)
-    {
+    std::uint32_t length = 0;
+    if (!input.ReadVarint32 (&length))
+        return false;
+    if (length == 0) {
+        value = {};
+        return true;
     }
+    const void *data = nullptr;
+    int available = 0;
+    if (!input.GetDirectBufferPointer (&data, &available)
+        || length > static_cast<std::uint32_t> (available))
+        return false;
+    value = std::string_view (static_cast<const char *> (data), length);
+    return input.Skip (static_cast<int> (length));
+}
 
-    void append (std::string_view text)
-    {
-        if constexpr (std::is_same_v<Output, char *>) {
-            if (!text.empty ())
-                std::memcpy (_output + _size, text.data (), text.size ());
-        } else if constexpr (std::is_same_v<Output, std::string *>) {
-            _output->append (text);
+bool parse_metadata_entry_view (std::string_view bytes, std::string &key, std::string &value)
+{
+    google::protobuf::io::ArrayInputStream stream (bytes.data (), static_cast<int> (bytes.size ()),
+                                                   std::max (1, static_cast<int> (bytes.size ())));
+    google::protobuf::io::CodedInputStream input (&stream);
+    for (std::uint32_t tag = input.ReadTag (); tag != 0; tag = input.ReadTag ()) {
+        const auto field = google::protobuf::internal::WireFormatLite::GetTagFieldNumber (tag);
+        const auto wire = google::protobuf::internal::WireFormatLite::GetTagWireType (tag);
+        if ((field == metadata_entry_proto_t::kKeyFieldNumber
+             || field == metadata_entry_proto_t::kValueFieldNumber)
+            && wire == google::protobuf::internal::WireFormatLite::WIRETYPE_LENGTH_DELIMITED) {
+            std::string_view text;
+            if (!read_wire_string_view (input, text) || !valid_utf8 (text))
+                return false;
+            auto &destination = field == metadata_entry_proto_t::kKeyFieldNumber ? key : value;
+            destination.assign (text.data (), text.size ());
+        } else if (!google::protobuf::internal::WireFormatLite::SkipField (&input, tag)) {
+            return false;
         }
-        _size += text.size ();
     }
+    return input.ConsumedEntireMessage ();
+}
 
-    void number (int value)
-    {
-        char buffer[std::numeric_limits<int>::digits10 + 3];
-        const auto result = std::to_chars (buffer, buffer + sizeof (buffer), value);
-        append (std::string_view (buffer, result.ptr - buffer));
-    }
-
-    void string (std::string_view value)
-    {
-        append ("\"");
-        std::size_t start = 0;
-        for (std::size_t index = 0; index < value.size ();) {
-            const auto position = index;
-            const auto byte = static_cast<unsigned char> (value[index++]);
-            if (byte >= 0x80 && validates_input ()) {
-                if (!consume_utf8 (value, index, byte)) {
-                    // Preserve the JSON library's strict UTF-8 diagnostic.
-                    (void) nlohmann::json (value).dump ();
-                }
-                continue;
+bool parse_channel_header_view (std::span<const std::byte> bytes,
+                                bool capture_flow,
+                                envelope_header_t &header,
+                                header_presence_t &presence)
+{
+    using wire_t = google::protobuf::internal::WireFormatLite;
+    google::protobuf::io::ArrayInputStream stream (bytes.data (), static_cast<int> (bytes.size ()),
+                                                   std::max (1, static_cast<int> (bytes.size ())));
+    google::protobuf::io::CodedInputStream input (&stream);
+    const auto assign_view = [] (header_text_t &destination, std::string_view text) {
+        destination = header_text_t::view (text);
+    };
+    for (std::uint32_t tag = input.ReadTag (); tag != 0; tag = input.ReadTag ()) {
+        const auto field = wire_t::GetTagFieldNumber (tag);
+        const auto wire = wire_t::GetTagWireType (tag);
+        if (field == channel_header_proto_t::kKindFieldNumber && wire == wire_t::WIRETYPE_VARINT) {
+            std::uint32_t value = 0;
+            if (!input.ReadVarint32 (&value))
+                return false;
+            header.kind = static_cast<message_kind_t> (static_cast<std::int32_t> (value));
+        } else if (wire == wire_t::WIRETYPE_LENGTH_DELIMITED
+                   && ((field >= channel_header_proto_t::kChannelNameFieldNumber
+                        && field <= channel_header_proto_t::kFlowIdFieldNumber)
+                       || field == channel_header_proto_t::kSourceFieldNumber
+                       || field == channel_header_proto_t::kTopicFieldNumber)) {
+            std::string_view text;
+            if (!read_wire_string_view (input, text) || !valid_utf8 (text))
+                return false;
+            switch (field) {
+                case channel_header_proto_t::kChannelNameFieldNumber:
+                    assign_view (header.channel_name, text);
+                    break;
+                case channel_header_proto_t::kMessageNameFieldNumber:
+                    assign_view (header.message_name, text);
+                    break;
+                case channel_header_proto_t::kContentTypeFieldNumber:
+                    assign_view (header.content_type, text);
+                    break;
+                case channel_header_proto_t::kCorrelationIdFieldNumber:
+                    assign_view (header.correlation_id, text);
+                    presence.correlation_id = true;
+                    break;
+                case channel_header_proto_t::kDeadlineFieldNumber:
+                    header.deadline = header_text_t::view (text);
+                    presence.deadline = true;
+                    break;
+                case channel_header_proto_t::kErrorCodeFieldNumber:
+                    header.error_code = std::string (text);
+                    presence.error_code = true;
+                    break;
+                case channel_header_proto_t::kErrorMessageFieldNumber:
+                    header.error_message = std::string (text);
+                    presence.error_message = true;
+                    break;
+                case channel_header_proto_t::kFlowIdFieldNumber:
+                    presence.flow_id = true;
+                    if (capture_flow)
+                        header.flow_id = std::string (text);
+                    break;
+                case channel_header_proto_t::kSourceFieldNumber:
+                    header.source = std::string (text);
+                    presence.source = true;
+                    break;
+                case channel_header_proto_t::kTopicFieldNumber:
+                    header.topic = std::string (text);
+                    presence.topic = true;
+                    break;
+                default:
+                    break;
             }
-            if (byte >= 0x20 && byte != '"' && byte != '\\')
-                continue;
-            append (std::string_view (value).substr (start, position - start));
-            switch (byte) {
-                case '"':
-                    append ("\\\"");
-                    break;
-                case '\\':
-                    append ("\\\\");
-                    break;
-                case '\b':
-                    append ("\\b");
-                    break;
-                case '\f':
-                    append ("\\f");
-                    break;
-                case '\n':
-                    append ("\\n");
-                    break;
-                case '\r':
-                    append ("\\r");
-                    break;
-                case '\t':
-                    append ("\\t");
-                    break;
-                default: {
-                    constexpr char hex[] = "0123456789abcdef";
-                    const char escaped[] = {'\\', 'u', '0', '0', hex[byte >> 4], hex[byte & 15]};
-                    append (std::string_view (escaped, sizeof (escaped)));
-                    break;
-                }
-            }
-            start = index;
-        }
-        append (std::string_view (value).substr (start));
-        append ("\"");
-    }
-
-    template <typename T> void optional_string (const std::optional<T> &value)
-    {
-        if (value)
-            string (*value);
-        else
-            append ("null");
-    }
-
-    std::size_t size () const noexcept { return _size; }
-
-    // The sizing/string writer owns validation; the final frame writer only
-    // emits the bytes whose size and validity have already been established.
-    constexpr bool validates_input () const noexcept { return !std::is_same_v<Output, char *>; }
-
-  private:
-    Output _output{};
-    std::size_t _size = 0;
-};
-
-header_writer_t () -> header_writer_t<std::nullptr_t>;
-header_writer_t (char *) -> header_writer_t<char *>;
-header_writer_t (std::string &) -> header_writer_t<std::string *>;
-
-template <typename Output>
-void write_metadata (header_writer_t<Output> &writer,
-                     const std::map<std::string, std::string> &metadata)
-{
-    const auto start = writer.size ();
-    writer.append ("{");
-    bool first = true;
-    for (const auto &[key, value] : metadata) {
-        if (writer.validates_input ()
-            && (key.empty () || key.find ('\0') != std::string::npos
-                || value.find ('\0') != std::string::npos))
-            throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                         "ZLink envelope metadata key/value is invalid");
-        if (!first)
-            writer.append (",");
-        first = false;
-        try {
-            writer.string (key);
-            writer.append (":");
-            writer.string (value);
-        }
-        catch (const nlohmann::json::exception &error) {
-            throw framework_exception_t (framework_error_kind_t::protocol_error, error.what ());
+        } else if (field == channel_header_proto_t::kFlowOriginFieldNumber
+                   && wire == wire_t::WIRETYPE_VARINT) {
+            std::uint32_t value = 0;
+            if (!input.ReadVarint32 (&value))
+                return false;
+            presence.flow_origin = true;
+            if (capture_flow)
+                header.flow_origin = static_cast<flow_origin_t> (static_cast<std::int32_t> (value));
+        } else if (field == channel_header_proto_t::kMetadataFieldNumber
+                   && wire == wire_t::WIRETYPE_LENGTH_DELIMITED) {
+            std::string_view entry_bytes;
+            if (!read_wire_string_view (input, entry_bytes))
+                return false;
+            presence.metadata_encoded_size += 1 + wire_t::LengthDelimitedSize (entry_bytes.size ());
+            std::string key;
+            std::string value;
+            if (!parse_metadata_entry_view (entry_bytes, key, value))
+                return false;
+            if (!header.metadata.emplace (std::move (key), std::move (value)).second)
+                presence.metadata_duplicate = true;
+        } else if (!wire_t::SkipField (&input, tag)) {
+            return false;
         }
     }
-    writer.append ("}");
-    if (writer.validates_input () && writer.size () - start > protocol::metadataBytes)
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "ZLink envelope metadata exceeds "
-                                       + std::to_string (protocol::metadataBytes) + " bytes");
+    return input.ConsumedEntireMessage ();
 }
 
-template <typename Output>
-void write_channel_fragment (header_writer_t<Output> &writer, std::string_view channel)
+template <typename Setter>
+void copy_optional (const std::optional<std::string> &source, Setter &&set)
 {
-    writer.append ("{\"channelName\":");
-    writer.string (channel);
+    if (source)
+        std::forward<Setter> (set) (*source);
 }
 
-template <typename Output>
-void write_type_fragments (header_writer_t<Output> &prefix,
-                           header_writer_t<Output> &middle,
-                           std::string_view name,
-                           std::string_view content_type,
-                           message_kind_t kind)
+template <typename Setter>
+void copy_optional (const std::optional<header_text_t> &source, Setter &&set)
 {
-    prefix.append (",\"contentType\":");
-    prefix.string (content_type);
-    prefix.append (",\"correlationId\":");
-    middle.append (",\"formatMarker\":");
-    middle.number (static_cast<int> (flow_id_t::format_marker));
-    middle.append (",\"kind\":");
-    middle.number (static_cast<int> (kind));
-    middle.append (",\"messageName\":");
-    middle.string (name);
-    middle.append (",\"metadata\":");
+    if (source)
+        std::forward<Setter> (set) (std::string (*source));
 }
 
-// header_plan_t::matches compares every envelope_header_t field by hand. The
-// size check catches a new field on the reference toolchain (libstdc++ x86-64).
-#if defined(__GLIBCXX__) && defined(__x86_64__) && !defined(_GLIBCXX_DEBUG)
-static_assert (sizeof (envelope_header_t) == 576,
-               "new envelope_header_t field: add it to header_plan_t::matches and to "
-               "EnvelopeEncoding.ChangedValuesAndInvalidHeadersCannotReusePreviousBytes");
-#endif
-
-struct header_plan_t
+channel_header_proto_t &channel_header_encode_scratch ()
 {
-    std::optional<envelope_header_t> header;
-    std::string prefix;
-    std::string middle;
-    std::string encoded;
-
-    bool matches_type (const envelope_header_t &value, std::string_view content_type) const noexcept
-    {
-        return header && header->kind == value.kind && header->channel_name == value.channel_name
-               && header->message_name == value.message_name
-               && header->content_type == content_type;
-    }
-
-    bool matches (const envelope_header_t &value,
-                  const std::string *flow_id,
-                  std::optional<flow_origin_t> flow_origin) const noexcept
-    {
-        return header->correlation_id == value.correlation_id && header->deadline == value.deadline
-               && header->topic == value.topic && header->error_code == value.error_code
-               && header->error_message == value.error_message && header->source == value.source
-               && header->metadata == value.metadata
-               && header->flow_id.has_value () == (flow_id != nullptr)
-               && (!flow_id || *header->flow_id == *flow_id) && header->flow_origin == flow_origin;
-    }
-
-    void replace (const envelope_header_t &value,
-                  std::string_view selected_content_type,
-                  const std::string *flow_id,
-                  std::optional<flow_origin_t> flow_origin,
-                  const zlink::message_t &message,
-                  std::string next_prefix,
-                  std::string next_middle)
-    {
-        // The key owns any text borrowed by a decoded header. Publish it only
-        // after encoding and every key allocation have succeeded.
-        auto key = value;
-        key.content_type.assign (selected_content_type);
-        key.flow_id = flow_id ? std::optional<std::string> (*flow_id) : std::nullopt;
-        key.flow_origin = flow_origin;
-        std::string bytes (reinterpret_cast<const char *> (message.data ()), message.size ());
-        header.reset ();
-        prefix = std::move (next_prefix);
-        middle = std::move (next_middle);
-        encoded = std::move (bytes);
-        header = std::move (key);
-    }
-};
-
-header_plan_t &header_plan ()
-{
-    thread_local header_plan_t value;
+    thread_local channel_header_proto_t value;
+    value.Clear ();
     return value;
 }
 
-template <typename Output>
-void write_header (header_writer_t<Output> &writer,
-                   const envelope_header_t &header,
-                   const std::string *flow_id,
-                   const std::optional<flow_origin_t> &flow_origin,
-                   std::string_view prefix,
-                   std::string_view middle,
-                   std::string_view content = {})
+void to_proto (channel_header_proto_t &proto,
+               const envelope_header_t &header,
+               std::string_view content_type,
+               const std::string *flow_id,
+               std::optional<flow_origin_t> flow_origin)
 {
-    writer.append (prefix);
-    writer.append (content);
-    if (header.correlation_id.empty ())
-        writer.append ("null");
-    else
-        writer.string (header.correlation_id);
-    writer.append (",\"deadline\":");
-    writer.optional_string (header.deadline);
-    writer.append (",\"errorCode\":");
-    writer.optional_string (header.error_code);
-    writer.append (",\"errorMessage\":");
-    writer.optional_string (header.error_message);
-    writer.append (",\"flowId\":");
+    proto.set_kind (static_cast<zlink::framework::channel::v1::ChannelKind> (header.kind));
+    proto.set_channel_name (header.channel_name.data (), header.channel_name.size ());
+    proto.set_message_name (header.message_name.data (), header.message_name.size ());
+    proto.set_content_type (content_type.data (), content_type.size ());
+    if (!header.correlation_id.empty ())
+        proto.set_correlation_id (header.correlation_id.data (), header.correlation_id.size ());
+    copy_optional (header.deadline, [&] (const std::string &v) { proto.set_deadline (v); });
+    copy_optional (header.error_code, [&] (const std::string &v) { proto.set_error_code (v); });
+    copy_optional (header.error_message,
+                   [&] (const std::string &v) { proto.set_error_message (v); });
     if (flow_id)
-        writer.string (*flow_id);
-    else
-        writer.append ("null");
-    writer.append (",\"flowOrigin\":");
+        proto.set_flow_id (*flow_id);
     if (flow_origin)
-        writer.number (static_cast<int> (*flow_origin));
-    else
-        writer.append ("null");
-    writer.append (middle);
-    write_metadata (writer, header.metadata);
-    writer.append (",\"source\":");
-    writer.optional_string (header.source);
-    writer.append (",\"topic\":");
-    writer.optional_string (header.topic);
-    writer.append ("}");
+        proto.set_flow_origin (
+          static_cast<zlink::framework::channel::v1::FlowOrigin> (*flow_origin));
+    copy_optional (header.source, [&] (const std::string &v) { proto.set_source (v); });
+    copy_optional (header.topic, [&] (const std::string &v) { proto.set_topic (v); });
+    for (const auto &[key, value] : header.metadata) {
+        auto *entry = proto.add_metadata ();
+        entry->set_key (key);
+        entry->set_value (value);
+    }
 }
 
-zlink::message_t encode_header_bytes (const envelope_header_t &header,
-                                      const std::string *flow_id,
-                                      std::optional<flow_origin_t> flow_origin,
-                                      std::string_view prefix,
-                                      std::string_view middle,
-                                      std::string_view content = {})
+std::size_t serialized_header_size (const channel_header_proto_t &proto)
 {
-    header_writer_t measure;
-    write_header (measure, header, flow_id, flow_origin, prefix, middle, content);
-    auto message = zlink::message_t::allocate (measure.size ());
+    const auto size = proto.ByteSizeLong ();
+    if (size > static_cast<std::size_t> (std::numeric_limits<int>::max ()))
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "ZLink envelope header is too large");
+    return size;
+}
+
+void serialize_header_into (const channel_header_proto_t &proto,
+                            std::span<std::byte> destination,
+                            std::size_t size)
+{
+    if (destination.size () != size || proto.GetCachedSize () != static_cast<int> (size)
+        || proto.SerializeWithCachedSizesToArray (
+             reinterpret_cast<std::uint8_t *> (destination.data ()))
+             != reinterpret_cast<std::uint8_t *> (destination.data ()) + size)
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "ZLink envelope header cannot be encoded");
+}
+
+zlink::message_t serialize_header (const channel_header_proto_t &proto)
+{
+    const auto size = serialized_header_size (proto);
+    auto message = zlink::message_t::allocate (size);
     if (!message.valid ())
         throw std::bad_alloc ();
-    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
-    write_header (writer, header, flow_id, flow_origin, prefix, middle, content);
+    serialize_header_into (proto, {message.data (), size}, size);
     return message;
+}
+
+result_t<envelope_header_t>
+decode_header_bytes (std::span<const std::byte> bytes,
+                     bool capture_flow,
+                     std::optional<envelope_header_t> *rejection_context,
+                     bool view_text = false)
+{
+    if (rejection_context)
+        rejection_context->reset ();
+    if (bytes.size () > static_cast<std::size_t> (std::numeric_limits<int>::max ()))
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     "ZLink envelope header is too large");
+    envelope_header_t header{.content_type = {}};
+    header.kind = static_cast<message_kind_t> (0);
+    header_presence_t presence;
+    if (!parse_channel_header_view (bytes, capture_flow, header, presence))
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     "ZLink envelope header protobuf is invalid");
+    if (!view_text) {
+        header.channel_name = std::string (header.channel_name);
+        header.message_name = std::string (header.message_name);
+        header.content_type = std::string (header.content_type);
+        header.correlation_id = std::string (header.correlation_id);
+        if (header.deadline)
+            header.deadline = std::string (*header.deadline);
+    }
+    bool metadata_invalid = false;
+    auto valid = validate_protocol_header (header, capture_flow, header.content_type, nullptr, {},
+                                           &metadata_invalid, &presence);
+    if (!valid) {
+        if (rejection_context) {
+            if (!valid_nul_free_string (header.channel_name))
+                header.channel_name.clear ();
+            if (!valid_nul_free_string (header.message_name))
+                header.message_name.clear ();
+            if (!valid_nul_free_string (header.content_type))
+                header.content_type.clear ();
+            if (!valid_correlation_id (header.correlation_id))
+                header.correlation_id.clear ();
+            if (!header.deadline || !valid_nul_free_string (*header.deadline))
+                header.deadline.reset ();
+            if (header.error_code && !valid_nul_free_string (*header.error_code))
+                header.error_code.reset ();
+            if (header.error_message && !valid_nul_free_string (*header.error_message))
+                header.error_message.reset ();
+            if (header.source && !valid_nul_free_string (*header.source))
+                header.source.reset ();
+            if (header.topic && !valid_nul_free_string (*header.topic))
+                header.topic.reset ();
+            if (!metadata_invalid) {
+                header.flow_id.reset ();
+                header.flow_origin.reset ();
+            }
+            *rejection_context = std::move (header);
+        }
+        return result_t<envelope_header_t>::failure (valid.error_kind (), valid.error ()->what ());
+    }
+    if (!capture_flow) {
+        header.flow_id.reset ();
+        header.flow_origin.reset ();
+    }
+    return result_t<envelope_header_t>::success (std::move (header));
+}
+
+result_t<envelope_header_t>
+decode_header_bytes_result (std::span<const std::byte> bytes,
+                            bool capture_flow,
+                            std::optional<envelope_header_t> *rejection_context,
+                            bool view_text)
+{
+    try {
+        return decode_header_bytes (bytes, capture_flow, rejection_context, view_text);
+    }
+    catch (const framework_exception_t &error) {
+        return result_t<envelope_header_t>::failure (error.kind (), error.what ());
+    }
+    catch (const std::exception &error) {
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     error.what ());
+    }
 }
 
 std::pair<const std::string *, std::optional<flow_origin_t>>
@@ -501,26 +634,15 @@ validate_outgoing_header (const envelope_header_t &header)
     const bool stamp = !header.flow_id && flow && !flow->flow_id.empty ();
     const auto *id = stamp ? &flow->flow_id : header.flow_id ? &*header.flow_id : nullptr;
     const auto origin = stamp ? std::optional<flow_origin_t> (flow->origin) : header.flow_origin;
-    if (auto valid = validate_protocol_header (header, flow_id_t::format_marker, id, origin);
-        !valid)
-        throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
     return {id, origin};
 }
 
-std::pair<const std::string *, std::optional<flow_origin_t>>
-validate_request_header (const envelope_header_t &header,
-                         const detail::request_type_plan_t &type,
-                         const detail::prepared_header_fragment_t &channel)
-{
-    const auto flow = validate_outgoing_header (header);
-    if (channel.error)
-        std::rethrow_exception (channel.error);
-    if (type.error)
-        std::rethrow_exception (type.error);
-    return flow;
-}
-
 } // namespace
+
+bool envelope_header_t::can_correlate_reply () const noexcept
+{
+    return valid_correlation_id (correlation_id);
+}
 
 zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header) const
 {
@@ -530,792 +652,48 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
 zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header,
                                                   std::string_view content_type) const
 {
-    const auto [flow_id, flow_origin] = validate_outgoing_header (header);
-    auto &plan = header_plan ();
-    if (plan.matches_type (header, content_type)) {
-        if (plan.matches (header, flow_id, flow_origin)) {
-            auto message = zlink::message_t::from (plan.encoded);
-            if (!message.valid ())
-                throw std::bad_alloc ();
-            return message;
-        }
-        // Changing correlation, metadata or flow still reuses the type fragments;
-        // it does not copy a new cache key on every request or reply.
-        return encode_header_bytes (header, flow_id, flow_origin, plan.prefix, plan.middle);
-    }
-    std::string prefix;
-    std::string middle;
-    header_writer_t prefix_writer (prefix);
-    header_writer_t middle_writer (middle);
-    write_channel_fragment (prefix_writer, header.channel_name);
-    write_type_fragments (prefix_writer, middle_writer, header.message_name, content_type,
-                          header.kind);
-    auto message = encode_header_bytes (header, flow_id, flow_origin, prefix, middle);
-    plan.replace (header, content_type, flow_id, flow_origin, message, std::move (prefix),
-                  std::move (middle));
-    return message;
+    const auto [flow_id, origin] = validate_outgoing_header (header);
+    auto &proto = channel_header_encode_scratch ();
+    to_proto (proto, header, content_type, flow_id, origin);
+    auto valid = validate_protocol_header (header, true, content_type, flow_id, origin);
+    if (!valid)
+        throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
+    return serialize_header (proto);
 }
 
-zlink::message_t
-envelope_codec_t::encode_header (const envelope_header_t &header,
-                                 const detail::request_type_plan_t &type,
-                                 const detail::prepared_header_fragment_t &channel) const
+zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header,
+                                                  const detail::request_type_plan_t &type) const
 {
-    const auto [flow_id, origin] = validate_request_header (header, type, channel);
-    return encode_header_bytes (header, flow_id, origin, channel.bytes, type.middle, type.prefix);
+    return encode_header (header, type.content_type);
 }
 
 protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_payload (
   envelope_header_t &&header,
   zlink::message_t body,
-  std::shared_ptr<const detail::request_type_plan_t> type,
-  std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+  std::shared_ptr<const detail::request_type_plan_t> type) const
 {
-    const auto [flow_id, origin] = validate_request_header (header, *type, *channel);
-    // Preserve the E1 flow snapshot when target resolution defers the E3 pack.
+    header.content_type = type->content_type;
+    const auto [flow_id, origin] = validate_outgoing_header (header);
     if (flow_id && !header.flow_id)
         header.flow_id = *flow_id;
     header.flow_origin = origin;
-    header_writer_t measure;
-    write_header (measure, header, header.flow_id ? &*header.flow_id : nullptr, header.flow_origin,
-                  channel->bytes, type->middle, type->prefix);
-    struct state_t
-    {
-        state_t (envelope_header_t &&selected_header,
-                 zlink::message_t selected_body,
-                 std::shared_ptr<const detail::request_type_plan_t> selected_type,
-                 std::shared_ptr<const detail::prepared_header_fragment_t> selected_channel,
-                 std::size_t selected_size) :
-            header (std::move (selected_header)),
-            body (std::move (selected_body)),
-            type (std::move (selected_type)),
-            channel (std::move (selected_channel)),
-            size (selected_size)
-        {
-        }
-
-        envelope_header_t header;
-        zlink::message_t body;
-        std::shared_ptr<const detail::request_type_plan_t> type;
-        std::shared_ptr<const detail::prepared_header_fragment_t> channel;
-        std::size_t size;
-    };
-    auto state = std::make_shared<state_t> (std::move (header), std::move (body), std::move (type),
-                                            std::move (channel), measure.size ());
-    // The encoder captures only one shared_ptr (16 bytes on supported targets),
-    // keeping std::function's target within the common small capture range.
+    channel_header_proto_t proto;
+    to_proto (proto, header, type->content_type, flow_id, origin);
+    auto valid = validate_protocol_header (header, true, type->content_type, flow_id, origin);
+    if (!valid)
+        throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
+    auto state = std::make_shared<std::pair<channel_header_proto_t, zlink::message_t>> (
+      std::move (proto), std::move (body));
     return [state] (const std::optional<std::string> &flow_id,
                     std::optional<flow_origin_t> flow_origin) {
-        auto write = [&] (std::span<std::byte> destination) {
-            header_writer_t writer (reinterpret_cast<char *> (destination.data ()));
-            write_header (writer, state->header,
-                          state->header.flow_id ? &*state->header.flow_id : nullptr,
-                          state->header.flow_origin, state->channel->bytes, state->type->middle,
-                          state->type->prefix);
-        };
+        const auto header_size = serialized_header_size (state->first);
         return protocol::encode_application_envelope_message (
-          state->size, std::ref (write), state->body.bytes (), flow_id, flow_origin);
+          header_size,
+          [state, header_size] (std::span<std::byte> destination) {
+              serialize_header_into (state->first, destination, header_size);
+          },
+          state->second.bytes (), flow_id, flow_origin);
     };
-}
-
-namespace
-{
-
-enum class header_member_t
-{
-    none,
-    kind,
-    channel_name,
-    message_name,
-    content_type,
-    correlation_id,
-    deadline,
-    topic,
-    error_code,
-    error_message,
-    source,
-    flow_id,
-    flow_origin,
-    format_marker,
-    metadata
-};
-
-enum class header_value_t
-{
-    missing,
-    null,
-    string,
-    number,
-    other
-};
-
-struct header_scalar_t
-{
-    header_value_t type = header_value_t::missing;
-    header_text_t string;
-    int number = 0;
-
-    void set_null ()
-    {
-        type = header_value_t::null;
-        string.clear ();
-    }
-
-    void set_string (std::string value)
-    {
-        type = header_value_t::string;
-        string = std::move (value);
-    }
-
-    template <typename TInteger> void set_number (TInteger value)
-    {
-        if (!std::in_range<int> (value)) {
-            set_other ();
-            return;
-        }
-        type = header_value_t::number;
-        number = static_cast<int> (value);
-        string.clear ();
-    }
-
-    void set_other ()
-    {
-        type = header_value_t::other;
-        string.clear ();
-    }
-};
-
-// Recognize only the byte spelling emitted by header_writer_t. A mismatch
-// leaves syntax and error reporting to the JSON SAX parser.
-template <bool Borrow> class canonical_header_reader_t
-{
-  public:
-    explicit canonical_header_reader_t (std::string_view bytes) : _remaining (bytes) {}
-
-    template <std::size_t N> bool consume (const char (&text)[N])
-    {
-        constexpr std::size_t size = N - 1;
-        if (_remaining.size () < size || std::memcmp (_remaining.data (), text, size) != 0)
-            return false;
-        _remaining.remove_prefix (size);
-        return true;
-    }
-
-    bool empty () const noexcept { return _remaining.empty (); }
-
-    template <typename T> bool string (T *output)
-    {
-        if (!consume ("\""))
-            return false;
-        std::size_t index = 0;
-        std::size_t decoded_size = 0;
-        bool escaped = false;
-        while (index < _remaining.size () && _remaining[index] != '"') {
-            const auto plain =
-              plain_ascii_prefix (_remaining.data () + index, _remaining.size () - index);
-            if (plain != 0) {
-                index += plain;
-                decoded_size += plain;
-                continue;
-            }
-            const auto byte = static_cast<unsigned char> (_remaining[index++]);
-            if (byte < 0x20)
-                return false;
-            if (byte >= 0x80) {
-                const auto continuation = index;
-                if (!consume_utf8 (_remaining, index, byte))
-                    return false;
-                decoded_size += index - continuation;
-            }
-            if (byte == '\\') {
-                char decoded;
-                if (!escape (_remaining, index, decoded))
-                    return false;
-                escaped = true;
-            }
-            ++decoded_size;
-        }
-        if (index == _remaining.size ())
-            return false;
-        const auto encoded = _remaining.substr (0, index);
-        if (output) {
-            if (!escaped) {
-                if constexpr (std::is_same_v<T, header_text_t>) {
-                    if constexpr (Borrow)
-                        *output = header_text_t::view (encoded);
-                    else
-                        output->assign (encoded);
-                } else {
-                    output->assign (encoded);
-                }
-            } else {
-                output->resize (decoded_size);
-                std::size_t source = 0;
-                std::size_t destination = 0;
-                while (source < encoded.size ()) {
-                    char decoded = encoded[source++];
-                    if (decoded == '\\')
-                        (void) escape (encoded, source, decoded);
-                    (*output)[destination++] = decoded;
-                }
-            }
-        }
-        _remaining.remove_prefix (index + 1);
-        return true;
-    }
-
-    template <typename T> bool optional_string (std::optional<T> *value)
-    {
-        if (consume ("null"))
-            return true;
-        return string (value ? &value->emplace () : nullptr);
-    }
-
-    bool number (int *value)
-    {
-        std::size_t index = _remaining.starts_with ("-") ? 1 : 0;
-        const auto digits = index;
-        while (index < _remaining.size () && _remaining[index] >= '0' && _remaining[index] <= '9')
-            ++index;
-        if (index == digits || (_remaining[digits] == '0' && (index - digits != 1 || digits != 0)))
-            return false;
-        int parsed = 0;
-        const auto result =
-          std::from_chars (_remaining.data (), _remaining.data () + index, parsed);
-        if (result.ec != std::errc () || result.ptr != _remaining.data () + index)
-            return false;
-        if (value)
-            *value = parsed;
-        _remaining.remove_prefix (index);
-        return true;
-    }
-
-    bool optional_number (std::optional<flow_origin_t> *value)
-    {
-        if (consume ("null"))
-            return true;
-        int parsed = 0;
-        if (!number (&parsed))
-            return false;
-        if (value)
-            *value = static_cast<flow_origin_t> (parsed);
-        return true;
-    }
-
-  private:
-    static bool escape (std::string_view bytes, std::size_t &index, char &decoded)
-    {
-        if (index == bytes.size ())
-            return false;
-        switch (bytes[index++]) {
-            case '"':
-                decoded = '"';
-                return true;
-            case '\\':
-                decoded = '\\';
-                return true;
-            case 'b':
-                decoded = '\b';
-                return true;
-            case 'f':
-                decoded = '\f';
-                return true;
-            case 'n':
-                decoded = '\n';
-                return true;
-            case 'r':
-                decoded = '\r';
-                return true;
-            case 't':
-                decoded = '\t';
-                return true;
-            case 'u': {
-                if (bytes.size () - index < 4 || bytes[index] != '0' || bytes[index + 1] != '0'
-                    || (bytes[index + 2] != '0' && bytes[index + 2] != '1'))
-                    return false;
-                const auto low = bytes[index + 3];
-                const auto nibble = low >= '0' && low <= '9'   ? low - '0'
-                                    : low >= 'a' && low <= 'f' ? low - 'a' + 10
-                                                               : -1;
-                if (nibble < 0)
-                    return false;
-                const auto code = (bytes[index + 2] - '0') * 16 + nibble;
-                if (code >= 0x20 || code == '\b' || code == '\f' || code == '\n' || code == '\r'
-                    || code == '\t')
-                    return false;
-                decoded = static_cast<char> (code);
-                index += 4;
-                return true;
-            }
-            default:
-                return false;
-        }
-    }
-
-    std::string_view _remaining;
-};
-
-result_t<envelope_header_t> failure (std::string_view reason)
-{
-    return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
-                                                 std::string ("invalid ZLink envelope header: ")
-                                                   + std::string (reason));
-}
-
-result_t<envelope_header_t>
-finish_decoded_header (envelope_header_t &header,
-                       int format_marker,
-                       std::optional<envelope_header_t> *rejection_context,
-                       const char *field_error = nullptr,
-                       const char *metadata_error = nullptr)
-{
-    const auto reject = [&] (const std::string &message) {
-        // Rejected headers expose scalar context only, as on the SAX path.
-        header.metadata.clear ();
-        if (rejection_context)
-            *rejection_context = std::move (header);
-        return failure (message);
-    };
-    if (field_error) {
-        header.flow_id.reset ();
-        header.flow_origin.reset ();
-        return reject (field_error);
-    }
-    if (auto valid = validate_protocol_header (
-          header, format_marker, header.flow_id ? &*header.flow_id : nullptr, header.flow_origin);
-        !valid) {
-        header.flow_id.reset ();
-        header.flow_origin.reset ();
-        return reject (valid.error ()->what ());
-    }
-    if (metadata_error)
-        return reject (metadata_error);
-    header_writer_t metadata_measure;
-    try {
-        write_metadata (metadata_measure, header.metadata);
-    }
-    catch (...) {
-        header.metadata.clear ();
-        if (rejection_context)
-            *rejection_context = std::move (header);
-        throw;
-    }
-    return result_t<envelope_header_t>::success (std::move (header));
-}
-
-template <bool Borrow>
-bool read_canonical_header (std::string_view bytes,
-                            bool capture_flow,
-                            envelope_header_t &header,
-                            int &format_marker)
-{
-    canonical_header_reader_t<Borrow> reader (bytes);
-    int kind = 0;
-    if (!reader.consume ("{\"channelName\":") || !reader.string (&header.channel_name)
-        || !reader.consume (",\"contentType\":") || !reader.string (&header.content_type)
-        || !reader.consume (",\"correlationId\":")
-        || (!reader.consume ("null")
-            && (!reader.string (&header.correlation_id) || header.correlation_id.empty ()))
-        || !reader.consume (",\"deadline\":") || !reader.optional_string (&header.deadline)
-        || !reader.consume (",\"errorCode\":") || !reader.optional_string (&header.error_code)
-        || !reader.consume (",\"errorMessage\":") || !reader.optional_string (&header.error_message)
-        || !reader.consume (",\"flowId\":")
-        || !reader.optional_string (capture_flow ? &header.flow_id : nullptr)
-        || !reader.consume (",\"flowOrigin\":")
-        || !reader.optional_number (capture_flow ? &header.flow_origin : nullptr)
-        || !reader.consume (",\"formatMarker\":") || !reader.number (&format_marker)
-        || !reader.consume (",\"kind\":") || !reader.number (&kind)
-        || !reader.consume (",\"messageName\":") || !reader.string (&header.message_name)
-        || !reader.consume (",\"metadata\":{"))
-        return false;
-    header.kind = static_cast<message_kind_t> (kind);
-    if (!reader.consume ("}")) {
-        do {
-            std::string key;
-            if (!reader.string (&key) || !reader.consume (":")
-                || (!header.metadata.empty () && key <= header.metadata.rbegin ()->first))
-                return false;
-            auto entry = header.metadata.emplace_hint (header.metadata.end (), std::move (key),
-                                                       std::string ());
-            if (!reader.string (&entry->second))
-                return false;
-        } while (reader.consume (","));
-        if (!reader.consume ("}"))
-            return false;
-    }
-    return reader.consume (",\"source\":") && reader.optional_string (&header.source)
-           && reader.consume (",\"topic\":") && reader.optional_string (&header.topic)
-           && reader.consume ("}") && reader.empty ();
-}
-
-class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
-{
-  public:
-    explicit header_sax_t (bool capture_flow) : _capture_flow (capture_flow) {}
-
-    bool null () override
-    {
-        return scalar ([] (header_scalar_t &value) { value.set_null (); });
-    }
-    bool boolean (bool) override
-    {
-        return scalar ([] (header_scalar_t &target) { target.set_other (); });
-    }
-    bool number_integer (number_integer_t value) override
-    {
-        return scalar ([value] (header_scalar_t &target) { target.set_number (value); });
-    }
-    bool number_unsigned (number_unsigned_t value) override
-    {
-        return scalar ([value] (header_scalar_t &target) { target.set_number (value); });
-    }
-    bool number_float (number_float_t, const string_t &) override
-    {
-        return scalar ([] (header_scalar_t &target) { target.set_other (); });
-    }
-    bool string (string_t &value) override
-    {
-        return scalar (
-          [&value] (header_scalar_t &target) { target.set_string (std::move (value)); });
-    }
-    bool binary (binary_t &) override
-    {
-        return scalar ([] (header_scalar_t &value) { value.set_other (); });
-    }
-
-    bool start_object (std::size_t) override
-    {
-        if (_depth == 0) {
-            _root_object = true;
-        } else if (_depth == 1 && _member == header_member_t::metadata) {
-            _metadata_object_depth = _depth + 1;
-            clear_metadata ();
-            _invalid_metadata_shape = false;
-            _member = header_member_t::none;
-        } else {
-            container_value ();
-        }
-        ++_depth;
-        return true;
-    }
-
-    bool key (string_t &value) override
-    {
-        if (_depth == 1) {
-            _member = member (value);
-            if (_member != header_member_t::none) {
-                const auto bit = 1u << static_cast<unsigned> (_member);
-                if ((_seen_fields & bit) != 0) {
-                    _parse_error = "duplicate envelope header field";
-                    return false;
-                }
-                _seen_fields |= bit;
-            }
-        } else if (_depth == _metadata_object_depth) {
-            if (!_metadata.emplace (value, std::string{}).second) {
-                _parse_error = "duplicate envelope metadata key";
-                return false;
-            }
-            _metadata_key = std::move (value);
-        }
-        return true;
-    }
-
-    bool end_object () override
-    {
-        if (_depth == _metadata_object_depth) {
-            _metadata_object_depth = 0;
-        }
-        if (_depth == 1)
-            _root_closed = true;
-        --_depth;
-        return true;
-    }
-
-    bool start_array (std::size_t) override
-    {
-        container_value ();
-        ++_depth;
-        return true;
-    }
-
-    bool end_array () override
-    {
-        --_depth;
-        return true;
-    }
-
-    bool parse_error (std::size_t,
-                      const std::string &,
-                      const nlohmann::detail::exception &error) override
-    {
-        _parse_error = error.what ();
-        return false;
-    }
-
-    result_t<envelope_header_t> finish (std::optional<envelope_header_t> *rejection_context)
-    {
-        if (!_parse_error.empty ())
-            return failure (_parse_error);
-        if (!_root_object || !_root_closed || _depth != 0)
-            return failure ("ZLink envelope header must be a JSON object");
-        envelope_header_t header{.kind = static_cast<message_kind_t> (_kind.number),
-                                 .channel_name = std::move (_channel_name.string),
-                                 .message_name = std::move (_message_name.string),
-                                 .content_type = _content_type.type == header_value_t::string
-                                                   ? std::move (_content_type.string)
-                                                   : envelope_codec_t::default_content_type,
-                                 .correlation_id = std::move (_correlation_id.string)};
-        header.deadline = _deadline.type == header_value_t::string
-                            ? std::optional<header_text_t> (std::move (_deadline.string))
-                            : std::nullopt;
-        header.topic = take_optional (_topic);
-        header.error_code = take_optional (_error_code);
-        header.error_message = take_optional (_error_message);
-        header.source = take_optional (_source);
-        header.flow_id = _capture_flow ? take_optional (_flow_id) : std::nullopt;
-        if (_capture_flow && _flow_origin.type == header_value_t::number)
-            header.flow_origin = static_cast<flow_origin_t> (_flow_origin.number);
-        header.metadata = std::move (_metadata);
-        return finish_decoded_header (
-          header, _format_marker.type == header_value_t::number ? _format_marker.number : 0,
-          rejection_context, field_error (),
-          _invalid_metadata_shape            ? "ZLink envelope header metadata must be an object"
-          : !_invalid_metadata_keys.empty () ? "ZLink envelope header metadata value is invalid"
-                                             : nullptr);
-    }
-
-  private:
-    using number_integer_t = nlohmann::json::number_integer_t;
-    using number_unsigned_t = nlohmann::json::number_unsigned_t;
-    using number_float_t = nlohmann::json::number_float_t;
-    using string_t = nlohmann::json::string_t;
-    using binary_t = nlohmann::json::binary_t;
-
-    static header_member_t member (std::string_view name)
-    {
-        using namespace std::string_view_literals;
-        if (name == "kind"sv)
-            return header_member_t::kind;
-        if (name == "channelName"sv)
-            return header_member_t::channel_name;
-        if (name == "messageName"sv)
-            return header_member_t::message_name;
-        if (name == "contentType"sv)
-            return header_member_t::content_type;
-        if (name == "correlationId"sv)
-            return header_member_t::correlation_id;
-        if (name == "deadline"sv)
-            return header_member_t::deadline;
-        if (name == "topic"sv)
-            return header_member_t::topic;
-        if (name == "errorCode"sv)
-            return header_member_t::error_code;
-        if (name == "errorMessage"sv)
-            return header_member_t::error_message;
-        if (name == "source"sv)
-            return header_member_t::source;
-        if (name == "flowId"sv)
-            return header_member_t::flow_id;
-        if (name == "flowOrigin"sv)
-            return header_member_t::flow_origin;
-        if (name == "formatMarker"sv)
-            return header_member_t::format_marker;
-        if (name == "metadata"sv)
-            return header_member_t::metadata;
-        return header_member_t::none;
-    }
-
-    header_scalar_t *current ()
-    {
-        if (_depth != 1)
-            return nullptr;
-        switch (_member) {
-            case header_member_t::kind:
-                return &_kind;
-            case header_member_t::channel_name:
-                return &_channel_name;
-            case header_member_t::message_name:
-                return &_message_name;
-            case header_member_t::content_type:
-                return &_content_type;
-            case header_member_t::correlation_id:
-                return &_correlation_id;
-            case header_member_t::deadline:
-                return &_deadline;
-            case header_member_t::topic:
-                return &_topic;
-            case header_member_t::error_code:
-                return &_error_code;
-            case header_member_t::error_message:
-                return &_error_message;
-            case header_member_t::source:
-                return &_source;
-            case header_member_t::flow_id:
-                return _capture_flow ? &_flow_id : nullptr;
-            case header_member_t::flow_origin:
-                return _capture_flow ? &_flow_origin : nullptr;
-            case header_member_t::format_marker:
-                return &_format_marker;
-            default:
-                return nullptr;
-        }
-    }
-
-    template <typename Set> bool scalar (Set set)
-    {
-        if (_metadata_object_depth != 0 && _depth == _metadata_object_depth) {
-            header_scalar_t value;
-            set (value);
-            if (value.type == header_value_t::string)
-                set_metadata_value (std::move (value.string));
-            else
-                set_metadata_invalid ();
-        } else if (auto *value = current ()) {
-            set (*value);
-            _member = header_member_t::none;
-        } else if (_depth == 1 && _member == header_member_t::metadata) {
-            _invalid_metadata_shape = true;
-            clear_metadata ();
-            _member = header_member_t::none;
-        }
-        return true;
-    }
-
-    void container_value ()
-    {
-        if (_metadata_object_depth != 0 && _depth == _metadata_object_depth) {
-            set_metadata_invalid ();
-        } else if (auto *value = current ()) {
-            value->set_other ();
-            _member = header_member_t::none;
-        } else if (_depth == 1 && _member == header_member_t::metadata) {
-            _invalid_metadata_shape = true;
-            clear_metadata ();
-            _member = header_member_t::none;
-        }
-    }
-
-    void set_metadata_value (std::string value)
-    {
-        _metadata.at (_metadata_key) = std::move (value);
-        _metadata_key.clear ();
-    }
-
-    void set_metadata_invalid ()
-    {
-        _invalid_metadata_keys.push_back (std::move (_metadata_key));
-        _metadata_key.clear ();
-    }
-
-    void clear_metadata ()
-    {
-        _metadata.clear ();
-        _invalid_metadata_keys.clear ();
-    }
-
-    const char *field_error () const
-    {
-        if (_kind.type != header_value_t::number || _channel_name.type != header_value_t::string
-            || _message_name.type != header_value_t::string)
-            return "ZLink envelope header has invalid required fields";
-        if (_content_type.type != header_value_t::missing
-            && _content_type.type != header_value_t::string)
-            return "ZLink envelope header contentType is invalid";
-        if (!optional_string (_correlation_id) || !optional_string (_deadline)
-            || !optional_string (_topic) || !optional_string (_error_code)
-            || !optional_string (_error_message) || !optional_string (_source)
-            || !number_or_default (_format_marker))
-            return "ZLink envelope header has an invalid field type";
-        if (_capture_flow && (!optional_string (_flow_id) || !number_or_default (_flow_origin)))
-            return "ZLink envelope header flow fields are invalid";
-        return nullptr;
-    }
-
-    static bool optional_string (const header_scalar_t &value)
-    {
-        return value.type == header_value_t::missing || value.type == header_value_t::null
-               || value.type == header_value_t::string;
-    }
-
-    static bool number_or_default (const header_scalar_t &value)
-    {
-        return value.type == header_value_t::missing || value.type == header_value_t::null
-               || value.type == header_value_t::number;
-    }
-
-    static std::optional<std::string> take_optional (header_scalar_t &value)
-    {
-        if (value.type != header_value_t::string)
-            return std::nullopt;
-        return std::move (value.string);
-    }
-
-    unsigned _seen_fields = 0;
-    bool _capture_flow;
-    std::size_t _depth = 0;
-    std::size_t _metadata_object_depth = 0;
-    bool _root_object = false;
-    bool _root_closed = false;
-    bool _invalid_metadata_shape = false;
-    header_member_t _member = header_member_t::none;
-    std::string _metadata_key;
-    std::string _parse_error;
-    std::map<std::string, std::string> _metadata;
-    std::vector<std::string> _invalid_metadata_keys;
-    header_scalar_t _kind;
-    header_scalar_t _channel_name;
-    header_scalar_t _message_name;
-    header_scalar_t _content_type;
-    header_scalar_t _correlation_id;
-    header_scalar_t _deadline;
-    header_scalar_t _topic;
-    header_scalar_t _error_code;
-    header_scalar_t _error_message;
-    header_scalar_t _source;
-    header_scalar_t _flow_id;
-    header_scalar_t _flow_origin;
-    header_scalar_t _format_marker;
-};
-
-} // namespace
-
-namespace
-{
-template <bool Borrow>
-result_t<envelope_header_t>
-decode_header_bytes (std::span<const std::byte> bytes,
-                     bool capture_flow,
-                     std::optional<envelope_header_t> *rejection_context)
-{
-    if (rejection_context)
-        rejection_context->reset ();
-    try {
-        {
-            envelope_header_t header{.content_type = {}};
-            int format_marker = 0;
-            if (read_canonical_header<Borrow> (
-                  std::string_view (reinterpret_cast<const char *> (bytes.data ()), bytes.size ()),
-                  capture_flow, header, format_marker))
-                return finish_decoded_header (header, format_marker, rejection_context);
-        }
-        header_sax_t sax (capture_flow);
-        (void) nlohmann::json::sax_parse (bytes.begin (), bytes.end (), &sax);
-        return sax.finish (rejection_context);
-    }
-    catch (const std::exception &ex) {
-        return failure (ex.what ());
-    }
-}
-} // namespace
-
-bool envelope_header_t::can_correlate_reply () const noexcept
-{
-    constexpr std::size_t maximum_correlation_id_bytes = 64;
-    constexpr unsigned char maximum_ascii_character = 0x7f;
-    return !correlation_id.empty () && correlation_id.size () <= maximum_correlation_id_bytes
-           && std::all_of (correlation_id.begin (), correlation_id.end (),
-                           [] (unsigned char value) { return value <= maximum_ascii_character; });
 }
 
 result_t<envelope_header_t>
@@ -1331,7 +709,7 @@ envelope_codec_t::decode_header_view (const zlink::message_t &message,
                                       bool capture_flow,
                                       std::optional<envelope_header_t> *rejection_context) const
 {
-    return decode_header_bytes<true> (message.bytes (), capture_flow, rejection_context);
+    return decode_header_bytes_result (message.bytes (), capture_flow, rejection_context, true);
 }
 
 result_t<envelope_header_t>
@@ -1339,9 +717,16 @@ envelope_codec_t::decode_header_view (const message_parts_t &parts,
                                       bool capture_flow,
                                       std::optional<envelope_header_t> *rejection_context) const
 {
-    if (parts.size () == 0)
-        return decode_header (parts, capture_flow, rejection_context);
-    return decode_header_bytes<true> (parts.part_bytes (0), capture_flow, rejection_context);
+    if (parts.size () == 0) {
+        if (rejection_context)
+            rejection_context->reset ();
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     "ZLink envelope header part is missing");
+    }
+    if (std::holds_alternative<std::span<const std::span<const std::byte>>> (parts._parts))
+        return decode_header_bytes_result (parts.part_bytes (0), capture_flow, rejection_context,
+                                           true);
+    return decode_header_view (parts[0], capture_flow, rejection_context);
 }
 
 result_t<envelope_header_t>
@@ -1349,7 +734,7 @@ envelope_codec_t::decode_header (std::span<const std::byte> bytes,
                                  bool capture_flow,
                                  std::optional<envelope_header_t> *rejection_context) const
 {
-    return decode_header_bytes<false> (bytes, capture_flow, rejection_context);
+    return decode_header_bytes_result (bytes, capture_flow, rejection_context, false);
 }
 
 result_t<envelope_header_t>
@@ -1388,35 +773,3 @@ result_t<zlink::message_t> envelope_codec_t::decode_body (const message_parts_t 
 }
 
 } // namespace zlink::framework::runtime::messaging
-
-namespace zlink::framework::detail
-{
-prepared_header_fragment_t prepare_request_channel (std::string_view channel)
-{
-    prepared_header_fragment_t result;
-    try {
-        runtime::messaging::header_writer_t writer (result.bytes);
-        runtime::messaging::write_channel_fragment (writer, channel);
-    }
-    catch (const nlohmann::json::exception &) {
-        result.error = std::current_exception ();
-    }
-    return result;
-}
-
-request_type_plan_t prepare_request_type (std::string_view name, std::string content_type)
-{
-    request_type_plan_t result;
-    result.content_type = std::move (content_type);
-    try {
-        runtime::messaging::header_writer_t prefix (result.prefix);
-        runtime::messaging::header_writer_t middle (result.middle);
-        runtime::messaging::write_type_fragments (prefix, middle, name, result.content_type,
-                                                  runtime::messaging::message_kind_t::request);
-    }
-    catch (const nlohmann::json::exception &) {
-        result.error = std::current_exception ();
-    }
-    return result;
-}
-} // namespace zlink::framework::detail

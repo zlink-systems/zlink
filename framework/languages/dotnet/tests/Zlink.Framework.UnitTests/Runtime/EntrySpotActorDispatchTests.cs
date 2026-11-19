@@ -14307,6 +14307,7 @@ public sealed partial class EntrySpotActorDispatchTests
     private static ZLinkBackendRouteReceived CreateRoutedReceived(string value)
     {
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
             ZLinkMessageKind.Command,
             "entry-channel",
             nameof(ProbeRouteMessage)

@@ -26,7 +26,11 @@ internal sealed record TestHostOptions(
     string? SpotId,
     int? PayloadBytes,
     int? PlacementWeight,
-    string? MetadataValue = null
+    string? MetadataValue = null,
+    string? OutageControlPrefix = null,
+    string? OutageRunId = null,
+    string? OutageOrder = null,
+    string? StartFilePath = null
 )
 {
     public static TestHostOptions Parse(string[] args)
@@ -60,6 +64,10 @@ internal sealed record TestHostOptions(
 
     private sealed class ParsedTestHostOptions
     {
+        public string? OutageControlPrefix { get; set; }
+        public string? OutageRunId { get; set; }
+        public string? OutageOrder { get; set; }
+        public string? StartFilePath { get; set; }
         public string? Mode { get; set; }
         public string? ReadyFilePath { get; set; }
         public string? StopFilePath { get; set; }
@@ -91,6 +99,18 @@ internal sealed record TestHostOptions(
         {
             switch (argument)
             {
+                case "--outage-control-prefix":
+                    OutageControlPrefix = readValue();
+                    break;
+                case "--outage-run-id":
+                    OutageRunId = readValue();
+                    break;
+                case "--outage-order":
+                    OutageOrder = readValue();
+                    break;
+                case "--start-file":
+                    StartFilePath = readValue();
+                    break;
                 case "--ready-file":
                     ReadyFilePath = readValue();
                     break;
@@ -197,7 +217,11 @@ internal sealed record TestHostOptions(
                 SpotId,
                 PayloadBytes,
                 PlacementWeight,
-                MetadataValue
+                MetadataValue,
+                OutageControlPrefix,
+                OutageRunId,
+                OutageOrder,
+                StartFilePath
             );
         }
     }

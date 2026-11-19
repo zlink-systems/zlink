@@ -1154,10 +1154,17 @@ final class InstanceSpotRuntimeIntegrationTest {
                             "descriptor",
                             java.time.Instant.now().plusSeconds(5).toEpochMilli());
             var originals =
-                    List.of(
-                            systems.zlink.contracts.messaging.Message.from(
+                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encode(
+                            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
+                                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                            .KIND_REQUEST,
+                                    "game",
                                     systems.zlink.framework.runtime.messaging.ZLinkPacketNames
-                                            .resolve(String.class)),
+                                            .resolve(String.class),
+                                    "application/json",
+                                    null,
+                                    java.util.Map.of(),
+                                    null),
                             systems.zlink.contracts.messaging.Message.from("\"retained\""));
             var parts =
                     new java.util.AbstractList<systems.zlink.contracts.messaging.Message>() {

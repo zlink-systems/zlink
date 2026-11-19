@@ -1,4 +1,4 @@
-using System.Text;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink;
@@ -128,16 +128,31 @@ public sealed class ChannelEnvelopeHandoffTests
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         var flowId = invalidFlow ? "invalid-flow" : "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
-        var metadata = malformed ? "{\"\":\"invalid\"}" : "{}";
-        var json =
-            "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"work\","
-            + "\"messageName\":\"missing-handler\",\"contentType\":\"application/json\","
-            + "\"correlationId\":\"handoff-request\",\"flowId\":\""
-            + flowId
-            + "\",\"flowOrigin\":1,\"metadata\":"
-            + metadata
-            + "}";
-        using var headerFrame = Message.From(Encoding.UTF8.GetBytes(json));
+        var protoHeader = new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader
+        {
+            Kind = global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelKind.Request,
+            ChannelName = "work",
+            MessageName = "missing-handler",
+            ContentType = "application/json",
+            CorrelationId = "handoff-request",
+            FlowId = flowId,
+            FlowOrigin = global::Zlink
+                .Framework
+                .Runtime
+                .Protocol
+                .ChannelHeaderV1
+                .FlowOrigin
+                .Inbound,
+        };
+        if (malformed)
+            protoHeader.Metadata.Add(
+                new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry
+                {
+                    Key = "",
+                    Value = "invalid",
+                }
+            );
+        using var headerFrame = Message.From(protoHeader.ToByteArray());
         var replyTask = dealer.Request().Message(headerFrame).Async(CancellationToken.None).Reply;
         using var received = Received.Create();
         Assert.True(router.Recv(received));
@@ -219,7 +234,7 @@ public sealed class ChannelEnvelopeHandoffTests
                     var handler = (PublishHandler)target;
                     handler.Probe.Calls++;
                     handler.Probe.Value = ((PublishPayload)message!).Value;
-                    return null;
+                    return default;
                 },
                 [ZLinkHandlerArgumentKind.Message],
                 typeof(PublishPayload),
@@ -252,12 +267,19 @@ public sealed class ChannelEnvelopeHandoffTests
         subscriber.SetSubscription("events");
         Assert.True(publisher.ReceiveSubscriptionEvent(new SubscriptionEvent()));
         var messageName = malformed ? "" : "handoff-event";
-        var json =
-            "{\"formatMarker\":242,\"kind\":4,\"channelName\":\"work\","
-            + "\"messageName\":\""
-            + messageName
-            + "\",\"contentType\":\"application/json\",\"topic\":\"events\"}";
-        using var headerFrame = Message.From(Encoding.UTF8.GetBytes(json));
+        using var headerFrame = ZLinkEnvelopeCodec.EncodeHeader(
+            new ZLinkEnvelopeHeader(
+                ZLinkMessageKind.Publish,
+                "work",
+                messageName,
+                "application/json",
+                null,
+                null,
+                "events",
+                null,
+                null
+            )
+        );
         using var bodyFrame = Message.From("{\"value\":42}"u8);
         publisher.Publish("events").Messages([headerFrame, bodyFrame]).Submit();
         using var received = new TopicMessage();

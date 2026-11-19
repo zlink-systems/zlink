@@ -45,6 +45,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkUserSpotClosingJoinTest {
     private static final int WAIT_SECONDS = 10;
@@ -118,6 +119,12 @@ final class ZLinkUserSpotClosingJoinTest {
             rig.store.closingWriteEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
 
             assertEquals(ZLinkSpotCreateState.EXISTING, rig.getOrCreate().state());
+            ((systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver)
+                            rig.runtime.spotHandleResolver())
+                    .invalidate(rig.spotId);
+            // The handle lookup and the transport lookup both read committed Closing.
+            // Hold the transport snapshot until Close has removed the local activation.
+            rig.store.authorityReadsBeforeHold.set(2);
             rig.requestDeferredJoin();
             assertFalse(
                     joinCompleted.isDone(),
@@ -125,14 +132,17 @@ final class ZLinkUserSpotClosingJoinTest {
 
             rig.store.releaseClosingWrite.complete(null);
             onClosingEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            rig.store.authorityReadEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
             assertFalse(close.isDone(), "OnClosing keeps the accepted close pending");
 
             releaseOnClosing.complete(null);
             assertTrue(close.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            rig.store.releaseAuthorityRead.complete(null);
             assertJoinFailedNotFound();
         } finally {
             releaseOnClosing.complete(null);
             rig.store.releaseClosingWrite.complete(null);
+            rig.store.releaseAuthorityRead.complete(null);
             rig.close();
         }
     }
@@ -402,6 +412,9 @@ final class ZLinkUserSpotClosingJoinTest {
         private final String spotId;
         private final AtomicBoolean holdClosingWrite = new AtomicBoolean();
         private final AtomicBoolean holdAuthorityDelete = new AtomicBoolean();
+        private final AtomicInteger authorityReadsBeforeHold = new AtomicInteger();
+        final CompletableFuture<Void> authorityReadEntered = new CompletableFuture<>();
+        final CompletableFuture<Void> releaseAuthorityRead = new CompletableFuture<>();
         final CompletableFuture<Void> closingWriteEntered = new CompletableFuture<>();
         final CompletableFuture<Void> releaseClosingWrite = new CompletableFuture<>();
         final CompletableFuture<Void> authorityDeleteEntered = new CompletableFuture<>();
@@ -422,6 +435,18 @@ final class ZLinkUserSpotClosingJoinTest {
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
                 ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            if (isSpotAuthority(key) && authorityReadsBeforeHold.get() > 0) {
+                int remaining = authorityReadsBeforeHold.decrementAndGet();
+                return onClosingEntered
+                        .thenCompose(ignored -> inner.read(key, cancellation))
+                        .thenCompose(
+                                snapshot -> {
+                                    if (remaining != 0)
+                                        return CompletableFuture.completedFuture(snapshot);
+                                    authorityReadEntered.complete(null);
+                                    return releaseAuthorityRead.thenApply(ignored -> snapshot);
+                                });
+            }
             return inner.read(key, cancellation);
         }
 

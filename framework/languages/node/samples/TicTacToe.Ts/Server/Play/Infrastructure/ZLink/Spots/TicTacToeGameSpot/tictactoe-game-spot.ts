@@ -1,6 +1,7 @@
 import { Injectable, Scope } from '@nestjs/common';
 import { ZLinkTimerOverrunPolicy } from '@zlink-systems/framework';
 import { TicTacToeGameTimerHandler } from './Handlers/tictactoe-game-timer-handler';
+import { TicTacToeGameCloseTimerHandler } from './Handlers/tictactoe-game-close-timer-handler';
 import {
   PlayActorCurrentGameStateHandler,
   PlayActorPlaceMarkHandler
@@ -57,6 +58,8 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
   private readonly pendingJoins = new Map<string, TicTacToeGameJoinReq>();
   private readonly actors = new Map<string, PlayActor>();
   private gameTick?: ZLinkTimer;
+  private closeTimer?: ZLinkTimer;
+  private closeRequested = false;
   private requiredLevel: number = SampleDefaults.requiredLevel;
 
   async onCreate(requestMessage: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
@@ -95,6 +98,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
 
   async onClosing(): Promise<void> {
     await this.gameTick?.cancel();
+    await this.closeTimer?.cancel();
     this.gameTick = undefined;
   }
 
@@ -155,8 +159,23 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
       this.requireMatch().players.size === 0 &&
       isTerminal(this.requireMatch().snapshot().status)
     ) {
-      void this.context.close();
+      await this.scheduleClose();
     }
+  }
+
+  tryRequestClose(): boolean {
+    if (this.closeRequested) return false;
+    this.closeRequested = true;
+    return true;
+  }
+
+  private async scheduleClose(): Promise<void> {
+    if (this.closeTimer !== undefined) return;
+    this.closeTimer = await this.context.addTimer(
+      'tictactoe-game-close',
+      1,
+      TicTacToeGameCloseTimerHandler
+    );
   }
 
   // --8<-- [start:doc-disconnect-actor]

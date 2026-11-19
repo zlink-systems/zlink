@@ -149,6 +149,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
                     $"Spot '{target.SpotId}' was not found."
                 );
             var header = ZLinkClientCallCodec.CreateEnvelope(
+                runtime.Registration.TimeProvider,
                 ZLinkMessageKind.Command,
                 target.MeshName,
                 ZLinkMessageNameResolver.ResolveFromMessage(message)
@@ -333,6 +334,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                     );
                 var activationTimeout = Remaining(deadline);
                 var header = ZLinkClientCallCodec.CreateEnvelope(
+                    runtime.Registration.TimeProvider,
                     ZLinkMessageKind.Request,
                     target.MeshName,
                     ZLinkMessageNameResolver.ResolveFromMessage(request),
@@ -460,6 +462,7 @@ internal sealed class ZLinkCurrentSpotSendCall<TMessage>(
             activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
         );
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            activation.TimeProvider,
             ZLinkMessageKind.Command,
             channelName,
             ZLinkMessageNameResolver.ResolveFromMessage(message),
@@ -548,6 +551,7 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
                 activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
             );
             var header = ZLinkClientCallCodec.CreateEnvelope(
+                activation.TimeProvider,
                 ZLinkMessageKind.Request,
                 channelName,
                 packetName,

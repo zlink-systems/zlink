@@ -2283,6 +2283,12 @@ bool spot_context_state_t::admit (bool claim,
       [this, claim, retained_record] { return admit_core (claim, retained_record); });
 }
 
+framework_exception_t spot_context_state_t::target_not_found (std::string message)
+{
+    return detail::make_framework_origin_exception (framework_error_kind_t::not_found,
+                                                    std::move (message));
+}
+
 framework_exception_t spot_context_state_t::admission_error () const
 {
     return state_sync ([this] {
@@ -2295,8 +2301,7 @@ framework_exception_t spot_context_state_t::admission_error () const
                                                             "Spot host is shutting down");
         if (closed == spot_close_reason_t::explicit_close
             || closed == spot_close_reason_t::idle_evicted)
-            return detail::make_framework_origin_exception (framework_error_kind_t::not_found,
-                                                            "Spot incarnation was closed");
+            return target_not_found ("Spot incarnation was closed");
         return detail::make_framework_origin_exception (framework_error_kind_t::rejected,
                                                         "Spot admission is sealed");
     });

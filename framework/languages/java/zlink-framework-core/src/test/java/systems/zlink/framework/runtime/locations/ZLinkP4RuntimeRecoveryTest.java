@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
@@ -896,7 +897,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                         new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
                                 Runnable::run,
                                 systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
-                queue.executionPolicy(a);
+                ZLinkSpotCloseCallAccess.executionPolicy(queue, a);
                 var calls = new java.util.concurrent.atomic.AtomicInteger();
                 f.outage();
                 f.at(35, 0);
@@ -1106,7 +1107,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                                 () -> parentKey,
                                 disposed::incrementAndGet);
                 await(member.ready());
-                queue.executionPolicy(member);
+                ZLinkSpotCloseCallAccess.executionPolicy(queue, member);
                 var held = new CompletableFuture<ZLinkAuthorityWriteResult>();
                 f.heldWrites.put(parentKey, held);
                 f.outage();
@@ -1154,7 +1155,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                                 () -> null,
                                 disposed::incrementAndGet);
                 await(a.ready());
-                queue.executionPolicy(a);
+                ZLinkSpotCloseCallAccess.executionPolicy(queue, a);
                 var remote = new CompletableFuture<Void>();
                 var yielded = new CompletableFuture<Void>();
                 var calls = new java.util.concurrent.atomic.AtomicInteger();
@@ -1375,7 +1376,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                                 queue.discardApplications();
                             });
             await(a.ready());
-            queue.executionPolicy(a);
+            ZLinkSpotCloseCallAccess.executionPolicy(queue, a);
             var active = new CompletableFuture<Void>();
             var entered = new CompletableFuture<Void>();
             queue.enqueue(

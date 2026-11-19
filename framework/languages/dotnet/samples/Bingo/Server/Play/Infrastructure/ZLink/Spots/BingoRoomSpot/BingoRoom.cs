@@ -28,6 +28,8 @@ internal sealed class BingoRoom(
     private readonly Dictionary<string, PendingJoin> _pendingJoins = new(StringComparer.Ordinal);
     private bool _cleanupStarted;
     private IZLinkTimer? _drawTimer;
+    private IZLinkTimer? _closeTimer;
+    private bool _closeRequested;
     private BingoRoomGame? _game = new(context.SpotId, DefaultSettings);
     private PlayerActor? _observerActor;
     private int? _announcedRewardDrawSeq;
@@ -36,6 +38,14 @@ internal sealed class BingoRoom(
     internal bool IsReadyToDraw => _game?.IsReadyToDraw == true;
 
     public IZLinkSpotContext Context { get; } = context;
+
+    internal bool TryRequestClose()
+    {
+        if (_closeRequested)
+            return false;
+        _closeRequested = true;
+        return true;
+    }
 
     internal (BingoRoomSettings Settings, BingoRoomState State) CaptureRelocationState()
     {
@@ -76,14 +86,17 @@ internal sealed class BingoRoom(
             );
     }
 
-    public ValueTask OnClosingAsync(
+    public async ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
         CancellationToken cleanupCancellationToken
     )
     {
         _ = context;
         cleanupCancellationToken.ThrowIfCancellationRequested();
-        return _drawTimer?.CancelAsync() ?? ValueTask.CompletedTask;
+        if (_drawTimer is not null)
+            await _drawTimer.CancelAsync();
+        if (_closeTimer is not null)
+            await _closeTimer.CancelAsync();
     }
 
     public async ValueTask OnJoinedActorAsync(
@@ -212,8 +225,12 @@ internal sealed class BingoRoom(
         )
             _observerActor = null;
         logger.LogInformation("bingo-lifecycle room-leave actor={ActorId}", actor.ActorId);
-        if (_actors.Count == 0 && _observerActor is null)
-            _ = Context.CloseAsync(cancellationToken);
+        if (_actors.Count == 0 && _observerActor is null && _closeTimer is null)
+            _closeTimer = await Context.AddTimer<Handlers.BingoRoomCloseTimerHandler>(
+                "bingo-room-close",
+                TimeSpan.FromMilliseconds(1),
+                cancellationToken: cancellationToken
+            );
     }
 
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken cancellationToken)

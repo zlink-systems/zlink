@@ -5,7 +5,6 @@ import java.util.concurrent.TimeUnit
 import org.slf4j.LoggerFactory
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
-import systems.zlink.framework.errors.ZLinkConfigurationException
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 
 class SupportChatReadinessReporter(
@@ -22,21 +21,15 @@ class SupportChatReadinessReporter(
     }
 
     private fun report() {
-        try {
-            val mesh = meshes.snapshot(SampleNames.SupportSpotDiscovery)
-            if (!mesh.isReady || mesh.readyPeerCount == 0) return
+        val mesh = meshes.snapshot(SampleNames.SupportSpotDiscovery)
+        if (!mesh.isReady || mesh.readyPeerCount == 0) return
 
-            logger.info(
-                "supportchat-ready kind=spot-route node={} mesh={}",
-                nodeId,
-                SampleNames.SupportSpotDiscovery,
-            )
-            reporter.shutdown()
-        } catch (_: IllegalStateException) {
-            // The public runtime view is not available until Framework startup completes.
-        } catch (_: ZLinkConfigurationException) {
-            // The public runtime view is not available until Framework startup completes.
-        }
+        logger.info(
+            "supportchat-ready kind=spot-route node={} mesh={}",
+            nodeId,
+            SampleNames.SupportSpotDiscovery,
+        )
+        reporter.shutdown()
     }
 
     override fun close() {

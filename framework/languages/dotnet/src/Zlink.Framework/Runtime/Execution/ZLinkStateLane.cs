@@ -102,57 +102,61 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         if (Volatile.Read(ref _closed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkStateLane));
 
-        // An idle RunAsync turn rechecks close after its claim and fails instead of
-        // running on a closed lane. TryPost has no such recheck: see its summary.
-        var inline = TryRunInlineAsync(
-                static entry =>
-                {
-                    ObjectDisposedException.ThrowIf(
-                        Volatile.Read(ref entry.Lane._closed) != 0,
-                        entry.Lane
-                    );
-                    return entry.Work(entry.State);
-                },
-                (Lane: this, Work: work, State: state)
-            )
-            .GetAwaiter()
-            .GetResult();
-        if (inline.Ran)
-            return inline.Result;
-
-        var completion = Enqueue(work, state);
-        // The holder may have released between the claim attempt and the
-        // enqueue; its release re-check and this attempt cannot both miss.
-        if (TryClaimDrain())
-            _ = DrainAsync();
-        return completion;
+        return RunSynchronous(work, null, state);
     }
 
-    // The async builder isolates AsyncLocal changes even with suppressed flow.
-    // This method never suspends. The result stays a value so a thrown OCE is
-    // faulted, like queued ResultWork, rather than converted to cancellation.
-#pragma warning disable CS1998
-    private async ValueTask<(bool Ran, ValueTask<T> Result)> TryRunInlineAsync<TState, T>(
-        Func<TState, T> work,
+    private ValueTask<T> RunSynchronous<TState, T>(
+        Func<TState, T>? work,
+        Action<TState>? post,
         TState state
     )
     {
         if (!TryClaimDrain())
-            return (false, default);
-        if (HasQueuedWork)
         {
-            _ = DrainAsync();
-            return (false, default);
+            var completion = Enqueue(work, post, state);
+            if (TryClaimDrain())
+                _ = DrainAsync();
+            return completion;
         }
 
+        if (HasQueuedWork)
+        {
+            var queued = Enqueue(work, post, state);
+            _ = DrainAsync();
+            return queued;
+        }
+
+        return InvokeInlineAsync(work, post, state).GetAwaiter().GetResult().Result;
+    }
+
+    // The async builder restores the caller context even with suppressed flow.
+    // The inner result keeps work failures faulted, as queued ResultWork does.
+#pragma warning disable CS1998
+    private async ValueTask<(bool Ran, ValueTask<T> Result)> InvokeInlineAsync<TState, T>(
+        Func<TState, T>? work,
+        Action<TState>? post,
+        TState state
+    )
+    {
+        await ValueTask.CompletedTask.ConfigureAwait(false);
         try
         {
+            if (work is not null)
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
             CurrentLane.Value = this;
-            return (true, ValueTask.FromResult(work(state)));
+            if (post is not null)
+            {
+                post(state);
+                return (true, default);
+            }
+            return (true, ValueTask.FromResult(work!(state)));
         }
         catch (Exception error)
         {
-            return (true, ValueTask.FromException<T>(error));
+            if (post is null)
+                return (true, ValueTask.FromException<T>(error));
+            _ = Task.FromException(error);
+            return (true, default);
         }
         finally
         {
@@ -162,9 +166,18 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     }
 #pragma warning restore CS1998
 
-    private ValueTask<T> Enqueue<TState, T>(Func<TState, T> work, TState state)
+    private ValueTask<T> Enqueue<TState, T>(
+        Func<TState, T>? work,
+        Action<TState>? post,
+        TState state
+    )
     {
-        var completion = new ResultWork<TState, T>(work, state);
+        if (post is not null)
+        {
+            Mailbox.Enqueue(new PostWork<TState>(post, state));
+            return default;
+        }
+        var completion = new ResultWork<TState, T>(work!, state);
         Mailbox.Enqueue(completion);
         return new ValueTask<T>(completion.Task);
     }
@@ -231,25 +244,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         ObserveEntry();
         if (Volatile.Read(ref _closed) != 0)
             return false;
-        if (
-            TryRunInlineAsync(
-                    static posted =>
-                    {
-                        posted.Work(posted.State);
-                        return true;
-                    },
-                    (Work: work, State: state)
-                )
-                .GetAwaiter()
-                .GetResult()
-                .Ran
-        )
-            return true;
-        Mailbox.Enqueue(new PostWork<TState>(work, state));
-        // A current owner, including a turn that posts to its own lane, drains
-        // this item before it releases the lane.
-        if (TryClaimDrain())
-            _ = DrainAsync();
+        _ = RunSynchronous<TState, bool>(null, work, state);
         return true;
     }
 

@@ -36,6 +36,10 @@ if(ZLINK_FRAMEWORK_CPP_TEST_PROBES AND ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   message(FATAL_ERROR
     "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
 endif()
+find_package(protobuf CONFIG QUIET)
+if(NOT protobuf_FOUND)
+  find_package(Protobuf MODULE REQUIRED)
+endif()
 option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
   "Stage Core and the C++ binding in a standalone Framework install" ON)
 option(ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4 "Enable C++ framework STREAM LZ4 compression" ON)
@@ -276,6 +280,9 @@ endfunction()
 add_library(zlink_framework_m6a_objects OBJECT
   ${ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES})
 zlink_framework_cpp_configure_m6_objects(zlink_framework_m6a_objects)
+target_include_directories(zlink_framework_m6a_objects PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+add_dependencies(zlink_framework_m6a_objects zlink_framework_channel_header_proto)
+target_link_libraries(zlink_framework_m6a_objects PRIVATE protobuf::libprotobuf)
 
 add_library(zlink_framework_m6b_objects OBJECT
   ${ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES})
@@ -286,13 +293,15 @@ add_library(zlink_framework_m6c_objects OBJECT
 zlink_framework_cpp_configure_m6_objects(zlink_framework_m6c_objects)
 
 add_library(zlink_framework_m6a_runtime STATIC
-  $<TARGET_OBJECTS:zlink_framework_m6a_objects>)
+  $<TARGET_OBJECTS:zlink_framework_m6a_objects>
+  $<TARGET_OBJECTS:zlink_framework_channel_header_proto>)
 target_compile_features(zlink_framework_m6a_runtime PUBLIC cxx_std_20)
 target_include_directories(zlink_framework_m6a_runtime PUBLIC
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include)
 target_link_libraries(zlink_framework_m6a_runtime PUBLIC
   opentelemetry-cpp::api
   zlink::cpp
+  protobuf::libprotobuf
   Threads::Threads)
 
 add_library(zlink_framework_m6b_runtime STATIC
@@ -312,6 +321,7 @@ target_link_libraries(zlink_framework_m6c_runtime PUBLIC
 add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/codecs/json_profile_engine.cpp
   $<TARGET_OBJECTS:zlink_framework_m6a_objects>
+  $<TARGET_OBJECTS:zlink_framework_channel_header_proto>
   $<TARGET_OBJECTS:zlink_framework_m6b_objects>
   $<TARGET_OBJECTS:zlink_framework_m6c_objects>
   framework/src/runtime/channels/channel_packet_dispatcher.cpp
@@ -402,6 +412,7 @@ target_link_libraries(zlink_framework PRIVATE yyjson::yyjson)
 target_compile_definitions(zlink_framework
   PRIVATE ZLINK_JSON_PROFILE_ENGINE_NS=framework_engine
   INTERFACE ZLINK_JSON_PROFILE_ENGINE_FRAMEWORK)
+target_link_libraries(zlink_framework PRIVATE protobuf::libprotobuf)
 # Applications own the SDK, reader and exporter for the supplied Metrics API provider.
 target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
 if(WIN32)
@@ -591,10 +602,15 @@ add_zlink_framework_codec_extension(
   extensions/framework-codec-protobuf)
 # The protobuf codec carries protobuf wire bytes, so it needs the runtime it
 # encodes with. Payload types come from protoc; the extension only serializes them.
-find_package(protobuf CONFIG QUIET)
-if(NOT protobuf_FOUND)
-  find_package(Protobuf MODULE REQUIRED)
-endif()
+add_library(zlink_framework_channel_header_proto OBJECT
+  ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/channel-header-v1.proto)
+target_link_libraries(zlink_framework_channel_header_proto PRIVATE protobuf::libprotobuf)
+target_include_directories(zlink_framework_channel_header_proto PRIVATE
+  ${CMAKE_CURRENT_BINARY_DIR})
+protobuf_generate(
+  TARGET zlink_framework_channel_header_proto
+  IMPORT_DIRS ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol
+  PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(zlink_framework_codec_protobuf INTERFACE protobuf::libprotobuf)
 
 # Generates protobuf sources for a sample/e2e schema and exposes them as a target.
@@ -1199,9 +1215,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_include_directories(test_cpp_framework_service_wire_codec PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${CMAKE_CURRENT_BINARY_DIR})
   target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
-    ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/fixtures/client-server-metadata.json"
     ZLINK_SESSION_OWNER_IDENTITY_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/fixtures/session-owner-identity-v1.json"
     ZLINK_SESSION_DISCONNECTED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/session-disconnected-v1.json"
     ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/bound-session-replaced-v1.json"
@@ -1215,11 +1231,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ZLINK_ACTOR_JOIN_REQUEST_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-request-v1.json"
     ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-reply-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
-    zlink::framework
+    zlink::framework protobuf::libprotobuf
     zlink::framework_provider_abstractions
     nlohmann_json::nlohmann_json
     opentelemetry-cpp::api
     Threads::Threads)
+  add_dependencies(test_cpp_framework_service_wire_codec
+    zlink_framework_channel_header_proto)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_service_wire_codec
     COMMAND test_cpp_framework_service_wire_codec
@@ -2159,9 +2177,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-contract;execution"
     TIMEOUT 60)
   target_include_directories(test_cpp_framework_client_server_runtime PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  target_compile_definitions(test_cpp_framework_client_server_runtime PRIVATE
-    ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/fixtures/client-server-metadata.json")
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(test_cpp_framework_client_server_runtime PRIVATE
+    protobuf::libprotobuf)
+  add_dependencies(test_cpp_framework_client_server_runtime
+    zlink_framework_channel_header_proto)
   set_tests_properties(test_cpp_framework_client_server_runtime PROPERTIES
     RESOURCE_LOCK "zlink_cpp_heavy_runtime")
   add_zlink_framework_test(
@@ -3157,23 +3178,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_include_directories(test_cpp_framework_raw_send_sync PRIVATE
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     target_link_options(test_cpp_framework_raw_send_sync PRIVATE "LINKER:--wrap=pthread_mutex_lock")
-    # Compile the real codec here so wrapping observes its libc calls with both
-    # static and shared Framework packages, as in the DI synchronization probe.
-    # A sanitizer build cannot hide __wrap_strlen from the sanitizer runtime, and
-    # its instrumentation changes the libc call counts this test pins.
-    string(FIND "${CMAKE_CXX_FLAGS}" "-fsanitize=" zlink_framework_cpp_sanitizer_flag)
-    if(zlink_framework_cpp_sanitizer_flag EQUAL -1)
-      add_zlink_framework_test(
-        test_cpp_framework_envelope_key_cost
-        tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_key_cost.cpp
-        "framework-unit;framework-regression;messaging;resource")
-      target_use_zlink_gtest_main(test_cpp_framework_envelope_key_cost)
-      target_sources(test_cpp_framework_envelope_key_cost PRIVATE
-        framework/src/runtime/messaging/envelope_codec.cpp)
-      target_include_directories(test_cpp_framework_envelope_key_cost PRIVATE
-        ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-      target_link_options(test_cpp_framework_envelope_key_cost PRIVATE "LINKER:--wrap=strlen")
-    endif()
   endif()
   target_sources(test_cpp_framework_completion_allocations PRIVATE
     tests/support/allocation_counter.cpp)
@@ -3287,8 +3291,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_request_wire_identity)
   target_include_directories(test_cpp_framework_request_wire_identity PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  target_compile_definitions(test_cpp_framework_request_wire_identity PRIVATE
-    ZLINK_REQUEST_WIRE_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/request-wire-main-213e579f52.json")
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
     add_zlink_framework_test(test_cpp_framework_request_native_counts
       tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp
@@ -3420,6 +3422,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_messaging PRIVATE
     ZLINK_ERROR_MAPPING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/framework-error-mapping-v1.json")
+  add_executable(test_cpp_framework_channel_header_golden
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_header_golden.cpp)
+  target_include_directories(test_cpp_framework_channel_header_golden PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_channel_header_golden PRIVATE
+    ZLINK_CHANNEL_HEADER_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/channel-header-v1.json")
+  target_link_libraries(test_cpp_framework_channel_header_golden PRIVATE
+    zlink::framework nlohmann_json::nlohmann_json)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_channel_header_golden
+    COMMAND test_cpp_framework_channel_header_golden
+    LABELS "framework-unit;protocol;messaging"
+    TIMEOUT 30)
   add_executable(test_cpp_framework_gtest_harness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_gtest_harness.cpp)
   add_executable(test_cpp_framework_route_payload_ownership
@@ -3429,7 +3445,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_sources(test_cpp_framework_route_payload_ownership PRIVATE
     tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_route_payload_ownership PRIVATE
-    framework/src ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    framework/src ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(test_cpp_framework_route_payload_ownership PRIVATE
+    protobuf::libprotobuf)
+  add_dependencies(test_cpp_framework_route_payload_ownership
+    zlink_framework_channel_header_proto)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_route_payload_ownership
     COMMAND test_cpp_framework_route_payload_ownership

@@ -106,6 +106,7 @@ public sealed class NodeRequestReceiverTests
         }
         var application = ZLinkClientCallCodec.EncodeEnvelopeParts(
             ZLinkClientCallCodec.CreateEnvelope(
+                TimeProvider.System,
                 ZLinkMessageKind.Request,
                 "receiver-terminal",
                 "Reply"

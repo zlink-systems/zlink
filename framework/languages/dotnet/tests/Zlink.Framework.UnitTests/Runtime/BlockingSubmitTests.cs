@@ -38,7 +38,8 @@ public sealed class BlockingSubmitTests
                 {
                     await ZLinkHandlerInvocationEngine.InvokeAsync(
                         new object(),
-                        (_, _, _, _, _, _) => CheckHandlerAsync()
+                        (_, _, _, _, _, _) =>
+                            ZLinkHandlerResultAwaiter.AwaitTaskAsync(CheckHandlerAsync())
                     );
 
                     async Task CheckHandlerAsync()
@@ -378,6 +379,7 @@ public sealed class BlockingSubmitTests
         public string SpotId => "spot";
         public ZLinkUserSpotExecutionMode ExecutionMode => ZLinkUserSpotExecutionMode.SpotWide;
         public TimeSpan DefaultRequestTimeout => TimeSpan.FromSeconds(1);
+        public TimeProvider TimeProvider => TimeProvider.System;
         public ZLinkCodecRegistryBuilder Codecs => null!;
         public ZLinkMessageFlowTracer Flow => null!;
         public IZLinkRuntimeFailureReporter ErrorSink => null!;

@@ -1355,6 +1355,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     bool admit (bool claim = false,
                 const instance_spot_retained_message_t *retained_record = nullptr);
     framework_exception_t admission_error () const;
+    static framework_exception_t target_not_found (std::string message);
     // Admits a timer callback claim; payload is selected in its execution turn.
     bool admit_timer_fire (const std::shared_ptr<runtime::serial_execution_queue_t> &queue = {});
     // Counts a lifecycle callback that its lane admitted earlier.

@@ -13,6 +13,7 @@ const {
   ZLinkSpotRoutePacketDispatch
 } = require('../../packages/framework/dist/runtime/spots/spot-route-packet-dispatch');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const { decodeChannelHeader } = require('./helpers/protobuf-channel-header');
 
 const ORIGIN_KEY = 'zlink.origin';
 
@@ -65,7 +66,7 @@ function decodeReplyHeader(replies) {
   assert.ok(replies.length >= 1, 'expected an error reply to be written');
   const first = replies[0];
   const bytes = Buffer.isBuffer(first) ? first : Buffer.from(first.data());
-  return JSON.parse(bytes.toString());
+  return decodeChannelHeader(bytes);
 }
 
 function createDispatch(packetHandlers) {

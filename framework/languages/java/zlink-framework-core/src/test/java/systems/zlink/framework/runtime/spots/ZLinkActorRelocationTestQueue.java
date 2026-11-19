@@ -5,6 +5,7 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -40,7 +41,8 @@ final class ZLinkActorRelocationTestQueue {
             fifo.enqueueBarrierNext(() -> opened, null);
         }
         var batch =
-                fifo.admitDurablePrefix(
+                ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                fifo,
                                 records,
                                 (record, terminal) -> {
                                     var operation = replay.apply(record, terminal);
