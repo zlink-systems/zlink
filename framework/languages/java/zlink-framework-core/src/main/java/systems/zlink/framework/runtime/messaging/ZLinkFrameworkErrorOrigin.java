@@ -20,6 +20,10 @@ public final class ZLinkFrameworkErrorOrigin {
 
     private ZLinkFrameworkErrorOrigin() {}
 
+    public static ZLinkFrameworkException closingSpot() {
+        return framework(ZLinkFrameworkErrorKind.NOT_FOUND, "Spot incarnation is closing");
+    }
+
     public static Map<String, String> frameworkMetadata() {
         return FRAMEWORK_METADATA;
     }

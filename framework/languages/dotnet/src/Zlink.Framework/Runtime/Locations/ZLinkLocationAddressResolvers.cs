@@ -47,7 +47,10 @@ internal sealed class ZLinkLocationAddressResolvers
         if (row is null)
             return null;
         var handle = new ZLinkResolvedSpotHandle(
-            ToSnapshot(row),
+            ToSnapshot(row) with
+            {
+                ResolutionKind = resolution.Kind,
+            },
             row.SpotGeneration,
             ct => RefreshSpotAsync(key, ct),
             () => _rows.InvalidateSpotRouteAsync(key)
@@ -98,7 +101,9 @@ internal sealed class ZLinkLocationAddressResolvers
             .ResolveSpotRowWithStatusAsync(key, cancellationToken)
             .ConfigureAwait(false);
         ThrowIfKnownUnavailable(resolution.Kind, $"Spot '{key.SpotId}'");
-        return resolution.Row is not { } row ? null : (ToSnapshot(row), row.SpotGeneration);
+        return resolution.Row is not { } row
+            ? null
+            : (ToSnapshot(row) with { ResolutionKind = resolution.Kind }, row.SpotGeneration);
     }
 
     private async ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?> RefreshActorAsync(
@@ -113,8 +118,7 @@ internal sealed class ZLinkLocationAddressResolvers
         return resolution.Row is not { } row ? null : (ToSnapshot(row), row.MembershipEpoch);
     }
 
-    // Terminal kind of an unusable authority (spec 06-spot-address-messaging §9):
-    // a Closing owner is Rejected, any other unavailable authority Unavailable.
+    // A known unavailable authority has no usable owner route (Spot address messaging §9).
     private static void ThrowIfKnownUnavailable(ZLinkLocationResolutionKind kind, string target)
     {
         switch (kind)
@@ -175,7 +179,8 @@ internal readonly record struct ZLinkSpotHandleSnapshot(
     ulong NodeGeneration = 0,
     ulong OwnerLeaseGeneration = 0,
     string OwnerId = "",
-    string StoreVersion = ""
+    string StoreVersion = "",
+    ZLinkLocationResolutionKind ResolutionKind = ZLinkLocationResolutionKind.Ready
 );
 
 internal sealed class ZLinkResolvedSpotHandle
