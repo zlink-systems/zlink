@@ -16,5 +16,5 @@ metadata projectUrl=https://github.com/zlink-systems/zlink
 metadata version={VERSION}
 metadata repository commit={COMMIT} type=git
 dependency-group targetFramework=net8.0
-dependency targetFramework=net8.0 exclude=Build,Analyzers id=Google.Protobuf version=3.29.1
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Google.Protobuf version=3.30.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework version={VERSION}
