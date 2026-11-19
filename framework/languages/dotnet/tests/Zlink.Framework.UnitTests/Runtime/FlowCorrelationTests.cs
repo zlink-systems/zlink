@@ -33,7 +33,7 @@ public sealed class FlowCorrelationTests
     private static string CreateChannelCorrelation() =>
         Assert.IsType<string>(
             ZLinkClientCallCodec
-                .CreateEnvelope(ZLinkMessageKind.Request, "orders", "GetOrder")
+                .CreateEnvelope(TimeProvider.System, ZLinkMessageKind.Request, "orders", "GetOrder")
                 .CorrelationId
         );
 

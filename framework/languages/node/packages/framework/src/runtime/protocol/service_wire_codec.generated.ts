@@ -4463,7 +4463,7 @@ function readDescriptorExtension(reader: Reader, context: ServiceWireDecoderCont
       case 6:
             if (value["protocolCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["protocolCapabilities"] = readSortedText8Vector(item, context, value, flags);
 
-            if (!value["protocolCapabilities"].includes("framework-service-v13")) fail("protocolCapabilities required capability");
+            if (!value["protocolCapabilities"].includes("framework-service-v14")) fail("protocolCapabilities required capability");
             item.done("protocolCapabilities"); break;
       case 7:
             if (value["objectRole"] !== undefined) fail("descriptor-extension duplicate"); value["objectRole"] = readObjectRole(item, context, value, flags);
@@ -4538,7 +4538,7 @@ function writeDescriptorExtension(input: DescriptorExtension, writer: Writer, co
   }
   if (value["protocolCapabilities"] !== undefined) {
 
-    if (!value["protocolCapabilities"].includes("framework-service-v13")) fail("protocolCapabilities required capability");
+    if (!value["protocolCapabilities"].includes("framework-service-v14")) fail("protocolCapabilities required capability");
     const item = new Writer(); writeSortedText8Vector(value["protocolCapabilities"], item, context, value, flags); const itemBytes = item.result(); writeU8(6, body, context, value, flags); writeU32(itemBytes.length, body, context, value, flags); body.put(itemBytes);
   }
   if (value["objectRole"] !== undefined) {

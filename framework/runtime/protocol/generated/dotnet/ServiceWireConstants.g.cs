@@ -7,7 +7,7 @@ internal static class ServiceWireConstants
     internal const byte Magic1 = 77;
     internal const byte WireMajor = 1;
     internal const int MetadataBytes = 1024;
-    internal const string RequiredCapability = "framework-service-v13";
+    internal const string RequiredCapability = "framework-service-v14";
     internal const string FrameworkMultipartPacketName = "ZLinkFrameworkMultipart";
     internal const string FrameworkMultipartContentType = "application/x-zlink-multipart";
     internal const ulong RelocationReferenceBytes = 4096UL;

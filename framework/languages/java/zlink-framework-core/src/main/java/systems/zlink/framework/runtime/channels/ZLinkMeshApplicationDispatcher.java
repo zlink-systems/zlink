@@ -225,8 +225,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                     systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
                             .decodeDispatchHeader(record.parts(), captureFlow);
         } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
-            //  A JSON-object first frame that is not a valid shared envelope
-            //  is a protocol error (C++ decode parity).
+            //  A frame that cannot be parsed and validated as ChannelHeader is a protocol error.
             recordDrop(record, ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED);
             var rejectedEnvelope =
                     invalidEnvelope
@@ -279,9 +278,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             return;
         }
         ZLinkFlowContext.State inboundFlow =
-                captureFlow && envelope != null
-                        ? ZLinkChannelFlowFrame.fromEnvelopeHeader(envelope)
-                        : null;
+                captureFlow ? ZLinkChannelFlowFrame.fromEnvelopeHeader(envelope) : null;
         var flowScope =
                 captureFlow
                         ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
@@ -290,16 +287,11 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             String packetName =
                     ZLinkChannelEnvelope.decodeDispatchPacket(record.parts(), envelope)
                             .packetName();
-            String contentType =
-                    envelope != null
-                            ? envelope.contentType()
-                            : record.receive().contentType() != null
-                                    ? record.receive().contentType()
-                                    : ZLinkChannelContentTypeFrame.decode(record.parts());
+            String contentType = envelope.contentType();
             Map<String, String> metadata;
             try {
                 metadata =
-                        envelope != null && !envelope.metadata().isEmpty()
+                        !envelope.metadata().isEmpty()
                                 ? envelope.metadata()
                                 : ZLinkApplicationMetadata.decode(
                                         record.receive().applicationMetadata());
@@ -360,13 +352,10 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         try {
             payload = Message.from(parts.get(1));
             Map<String, String> metadata =
-                    envelope != null && !envelope.metadata().isEmpty()
+                    !envelope.metadata().isEmpty()
                             ? envelope.metadata()
                             : ZLinkApplicationMetadata.decode(metadataBytes);
-            String contentType =
-                    envelope != null
-                            ? envelope.contentType()
-                            : ZLinkChannelContentTypeFrame.decode(parts);
+            String contentType = envelope.contentType();
             Message ownedPayload = payload;
             CompletableFuture<ZLinkApplicationJobQueue.Permit> acquisition =
                     applicationJobQueue

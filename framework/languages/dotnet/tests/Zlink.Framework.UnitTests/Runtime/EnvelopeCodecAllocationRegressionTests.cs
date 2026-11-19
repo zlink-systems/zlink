@@ -14,6 +14,51 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
     private const int Iterations = 128;
     private const int WindowCalls = 1024;
 
+    [Fact]
+    public void WarmChannelHeaderEncodeAndDecodeStayWithinMeasuredAllocationBudgets()
+    {
+        var source = new ZLinkEnvelopeHeader(
+            ZLinkMessageKind.Request,
+            "route",
+            "request",
+            "application/json",
+            "request-correlation",
+            new DateTimeOffset(2030, 1, 2, 3, 4, 5, TimeSpan.FromHours(2)).AddTicks(1234567),
+            null,
+            null,
+            null
+        )
+        {
+            FlowId = "0192f3a0-7b1c-7def-8123-456789abcdef",
+            FlowOrigin = ZLinkFlowOrigin.Inbound,
+            Metadata = new Dictionary<string, string> { ["tenant"] = "alpha" },
+        };
+        using var wire = ZLinkEnvelopeCodec.EncodeHeader(source);
+        ZLinkEnvelopeHeader? decoded = null;
+
+        var encodeBytes =
+            PerCallAllocation.MinWindow(
+                () =>
+                {
+                    using var encoded = ZLinkEnvelopeCodec.EncodeHeader(source);
+                },
+                WindowCalls,
+                warmup: Iterations
+            ) / WindowCalls;
+        var decodeBytes =
+            PerCallAllocation.MinWindow(
+                () => decoded = ZLinkEnvelopeCodec.DecodeHeader(wire),
+                WindowCalls,
+                warmup: Iterations
+            ) / WindowCalls;
+
+        output.WriteLine($"channel header: encode={encodeBytes}, decode={decodeBytes} B/call");
+        Assert.True(encodeBytes <= 872, $"Encode allocated {encodeBytes} B; limit=872 B.");
+        Assert.True(decodeBytes <= 1264, $"Decode allocated {decodeBytes} B; limit=1264 B.");
+        Assert.Equal("request-correlation", decoded!.CorrelationId);
+        Assert.Equal(source.Metadata, decoded.Metadata);
+    }
+
     [Theory]
     [InlineData(16)]
     [InlineData(17)]

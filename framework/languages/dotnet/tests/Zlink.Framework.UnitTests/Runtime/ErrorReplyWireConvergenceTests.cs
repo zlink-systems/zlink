@@ -104,26 +104,18 @@ public sealed class ErrorReplyWireConvergenceTests
         );
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-        using var json = JsonDocument.Parse(encoded.AsReadOnlyMemory());
-
-        Assert.False(json.RootElement.TryGetProperty("metadata", out _));
+        Assert.Null(ZLinkEnvelopeCodec.DecodeHeader(encoded).Metadata);
     }
 
-    //  Fixed input mirroring the C++ envelope_codec_t::encode_header output for
-    //  a framework-generated error reply (metadata always present, snake_case
-    //  errorCode, numeric kind, formatMarker 0xF2).
-    private const string CppFrameworkErrorHeaderGolden = """
-        {"formatMarker":242,"flowId":null,"flowOrigin":null,"kind":5,"channelName":"play","messageName":"Move","contentType":"application/json","correlationId":"corr-1","deadline":null,"topic":null,"errorCode":"not_found","errorMessage":"Spot route was not found","source":null,"metadata":{"zlink.origin":"framework"}}
-        """;
-
-    private const string CppApplicationErrorHeaderGolden = """
-        {"formatMarker":242,"flowId":null,"flowOrigin":null,"kind":5,"channelName":"play","messageName":"Move","contentType":"application/json","correlationId":"corr-1","deadline":null,"topic":null,"errorCode":"not_found","errorMessage":"order was not found","source":null,"metadata":{}}
-        """;
+    private const string FrameworkErrorHeaderHex =
+        "08051204706c61791a044d6f766522106170706c69636174696f6e2f6a736f6e2a06636f72722d313a096e6f745f666f756e64421853706f7420726f75746520776173206e6f7420666f756e646a190a0c7a6c696e6b2e6f726967696e12096672616d65776f726b";
+    private const string ApplicationErrorHeaderHex =
+        "08051204706c61791a044d6f766522106170706c69636174696f6e2f6a736f6e2a06636f72722d313a096e6f745f666f756e6442136f7264657220776173206e6f7420666f756e64";
 
     [Fact]
     public void Cpp_golden_framework_error_header_decodes_to_a_stale_route_signal()
     {
-        using var message = Message.From(CppFrameworkErrorHeaderGolden);
+        using var message = Message.From(Convert.FromHexString(FrameworkErrorHeaderHex));
         var header = ZLinkEnvelopeCodec.DecodeHeader(message);
 
         Assert.Equal(ZLinkMessageKind.Error, header.Kind);
@@ -143,12 +135,11 @@ public sealed class ErrorReplyWireConvergenceTests
     [Fact]
     public void Cpp_golden_application_error_header_is_not_a_stale_route_signal()
     {
-        using var message = Message.From(CppApplicationErrorHeaderGolden);
+        using var message = Message.From(Convert.FromHexString(ApplicationErrorHeaderHex));
         var header = ZLinkEnvelopeCodec.DecodeHeader(message);
 
         Assert.Equal("not_found", header.ErrorCode);
-        Assert.NotNull(header.Metadata);
-        Assert.Empty(header.Metadata!);
+        Assert.Null(header.Metadata);
 
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkEnvelopeErrorMapper.CreateException(header, "fallback")
@@ -175,14 +166,10 @@ public sealed class ErrorReplyWireConvergenceTests
         );
         try
         {
-            using var json = JsonDocument.Parse(parts[0].AsReadOnlyMemory());
-            var root = json.RootElement;
-            Assert.Equal(5, root.GetProperty("kind").GetInt32());
-            Assert.Equal("not_found", root.GetProperty("errorCode").GetString());
-            Assert.Equal(
-                "framework",
-                root.GetProperty("metadata").GetProperty("zlink.origin").GetString()
-            );
+            var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            Assert.Equal(ZLinkMessageKind.Error, header.Kind);
+            Assert.Equal("not_found", header.ErrorCode);
+            Assert.Equal("framework", header.Metadata!["zlink.origin"]);
         }
         finally
         {
@@ -201,10 +188,8 @@ public sealed class ErrorReplyWireConvergenceTests
         );
         try
         {
-            using var json = JsonDocument.Parse(parts[0].AsReadOnlyMemory());
-            Assert.False(json.RootElement.TryGetProperty("metadata", out _));
-
             var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            Assert.Null(header.Metadata);
             var error = Assert.IsType<ZLinkFrameworkException>(
                 ZLinkEnvelopeErrorMapper.CreateException(header, "fallback")
             );
@@ -230,11 +215,8 @@ public sealed class ErrorReplyWireConvergenceTests
         );
         try
         {
-            using var json = JsonDocument.Parse(parts[0].AsReadOnlyMemory());
-            Assert.Equal(
-                "framework",
-                json.RootElement.GetProperty("metadata").GetProperty("zlink.origin").GetString()
-            );
+            var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            Assert.Equal("framework", header.Metadata!["zlink.origin"]);
         }
         finally
         {

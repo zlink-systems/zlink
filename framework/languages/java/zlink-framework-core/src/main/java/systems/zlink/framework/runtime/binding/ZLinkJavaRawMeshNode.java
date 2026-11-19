@@ -6412,9 +6412,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private ZLinkFlowContext.State captureInstanceActivationFlow(List<Message> parts) {
         var reporter = dispatchErrorReporter;
-        return reporter != null && reporter.flow().captureEnabled()
-                ? ZLinkSpotFlowFrame.decode(parts)
-                : null;
+        if (reporter == null || !reporter.flow().captureEnabled()) return null;
+        var header =
+                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(
+                        parts, true);
+        return ZLinkSpotFlowFrame.fromEnvelopeHeader(header);
     }
 
     private int[] recordInstanceActivationFailure(

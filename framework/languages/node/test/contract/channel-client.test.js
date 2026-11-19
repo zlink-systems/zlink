@@ -12,6 +12,7 @@ const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 
 const telemetry = require('./helpers/telemetry-log-capture');
+const { encodeChannelHeader, decodeChannelHeader: decodeProtobufChannelHeader } = require('./helpers/protobuf-channel-header');
 const { ownCompletions } = require('./helpers/completion-poller');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
@@ -1194,8 +1195,7 @@ test('route packet dispatcher sends channel envelopes to route handlers before S
   });
 
   const parts = [
-    zlink.Message.from(Buffer.from(JSON.stringify({
-      formatMarker: 0xf2,
+    zlink.Message.from(encodeChannelHeader({
       flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
       flowOrigin: 1,
       kind: 1,
@@ -1207,7 +1207,7 @@ test('route packet dispatcher sends channel envelopes to route handlers before S
       topic: null,
       errorCode: null,
       errorMessage: null
-    }))),
+    })),
     zlink.Message.from(Buffer.from(JSON.stringify({ mode: 'two-player' })))
   ];
   const replyToken = {};
@@ -4604,19 +4604,16 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
   }
 });
 
-test('ClientServer malformed metadata replies ProtocolError before handlers', async () => {
-  const fixture = JSON.parse(
-    fs.readFileSync(
-      path.resolve(
-        __dirname,
-        '../../../../runtime/protocol/fixtures/client-server-metadata.json'
-      ),
-      'utf8'
-    )
-  );
+test('ClientServer malformed protobuf metadata replies ProtocolError before handlers', async () => {
   const invalidCases = [
-    ...fixture.cases.filter(( item ) => !item.valid),
-    {name: 'invalid UTF-8', metadata: {k: 'byte-marker'}, invalidUtf8: true}
+    {
+      name: 'duplicate metadata key',
+      metadata: [{ key: 'k', value: 'first' }, { key: 'k', value: 'last' }]
+    },
+    {
+      name: 'metadata protobuf encoding exceeds 1024 bytes',
+      metadata: [{ key: 'k', value: 'v'.repeat(1020) }]
+    }
   ];
   for (const scenario of invalidCases) {
     let invocations = 0;
@@ -4625,57 +4622,31 @@ test('ClientServer malformed metadata replies ProtocolError before handlers', as
       channelName: 'api',
       dispatchErrors: noDispatchErrorReporter(),
       handlers: new Map([
-        ['Ping', { handler: {
-          handle() {
-            invocations++;
-          }
-        } }]
+        ['Ping', { handler: { handle() { invocations++; } } }]
       ]),
       sendHandlers: new Map()
     });
-    const header = {
-      formatMarker: 242,
+    const header = encodeChannelHeader({
       kind: 1,
       channelName: 'api',
       messageName: 'Ping',
       contentType: 'application/json',
       correlationId: 'invalid-metadata',
-      deadline: null,
-      topic: null,
       metadata: scenario.metadata
-    };
-    const json =
-      scenario.receivedEncoded === undefined
-        ? JSON.stringify(header)
-        : JSON.stringify(header).replace(
-            '"metadata":' + JSON.stringify(scenario.metadata),
-            '"metadata":' + scenario.receivedEncoded
-          );
-    const markerIndex = json.indexOf('byte-marker');
-    const wire = scenario.invalidUtf8
-      ? Buffer.concat([
-          Buffer.from(json.slice(0, markerIndex)),
-          Buffer.from([0xff]),
-          Buffer.from(json.slice(markerIndex + 'byte-marker'.length))
-        ])
-      : Buffer.from(json);
-    const parts = [wire, Buffer.from('{}')].map(fakeMessagePart);
+    });
+    const parts = [header, Buffer.from('{}')].map(fakeMessagePart);
     await dispatcher.dispatch(
-      {parts, routingId: 'client-1', replyToken: {}},
-      {
-        reply() {
-          return captureMultipart(replies);
-        }
-      }
+      { parts, routingId: 'client-1', replyToken: {} },
+      { reply() { return captureMultipart(replies); } }
     );
     assert.equal(invocations, 0, scenario.name);
     const channelCodec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
     assert.throws(
       () => channelCodec.decodeChannelReply(replies),
-      ( error ) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError,
+      error => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError,
       scenario.name
     );
-    parts.forEach(( part ) => part.close());
+    parts.forEach(part => part.close());
   }
 });
 
@@ -4906,8 +4877,7 @@ test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports provider 
     sendHandlers: new Map()
   });
   const parts = [
-    fakeMessagePart(Buffer.from(JSON.stringify({
-      formatMarker: 0xf2,
+    fakeMessagePart(encodeChannelHeader({
       flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
       flowOrigin: 1,
       kind: 1,
@@ -4919,7 +4889,7 @@ test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports provider 
       topic: null,
       errorCode: null,
       errorMessage: null
-    }))),
+    })),
     fakeMessagePart(Buffer.from('{'))
   ];
   const router = {
@@ -5138,8 +5108,7 @@ test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors t
     }, router);
     await dispatcher.dispatch({
       parts: [
-        fakeMessagePart(Buffer.from(JSON.stringify({
-          formatMarker: 0xf2,
+        fakeMessagePart(encodeChannelHeader({
           flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
           flowOrigin: 1,
           kind: 1,
@@ -5151,7 +5120,7 @@ test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors t
           topic: null,
           errorCode: null,
           errorMessage: null
-        }))),
+        })),
         fakeMessagePart(Buffer.from('{'))
       ],
       routingId: 'client-1',
@@ -5667,19 +5636,18 @@ function subscribeMaybe(socket, received) {
 function decodeDotnetEnvelope(parts) {
   assert.equal(parts.length, 2);
   return {
-    header: JSON.parse(parts[0].data().toString()),
+    header: decodeProtobufChannelHeader(parts[0].data()),
     body: JSON.parse(parts[1].data().toString())
   };
 }
 
 function encodeDotnetEnvelope(header, body) {
   return [
-    Buffer.from(JSON.stringify({
-      formatMarker: 0xf2,
+    encodeChannelHeader({
       flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
       flowOrigin: 1,
       ...header
-    })),
+    }),
     Buffer.from(JSON.stringify(body))
   ];
 }

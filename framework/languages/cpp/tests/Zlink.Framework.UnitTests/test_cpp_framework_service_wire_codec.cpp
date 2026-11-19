@@ -6,6 +6,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "channel-header-v1.pb.h"
 
 #include <service_wire_pilot_codec.hpp>
 #include <service_wire_codec.hpp>
@@ -1202,90 +1203,6 @@ int main (int argc, char **argv)
         assert (full_range.binding_generation == UINT64_MAX);
     }
 
-    {
-        std::ifstream input (ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH);
-        assert (input.good ());
-        const auto fixture = nlohmann::json::parse (input);
-        messaging::envelope_codec_t codec;
-        for (const bool invalid_key : {false, true}) {
-            messaging::envelope_header_t outgoing;
-            outgoing.kind = messaging::message_kind_t::command;
-            outgoing.channel_name = "metadata";
-            outgoing.message_name = "probe";
-            const std::string invalid_utf8 ("\xed\xa0\x80", 3);
-            outgoing.metadata = invalid_key
-                                  ? std::map<std::string, std::string>{{invalid_utf8, "value"}}
-                                  : std::map<std::string, std::string>{{"key", invalid_utf8}};
-            bool rejected = false;
-            try {
-                (void) codec.encode_header (outgoing);
-            }
-            catch (const zlink::framework::framework_exception_t &error) {
-                rejected =
-                  error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
-            }
-            assert (rejected);
-        }
-        for (const auto &test : fixture.at ("cases")) {
-            nlohmann::json wire = {{"formatMarker", 242},
-                                   {"kind", 3},
-                                   {"channelName", "metadata"},
-                                   {"messageName", "probe"}};
-            if (test.contains ("metadata"))
-                wire["metadata"] = test["metadata"];
-            auto received = wire.dump ();
-            if (test.contains ("receivedEncoded")) {
-                auto received_header = wire;
-                received_header.erase ("metadata");
-                received = received_header.dump ();
-                received.pop_back ();
-                received +=
-                  ",\"metadata\":" + test.at ("receivedEncoded").get<std::string> () + "}";
-            }
-            const auto decoded = codec.decode_header (zlink::message_t::from (received), false);
-            const bool valid = test.at ("valid");
-            assert (static_cast<bool> (decoded) == valid);
-            if (valid) {
-                const auto encoded = codec.encode_header (decoded.value ()).to_string ();
-                const auto position = encoded.find ("\"metadata\":");
-                assert (position != std::string::npos);
-                const auto canonical = test.at ("encoded").get<std::string> ();
-                assert (encoded.compare (position + 11, canonical.size (), canonical) == 0);
-                assert (canonical.size () == test.at ("encodedSize").get<std::size_t> ());
-                const auto escaped =
-                  codec.decode_header (zlink::message_t::from (wire.dump (-1, ' ', true)), false);
-                assert (escaped && escaped.value ().metadata == decoded.value ().metadata);
-            } else {
-                assert (decoded.error_kind ()
-                        == zlink::framework::framework_error_kind_t::protocol_error);
-            }
-            if (!test.contains ("metadata") || !test["metadata"].is_object ())
-                continue;
-            messaging::envelope_header_t outgoing;
-            outgoing.kind = messaging::message_kind_t::command;
-            outgoing.channel_name = "metadata";
-            outgoing.message_name = "probe";
-            bool strings = true;
-            for (const auto &[key, value] : test["metadata"].items ()) {
-                if (!value.is_string ()) {
-                    strings = false;
-                    break;
-                }
-                outgoing.metadata.emplace (key, value.get<std::string> ());
-            }
-            if (!strings)
-                continue;
-            bool rejected = false;
-            try {
-                (void) codec.encode_header (outgoing);
-            }
-            catch (const zlink::framework::framework_exception_t &error) {
-                rejected =
-                  error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
-            }
-            assert (rejected != valid);
-        }
-    }
     test_application_payload_wire_bytes ();
     test_retained_multipart_wire_bytes ();
     test_moved_multipart_ownership ();
@@ -1607,27 +1524,24 @@ int main (int argc, char **argv)
         assert (decode_rejected);
     }
 
-    // Channel error envelopes use the shared JSON wire (spec 51).  An Error
-    // reply must name one of the canonical framework error codes; accepting a
-    // missing or invented code would turn malformed remote input into a
-    // fabricated application failure.
+    // The channel-header contract does not require or restrict errorCode on decode.
     const messaging::envelope_codec_t envelope_codec;
-    const auto invalid_error_header = [&] (std::string_view error_code) {
-        return envelope_codec.decode_header (zlink::message_t::from (
-          std::string{"{\"formatMarker\":242,\"kind\":5,\"channelName\":\"test\",\"messageName\":"
-                      "\"reply\",\"contentType\":\"application/"
-                      "json\",\"correlationId\":\"request-1\",\"deadline\":null,\"topic\":null,"}
-          + std::string (error_code)
-          + ",\"errorMessage\":\"failed\",\"source\":null,\"metadata\":{}}"));
+    const auto invalid_error_header = [&] (std::optional<std::string> error_code) {
+        zlink::framework::channel::v1::ChannelHeader wire;
+        wire.set_kind (zlink::framework::channel::v1::ERROR);
+        wire.set_channel_name ("test");
+        wire.set_message_name ("reply");
+        wire.set_content_type ("application/json");
+        wire.set_correlation_id ("request-1");
+        wire.set_error_message ("failed");
+        if (error_code)
+            wire.set_error_code (*error_code);
+        return envelope_codec.decode_header (zlink::message_t::from (wire.SerializeAsString ()));
     };
-    const auto missing_error_code = invalid_error_header (R"("errorCode":null)");
-    assert (!missing_error_code
-            && missing_error_code.error_kind ()
-                 == zlink::framework::framework_error_kind_t::protocol_error);
-    const auto unknown_error_code = invalid_error_header (R"("errorCode":"invented_error")");
-    assert (!unknown_error_code
-            && unknown_error_code.error_kind ()
-                 == zlink::framework::framework_error_kind_t::protocol_error);
+    const auto missing_error_code = invalid_error_header (std::nullopt);
+    assert (missing_error_code);
+    const auto unknown_error_code = invalid_error_header ("invented_error");
+    assert (unknown_error_code);
     const protocol::spot_route_fence_t spot_fence{
       {'s', 'p', 'o', 't'}, 3, {'n', 'o', 'd', 'e'}, 5, 7, 8};
     const auto spot_request = protocol::decode_spot_message_header (

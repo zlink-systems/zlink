@@ -132,6 +132,7 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
     public void Header_initialization_keeps_metadata_and_the_wire_payload()
     {
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
             ZLinkMessageKind.Command,
             "work",
             nameof(Probe),
@@ -270,6 +271,7 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
             static type => type == typeof(Probe)
         );
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
             ZLinkMessageKind.Request,
             "work",
             nameof(Probe),
@@ -303,6 +305,7 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
             () =>
                 GC.KeepAlive(
                     ZLinkClientCallCodec.CreateEnvelope(
+                        TimeProvider.System,
                         ZLinkMessageKind.Command,
                         "work",
                         nameof(Probe)
@@ -314,6 +317,7 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
             () =>
                 GC.KeepAlive(
                     ZLinkClientCallCodec.CreateEnvelope(
+                        TimeProvider.System,
                         ZLinkMessageKind.Command,
                         "work",
                         nameof(Probe),
@@ -789,6 +793,7 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
         public string SpotId => "work";
         public ZLinkUserSpotExecutionMode ExecutionMode => default;
         public TimeSpan DefaultRequestTimeout => Budget;
+        public TimeProvider TimeProvider => TimeProvider.System;
         public ZLinkCodecRegistryBuilder Codecs => codecs;
         public ZLinkMessageFlowTracer Flow => flow;
         public IZLinkRuntimeFailureReporter ErrorSink => null!;

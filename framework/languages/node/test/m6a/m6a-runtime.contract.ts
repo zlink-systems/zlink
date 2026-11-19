@@ -193,7 +193,7 @@ test('RouteMesh admission requires the generated capability but accepts sorted u
         ...descriptor('old'),
         protocolCapabilities: ['framework-service-v12']
       }),
-    /framework-service-v13/
+    /framework-service-v14/
   );
 });
 

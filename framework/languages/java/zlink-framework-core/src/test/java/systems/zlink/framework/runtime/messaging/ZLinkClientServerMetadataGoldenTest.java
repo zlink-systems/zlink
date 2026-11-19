@@ -1,188 +1,121 @@
 package systems.zlink.framework.runtime.messaging;
 
-import static org.junit.jupiter.api.Assertions.*;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.util.LinkedHashMap;
+import zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader;
+import zlink.framework.channel.v1.ChannelHeaderV1.MetadataEntry;
+
+import java.nio.ByteBuffer;
 import java.util.Map;
 
 final class ZLinkClientServerMetadataGoldenTest {
     @Test
-    void receivedHeaderRejectsInvalidUtf8AsProtocolError() {
-        byte[] prefix =
-                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"api\",\"messageName\":\""
-                        .getBytes(StandardCharsets.UTF_8);
-        byte[] suffix =
-                "\",\"contentType\":\"application/json\",\"metadata\":{}}"
-                        .getBytes(StandardCharsets.UTF_8);
-        byte[] bytes = new byte[prefix.length + 2 + suffix.length];
-        System.arraycopy(prefix, 0, bytes, 0, prefix.length);
-        bytes[prefix.length] = (byte) 0xc3;
-        bytes[prefix.length + 1] = 0x28;
-        System.arraycopy(suffix, 0, bytes, prefix.length + 2, suffix.length);
-        try (var wire = Message.from(bytes)) {
-            assertEquals(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                    assertThrows(
-                                    ZLinkFrameworkException.class,
-                                    () -> ZLinkChannelEnvelope.decodeHeader(wire, false))
-                            .kind());
-        }
-    }
-
-    @Test
-    void metadataWritesUnicodeAsUtf8AndRejectsLoneSurrogates() {
+    void metadataUsesUtf8ByteOrderAndRoundTripsUnicode() {
         var header =
-                ZLinkChannelEnvelope.create(
+                new ZLinkChannelEnvelope.Header(
                         3,
                         "work",
                         "Send",
                         "application/json",
                         null,
-                        Map.of("k", "snowman-☃ emoji-😀"),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of("é", "snowman-☃ emoji-😀", "a", "first"),
                         null,
                         null);
-        try (var encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
-            assertTrue(
-                    encoded.toUtf8String().contains("\"metadata\":{\"k\":\"snowman-☃ emoji-😀\"}"));
-            assertEquals(
-                    header.metadata(),
-                    ZLinkChannelEnvelope.decodeHeader(encoded, false).metadata());
-        }
-        for (String invalid : java.util.List.of("\uD800", "\uDC00")) {
-            var outgoing =
-                    ZLinkChannelEnvelope.create(
-                            3,
-                            "work",
-                            "Send",
-                            "application/json",
-                            null,
-                            Map.of("k", invalid),
-                            null,
-                            null);
-            assertEquals(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                    assertThrows(
-                                    ZLinkFrameworkException.class,
-                                    () -> ZLinkChannelEnvelope.encodeHeader(outgoing))
-                            .kind());
-        }
+        byte[] bytes = ZLinkChannelEnvelope.encodeHeaderBytes(header);
+        var decoded = ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(bytes), false);
+        assertEquals(header.metadata(), decoded.metadata());
+        assertEquals(header, decoded);
     }
 
     @Test
-    void sharedMetadataFixturesEncodeAndDecodeWithCanonicalSize() throws Exception {
-        var json = new ObjectMapper();
-        var cases =
-                json.readTree(
-                                Path.of(
-                                                "../../../runtime/protocol/fixtures/client-server-metadata.json")
-                                        .toFile())
-                        .get("cases");
-        for (var fixture : cases) {
-            String name = fixture.get("name").asText();
-            var header =
-                    json.createObjectNode()
-                            .put("formatMarker", 242)
-                            .put("kind", 3)
-                            .put("channelName", "work")
-                            .put("messageName", "Send")
-                            .put("contentType", "application/json");
-            if (fixture.has("metadata")) header.set("metadata", fixture.get("metadata"));
-            try (var part =
-                    Message.from(
-                            fixture.has("receivedEncoded")
-                                    ? (header.toString()
-                                                            .substring(
-                                                                    0,
-                                                                    header.toString()
-                                                                            .lastIndexOf(
-                                                                                    "\"metadata\":"))
-                                                    + "\"metadata\":"
-                                                    + fixture.get("receivedEncoded").asText()
-                                                    + "}")
-                                            .getBytes(StandardCharsets.UTF_8)
-                                    : json.writeValueAsBytes(header))) {
-                if (!fixture.get("valid").asBoolean()) {
-                    var error =
-                            assertThrows(
-                                    ZLinkFrameworkException.class,
-                                    () -> ZLinkChannelEnvelope.decodeHeader(part, false),
-                                    name);
-                    assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, error.kind(), name);
-                    if (fixture.has("metadata")
-                            && fixture.get("metadata").isObject()
-                            && java.util.stream.StreamSupport.stream(
-                                            java.util.Spliterators.spliteratorUnknownSize(
-                                                    fixture.get("metadata").elements(), 0),
-                                            false)
-                                    .allMatch(com.fasterxml.jackson.databind.JsonNode::isTextual)) {
-                        Map<String, String> metadata = new LinkedHashMap<>();
-                        fixture.get("metadata")
-                                .fields()
-                                .forEachRemaining(
-                                        entry ->
-                                                metadata.put(
-                                                        entry.getKey(), entry.getValue().asText()));
-                        var outgoing =
-                                ZLinkChannelEnvelope.create(
-                                        3,
-                                        "work",
-                                        "Send",
-                                        "application/json",
-                                        null,
-                                        metadata,
-                                        null,
-                                        null);
-                        assertThrows(
+    void metadataEncodedLengthIsLimitedTo1024Bytes() {
+        var header =
+                new ZLinkChannelEnvelope.Header(
+                        3,
+                        "work",
+                        "Send",
+                        "application/json",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of("k", "v".repeat(1020)),
+                        null,
+                        null);
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                assertThrows(
                                 ZLinkFrameworkException.class,
-                                () -> ZLinkChannelEnvelope.encodeHeader(outgoing),
-                                name);
-                    }
-                    continue;
-                }
-                var decoded = ZLinkChannelEnvelope.decodeHeader(part, false);
-                try (var encoded = ZLinkChannelEnvelope.encodeHeader(decoded)) {
-                    String text = encoded.toUtf8String();
-                    String metadata =
-                            text.substring(text.indexOf("\"metadata\":") + 11, text.length() - 1);
-                    if (decoded.metadata().size() <= 1) {
-                        assertEquals(fixture.get("encoded").asText(), metadata, name);
-                    } else {
-                        assertEquals(
-                                json.readTree(fixture.get("encoded").asText()),
-                                json.readTree(metadata),
-                                name);
-                        for (var entry : decoded.metadata().entrySet()) {
-                            assertTrue(
-                                    metadata.contains(
-                                            json.writeValueAsString(entry.getKey())
-                                                    + ":"
-                                                    + json.writeValueAsString(entry.getValue())),
-                                    name);
-                        }
-                    }
-                    assertEquals(
-                            fixture.get("encodedSize").asInt(),
-                            metadata.getBytes(StandardCharsets.UTF_8).length,
-                            name);
-                }
-                if (name.equals("utf8-1024")) {
-                    try (var escaped = Message.from(part.toUtf8String().replace("é", "\\u00e9"))) {
-                        assertEquals(
-                                decoded.metadata(),
-                                ZLinkChannelEnvelope.decodeHeader(escaped, false).metadata());
-                    }
-                }
-            }
-        }
+                                () -> ZLinkChannelEnvelope.encodeHeaderBytes(header))
+                        .kind());
+    }
+
+    @Test
+    void malformedMetadataUtf8IsProtocolError() {
+        byte[] bytes = {
+            0x08,
+            3,
+            0x12,
+            1,
+            'c',
+            0x1a,
+            1,
+            'm',
+            0x22,
+            1,
+            'x',
+            0x6a,
+            5,
+            0x0a,
+            1,
+            (byte) 0xff,
+            0x12,
+            1,
+            'v'
+        };
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                assertThrows(
+                                ZLinkFrameworkException.class,
+                                () ->
+                                        ZLinkChannelEnvelope.decodeHeader(
+                                                ByteBuffer.wrap(bytes), false))
+                        .kind());
+    }
+
+    @Test
+    void repeatedMetadataKeysAreRejected() {
+        var entry = MetadataEntry.newBuilder().setKey("k").setValue("v").build();
+        byte[] bytes =
+                ChannelHeader.newBuilder()
+                        .setKindValue(3)
+                        .setChannelName("c")
+                        .setMessageName("m")
+                        .setContentType("x")
+                        .addMetadata(entry)
+                        .addMetadata(entry.toBuilder().setValue("other"))
+                        .build()
+                        .toByteArray();
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                assertThrows(
+                                ZLinkFrameworkException.class,
+                                () ->
+                                        ZLinkChannelEnvelope.decodeHeader(
+                                                ByteBuffer.wrap(bytes), false))
+                        .kind());
     }
 }

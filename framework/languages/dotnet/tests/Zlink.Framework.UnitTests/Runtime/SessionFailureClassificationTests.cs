@@ -115,6 +115,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
             var envelope = ZLinkClientCallCodec.CreateEnvelope(
+                TimeProvider.System,
                 ZLinkMessageKind.Command,
                 "entry",
                 ZLinkRemoteSessionPushProtocol.PacketName
