@@ -57,6 +57,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.ReadyRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -330,7 +331,21 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                                         0,
                                         2),
                                 List.of(
-                                        Message.from(packetName.getBytes(StandardCharsets.UTF_8)),
+                                        ZLinkChannelEnvelope.encodeHeader(
+                                                new ZLinkChannelEnvelope.Header(
+                                                        ZLinkChannelEnvelope.KIND_COMMAND,
+                                                        channelName,
+                                                        packetName,
+                                                        ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        Map.of(),
+                                                        null,
+                                                        null)),
                                         Message.from(
                                                 jsonPayload.getBytes(StandardCharsets.UTF_8)))));
     }
