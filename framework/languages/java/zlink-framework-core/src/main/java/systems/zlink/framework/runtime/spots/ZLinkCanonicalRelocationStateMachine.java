@@ -1847,8 +1847,14 @@ final class ZLinkCanonicalRelocationStateMachine
                         : ZLinkCanonicalRelocationAuthorityStateCodec.decode(
                                 primarySnapshot.payload());
         var coordinatorFence = prepare.coordinator();
+        // Owner and lease are checked per participant above; the fence also names the node.
         boolean coordinatorFenceMatches =
                 primarySnapshot != null
+                        && coordinatorFence
+                                .nodeRid()
+                                .equals(primarySnapshot.allocation().descriptor().rid())
+                        && coordinatorFence.nodeGeneration()
+                                == primarySnapshot.allocation().descriptorLifecycleGeneration()
                         && (canonical == null
                                 ? primarySnapshot
                                         .storeVersion()
