@@ -4,6 +4,7 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
+const { decodeChannelHeader } = require('./helpers/protobuf-channel-header');
 const framework = require('../../packages/framework/dist/internal');
 const {
   ZLinkSubmitStatus
@@ -110,7 +111,7 @@ async function recvRouterMessage(router) {
 function decodeDotnetEnvelope(parts) {
   assert.equal(parts.length, 2);
   return {
-    header: JSON.parse(parts[0].data().toString()),
+    header: decodeChannelHeader(parts[0].data()),
     body: JSON.parse(parts[1].data().toString())
   };
 }

@@ -715,8 +715,6 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
     });
     auto client = builder.route_client (serializers);
     fw::channel_request_call_t::metadata_map_t metadata{{"allocation-probe", "node-request"}};
-    const auto prepared_channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
-      fw::detail::prepare_request_channel ("m"));
     const auto encode_node = [&] {
         return sample_allocations ([&] {
             fw::runtime::messaging::client_call_codec_t codec;
@@ -727,8 +725,7 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
             const auto serializer = serializers.get<payload_t> ();
             (void) codec.encode_service_payload_parts (
               std::move (header), serializer.serialize (payload_t{}),
-              fw::detail::serializer_registry_access_t::request_plan (serializer),
-              prepared_channel);
+              fw::detail::serializer_registry_access_t::request_plan (serializer));
         });
     };
     const auto first_encode = encode_node ().total;

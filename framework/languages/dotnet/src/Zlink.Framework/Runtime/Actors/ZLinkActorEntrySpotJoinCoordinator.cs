@@ -246,6 +246,7 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         );
 
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            registration.TimeProvider,
             ZLinkMessageKind.Request,
             nodeRuntime.Name,
             ZLinkActorEntrySpotRoutePackets.JoinEntrySpotPacketName,

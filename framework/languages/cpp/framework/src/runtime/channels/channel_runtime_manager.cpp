@@ -184,10 +184,9 @@ void channel_runtime_manager_t::initialize_route_channels (
         }
         _state->route_channels.emplace (route_id, std::move (runtime));
         _state->publish_node_transports ([&] (auto &index) {
-            index.nodes.insert_or_assign (
-              route_id,
-              channel_runtime_state_t::node_transport_index_t::entry_t{
-                _state->route_channels.at (route_id), prepare_request_channel (route_id)});
+            index.nodes.insert_or_assign (route_id,
+                                          channel_runtime_state_t::node_transport_index_t::entry_t{
+                                            _state->route_channels.at (route_id)});
         });
     }
 }
@@ -204,10 +203,9 @@ void channel_runtime_manager_t::initialize_route_channels (
         _state->route_handlers[route_id] = std::move (initialized.handlers);
         _state->route_channels.emplace (route_id, std::move (initialized.runtime));
         _state->publish_node_transports ([&] (auto &index) {
-            index.nodes.insert_or_assign (
-              route_id,
-              channel_runtime_state_t::node_transport_index_t::entry_t{
-                _state->route_channels.at (route_id), prepare_request_channel (route_id)});
+            index.nodes.insert_or_assign (route_id,
+                                          channel_runtime_state_t::node_transport_index_t::entry_t{
+                                            _state->route_channels.at (route_id)});
         });
     }
 }

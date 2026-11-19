@@ -6,43 +6,50 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
-import java.nio.charset.StandardCharsets;
+import zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader;
+
 import java.util.List;
 
 final class ZLinkChannelFlowFrameTest {
     @Test
-    void tracingOnDecodeAcceptsOnlyCanonicalUuidV7() {
-        List<Message> valid = parts("018f2f1d-5d52-7b70-8f08-13fecf6f6abc", "INBOUND");
+    void readsFlowOriginFromChannelHeader() {
+        List<Message> parts = parts("018f2f1d-5d52-7b70-8f08-13fecf6f6abc", 1);
         try {
-            var decoded = ZLinkChannelFlowFrame.decode(valid);
+            var header = ZLinkChannelEnvelope.decodeDispatchHeader(parts, true);
+            var decoded = ZLinkChannelFlowFrame.fromEnvelopeHeader(header);
             assertEquals(ZLinkFlowOrigin.INBOUND, decoded.origin());
         } finally {
-            Message.closeAll(valid);
-        }
-
-        for (String invalid :
-                List.of(
-                        "018f2f1d-5d52-6b70-8f08-13fecf6f6abc",
-                        "018F2F1D-5D52-7B70-8F08-13FECF6F6ABC")) {
-            List<Message> parts = parts(invalid, "INBOUND");
-            try {
-                assertThrows(
-                        PayloadDecodeDispatchException.class,
-                        () -> ZLinkChannelFlowFrame.decode(parts));
-            } finally {
-                Message.closeAll(parts);
-            }
+            Message.closeAll(parts);
         }
     }
 
-    private static List<Message> parts(String flowId, String origin) {
-        return List.of(
-                Message.from("Packet".getBytes(StandardCharsets.UTF_8)),
-                Message.from(new byte[] {1}),
-                Message.from(
-                        ("__zlink.flow\n" + flowId + "\n" + origin)
-                                .getBytes(StandardCharsets.UTF_8)));
+    @Test
+    void rejectsUnspecifiedFlowOrigin() {
+        List<Message> parts = parts("018f2f1d-5d52-7b70-8f08-13fecf6f6abc", 0);
+        try {
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ZLinkChannelEnvelope.decodeDispatchHeader(parts, true));
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
+        } finally {
+            Message.closeAll(parts);
+        }
+    }
+
+    private static List<Message> parts(String flowId, int origin) {
+        byte[] header =
+                ChannelHeader.newBuilder()
+                        .setKindValue(1)
+                        .setFlowId(flowId)
+                        .setFlowOriginValue(origin)
+                        .build()
+                        .toByteArray();
+        return List.of(Message.from(header), Message.from(new byte[] {1}));
     }
 }

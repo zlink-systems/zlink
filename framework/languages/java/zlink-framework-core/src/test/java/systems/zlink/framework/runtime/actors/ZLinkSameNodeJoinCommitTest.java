@@ -62,8 +62,9 @@ final class ZLinkSameNodeJoinCommitTest {
         objects.addActorFactory(
                 "player", Player.class, Factory.class, factory -> factory.disableRelocation());
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, ZLinkSameNodeJoinBarrierTest.observeMeshJoins(records))) {
+                        ZLinkFrameworkRuntimeTestAccess.start(
+                                options, ZLinkSameNodeJoinBarrierTest.observeMeshJoins(records));
+                AutoCloseable releasePendingLeave = () -> sourceLeave.complete(null)) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);

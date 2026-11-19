@@ -45,6 +45,7 @@ internal sealed class ZLinkPublishCall(
         var bundle = runtime.GetPublisherBundle(channelName);
         var publisher = (IPubSocket)bundle.Socket;
         var header = ZLinkClientCallCodec.CreateEnvelope(
+            runtime.Registration.TimeProvider,
             ZLinkMessageKind.Publish,
             channelName,
             ZLinkMessageNameResolver.ResolveFromMessage(message),

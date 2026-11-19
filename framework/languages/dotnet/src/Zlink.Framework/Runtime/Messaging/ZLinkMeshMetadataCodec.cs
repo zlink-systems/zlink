@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using Zlink.Framework.Contracts.Streams;
 
@@ -28,6 +29,32 @@ internal static class ZLinkMeshMetadataCodec
     internal const int MaxEncodedSize = 1024;
 
     internal static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    internal static readonly IComparer<string> Utf8ByteComparer = Comparer<string>.Create(
+        CompareUtf8CodePoints
+    );
+
+    private static int CompareUtf8CodePoints(string left, string right)
+    {
+        var leftSpan = left.AsSpan();
+        var rightSpan = right.AsSpan();
+        while (!leftSpan.IsEmpty && !rightSpan.IsEmpty)
+        {
+            var leftStatus = Rune.DecodeFromUtf16(leftSpan, out var leftRune, out var leftConsumed);
+            var rightStatus = Rune.DecodeFromUtf16(
+                rightSpan,
+                out var rightRune,
+                out var rightConsumed
+            );
+            if (leftStatus != OperationStatus.Done || rightStatus != OperationStatus.Done)
+                throw new EncoderFallbackException("Metadata keys must contain valid Unicode.");
+            var comparison = leftRune.Value.CompareTo(rightRune.Value);
+            if (comparison != 0)
+                return comparison;
+            leftSpan = leftSpan[leftConsumed..];
+            rightSpan = rightSpan[rightConsumed..];
+        }
+        return leftSpan.Length.CompareTo(rightSpan.Length);
+    }
 
     private const byte Version = 1;
     private const int MaxEntries = 255;

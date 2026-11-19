@@ -5,6 +5,7 @@ const wire = require('../../packages/framework/dist/runtime/foundation/service-w
 const channel = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const payloadSlab = require('../../packages/framework/dist/contracts/Common/payload-slab');
 const { frameworkPair } = require('../../perf/request-backpressure.cjs');
+const { decodeChannelHeader } = require('./helpers/protobuf-channel-header');
 
 // Observe every Framework module, so moving normalization to another helper
 // still fails. The binding terminal is a separate, permitted owner.
@@ -134,7 +135,7 @@ test('custom and encoded payloads retain their existing byte representation', ()
   );
   assert.equal(calls, 1);
   assert.deepEqual(parts[1], bytes);
-  assert.equal(JSON.parse(parts[0].toString()).contentType, 'application/x-test');
+  assert.equal(decodeChannelHeader(parts[0]).contentType, 'application/x-test');
   const encoded = framework.ZLinkMessage.fromEncoded(framework.ZLinkEncodedPayload.from(bytes));
   const raw = channel.encodeChannelEnvelopeParts(1, 'codec', 'Packet', encoded);
   assert.deepEqual(raw[1], bytes);
