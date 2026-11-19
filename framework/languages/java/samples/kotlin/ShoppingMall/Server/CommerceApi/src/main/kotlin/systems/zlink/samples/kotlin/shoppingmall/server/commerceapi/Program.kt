@@ -142,8 +142,6 @@ private fun startObjectRouteReadiness(nodeId: String, meshes: ZLinkRouteMeshRunt
                     println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-b")
                     readiness.shutdown()
                 }
-            } catch (_: IllegalStateException) {
-                // The passive runtime view becomes available after Framework startup.
             } finally {
                 if (attempt >= 300) readiness.shutdown()
             }

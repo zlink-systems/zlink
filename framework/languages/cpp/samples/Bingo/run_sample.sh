@@ -371,6 +371,8 @@ wait_log_count "player-1 session disconnect" 1 \
   "bingo-lifecycle session-disconnect actor=player-1 destroy=false" "${SESSION_LOGS[@]}"
 wait_log_count "player-2 session disconnect" 1 \
   "bingo-lifecycle session-disconnect actor=player-2 destroy=false" "${SESSION_LOGS[@]}"
+wait_log_count "game and observer room close" 2 \
+  "bingo-lifecycle room-close spot=" "${PLAY_LOGS[@]}"
 wait_log_count "observer record report" 0 \
   "bingo-record reported actor=observer" "${PLAY_LOGS[@]}"
 wait_log_count "observer Entry Spot destroy completion" 0 \

@@ -12,6 +12,90 @@ namespace Zlink.Framework.UnitTests;
 public sealed partial class LocationRuntimeTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task YieldResumeRejectsLocationCutoffOrOwnerLeaseLoss(bool shared, bool leaseLoss)
+    {
+        var time = new ControllableTimeProvider();
+        var store = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time));
+        await using var locations = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { StoreOutageRetention = true },
+            store,
+            time
+        );
+        await using var services = new ServiceCollection()
+            .AddSingleton(locations)
+            .BuildServiceProvider();
+        var actor = new ZLinkActorRuntimeState("yield-location-loss", services: services);
+        actor.BindActorInstance(new Runtime.EntrySpotActorDispatchTests.ProbeActor(actor.ActorId));
+        locations.CaptureExecutions = () => new HashSet<object> { actor };
+        Assert.True(await locations.RenewOwnerLeaseOnceAsync());
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            applicationStartAllowed: item =>
+                item.ExecutionStatus != ZLinkObjectExecutionStatus.Paused,
+            sharedGate: shared
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completeIo = new TaskCompletionSource();
+        var resumed = false;
+        queue.TryPostApplicationWithAdmission(
+            async ct =>
+            {
+                entered.TrySetResult();
+                await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                    _ => new ValueTask(completeIo.Task),
+                    ct
+                );
+                resumed = true;
+            },
+            0,
+            0,
+            false,
+            out var item,
+            executionState: new OutageExecutionRecord(actor)
+        );
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            store.Stale = leaseLoss;
+            store.Fail = !leaseLoss;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            if (!leaseLoss)
+            {
+                var episode = locations.GetHealthSnapshot().StoreOutage!;
+                time.AdvanceMonotonic(
+                    episode.Lifetime - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                );
+                Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            }
+            Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
+            completeIo.TrySetResult();
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                item.Completion.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+            Assert.Contains("no longer owns execution", error.Message);
+            Assert.DoesNotContain("queue is closed", error.Message);
+            Assert.False(resumed);
+            await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            completeIo.TrySetResult();
+            store.Fail = false;
+            store.Stale = false;
+            await actor.InvalidateRuntimeGenerationAfterDispatchesAsync();
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task SecondOutage_AfterDiscard_CapturesNewIncarnation(bool providerStore)
@@ -119,6 +203,385 @@ public sealed partial class LocationRuntimeTests
         bool discard,
         int boundary
     ) => await VerifyRecoveryBoundary(mode, target, discard, boundary);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Recovery_PartialConfirmation_RejectsNewActorRequest_AndResumesAcceptedWork(
+        bool descriptorFirst
+    )
+    {
+        var time = new ControllableTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store);
+        var probe = new OutageExecutionProbe();
+        var services = new ServiceCollection().AddSingleton(probe);
+        ZLinkLocationOptions options = null!;
+        services.AddZLinkFramework(builder =>
+        {
+            builder.DisableImplicitHandlerAutoRegistration();
+            builder.UseTestLocationStore();
+            builder.AddRelocationStore(new InMemoryRelocationStore());
+            builder.UseTestTimeProvider(time);
+            options = builder.ConfigureLocations();
+            options.StoreOutageRetention = true;
+            var server = builder
+                .AddRouteMesh("outage-execution")
+                .Listen("tcp://127.0.0.1:0")
+                .Objects()
+                .Server();
+            server.AddSpotFactory<OutageExecutionSpot>(
+                "outage-execution",
+                factory =>
+                    factory
+                        .ExecutionMode(ZLinkUserSpotExecutionMode.PerActor)
+                        .RecreateOnRelocation()
+            );
+            server.AddEntrySpot<OutageExecutionEntry>();
+            server.AddActorFactory<OutageExecutionActor, OutageExecutionActorFactory>(
+                "outage-actor",
+                factory => factory.DisableRelocation()
+            );
+        });
+        services.AddSingleton<IZLinkLocationRepository>(flaky);
+        services.AddSingleton(sp => new ZLinkLocationRuntime(options, flaky, time));
+        await using var servicesProvider = services.BuildServiceProvider();
+        servicesProvider.GetRequiredService<ZLinkFrameworkRegistration>().Locations._repository =
+            flaky;
+        var runtime = servicesProvider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = servicesProvider.GetRequiredService<ZLinkLocationRuntime>();
+        var hosted = servicesProvider
+            .GetServices<IHostedService>()
+            .Single(service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? recovery = null;
+        try
+        {
+            await servicesProvider
+                .GetRequiredService<IZLinkSpotManager>()
+                .GetOrCreate("steady", "outage-execution")
+                .InMesh("outage-execution")
+                .Async();
+            await servicesProvider
+                .GetRequiredService<IZLinkActorManager>()
+                .Create("steady-actor", "outage-actor")
+                .InMesh("outage-execution")
+                .Async();
+            Assert.True(runtime.TryGetActorState("steady-actor", out var actor));
+
+            var instance = Assert.IsType<OutageExecutionActor>(actor.Actor);
+            var factoryCalls = probe.FactoryCalls;
+            var client = servicesProvider.GetRequiredService<IZLinkActorClient>();
+            Assert.Equal(
+                1,
+                (
+                    await client
+                        .RequestToActor(actor.ActorId, "before")
+                        .Timeout(TimeSpan.FromSeconds(1))
+                        .Async<OutageExecutionReply>()
+                ).Count
+            );
+            var messages = instance.Messages;
+            var running = actor
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        entered.TrySetResult();
+                        await release.Task;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var calls = 0;
+            var pending = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref calls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            flaky.OriginalLease = locations.OwnerToken.LeaseGeneration;
+            time.Advance(TimeSpan.FromSeconds(1));
+            flaky.Fail = true;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            var episode = locations.GetHealthSnapshot().StoreOutage!;
+            await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
+            flaky.HoldRecoveryCas = true;
+            flaky.HoldRecoveryDescriptor = true;
+            flaky.Fail = false;
+            var authorityApplied = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var applyAuthority = locations.ApplyRecoveredAuthorityAsync!;
+            locations.ApplyRecoveredAuthorityAsync = async (execution, snapshot) =>
+            {
+                await applyAuthority(execution, snapshot);
+                if (ReferenceEquals(execution, actor))
+                    authorityApplied.TrySetResult();
+            };
+            IReadOnlyDictionary<ZLinkMeshNodeDescriptorKey, Task<bool>> confirmations = null!;
+            var submitDescriptors = locations.SubmitRecoveryDescriptorsAsync!;
+            locations.SubmitRecoveryDescriptorsAsync = async ct =>
+                confirmations = await submitDescriptors(ct);
+            recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+            await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            release.TrySetResult();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            if (descriptorFirst)
+            {
+                flaky.ReleaseRecoveryDescriptor.TrySetResult();
+                Assert.All(
+                    await Task.WhenAll(confirmations.Values).WaitAsync(TimeSpan.FromSeconds(5)),
+                    Assert.True
+                );
+            }
+            else
+            {
+                flaky.ReleaseRecoveryCas.TrySetResult();
+                await authorityApplied.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            await actor._dispatchMailbox._queue.RunLifecycleAsync(
+                _ => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            Assert.True(time.GetElapsedTime(episode.LeaseOperationStartedAt) < episode.Lifetime);
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
+            Assert.False(pending.IsCompleted);
+            Assert.Equal(0, calls);
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                client
+                    .RequestToActor(actor.ActorId, "partial")
+                    .Timeout(TimeSpan.FromSeconds(1))
+                    .Async<OutageExecutionReply>()
+                    .AsTask()
+            );
+            Assert.True(error.Kind == ZLinkFrameworkErrorKind.ShuttingDown, error.ToString());
+            Assert.Equal(messages, instance.Messages);
+            Assert.False(pending.IsCompleted);
+            Assert.Equal(0, calls);
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            flaky.ReleaseRecoveryDescriptor.TrySetResult();
+            Assert.True(await recovery.WaitAsync(TimeSpan.FromSeconds(5)));
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, calls);
+            Assert.Equal(messages, instance.Messages);
+            // Post-recovery public request routing is tracked in https://github.com/zlink-systems/zlink/issues/4737.
+            Assert.Same(instance, actor.Actor);
+            Assert.Equal(factoryCalls, probe.FactoryCalls);
+        }
+        finally
+        {
+            release.TrySetResult();
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            flaky.ReleaseRecoveryDescriptor.TrySetResult();
+            if (recovery is not null)
+                await recovery;
+            flaky.Fail = false;
+            await runtime.ForceStopAsync(CancellationToken.None);
+            await locations.StopAsync();
+        }
+    }
+
+    [Theory]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor)]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide)]
+    public async Task Recovery_PartialConfirmation_RejectsNewActorDispatch_BeforeQueueAdmission(
+        ZLinkUserSpotExecutionMode mode
+    )
+    {
+        var time = new ControllableTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store);
+        var probe = new OutageExecutionProbe();
+        var services = new ServiceCollection().AddSingleton(probe);
+        ZLinkLocationOptions options = null!;
+        services.AddZLinkFramework(builder =>
+        {
+            builder.DisableImplicitHandlerAutoRegistration();
+            builder.UseTestLocationStore();
+            builder.AddRelocationStore(new InMemoryRelocationStore());
+            builder.UseTestTimeProvider(time);
+            options = builder.ConfigureLocations();
+            options.StoreOutageRetention = true;
+            var server = builder
+                .AddRouteMesh("outage-execution")
+                .Listen("tcp://127.0.0.1:0")
+                .Objects()
+                .Server();
+            server.AddSpotFactory<OutageExecutionSpot>(
+                "outage-execution",
+                factory => factory.ExecutionMode(mode).RecreateOnRelocation()
+            );
+            server.AddEntrySpot<OutageExecutionEntry>();
+            server.AddActorFactory<OutageExecutionActor, OutageExecutionActorFactory>(
+                "outage-actor",
+                factory => factory.DisableRelocation()
+            );
+        });
+        services.AddSingleton<IZLinkLocationRepository>(flaky);
+        services.AddSingleton(sp => new ZLinkLocationRuntime(options, flaky, time));
+        await using var servicesProvider = services.BuildServiceProvider();
+        servicesProvider.GetRequiredService<ZLinkFrameworkRegistration>().Locations._repository =
+            flaky;
+        var runtime = servicesProvider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = servicesProvider.GetRequiredService<ZLinkLocationRuntime>();
+        var hosted = servicesProvider
+            .GetServices<IHostedService>()
+            .Single(service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? recovery = null;
+        try
+        {
+            await servicesProvider
+                .GetRequiredService<IZLinkSpotManager>()
+                .GetOrCreate("steady", "outage-execution")
+                .InMesh("outage-execution")
+                .Async();
+            var spot = Assert.Single(runtime.GetSpotNodeRuntime("outage-execution").Spots);
+            await servicesProvider
+                .GetRequiredService<IZLinkActorManager>()
+                .Create("steady-actor", "outage-actor")
+                .InMesh("outage-execution")
+                .Async();
+            Assert.True(runtime.TryGetActorState("steady-actor", out var actor));
+            var instance = Assert.IsType<OutageExecutionActor>(actor.Actor);
+            var factoryCalls = probe.FactoryCalls;
+            var client = servicesProvider.GetRequiredService<IZLinkActorClient>();
+            Assert.Equal(
+                1,
+                (
+                    await client
+                        .RequestToActor(actor.ActorId, "before")
+                        .Timeout(TimeSpan.FromSeconds(1))
+                        .Async<OutageExecutionReply>()
+                ).Count
+            );
+            var messages = instance.Messages;
+            if (mode == ZLinkUserSpotExecutionMode.SpotWide)
+                actor.JoinSpot(spot);
+            var running = actor
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        entered.TrySetResult();
+                        await release.Task;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var calls = 0;
+            var pending = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref calls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            flaky.OriginalLease = locations.OwnerToken.LeaseGeneration;
+            time.Advance(TimeSpan.FromSeconds(1));
+            flaky.Fail = true;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            var episode = locations.GetHealthSnapshot().StoreOutage!;
+            await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
+            flaky.HoldRecoveryCas = true;
+            flaky.HoldRecoveryDescriptor = true;
+            flaky.Fail = false;
+            var authorityApplied = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var applyAuthority = locations.ApplyRecoveredAuthorityAsync!;
+            locations.ApplyRecoveredAuthorityAsync = async (execution, snapshot) =>
+            {
+                await applyAuthority(execution, snapshot);
+                if (ReferenceEquals(execution, actor))
+                    authorityApplied.TrySetResult();
+            };
+            IReadOnlyDictionary<ZLinkMeshNodeDescriptorKey, Task<bool>> confirmations = null!;
+            var submitDescriptors = locations.SubmitRecoveryDescriptorsAsync!;
+            locations.SubmitRecoveryDescriptorsAsync = async ct =>
+                confirmations = await submitDescriptors(ct);
+            recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+            await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            release.TrySetResult();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            await authorityApplied.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await actor._dispatchMailbox._queue.RunLifecycleAsync(
+                _ => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            Assert.True(time.GetElapsedTime(episode.LeaseOperationStartedAt) < episode.Lifetime);
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
+            Assert.False(pending.IsCompleted);
+            Assert.Equal(0, calls);
+            var mailbox = actor._dispatchMailbox._queue;
+            var pendingCount = mailbox.ApplicationPendingCount;
+            var rejectedCalls = 0;
+            var rejected = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref rejectedCalls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            Assert.True(rejected.IsCompleted);
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => rejected);
+            Assert.True(error.Kind == ZLinkFrameworkErrorKind.ShuttingDown, error.ToString());
+            Assert.Equal(0, rejectedCalls);
+            Assert.Equal(pendingCount, mailbox.ApplicationPendingCount);
+            Assert.Equal(messages, instance.Messages);
+            Assert.False(pending.IsCompleted);
+            Assert.Equal(0, calls);
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            flaky.ReleaseRecoveryDescriptor.TrySetResult();
+            Assert.True(await recovery.WaitAsync(TimeSpan.FromSeconds(5)));
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, calls);
+            Assert.Equal(0, rejectedCalls);
+            Assert.Equal(messages, instance.Messages);
+            await actor.ExecuteDispatchAsync(
+                _ =>
+                {
+                    Interlocked.Increment(ref calls);
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            );
+            Assert.Equal(2, calls);
+            Assert.Same(instance, actor.Actor);
+            Assert.Equal(factoryCalls, probe.FactoryCalls);
+        }
+        finally
+        {
+            release.TrySetResult();
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            flaky.ReleaseRecoveryDescriptor.TrySetResult();
+            if (recovery is not null)
+                await recovery;
+            flaky.Fail = false;
+            await runtime.ForceStopAsync(CancellationToken.None);
+            await locations.StopAsync();
+        }
+    }
 
     private static async Task VerifyRecoveryBoundary(
         ZLinkUserSpotExecutionMode mode,
@@ -711,6 +1174,422 @@ public sealed partial class LocationRuntimeTests
         Assert.True(runtime.IsOwnerAdmissionOpen);
         Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
         Assert.Equal(episode.Lifetime, runtime.GetHealthSnapshot().StoreOutage!.Lifetime);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoreOutageRecovery_ExpiredLeaseBeforeReclaim_RetainsAndPreserves(
+        bool providerStore
+    )
+    {
+        var time = new ControllableTimeProvider();
+        IZLinkLocationRepository store = providerStore
+            ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+            : new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store);
+        var probe = new OutageExecutionProbe();
+        var services = new ServiceCollection().AddSingleton(probe);
+        ZLinkLocationOptions options = null!;
+        services.AddZLinkFramework(builder =>
+        {
+            builder.DisableImplicitHandlerAutoRegistration();
+            builder.UseTestLocationStore();
+            builder.AddRelocationStore(new InMemoryRelocationStore());
+            builder.UseTestTimeProvider(time);
+            options = builder.ConfigureLocations();
+            options.StoreOutageRetention = true;
+            var server = builder
+                .AddRouteMesh("outage-execution")
+                .Listen("tcp://127.0.0.1:0")
+                .Objects()
+                .Server();
+            server.AddSpotFactory<OutageExecutionSpot>(
+                "outage-execution",
+                factory =>
+                    factory
+                        .ExecutionMode(ZLinkUserSpotExecutionMode.PerActor)
+                        .RecreateOnRelocation()
+            );
+            server.AddEntrySpot<OutageExecutionEntry>();
+            server.AddActorFactory<OutageExecutionActor, OutageExecutionActorFactory>(
+                "outage-actor",
+                factory => factory.DisableRelocation()
+            );
+        });
+        services.AddSingleton<IZLinkLocationRepository>(flaky);
+        services.AddSingleton(sp => new ZLinkLocationRuntime(options, flaky, time));
+        await using var servicesProvider = services.BuildServiceProvider();
+        servicesProvider.GetRequiredService<ZLinkFrameworkRegistration>().Locations._repository =
+            flaky;
+        var runtime = servicesProvider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = servicesProvider.GetRequiredService<ZLinkLocationRuntime>();
+        var hosted = servicesProvider
+            .GetServices<IHostedService>()
+            .Single(service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? recovery = null;
+        try
+        {
+            await servicesProvider
+                .GetRequiredService<IZLinkSpotManager>()
+                .GetOrCreate("steady", "outage-execution")
+                .InMesh("outage-execution")
+                .Async();
+            var spot = Assert.Single(runtime.GetSpotNodeRuntime("outage-execution").Spots);
+            await servicesProvider
+                .GetRequiredService<IZLinkActorManager>()
+                .Create("steady-actor", "outage-actor")
+                .InMesh("outage-execution")
+                .Async();
+            Assert.True(runtime.TryGetActorState("steady-actor", out var actor));
+            var actorInstance = actor.Actor;
+            var spotInstance = spot.Spot;
+            var factoryCalls = probe.FactoryCalls;
+            var originalOwner = locations.OwnerToken;
+            var keys = new[]
+            {
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey("steady-actor"),
+                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("steady"),
+            };
+            var authorities = new List<ZLinkAuthoritySnapshot>();
+            foreach (var key in keys)
+                authorities.Add(
+                    Assert
+                        .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(key))
+                        .Snapshot
+                );
+            var discarded = 0;
+            locations.ExecutionsDiscarded += _ => discarded++;
+            var running = actor
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        entered.TrySetResult();
+                        await release.Task;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var calls = 0;
+            var pending = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref calls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            flaky.OriginalLease = originalOwner.LeaseGeneration;
+            time.Advance(TimeSpan.FromSeconds(1));
+            flaky.Fail = true;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            var episode = locations.GetHealthSnapshot().StoreOutage!;
+            await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            flaky.Fail = false;
+            time.Advance(
+                TimeSpan.FromSeconds(31) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+            );
+            var claims = flaky.Claims;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            Assert.Equal(0, discarded);
+            Assert.False(locations.IsOwnerAdmissionOpen);
+            Assert.Equal(claims, flaky.Claims);
+            Assert.Equal(originalOwner, locations.OwnerToken);
+            Assert.NotEqual(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
+            Assert.NotEqual(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
+            Assert.Same(actorInstance, actor.Actor);
+            Assert.Same(spotInstance, spot.Spot);
+            Assert.Equal(episode.ObservedAt, locations.GetHealthSnapshot().StoreOutage!.ObservedAt);
+            Assert.Equal(
+                episode.LeaseOperationStartedAt,
+                locations.GetHealthSnapshot().StoreOutage!.LeaseOperationStartedAt
+            );
+            Assert.Equal(episode.Lifetime, locations.GetHealthSnapshot().StoreOutage!.Lifetime);
+            time.Advance(
+                TimeSpan.FromSeconds(35) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+            );
+            flaky.HoldRecoveryCas = true;
+            flaky.HoldRecoveryDescriptor = true;
+            recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+            await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, spot.ExecutionStatus);
+            var rejectedCalls = 0;
+            var pendingCount = actor._dispatchMailbox._queue.ApplicationPendingCount;
+            var rejected = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref rejectedCalls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            Assert.True(rejected.IsCompleted);
+            var rejection = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => rejected);
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, rejection.Kind);
+            Assert.Equal(0, rejectedCalls);
+            Assert.Equal(pendingCount, actor._dispatchMailbox._queue.ApplicationPendingCount);
+            release.TrySetResult();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            await actor._dispatchMailbox._queue.RunLifecycleAsync(
+                _ => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            Assert.False(pending.IsCompleted);
+            Assert.Equal(0, calls);
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(pending.IsCompleted);
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, spot.ExecutionStatus);
+            flaky.ReleaseRecoveryDescriptor.TrySetResult();
+            Assert.True(await recovery.WaitAsync(TimeSpan.FromSeconds(5)));
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, calls);
+            Assert.True(locations.IsOwnerAdmissionOpen);
+            Assert.Same(actorInstance, actor.Actor);
+            Assert.Same(spotInstance, spot.Spot);
+            Assert.Equal(factoryCalls, probe.FactoryCalls);
+            Assert.NotEqual(originalOwner.LeaseGeneration, locations.OwnerToken.LeaseGeneration);
+            Assert.Equal(2, flaky.ReplacementWrites);
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var current = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await store.ReadAuthorityAsync(keys[index])
+                    )
+                    .Snapshot;
+                Assert.Equal(authorities[index].ObjectGeneration, current.ObjectGeneration);
+                Assert.Equal(
+                    authorities[index].AuthorityOwnerGeneration,
+                    current.AuthorityOwnerGeneration
+                );
+                Assert.NotEqual(
+                    authorities[index].OwnerLeaseGeneration,
+                    current.OwnerLeaseGeneration
+                );
+            }
+            Assert.Equal(ZLinkObjectExecutionStatus.Allowed, actor.ExecutionStatus);
+            Assert.Equal(ZLinkObjectExecutionStatus.Allowed, spot.ExecutionStatus);
+            Assert.Null(locations.GetHealthSnapshot().StoreOutage);
+            Assert.Equal(0, discarded);
+        }
+        finally
+        {
+            release.TrySetResult();
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            flaky.ReleaseRecoveryDescriptor.TrySetResult();
+            if (recovery is not null)
+                await recovery;
+            flaky.Fail = false;
+            await runtime.ForceStopAsync(CancellationToken.None);
+            await locations.StopAsync();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoreOutageRecovery_NotYet_DiscardsAtOriginalT(bool providerStore)
+    {
+        var time = new ControllableTimeProvider();
+        IZLinkLocationRepository store = providerStore
+            ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+            : new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store);
+        var probe = new OutageExecutionProbe();
+        var services = new ServiceCollection().AddSingleton(probe);
+        ZLinkLocationOptions options = null!;
+        services.AddZLinkFramework(builder =>
+        {
+            builder.DisableImplicitHandlerAutoRegistration();
+            builder.UseTestLocationStore();
+            builder.AddRelocationStore(new InMemoryRelocationStore());
+            builder.UseTestTimeProvider(time);
+            options = builder.ConfigureLocations();
+            options.StoreOutageRetention = true;
+            var server = builder
+                .AddRouteMesh("outage-execution")
+                .Listen("tcp://127.0.0.1:0")
+                .Objects()
+                .Server();
+            server.AddSpotFactory<OutageExecutionSpot>(
+                "outage-execution",
+                factory =>
+                    factory
+                        .ExecutionMode(ZLinkUserSpotExecutionMode.PerActor)
+                        .RecreateOnRelocation()
+            );
+            server.AddEntrySpot<OutageExecutionEntry>();
+            server.AddActorFactory<OutageExecutionActor, OutageExecutionActorFactory>(
+                "outage-actor",
+                factory => factory.DisableRelocation()
+            );
+        });
+        services.AddSingleton<IZLinkLocationRepository>(flaky);
+        services.AddSingleton(sp => new ZLinkLocationRuntime(options, flaky, time));
+        await using var servicesProvider = services.BuildServiceProvider();
+        servicesProvider.GetRequiredService<ZLinkFrameworkRegistration>().Locations._repository =
+            flaky;
+        var runtime = servicesProvider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = servicesProvider.GetRequiredService<ZLinkLocationRuntime>();
+        var hosted = servicesProvider
+            .GetServices<IHostedService>()
+            .Single(service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? recovery = null;
+        try
+        {
+            await servicesProvider
+                .GetRequiredService<IZLinkSpotManager>()
+                .GetOrCreate("steady", "outage-execution")
+                .InMesh("outage-execution")
+                .Async();
+            var spot = Assert.Single(runtime.GetSpotNodeRuntime("outage-execution").Spots);
+            await servicesProvider
+                .GetRequiredService<IZLinkActorManager>()
+                .Create("steady-actor", "outage-actor")
+                .InMesh("outage-execution")
+                .Async();
+            Assert.True(runtime.TryGetActorState("steady-actor", out var actor));
+            var actorInstance = actor.Actor;
+            var spotInstance = spot.Spot;
+            var factoryCalls = probe.FactoryCalls;
+            var originalOwner = locations.OwnerToken;
+            var discarded = 0;
+            locations.ExecutionsDiscarded += _ => discarded++;
+            var running = actor
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        entered.TrySetResult();
+                        await release.Task;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var calls = 0;
+            var pending = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref calls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            flaky.OriginalLease = originalOwner.LeaseGeneration;
+            time.Advance(TimeSpan.FromSeconds(1));
+            flaky.Fail = true;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            var episode = locations.GetHealthSnapshot().StoreOutage!;
+            await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            flaky.Fail = false;
+            time.Advance(
+                TimeSpan.FromSeconds(31) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+            );
+            var claims = flaky.Claims;
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            Assert.Equal(0, discarded);
+            Assert.False(locations.IsOwnerAdmissionOpen);
+            Assert.Equal(claims, flaky.Claims);
+            Assert.Equal(originalOwner, locations.OwnerToken);
+            Assert.NotEqual(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
+            Assert.NotEqual(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
+            Assert.Same(actorInstance, actor.Actor);
+            Assert.Same(spotInstance, spot.Spot);
+            Assert.Equal(episode.ObservedAt, locations.GetHealthSnapshot().StoreOutage!.ObservedAt);
+            Assert.Equal(
+                episode.LeaseOperationStartedAt,
+                locations.GetHealthSnapshot().StoreOutage!.LeaseOperationStartedAt
+            );
+            Assert.Equal(episode.Lifetime, locations.GetHealthSnapshot().StoreOutage!.Lifetime);
+            time.Advance(
+                TimeSpan.FromSeconds(35) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+            );
+            flaky.HoldRecoveryCas = true;
+            flaky.HoldRecoveryDescriptor = true;
+            recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+            await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await flaky.SecondReplacementWriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
+            Assert.Equal(ZLinkObjectExecutionStatus.Paused, spot.ExecutionStatus);
+            var rejectedCalls = 0;
+            var pendingCount = actor._dispatchMailbox._queue.ApplicationPendingCount;
+            var rejected = actor
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref rejectedCalls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            Assert.True(rejected.IsCompleted);
+            var rejection = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => rejected);
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, rejection.Kind);
+            Assert.Equal(0, rejectedCalls);
+            Assert.Equal(pendingCount, actor._dispatchMailbox._queue.ApplicationPendingCount);
+            release.TrySetResult();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            await actor._dispatchMailbox._queue.RunLifecycleAsync(
+                _ => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            Assert.False(pending.IsCompleted);
+            time.Advance(
+                episode.Lifetime
+                    - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                    - TimeSpan.FromTicks(1)
+            );
+            Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            Assert.Equal(0, discarded);
+            Assert.False(pending.IsCompleted);
+            time.Advance(TimeSpan.FromTicks(1));
+            Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
+            Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                pending.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            flaky.ReleaseRecoveryDescriptor.TrySetResult();
+            await recovery.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(await locations.RenewOwnerLeaseOnceAsync());
+            Assert.Equal(0, calls);
+            Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
+            Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
+            Assert.Equal(factoryCalls, probe.FactoryCalls);
+            Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+        }
+        finally
+        {
+            release.TrySetResult();
+            flaky.ReleaseRecoveryCas.TrySetResult();
+            flaky.ReleaseRecoveryDescriptor.TrySetResult();
+            if (recovery is not null)
+                await recovery;
+            flaky.Fail = false;
+            await runtime.ForceStopAsync(CancellationToken.None);
+            await locations.StopAsync();
+        }
     }
 
     [Theory]
@@ -1605,17 +2484,41 @@ public sealed partial class LocationRuntimeTests
                 if (scenario == 2)
                 {
                     flaky.RejectRecoveryDescriptor = true;
-                    time.Advance(options.OwnerLeaseTtl);
+                    time.Advance(
+                        TimeSpan.FromSeconds(31)
+                            - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                    );
+                    flaky.Fail = false;
+                    Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+                    Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+                    Assert.Equal(0, continued);
+                    Assert.All(pending, item => Assert.False(item.IsCompleted));
+                    Assert.NotEqual(
+                        ZLinkObjectExecutionStatus.OwnershipLost,
+                        actor.ExecutionStatus
+                    );
+                    Assert.NotEqual(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
+                    time.Advance(
+                        TimeSpan.FromSeconds(35)
+                            - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                    );
+                    await locations.RenewOwnerLeaseOnceAsync();
+                    await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.NotNull(flaky.RecoveryDescriptor);
                 }
-                if (scenario == 3)
+                else if (scenario == 3)
                 {
+                    time.Advance(options.OwnerLeaseTtl);
                     await store.ReleaseOwnerLeaseAsync(owner);
                     Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
                         await store.ClaimOwnerLeaseAsync(owner.OwnerId, options.OwnerLeaseTtl)
                     );
                 }
-                flaky.Fail = false;
-                await locations.RenewOwnerLeaseOnceAsync();
+                if (scenario != 2)
+                {
+                    flaky.Fail = false;
+                    await locations.RenewOwnerLeaseOnceAsync();
+                }
             }
             reply.TrySetResult();
             await Task.WhenAll(runningTasks);
@@ -1695,8 +2598,9 @@ public sealed partial class LocationRuntimeTests
         );
         await item.Completion;
         Assert.Equal(1, handlers);
-        Assert.Equal(useRecord ? 0 : 1, delegateCalls);
-        Assert.Equal(useRecord ? 1 : 0, record.Checks);
+        // new-operation admission and the start of accepted work each read the same execution-status decider once; recovery can begin between the two, so the start check is required.
+        Assert.Equal(useRecord ? 0 : 2, delegateCalls);
+        Assert.Equal(useRecord ? 2 : 0, record.Checks);
         Assert.Equal(0, time.Reads);
         // The counter also observes the admission path that must still read time.
         Assert.True(locations.IsOwnerAdmissionOpen);
@@ -2133,6 +3037,8 @@ public sealed partial class LocationRuntimeTests
         internal TaskCompletionSource RecoveryCasHeld { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int ReplacementWrites;
+        internal TaskCompletionSource SecondReplacementWriteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal System.Collections.Concurrent.ConcurrentQueue<string> RecoveryOrder { get; } =
             new();
         internal TaskCompletionSource RecoveryDescriptorStarted { get; } =
@@ -2212,7 +3118,8 @@ public sealed partial class LocationRuntimeTests
             if (recovery)
             {
                 RecoveryOrder.Enqueue("cas");
-                Interlocked.Increment(ref ReplacementWrites);
+                if (Interlocked.Increment(ref ReplacementWrites) == 2)
+                    SecondReplacementWriteStarted.TrySetResult();
                 RecoveryCasStarted.TrySetResult();
             }
             if (recovery && FailRecoveryCasBeforeApplyOnce)

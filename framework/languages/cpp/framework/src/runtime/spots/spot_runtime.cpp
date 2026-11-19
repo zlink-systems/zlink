@@ -2283,6 +2283,12 @@ bool spot_context_state_t::admit (bool claim,
       [this, claim, retained_record] { return admit_core (claim, retained_record); });
 }
 
+framework_exception_t spot_context_state_t::target_not_found (std::string message)
+{
+    return detail::make_framework_origin_exception (framework_error_kind_t::not_found,
+                                                    std::move (message));
+}
+
 framework_exception_t spot_context_state_t::admission_error () const
 {
     return state_sync ([this] {
@@ -2295,8 +2301,7 @@ framework_exception_t spot_context_state_t::admission_error () const
                                                             "Spot host is shutting down");
         if (closed == spot_close_reason_t::explicit_close
             || closed == spot_close_reason_t::idle_evicted)
-            return detail::make_framework_origin_exception (framework_error_kind_t::not_found,
-                                                            "Spot incarnation was closed");
+            return target_not_found ("Spot incarnation was closed");
         return detail::make_framework_origin_exception (framework_error_kind_t::rejected,
                                                         "Spot admission is sealed");
     });
@@ -7998,7 +8003,7 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
         return std::nullopt;
     const auto handoff_id = runtime::protocol::actor_join_handoff_id (prepare.relocation);
     const auto admission = _state->actor_transfer_coordinator->admission (handoff_id);
-    if (!admission || !admission->canonical_user_spot_join)
+    if (!admission || !admission->canonical_application_join)
         return std::nullopt;
     struct validation_projection_t
     {
@@ -8026,8 +8031,10 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
                                       ? _state->snapshot.routing_id->to_bytes ()
                                       : std::vector<std::uint8_t>{};
             result.matches =
-              !local_node.empty () && !target.is_entry_spot () && !target.is_instance_spot ()
-              && target.object_generation == admission->target_spot_generation
+              !local_node.empty () && !target.is_instance_spot ()
+              && (target.is_entry_spot () ? prepare.target.target_node_generation
+                                          : target.object_generation)
+                   == admission->target_spot_generation
               && prepare.object.object_id == admission->source_actor.actor_id ().value ()
               && prepare.object.object_generation == admission->source_actor.object_generation ()
               && prepare.object.expected_authority_owner_generation
@@ -9468,7 +9475,7 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
           const auto found_admission =
             target_state->actor_admissions.find (factory->second.actor_type);
           if (found_admission != target_state->actor_admissions.end ()
-              && found_admission->second.join) {
+              && (target_state->is_entry_spot () || found_admission->second.join)) {
               admission = found_admission->second;
           }
           admission_timeout =
@@ -9537,7 +9544,9 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
        completion_operation_id_high, completion_operation_id_low] {
           auto &target = *target_state;
           auto &response = outcome->response;
-          response = admission.join (target.spot_instance.get (), actor_id, request, *serializers);
+          response = target.is_entry_spot () ? spot_actor_join_result_t{true, {}}
+                                             : admission.join (target.spot_instance.get (),
+                                                               actor_id, request, *serializers);
           if (response.accepted
               && !state->actor_transfer_coordinator->try_add_admission (
                 transfer_id,
@@ -9546,9 +9555,8 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
                   .source_actor = store_actor,
                   .source_spot_id = source_spot_id,
                   .target_spot_id = target_spot_id,
-                  .canonical_user_spot_join = actor_type_from_authority_only
-                                              && !target.is_entry_spot ()
-                                              && !target.is_instance_spot (),
+                  .canonical_application_join =
+                    actor_type_from_authority_only && !target.is_instance_spot (),
                   .deadline = std::chrono::steady_clock::now () + admission_timeout,
                   .completion_operation_id_high = completion_operation_id_high,
                   .completion_operation_id_low = completion_operation_id_low,
@@ -14383,12 +14391,14 @@ task_t<void> run_actor_handler_turn_task (
   std::string actor_key)
 {
     runtime::actor_execution_scope_t actor_scope (std::move (actor_key), target.context->spot_id);
+    target.context->enter_callback ();
     try {
         outcome->emplace (co_await work (*target.actor, cancellation));
     }
     catch (...) {
         outcome->emplace (detail::current_exception_result<bool> ());
     }
+    target.context->leave_callback ();
     co_return;
 }
 
@@ -14443,16 +14453,39 @@ task_t<result_t<bool>> spot_node_runtime_t::run_actor_turn (
                                            "Actor handler-turn target is not registered");
 
     const auto actor_context = target->context;
+    if (!actor_context->admit ())
+        co_return detail::result_access_t::failure<bool> (actor_context->admission_error ());
+    const auto executor = actor_context->spot_serial_executor;
+    if (!executor)
+        co_return result_t<bool>::failure (framework_error_kind_t::not_found,
+                                           "Actor handler-turn executor is unavailable");
+    const auto key = actor_key (target->actor_ref);
     auto outcome = std::make_shared<std::optional<result_t<bool>>> ();
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
+    const auto submitted = executor->execute_actor_lifecycle (
+      key, "actor-handler-turn",
+      [target = std::move (*target), work = std::move (work), cancellation, outcome, completion,
+       key] (auto complete) mutable {
+          callback_context_scope_t callback_scope (target.context.get ());
+          auto running = std::make_shared<task_t<void>> (run_actor_handler_turn_task (
+            std::move (target), std::move (work), cancellation, outcome, std::move (key)));
+          detail::observe_task_completion (
+            *running, [running, complete, completion] (const result_t<void> &result) mutable {
+                complete ([result, completion] {
+                    completion->complete (result);
+                    result.value ();
+                });
+            });
+      },
+      [completion] {
+          completion->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                         "Actor handler-turn gate is closed"));
+      });
+    if (!submitted)
+        co_return result_t<bool>::failure (framework_error_kind_t::shutting_down,
+                                           "Actor handler-turn queue is closed");
     try {
-        co_await actor_context->run_serial_task (
-          "actor-handler-turn",
-          [target = std::move (*target), work = std::move (work), cancellation,
-           outcome] () mutable -> task_t<void> {
-              auto key = actor_key (target.actor_ref);
-              return run_actor_handler_turn_task (std::move (target), std::move (work),
-                                                  cancellation, outcome, std::move (key));
-          });
+        co_await completion->task ();
     }
     catch (...) {
         co_return detail::current_exception_result<bool> ();
@@ -15575,7 +15608,7 @@ spot_node_runtime_t::resolve_spot_generation (const zlink::routing_id_t &target_
 }
 
 result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
-  const runtime::protocol::spot_route_fence_t &fence) const
+  const runtime::protocol::spot_route_fence_t &fence, bool entry) const
 {
     if (fence.spot_id.empty () || fence.object_generation == 0
         || fence.target_node_routing_id.empty () || fence.target_node_generation == 0
@@ -15590,6 +15623,22 @@ result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
         return result_t<std::uint64_t>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor Join target Spot Authority Store is unavailable");
+    }
+    if (entry) {
+        const auto entry_id = resolve_entry_spot_id ();
+        const auto node = native_node ();
+        const auto owner =
+          services->get_required<runtime::location_runtime_t> ().current_owner_token ();
+        if (!entry_id || *entry_id != fence.spot_id || !node || !owner
+            || node->status ().routing_id ().to_bytes () != fence.target_node_routing_id
+            || node->status ().lifecycle_generation () != fence.target_node_generation
+            || fence.object_generation != fence.target_node_generation
+            || fence.authority_owner_generation != fence.target_node_generation
+            || owner->lease_generation <= 0
+            || static_cast<std::uint64_t> (owner->lease_generation) != fence.owner_lease_generation)
+            return result_t<std::uint64_t>::failure (framework_error_kind_t::unavailable,
+                                                     "Entry Spot descriptor fence is unavailable");
+        return result_t<std::uint64_t>::success (fence.object_generation);
     }
     runtime::live_location_reader_t *store = nullptr;
     try {

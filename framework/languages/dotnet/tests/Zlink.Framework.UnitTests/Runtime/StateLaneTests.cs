@@ -6,8 +6,257 @@ namespace Zlink.Framework.UnitTests;
 /// Specifies <see cref="ZLinkStateLane"/>, the ownership primitive every converted state component
 /// relies on. Each test states one guarantee a component author is allowed to assume.
 /// </summary>
-public sealed class StateLaneTests
+public sealed class StateLaneTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task InlineAndQueuedCancellationExceptions_KeepTheSameFaultedResult()
+    {
+        await using var lane = new ZLinkStateLane();
+        using var cancellation = new CancellationTokenSource();
+        var failure = new OperationCanceledException(cancellation.Token);
+        var inline = lane.RunAsync<int>(() => throw failure);
+        Assert.True(inline.IsFaulted);
+        Assert.Same(
+            failure,
+            await Assert.ThrowsAsync<OperationCanceledException>(async () => await inline)
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var queued = lane.RunAsync<int>(() => throw failure);
+        release.SetResult();
+        await held;
+        Assert.Same(
+            failure,
+            await Assert.ThrowsAsync<OperationCanceledException>(async () => await queued)
+        );
+        Assert.True(queued.IsFaulted);
+    }
+
+    [Fact]
+    public async Task MixedQueuedPostsAndResults_PreserveFifoAndSelfPostDeferral()
+    {
+        await using var lane = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new List<int>();
+        var first = lane.RunAsync(async () =>
+        {
+            order.Add(0);
+            entered.SetResult();
+            await release.Task;
+            order.Add(1);
+        });
+        await entered.Task;
+        Assert.True(
+            lane.TryPost(() =>
+            {
+                Assert.Same(lane, ZLinkStateLane.Current);
+                order.Add(2);
+                Assert.True(lane.TryPost(() => order.Add(5)));
+                Assert.Throws<InvalidOperationException>(() => lane.RunAsync(static () => 0));
+            })
+        );
+        var result = lane.RunAsync(() =>
+        {
+            order.Add(3);
+            return 42;
+        });
+        Assert.True(lane.TryPost(() => order.Add(4)));
+        Assert.Equal(new[] { 0 }, order);
+        release.SetResult();
+        await first;
+        Assert.Equal(42, await result);
+        await lane.DisposeAsync();
+        Assert.Equal(Enumerable.Range(0, 6), order);
+        Assert.False(lane.TryPost(static () => { }));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task IdlePost_RestoresContextAndContinuesAfterFailure(bool suppressed, bool fail)
+    {
+        await using var lane = new ZLinkStateLane();
+        var ambient = new AsyncLocal<object?> { Value = new object() };
+        var value = ambient.Value;
+        var suppression = suppressed ? ExecutionContext.SuppressFlow() : default;
+        try
+        {
+            var context = ExecutionContext.Capture();
+            ZLinkStateLane? observedLane = null;
+            object? observedAmbient = null;
+            Assert.True(
+                lane.TryPost(() =>
+                {
+                    observedLane = ZLinkStateLane.Current;
+                    observedAmbient = ambient.Value;
+                    ambient.Value = new object();
+                    if (fail)
+                        throw new InvalidOperationException("posted failure");
+                })
+            );
+            Assert.Same(lane, observedLane);
+            Assert.Same(value, observedAmbient);
+            Assert.Same(value, ambient.Value);
+            Assert.Same(context, ExecutionContext.Capture());
+            Assert.Equal(suppressed, ExecutionContext.IsFlowSuppressed());
+            Assert.Null(ZLinkStateLane.Current);
+        }
+        finally
+        {
+            if (suppressed)
+                suppression.Undo();
+        }
+        Assert.Equal(42, await lane.RunAsync(static () => 42));
+    }
+
+    [Fact]
+    public async Task IdlePost_UsesTheSameTurnStorageAsAnInlineResult()
+    {
+        await using var lane = new ZLinkStateLane();
+        var value = 0;
+        Action<int> post = next => value = next;
+        Func<int, int> result = next => value = next;
+        for (var index = 0; index < 256; index++)
+        {
+            lane.TryPost(post, index);
+            _ = lane.RunAsync(result, index).GetAwaiter().GetResult();
+        }
+        var measured = PerCallAllocation.MinWindowPair(
+            next => lane.TryPost(post, next),
+            next => lane.RunAsync(result, next).GetAwaiter().GetResult(),
+            1024
+        );
+        Assert.Equal(1023, value);
+        output.WriteLine(
+            $"posted={measured.First / 1024.0} B/turn, result={measured.Second / 1024.0} B/turn"
+        );
+        Assert.True(
+            measured.First <= measured.Second,
+            $"posted={measured.First / 1024.0} B/turn, result={measured.Second / 1024.0} B/turn"
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SynchronousPost_RestoresContextAndDefersItsOwnFollowup(bool suppress)
+    {
+        await using var lane = new ZLinkStateLane();
+        var ambient = new AsyncLocal<int> { Value = 7 };
+        var order = new List<int>();
+        if (suppress)
+        {
+            using (ExecutionContext.SuppressFlow())
+                Post();
+        }
+        else
+            Post();
+        Assert.Equal(new[] { 1, 2, 3 }, order);
+        Assert.Equal(7, ambient.Value);
+        Assert.Null(ZLinkStateLane.Current);
+        Assert.False(ExecutionContext.IsFlowSuppressed());
+
+        void Post()
+        {
+            var context = ExecutionContext.Capture();
+            Assert.True(
+                lane.TryPost(() =>
+                {
+                    Assert.True(lane.IsOnLane);
+                    Assert.Throws<InvalidOperationException>(() => lane.RunAsync(static () => 0));
+                    ambient.Value = 9;
+                    order.Add(1);
+                    Assert.True(
+                        lane.TryPost(() =>
+                        {
+                            Assert.True(lane.IsOnLane);
+                            Assert.Equal(9, ambient.Value);
+                            order.Add(3);
+                        })
+                    );
+                    order.Add(2);
+                })
+            );
+            Assert.Equal(suppress, ExecutionContext.IsFlowSuppressed());
+            Assert.Same(context, ExecutionContext.Capture());
+        }
+    }
+
+    [Fact]
+    public async Task AcceptedPost_RunsEvenWhenCloseRacesItsInlineTurn()
+    {
+        // TryPost true hands the caller's release work to the lane, so an accepted
+        // post must run even when DisposeAsync lands between entry and the turn.
+        const int attempts = 20_000;
+        var lost = 0;
+        var accepted = 0;
+        using var start = new Barrier(2);
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            var lane = new ZLinkStateLane();
+            var ran = 0;
+            var post = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                return lane.TryPost(() => Interlocked.Exchange(ref ran, 1));
+            });
+            var close = Task.Run(async () =>
+            {
+                start.SignalAndWait();
+                await lane.DisposeAsync();
+            });
+            var posted = await post.WaitAsync(TimeSpan.FromSeconds(5));
+            await close.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!posted)
+                continue;
+            accepted++;
+            if (Volatile.Read(ref ran) == 0)
+                lost++;
+        }
+        Assert.True(accepted > 0, "no post was accepted; the race was not exercised");
+        Assert.Equal(0, lost);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SynchronousCancellationException_RemainsFaultedInlineAndQueued(bool queued)
+    {
+        await using var lane = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (queued)
+        {
+            _ = lane.RunAsync(async () =>
+            {
+                entered.SetResult();
+                await release.Task;
+            });
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        var failure = new OperationCanceledException("synchronous lane failure");
+        var operation = lane.RunAsync<int>(() => throw failure);
+        release.TrySetResult();
+        var task = operation.AsTask();
+        Assert.Same(
+            failure,
+            await Assert.ThrowsAsync<OperationCanceledException>(async () => await task)
+        );
+        Assert.True(task.IsFaulted);
+        Assert.False(task.IsCanceled);
+        Assert.Equal(42, await lane.RunAsync(static () => 42));
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
     [Fact]
     public async Task AsynchronousPost_PreservesFailureAndContinuesLaterTurns()
     {

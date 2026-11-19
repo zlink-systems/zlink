@@ -167,7 +167,13 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                 sessionRoute(owned))))
                 .thenCompose(
                         admission ->
-                                validateDirectTargetSpot(goal, cancellation)
+                                (admission
+                                                        .target()
+                                                        .entrySpotId()
+                                                        .filter(goal.targetSpotId()::equals)
+                                                        .isPresent()
+                                                ? CompletableFuture.<Void>completedFuture(null)
+                                                : validateDirectTargetSpot(goal, cancellation))
                                         .thenCompose(
                                                 ignored ->
                                                         sealAndCapture(
@@ -293,7 +299,16 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                         .target()
                                                                         .lifecycleGeneration()
                                                                 : directJoin.targetSpotGeneration();
-                                                int targetSpotKind = directJoin == null ? 1 : 2;
+                                                int targetSpotKind =
+                                                        admission
+                                                                        .target()
+                                                                        .entrySpotId()
+                                                                        .filter(
+                                                                                targetSpotId
+                                                                                        ::equals)
+                                                                        .isPresent()
+                                                                ? 1
+                                                                : 2;
                                                 byte[] actorJoinRecovery = null;
                                                 if (directJoin != null) {
                                                     String relocationContentType =

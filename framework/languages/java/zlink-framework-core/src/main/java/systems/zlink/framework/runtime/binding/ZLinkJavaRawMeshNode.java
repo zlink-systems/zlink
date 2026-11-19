@@ -600,7 +600,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (transportStateLane.isOnLane()) return submission.get();
         var flow = ZLinkFlowContext.current();
         if (!ZLinkBlockingCalls.isRuntimeExecutionContext()) {
-            return transportStateLane.awaitTurn(() -> ZLinkFlowContext.call(flow, submission));
+            return transportStateLane.awaitResult(() -> ZLinkFlowContext.call(flow, submission));
         }
         return transportStateLane
                 .runAsync(() -> ZLinkFlowContext.call(flow, submission))
@@ -2156,6 +2156,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             "canonical actorJoin request is invalid",
                             invalid));
         }
+        PeerAdmissionExpectation target = observePeerRoute(request.targetNodeRid()).expectation();
+        if (request.entry()
+                && target != null
+                && target.lifecycleGeneration() != request.targetNodeGeneration())
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Entry Spot descriptor lifecycle changed"));
         return requestDurable(
                 request.targetNodeRid(),
                 () -> canRequestCanonicalActorJoin(request) ? frames : null,
@@ -2177,9 +2185,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 && request.actorNodeGeneration() != 0
                 && request.actorAuthorityOwnerGeneration() > 0
                 && request.actorOwnerLeaseGeneration() > 0
-                && request.targetSpotGeneration() > 0
+                && (request.entry()
+                        ? request.targetSpotGeneration() != 0
+                        : request.targetSpotGeneration() > 0)
                 && request.targetNodeGeneration() != 0
-                && request.targetAuthorityOwnerGeneration() > 0
+                && (request.entry()
+                        ? request.targetAuthorityOwnerGeneration() != 0
+                        : request.targetAuthorityOwnerGeneration() > 0)
                 && request.targetOwnerLeaseGeneration() > 0;
     }
 
@@ -6400,9 +6412,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private ZLinkFlowContext.State captureInstanceActivationFlow(List<Message> parts) {
         var reporter = dispatchErrorReporter;
-        return reporter != null && reporter.flow().captureEnabled()
-                ? ZLinkSpotFlowFrame.decode(parts)
-                : null;
+        if (reporter == null || !reporter.flow().captureEnabled()) return null;
+        var header =
+                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(
+                        parts, true);
+        return ZLinkSpotFlowFrame.fromEnvelopeHeader(header);
     }
 
     private int[] recordInstanceActivationFailure(

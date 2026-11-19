@@ -157,8 +157,11 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             const auto instance = ready_user
                                     ? std::optional<instance_spot_authority_payload_t>{}
                                     : decode_instance_spot_authority_payload (snapshot.payload);
-            if (ready_user
-                || (instance && instance->state == instance_spot_authority_state_t::ready))
+            address.authority_state =
+              ready_user || (instance && instance->state == instance_spot_authority_state_t::ready)
+                ? user_spot_authority_state_t::ready
+                : user_spot_authority_state_t::closing;
+            if (address.authority_state == user_spot_authority_state_t::ready)
                 co_await cache_ready_route (_spot_routes, spot_id, address,
                                             authority->owner_admission_deadline);
             co_return std::optional<spot_address_t>{std::move (address)};

@@ -10,6 +10,140 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
+    public void BatchTransfersPartsAndPayloadOwnerOnceWithoutChangingTheRecord()
+    {
+        using var batch = new MeshReceiveBatch();
+        using var message = Message.From(new byte[] { 1, 2, 3 });
+        var payload = new PayloadOwner();
+        var queued = NewRecord(payload);
+        var record = queued.Record;
+        IReadOnlyList<Message> parts = new[] { message };
+        batch.Add(record, parts, queued.TakePayloadOwner());
+        queued.Dispose();
+        Assert.Same(parts, batch.TakeMessage(0));
+        Assert.Empty(batch.TakeMessage(0));
+        Assert.Same(payload, batch.TakePayloadOwner(0));
+        Assert.Null(batch.TakePayloadOwner(0));
+        Assert.Equal(record.Kind, batch[0].Kind);
+        Assert.Equal(record.OperationId, batch[0].OperationId);
+        batch.Reset();
+        Assert.Equal(0, payload.DisposeCount);
+        Assert.Equal(new byte[] { 1, 2, 3 }, message.ToArray());
+        payload.Dispose();
+        Assert.Equal(1, payload.DisposeCount);
+    }
+
+    [Fact]
+    public async Task IdleRecordCycle_AllocatesOnlyTheRecordAndThreeInlineLaneTurns()
+    {
+        const int iterations = 1024;
+        var mailbox = new ZLinkMeshNodeOwnedMailbox(static _ => { }, static _ => { });
+        await using var lane = new ZLinkStateLane();
+        using var batch = new MeshReceiveBatch();
+        try
+        {
+            for (var index = 0; index < 128; index++)
+            {
+                Cycle();
+                Control();
+            }
+            var (actual, baseline) = PerCallAllocation.MinWindowPair(
+                _ => Cycle(),
+                _ => Control(),
+                iterations
+            );
+            output.WriteLine(
+                $"target record cycle: {actual / (double)iterations:F2} B/op; record + inline turns: {baseline / (double)iterations:F2} B/op"
+            );
+            Assert.Equal(baseline, actual);
+            Assert.True(
+                actual <= 552L * iterations,
+                $"Target record cycle allocated {actual / (double)iterations:F2} B/op; maximum 552 B/op."
+            );
+        }
+        finally
+        {
+            mailbox.Dispose();
+        }
+
+        void Cycle()
+        {
+            if (!mailbox.TryEnqueue(NewRecord()))
+                throw new InvalidOperationException("Record refused.");
+            if (!mailbox.ClaimAndDrainAsync(batch, 1).GetAwaiter().GetResult())
+                throw new InvalidOperationException("Record stranded.");
+            mailbox.Release();
+            batch.Reset();
+        }
+
+        void Control()
+        {
+            using var record = NewRecord();
+            for (var index = 0; index < 3; index++)
+                _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
+        }
+    }
+
+    [Fact]
+    public async Task ContendedRecords_KeepFifoAndReleaseBeforeTheNextClaim()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var resume = new ManualResetEventSlim();
+        var enqueued = 0;
+        var released = 0;
+        var observed = new List<ulong>();
+        var mailbox = new ZLinkMeshNodeOwnedMailbox(
+            _ =>
+            {
+                if (++enqueued != 1)
+                    return;
+                entered.Set();
+                Assert.True(resume.Wait(TimeSpan.FromSeconds(5)));
+            },
+            _ => { },
+            onReleased: _ => released++
+        );
+        Task<bool> first;
+        using (ExecutionContext.SuppressFlow())
+            first = Task.Run(() => mailbox.TryEnqueue(Record(1)));
+        using var firstBatch = new MeshReceiveBatch();
+        using var nextBatch = new MeshReceiveBatch();
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            for (ulong index = 2; index <= 16; index++)
+                Assert.True(mailbox.TryEnqueue(Record(index)));
+            var firstClaim = mailbox.ClaimAndDrainAsync(firstBatch, 1);
+            mailbox.Release();
+            var nextClaim = mailbox.ClaimAndDrainAsync(nextBatch, 64);
+            Assert.False(firstClaim.IsCompleted);
+            Assert.False(nextClaim.IsCompleted);
+            resume.Set();
+            Assert.True(await first.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.True(await firstClaim.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.True(await nextClaim.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(1, released);
+            Assert.Equal(1, firstBatch.Count);
+            Assert.Equal(15, nextBatch.Count);
+            observed.Add(firstBatch[0].ApplicationPayloadBytes!.Value);
+            for (var index = 0; index < nextBatch.Count; index++)
+                observed.Add(nextBatch[index].ApplicationPayloadBytes!.Value);
+            Assert.Equal(Enumerable.Range(1, 16).Select(index => (ulong)index), observed);
+            mailbox.Release();
+            Assert.False(mailbox.HasRecords);
+        }
+        finally
+        {
+            resume.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+            mailbox.Dispose();
+        }
+
+        static ZLinkMeshQueuedRecord Record(ulong index) =>
+            new(default, Array.Empty<Message>(), applicationPayloadBytes: index);
+    }
+
+    [Fact]
     public void ClaimKeepsItsOriginalPrefixAndEachRecordItsOwnPermit()
     {
         using var queue = new ZLinkApplicationJobQueue(

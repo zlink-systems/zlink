@@ -167,9 +167,16 @@ final class ZLinkChannelRuntimeTest {
                         Optional.of(RoutingId.from("client")),
                         Optional.empty(),
                         Optional.of(7L),
-                        List.of(
-                                Message.from("Request".getBytes(StandardCharsets.UTF_8)),
-                                Message.from("first".getBytes(StandardCharsets.UTF_8))),
+                        ZLinkChannelEnvelope.encode(
+                                ZLinkChannelEnvelope.create(
+                                        ZLinkChannelEnvelope.KIND_REQUEST,
+                                        "orders",
+                                        "Request",
+                                        ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                        null,
+                                        Map.of(),
+                                        null),
+                                Message.from("first")),
                         parts -> {
                             replies.incrementAndGet();
                             reply.complete(parts.getLast().toUtf8String());
@@ -2111,9 +2118,8 @@ final class ZLinkChannelRuntimeTest {
                             Optional.of(RoutingId.from("play-node")),
                             Optional.empty(),
                             Optional.of(7L),
-                            List.of(
-                                    Message.from("ZLinkFrameworkError".getBytes()),
-                                    Message.from("missing route handler".getBytes()))));
+                            ZLinkFrameworkErrorReply.create(
+                                    ZLinkFrameworkErrorKind.NOT_FOUND, "missing route handler")));
 
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
             while (!backend.router.inbound.isEmpty() && System.nanoTime() < deadline) {
@@ -3379,15 +3385,6 @@ final class ZLinkChannelRuntimeTest {
                 RoutingId targetNodeRid,
                 String targetSpotId,
                 List<Message> parts,
-                Duration timeout) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
-                ZLinkBackendActorRef actor,
-                RoutingId targetNodeRid,
-                Message request,
                 Duration timeout) {
             throw new UnsupportedOperationException();
         }

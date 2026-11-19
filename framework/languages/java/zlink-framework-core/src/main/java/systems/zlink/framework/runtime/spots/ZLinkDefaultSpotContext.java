@@ -92,6 +92,16 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     }
 
     @Override
+    public void requireExecution() {
+        serials.requireExecution(true);
+    }
+
+    @Override
+    public int spotKind() {
+        return 1;
+    }
+
+    @Override
     public String spotId() {
         return backendSpot.spotId();
     }
@@ -235,7 +245,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
      * Runs a lifecycle callback of this Entry Spot, such as {@code onClosing}. Cleanup of accepted
      * work runs even after the owner admission deadline (Location runtime §5).
      */
-    CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
+    @Override
+    public CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
         return enqueueAccepted(0, operation);
     }
 
@@ -269,6 +280,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {
@@ -278,6 +290,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                 actorId,
                 payloadBytes,
                 () -> runApplicationExecution(actorId, false, operation),
+                release,
                 admission,
                 header,
                 payload);
@@ -580,7 +593,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                                                 timerName,
                                                 () -> host.runWithOutbound(outbound, operation))));
         execution = instanceSpot ? null : host.execution(this);
-        serials.spotQueue.executionPolicy(execution);
+        ZLinkSpotCloseCallAccess.executionPolicy(serials.spotQueue, execution);
         if (execution != null)
             execution.onResume(
                     () -> {
@@ -608,6 +621,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         this.spot = spot;
         timers.setSpot(spot);
         actorTimers.values().forEach(timer -> timer.setSpot(spot));
+    }
+
+    @Override
+    public void requireExecution() {
+        serials.requireExecution(true);
     }
 
     @Override
@@ -846,6 +864,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {
@@ -855,6 +874,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 actorId,
                 payloadBytes,
                 () -> runActorApplication(actorId, serials.usesSharedExecutionGate(), operation),
+                release,
                 admission,
                 header,
                 payload);
@@ -947,7 +967,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.continueActivationPreparation(() -> runLifecycleExecution(operation));
     }
 
-    CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
+    @Override
+    public CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
         return serials.executeLifecycle(() -> runLifecycleExecution(operation));
     }
 
@@ -956,9 +977,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 () -> {
                     if (closeCommitted.getAsBoolean()) {
                         return CompletableFuture.failedFuture(
-                                ZLinkFrameworkErrorOrigin.framework(
-                                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                                        "Spot incarnation is closing (committed Close)"));
+                                ZLinkFrameworkErrorOrigin.closingSpot());
                     }
                     return runLifecycleExecution(operation);
                 });

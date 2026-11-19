@@ -15,6 +15,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 
 import java.util.ArrayList;
@@ -886,7 +887,8 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                                             CompletableFuture<Void>,
                                             Supplier<CompletionStage<Void>>>
                                     replay) {
-                        return serial.admitDurablePrefix(records, replay, jobs)
+                        return ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                        serial, records, replay, jobs)
                                 .thenApply(
                                         terminal -> {
                                             // The same semantic boundary as the red fixture: Q

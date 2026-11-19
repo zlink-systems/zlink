@@ -10,11 +10,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
@@ -22,6 +25,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -31,6 +35,77 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSpotOutboundFailureTest {
+    @Test
+    void instanceReplayRepliesWhenInternalActorPacketHasNoEnvelopeHeader() {
+        withRuntime(
+                (runtime, outbound, executor) -> {
+                    try (var workers =
+                            new systems.zlink.framework.execution.ZLinkWorkerPool(
+                                    0, 1, java.time.Duration.ofSeconds(1))) {
+                        var backendSpot =
+                                (systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot)
+                                        java.lang.reflect.Proxy.newProxyInstance(
+                                                systems.zlink.framework.runtime.internal.backend
+                                                        .ZLinkBackendSpot.class
+                                                        .getClassLoader(),
+                                                new Class<?>[] {
+                                                    systems.zlink.framework.runtime.internal.backend
+                                                            .ZLinkBackendSpot.class
+                                                },
+                                                (proxy, method, arguments) ->
+                                                        switch (method.getName()) {
+                                                            case "spotId" -> "instance-a";
+                                                            case "lifecycleGeneration" -> 1L;
+                                                            case "toString" -> "test-backend-spot";
+                                                            case "hashCode" -> 1;
+                                                            case "equals" -> proxy == arguments[0];
+                                                            default -> null;
+                                                        });
+                        var context =
+                                new DefaultInstanceSpotContext(
+                                        runtime,
+                                        workers,
+                                        new ZLinkSpotHandlerLoader(
+                                                new systems.zlink.framework.runtime.handlers
+                                                        .ZLinkScannedHandlerCatalog(List.of()),
+                                                new ZLinkSpotActorHandlerCatalog(
+                                                        new ZLinkStringMessageSerializer()),
+                                                handlerType -> null),
+                                        "mesh",
+                                        RoutingId.from("node-a"),
+                                        backendSpot);
+                        systems.zlink.framework.spots.ZLinkInstanceSpot spot = () -> context;
+                        var activation =
+                                new ZLinkInstanceSpotActivation(
+                                        runtime, null, spot, backendSpot, context);
+                        AtomicReference<List<Message>> reply = new AtomicReference<>();
+                        var received =
+                                new ZLinkBackendReceived(
+                                        Optional.empty(),
+                                        Optional.of(context.spotId()),
+                                        Optional.of(17L),
+                                        List.of(
+                                                Message.from(
+                                                        systems.zlink.framework.runtime.actors
+                                                                .ZLinkActorSpotRoutePackets
+                                                                .ACTOR_PACKET_NAME),
+                                                Message.from(new byte[0])),
+                                        reply::set,
+                                        () -> {});
+
+                        activation.replayMessage(received).toCompletableFuture().join();
+
+                        assertTrue(reply.get() != null && !reply.get().isEmpty());
+                        assertEquals(
+                                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                        .KIND_ERROR,
+                                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                        .decodeHeader(reply.get().getFirst().dataBuffer(), false)
+                                        .kind());
+                    }
+                });
+    }
+
     @Test
     void asynchronousOutboundCallbackRetainsTheSerialQueueUntilCompletion() {
         withRuntime(

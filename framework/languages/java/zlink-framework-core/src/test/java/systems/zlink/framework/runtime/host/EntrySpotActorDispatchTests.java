@@ -26,7 +26,6 @@ import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
@@ -61,6 +60,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -975,7 +975,16 @@ final class EntrySpotActorDispatchTests {
                                     }
                                 });
                 ZLinkFrameworkRuntime runtime = startRuntime(backend);
-                Message packetName = Message.from("missing-route-handler");
+                Message packetName =
+                        ZLinkChannelEnvelope.encodeHeader(
+                                ZLinkChannelEnvelope.create(
+                                        ZLinkChannelEnvelope.KIND_COMMAND,
+                                        "",
+                                        "missing-route-handler",
+                                        ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                        null,
+                                        Map.of(),
+                                        null));
                 Message payload = Message.from("body")) {
             backend.entrySpot
                     .sendToSpot(
@@ -1011,7 +1020,16 @@ final class EntrySpotActorDispatchTests {
                                     }
                                 });
                 ZLinkFrameworkRuntime runtime = startRuntime(backend);
-                Message packetName = Message.from("ProbeRequest");
+                Message packetName =
+                        ZLinkChannelEnvelope.encodeHeader(
+                                ZLinkChannelEnvelope.create(
+                                        ZLinkChannelEnvelope.KIND_COMMAND,
+                                        "",
+                                        "ProbeRequest",
+                                        ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                        null,
+                                        Map.of(),
+                                        null));
                 Message payload = Message.from("not-json")) {
             backend.entrySpot
                     .sendToSpot(
@@ -2080,15 +2098,6 @@ final class EntrySpotActorDispatchTests {
                 RoutingId targetNodeRid,
                 String targetSpotId,
                 List<Message> parts,
-                Duration timeout) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
-                ZLinkBackendActorRef actor,
-                RoutingId targetNodeRid,
-                Message request,
                 Duration timeout) {
             throw new UnsupportedOperationException();
         }

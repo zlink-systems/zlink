@@ -13,13 +13,10 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class ProtobufNativePayloadTests
 {
     [Fact]
-    public void Reply_header_rejects_invalid_utf8_in_unknown_property_names()
+    public void Reply_header_rejects_invalid_utf8_in_string_fields()
     {
         var codecs = Codecs();
-        var bytes = System.Text.Encoding.UTF8.GetBytes(
-            "{\"formatMarker\":242,\"kind\":2,\"correlationId\":\"r\",\"contentType\":\"application/x-protobuf\",\"x\":0}"
-        );
-        bytes[Array.LastIndexOf(bytes, (byte)'x')] = 0xff;
+        var bytes = Convert.FromHexString("08011201ff1a016d220178");
         using var header = Message.From(bytes);
         using var body = Message.From(new byte[] { 10, 1, 1 });
         IReadOnlyList<Message> parts = new[] { header, body };
@@ -104,28 +101,21 @@ public sealed class ProtobufNativePayloadTests
     }
 
     [Theory]
-    [InlineData("{", new byte[] { 10, 1, 1 })]
+    [InlineData("ff", new byte[] { 10, 1, 1 })]
+    [InlineData("0809", new byte[] { 10, 1, 1 })]
+    [InlineData("0802", new byte[] { 10, 1, 1 })]
+    [InlineData("0803", new byte[] { 10, 1, 1 })]
     [InlineData(
-        "{\"formatMarker\":241,\"kind\":2,\"correlationId\":\"r\"}",
-        new byte[] { 10, 1, 1 }
-    )]
-    [InlineData(
-        "{\"formatMarker\":242,\"kind\":2,\"kind\":2,\"correlationId\":\"r\"}",
-        new byte[] { 10, 1, 1 }
-    )]
-    [InlineData("{\"formatMarker\":242,\"kind\":2}", new byte[] { 10, 1, 1 })]
-    [InlineData("{\"formatMarker\":242,\"kind\":3}", new byte[] { 10, 1, 1 })]
-    [InlineData(
-        "{\"formatMarker\":242,\"kind\":2,\"correlationId\":\"r\",\"contentType\":\"application/x-protobuf\"}",
+        "080212017222166170706c69636174696f6e2f782d70726f746f627566",
         new byte[] { 10, 5, 1 }
     )]
     public void Malformed_reply_rejection_is_equivalent_for_parts_and_borrowed_view(
-        string json,
+        string headerHex,
         byte[] bytes
     )
     {
         var codecs = Codecs();
-        using var header = Message.From(System.Text.Encoding.UTF8.GetBytes(json));
+        using var header = Message.From(Convert.FromHexString(headerHex));
         using var body = Message.From(bytes);
         IReadOnlyList<Message> parts = new[] { header, body };
         using var packed = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(

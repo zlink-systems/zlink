@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate: barrier } = require('node:timers/promises');
 const zlink = require('@zlink-systems/zlink');
+const { encodeChannelHeader, decodeChannelHeader: decodeProtobufChannelHeader } = require('./helpers/protobuf-channel-header');
 const framework = require('../../packages/framework/dist/internal');
 const {
   RequestRuntime
@@ -142,10 +143,10 @@ for (const boundary of ['direct', 'socket', 'ClientServer']) {
             },
             { answer: 42 }
           );
-          const header = JSON.parse(encoded[0].toString('utf8'));
+          const header = decodeProtobufChannelHeader(encoded[0]);
           header.contentType = CONTENT_TYPE;
           const messages = [
-            zlink.Message.from(codec === 'malformed' ? '{' : JSON.stringify(header)),
+            zlink.Message.from(codec === 'malformed' ? '{' : encodeChannelHeader(header)),
             zlink.Message.from('answer')
           ];
           const closes = [0, 0];
@@ -916,9 +917,9 @@ for (const boundary of ['source', 'router', 'bridge']) {
             },
             { answer: 42 }
           );
-          const header = JSON.parse(parts[0].toString());
+          const header = decodeProtobufChannelHeader(parts[0]);
           header.contentType = CONTENT_TYPE;
-          parts[0] = Buffer.from(JSON.stringify(header));
+          parts[0] = encodeChannelHeader(header);
         }
         const messages = parts.map((part) => zlink.Message.from(part));
         const originals = messages.map((message) => ({ close: message.close, data: message.data }));
@@ -1553,7 +1554,8 @@ for (const publicResult of ['submit', 'yield']) {
             assert.deepEqual(result.value, { answer: 42 });
           } else if (['cancel', 'shutdown-custom', 'codec'].includes(terminalMode))
             assert.equal(result.error, reason);
-          else if (terminal === 'malformed') assert.ok(result.error instanceof SyntaxError);
+          else if (terminal === 'malformed')
+            assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.ProtocolError);
           else if (terminalMode === 'deadline')
             assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
           else if (terminalMode === 'shutdown')
@@ -3700,9 +3702,9 @@ for (const destinationMode of [false, true]) {
       },
       { answer: 42 }
     ).map((part) => (typeof part === 'string' ? Buffer.from(part) : part));
-    const header = JSON.parse(parts[0].toString());
+    const header = decodeProtobufChannelHeader(parts[0]);
     header.contentType = CONTENT_TYPE;
-    parts[0] = Buffer.from(JSON.stringify(header));
+    parts[0] = encodeChannelHeader(header);
     const payload = Buffer.alloc(4 + parts.reduce((size, part) => size + 4 + part.length, 0));
     payload.writeUInt32BE(parts.length, 0);
     let offset = 4;

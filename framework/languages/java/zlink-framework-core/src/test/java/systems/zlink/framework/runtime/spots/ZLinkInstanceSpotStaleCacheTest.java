@@ -62,6 +62,8 @@ final class ZLinkInstanceSpotStaleCacheTest {
         followAuthority(missing ? "Missing" : "Ready");
     }
 
+    private CompletableFuture<Void> recordedBeforeClose;
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void notReadyFailureRetainsSelectedTargetOnce(boolean request) throws Exception {
@@ -88,8 +90,10 @@ final class ZLinkInstanceSpotStaleCacheTest {
         logger.addHandler(handler);
         logger.setLevel(java.util.logging.Level.ALL);
         try {
+            // The telemetry worker delivers asynchronously and runtime close drops
+            // undelivered records, so the record is awaited while the runtime is open.
+            recordedBeforeClose = recorded;
             followAuthority("Ready", request);
-            recorded.get(5, TimeUnit.SECONDS);
             String failure =
                     assertDoesNotThrow(
                             () -> {
@@ -394,6 +398,7 @@ final class ZLinkInstanceSpotStaleCacheTest {
                         ExecutionException.class,
                         () -> failed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                 assertEquals(1, submissions.get());
+                if (recordedBeforeClose != null) recordedBeforeClose.get(5, TimeUnit.SECONDS);
                 return 0;
             }
             var call =

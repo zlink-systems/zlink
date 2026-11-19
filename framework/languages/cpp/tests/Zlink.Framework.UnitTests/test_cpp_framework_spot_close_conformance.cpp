@@ -1137,12 +1137,14 @@ class close_fault_store_t final : public zf::location_store_t
     std::atomic_bool owner_lease_released{false};
     std::promise<void> commit_held;
     std::atomic_bool hold_read_once{false};
+    std::atomic_bool hold_resolved_read_once{false};
     std::promise<void> read_held;
 
     void release_held_read ()
     {
         std::optional<zf::store_key_t> key;
         std::optional<zf::task_completion_source_t<zf::store_read_result_t>> completion;
+        std::optional<zf::result_t<zf::store_read_result_t>> snapshot;
         {
             std::lock_guard lock (_held_mutex);
             hold_read_once.store (false);
@@ -1150,9 +1152,12 @@ class close_fault_store_t final : public zf::location_store_t
             completion = std::move (_held_read_completion);
             _held_read_key.reset ();
             _held_read_completion.reset ();
+            snapshot = std::move (_held_read_snapshot);
+            _held_read_snapshot.reset ();
         }
         if (completion)
-            completion->complete (_inner->read (std::move (*key)).result ());
+            completion->complete (snapshot ? std::move (*snapshot)
+                                           : _inner->read (std::move (*key)).result ());
     }
 
     // Completes the held Closing commit: applied, or an authority version conflict.
@@ -1178,6 +1183,16 @@ class close_fault_store_t final : public zf::location_store_t
 
     zf::task_t<zf::store_read_result_t> read (zf::store_key_t key) override
     {
+        if (is_watched (key) && hold_resolved_read_once.exchange (false)) {
+            auto snapshot = _inner->read (key).result ();
+            std::lock_guard lock (_held_mutex);
+            zf::task_completion_source_t<zf::store_read_result_t> completion;
+            auto pending = completion.task ();
+            _held_read_snapshot = std::move (snapshot);
+            _held_read_completion = std::move (completion);
+            read_held.set_value ();
+            return pending;
+        }
         if (is_watched (key)) {
             std::lock_guard lock (_held_mutex);
             if (hold_read_once.exchange (false)) {
@@ -1303,6 +1318,7 @@ class close_fault_store_t final : public zf::location_store_t
     std::shared_ptr<zf::runtime::in_memory_location_store_t> _inner;
     std::mutex _held_mutex;
     std::optional<zf::store_key_t> _held_read_key;
+    std::optional<zf::result_t<zf::store_read_result_t>> _held_read_snapshot;
     std::optional<zf::task_completion_source_t<zf::store_read_result_t>> _held_read_completion;
     std::optional<zf::store_write_request_t> _held_request;
     std::optional<zf::task_completion_source_t<zf::store_write_result_t>> _held_completion;
@@ -2265,6 +2281,7 @@ class scenario_client_t final : public zf::hosted_service_t
         }
         if (act == "deferredJoinFailureContract") {
             const auto target = given.at ("target").get<std::string> ();
+            const bool remove_after_resolution = given.value ("removeAfterResolution", false);
             const bool warm = given.at ("warmRoute").get<bool> ();
             store.capture_ready = true;
             if (authority_state (services, spot_id) != "Ready")
@@ -2293,6 +2310,7 @@ class scenario_client_t final : public zf::hosted_service_t
               std::async (std::launch::async, [&] { return manager_close (services, *ref); });
             const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
                 store.replay_ready = false;
+                store.release_held_read ();
                 current ().closing_released.complete (zf::result_t<void>::success ());
             });
             if (entered.wait_for (3s) != std::future_status::ready)
@@ -2314,7 +2332,19 @@ class scenario_client_t final : public zf::hosted_service_t
             if (!existing
                 || !std::holds_alternative<zf::actor_create_existing_t> (existing.value ()))
                 throw std::runtime_error ("Actor GetOrCreate did not return Existing");
+            store.hold_resolved_read_once = remove_after_resolution;
             join_member (services, join_id, "closing-admission-member");
+            if (remove_after_resolution) {
+                auto held = store.read_held.get_future ();
+                if (held.wait_for (3s) != std::future_status::ready)
+                    throw std::runtime_error ("Closing authority read was not held");
+                EXPECT_NE (joined.wait_for (0s), std::future_status::ready);
+                current ().closing_released.complete (zf::result_t<void>::success ());
+                const auto closed = closing.get ();
+                if (!closed || !closed.value ())
+                    throw std::runtime_error ("Close did not remove the activation");
+                store.release_held_read ();
+            }
             if (joined.wait_for (3s) != std::future_status::ready)
                 throw std::runtime_error ("Join completion did not arrive");
             const auto completion = joined.get ();
@@ -2323,7 +2353,7 @@ class scenario_client_t final : public zf::hosted_service_t
             if (failed)
                 EXPECT_TRUE (failed->operation_id_high != 0 || failed->operation_id_low != 0);
             store.replay_ready = false;
-            if (target == "closing") {
+            if (target == "closing" && !remove_after_resolution) {
                 current ().closing_released.complete (zf::result_t<void>::success ());
                 const auto closed = closing.get ();
                 if (!closed || !closed.value ())
@@ -3430,4 +3460,17 @@ TEST (ZLinkFrameworkSpotCloseConformance, DeferredJoinFailureContract)
                                         {"warmRoute", row.at ("warmRoute")}}},
                                       {"act", "deferredJoinFailureContract"},
                                       {"expect", {{"joinResult", row.at ("errorKind")}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, ClosingResolutionSurvivesActivationRemoval)
+{
+    run_and_check (nlohmann::json{{"name", "closing-resolution-after-activation-removal"},
+                                  {"given",
+                                   {{"authority", "Ready"},
+                                    {"onClosing", "blocks"},
+                                    {"target", "closing"},
+                                    {"warmRoute", false},
+                                    {"removeAfterResolution", true}}},
+                                  {"act", "deferredJoinFailureContract"},
+                                  {"expect", {{"joinResult", "NotFound"}}}});
 }

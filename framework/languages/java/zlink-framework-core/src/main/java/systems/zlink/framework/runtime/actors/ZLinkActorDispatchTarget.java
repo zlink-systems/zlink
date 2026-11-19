@@ -29,6 +29,7 @@ public interface ZLinkActorDispatchTarget {
             ZLinkActorSerialExecutor activation,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission);
 
     CompletionStage<Void> executeActor(

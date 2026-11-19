@@ -1670,6 +1670,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         );
         var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
             ZLinkClientCallCodec.CreateEnvelope(
+                TimeProvider.System,
                 ZLinkMessageKind.Request,
                 SpotCloseHost.MeshName,
                 nameof(SpotCloseProbeRequest),
@@ -2907,6 +2908,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         services.AddTransient<SpotCloseJoinHandler>();
         services.AddTransient<SpotCloseEntryIdHandler>();
         services.AddTransient<SpotCloseActorGenerationHandler>();
+        services.AddTransient<SpotCloseActorGenerationSendHandler>();
         services.AddTransient<SpotCloseInstanceHandler>();
         services.AddTransient<SpotCloseInstanceSignalHandler>();
         services.AddZLinkFramework(options =>
@@ -3120,6 +3122,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
 
 internal sealed class SpotCloseProbeState
 {
+    internal TaskCompletionSource<ulong> SentActorGeneration { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal int FactoryCalls;
     private int _handlerCalls;
     private int _onClosingCalls;
@@ -3297,6 +3301,9 @@ internal sealed class SpotCloseEntrySpot(IZLinkEntrySpotContext context)
         Context.Handlers.AddActorPacket<SpotCloseActorGenerationHandler, SpotCloseActor>(
             nameof(SpotCloseActorGeneration)
         );
+        Context.Handlers.AddActorPacket<SpotCloseActorGenerationSendHandler, SpotCloseActor>(
+            nameof(SpotCloseActorGenerationSend)
+        );
     }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
@@ -3342,6 +3349,28 @@ internal sealed class SpotCloseJoinHandler
 }
 
 internal sealed record SpotCloseActorGeneration;
+
+internal sealed record SpotCloseActorGenerationSend;
+
+internal sealed class SpotCloseActorGenerationSendHandler(SpotCloseProbeState state)
+    : IZLinkEntrySpotActorSendHandler<
+        SpotCloseEntrySpot,
+        SpotCloseActor,
+        SpotCloseActorGenerationSend
+    >
+{
+    public ValueTask HandleAsync(
+        SpotCloseEntrySpot spot,
+        SpotCloseActor actor,
+        IZLinkMessageContext context,
+        SpotCloseActorGenerationSend message,
+        CancellationToken cancellationToken
+    )
+    {
+        state.SentActorGeneration.TrySetResult(actor.Context.ObjectGeneration);
+        return ValueTask.CompletedTask;
+    }
+}
 
 internal sealed class SpotCloseActorGenerationHandler
     : IZLinkEntrySpotActorRequestHandler<

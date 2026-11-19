@@ -147,6 +147,13 @@ subprojects {
             // exception type: a rerun replaces the uploaded result XML.
             testLogging {
                 events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                if (System.getenv("ZLINK_CI_TEST_PROGRESS") == "true") {
+                    events(
+                        org.gradle.api.tasks.testing.logging.TestLogEvent.STARTED,
+                        org.gradle.api.tasks.testing.logging.TestLogEvent.PASSED,
+                        org.gradle.api.tasks.testing.logging.TestLogEvent.SKIPPED,
+                    )
+                }
                 exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
             }
         }
@@ -188,7 +195,7 @@ subprojects {
                         usage("java-api") { fromResolutionOf("runtimeClasspath") }
                         usage("java-runtime") { fromResolutionResult() }
                     }
-                    from(components["java"])
+                    from(components.findByName("shadow") ?: components["java"])
                     groupId = project.group.toString()
                     artifactId = project.name
                     version = project.version.toString()

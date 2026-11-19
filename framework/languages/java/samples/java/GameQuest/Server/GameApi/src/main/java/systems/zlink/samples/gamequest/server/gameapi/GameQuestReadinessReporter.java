@@ -3,7 +3,6 @@ package systems.zlink.samples.gamequest.server.gameapi;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.samples.gamequest.server.configuration.SampleNames;
 
@@ -33,17 +32,13 @@ final class GameQuestReadinessReporter implements ApplicationRunner, AutoCloseab
     }
 
     private void report() {
-        try {
-            if (meshes.snapshot(SampleNames.PlayerQuestSpotDiscovery).readyPeerCount() == 0) {
-                return;
-            }
-            System.out.printf(
-                    "gamequest-ready kind=spot-route node=%s mesh=%s%n",
-                    nodeId, SampleNames.PlayerQuestSpotDiscovery);
-            reporter.shutdown();
-        } catch (IllegalStateException | ZLinkConfigurationException ignored) {
-            // The public runtime view is not available until Framework startup completes.
+        if (meshes.snapshot(SampleNames.PlayerQuestSpotDiscovery).readyPeerCount() == 0) {
+            return;
         }
+        System.out.printf(
+                "gamequest-ready kind=spot-route node=%s mesh=%s%n",
+                nodeId, SampleNames.PlayerQuestSpotDiscovery);
+        reporter.shutdown();
     }
 
     @Override

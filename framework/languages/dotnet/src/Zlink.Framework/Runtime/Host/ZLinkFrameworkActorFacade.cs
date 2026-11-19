@@ -68,6 +68,11 @@ internal sealed class ZLinkFrameworkActorFacade(
                     registration.TimeProvider
                 )
                 .ConfigureAwait(false);
+            if (target.Snapshot.ResolutionKind == ZLinkLocationResolutionKind.Closing)
+                throw new ZLinkFrameworkException(
+                    ZLinkAcceptedWorkAdmission.Closing.ErrorKind(),
+                    $"SPOT '{spotId}' incarnation is closing."
+                );
             if (target.Snapshot.NodeRid != actorRef.NodeRid)
                 return await _remoteJoiner
                     .JoinAsync(

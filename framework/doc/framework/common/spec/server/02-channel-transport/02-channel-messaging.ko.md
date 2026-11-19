@@ -590,8 +590,8 @@ Classic fanout publish에 적용하지 않는다.
 | One-way handler를 찾지 못하거나 payload를 해석하지 못했다. | Message를 handler에 전달하지 않고 runtime 관측 정보에 기록한다. |
 | Host가 새로운 submit을 받지 않는다. | 해당 언어의 shutdown 오류로 실패한다. |
 
-<a id="reply-route-remains"></a>수신한 message가 reply token을 가진 request이고, envelope header가
-[header 구조 규칙](03-client-server-channel.ko.md#envelope-header-structure)에 맞는 object이며, `correlationId`가
+<a id="reply-route-remains"></a>수신한 message가 reply token을 가진 request이고, envelope header를
+[`ChannelHeader`로 parse할 수 있으며](03-client-server-channel.ko.md#envelope-header-grammar), `correlation_id`가
 [Request 연결과 업무 흐름 식별 §3](../06-observability/04-flow-correlation.ko.md#3-형식과-소유권)의 형식에 맞는
 문자열이면 reply 경로가 남아 있다. 이때 다른 header field가 잘못되었으면 error reply로 완료한다. 이 조건을
 충족하지 못하면 reply를 만들지 않고 runtime 관측 정보에 실패를 한 번 기록한다.
@@ -675,7 +675,7 @@ Metadata의 공개 계약은 다음과 같다.
 | 항목 | 계약 |
 |---|---|
 | Key와 value | UTF-8이며 NUL을 포함하지 않는다. Key는 비어 있지 않다. |
-| 전체 크기 | Encoding된 key, value와 구조 overhead를 모두 합쳐 최대 1024 bytes다. |
+| 전체 크기 | Encoding된 key, value와 구조 overhead를 모두 합쳐 최대 1024 bytes다. Encoding은 [ClientServer §5.3](03-client-server-channel.ko.md#53-application-record-계약)이 정한다. |
 | 같은 key를 여러 번 설정 | 마지막 값이 전송된다. |
 | Handler에서 읽기 | 변경할 수 없는 snapshot으로 제공하며 handler turn이 끝난 뒤 보관하려면 application이 복사한다. |
 | 잘못된 metadata | Handler를 실행하지 않고 protocol 오류로 처리한다. |

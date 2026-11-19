@@ -69,6 +69,7 @@ function runner(children) {
     waitHttp() {},
     waitLog() {},
     waitAnyLog() {},
+    waitLogCount() {},
     assertLogCount() {}
   });
   vm.runInContext(lifecycleDeclarations(scope).join('\n'), scope);

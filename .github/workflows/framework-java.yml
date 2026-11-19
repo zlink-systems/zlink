@@ -161,6 +161,10 @@ jobs:
         if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
         run: bash framework/languages/java/scripts/verify_packaged_contract.sh java
 
+      - name: Verify the packaged Kotlin public contract and API snapshot
+        if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
+        run: bash framework/languages/java/scripts/verify_packaged_contract.sh kotlin
+
       - name: Fetch Core and build the checkout Java binding package on Windows
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'win-')) }}
         shell: pwsh
@@ -195,11 +199,21 @@ jobs:
         shell: bash
         env:
           ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/${{ matrix.target.local_package_root }}
+          ZLINK_CI_TEST_PROGRESS: "true"
         run: |
           worker_count=2
           if [[ "${ZLINK_SINGLE_WORKER}" == "true" ]]; then
             worker_count=1
           fi
+          dump_dir="${RUNNER_TEMP}/framework-java-thread-dumps/${{ matrix.target.name }}"
+          mkdir -p "${dump_dir}"
+          bash scripts/ci/gradle-test-watchdog.sh 3600 600 "${dump_dir}" &
+          watchdog_pid=$!
+          stop_watchdog() {
+            kill "${watchdog_pid}" 2>/dev/null || true
+            wait "${watchdog_pid}" 2>/dev/null || true
+          }
+          trap stop_watchdog EXIT
           ./gradlew --no-daemon --max-workers="${worker_count}" \
             :zlink-framework-core:test \
             :zlink-framework-core:integrationTest \
@@ -208,6 +222,15 @@ jobs:
             :zlink-framework-spring-boot-starter:integrationTest \
             :zlink-framework-locations-redis:test \
             -Pzlink.includeSamples=false
+
+      - name: Upload Java test thread dumps
+        if: ${{ !inputs.skip_tests && always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: framework-java-thread-dumps-${{ matrix.target.name }}
+          path: ${{ runner.temp }}/framework-java-thread-dumps/${{ matrix.target.name }}/**
+          retention-days: 14
+          if-no-files-found: ignore
 
       # 위 step은 `-Pzlink.includeSamples=false`로 샘플 composite build를 아예 등록하지
       # 않는다. 그래서 public API가 바뀌어도 샘플 호출부는 이 워크플로우에서 한 번도

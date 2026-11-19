@@ -55,6 +55,37 @@ constexpr std::uint64_t monitor_poll_slot = 2;
 constexpr std::size_t channel_handler_worker_limit = 8;
 constexpr std::chrono::milliseconds channel_poll_interval{50};
 constexpr std::chrono::milliseconds channel_worker_idle_timeout{100};
+void report_dispatch_failure (const detail::channel_runtime_t &runtime,
+                              const std::string &channel_name,
+                              const messaging::message_parts_t &parts,
+                              std::exception_ptr failure)
+{
+    detail::dispatch_error_reporter_t (runtime.dispatch_options_ref ()).report_lazy ([&] {
+        auto decoded = messaging::envelope_codec_t{}.decode_header (
+          parts, detail::message_flow_tracer_t (runtime.dispatch_options_ref ()).flow_tracing ());
+        message_dispatch_error_event_t event{
+          dispatch_error_surface_t::channel,
+          decoded && decoded.value ().kind == messaging::message_kind_t::request
+            ? dispatch_message_kind_t::request
+            : dispatch_message_kind_t::send,
+          dispatch_error_reason_t::handler_exception,
+          dispatch_error_action_t::drop,
+          decoded ? std::optional<std::string> (decoded.value ().message_name) : std::nullopt,
+          channel_name,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          decoded ? std::optional<std::string> (decoded.value ().correlation_id) : std::nullopt,
+          failure};
+        if (decoded) {
+            event.flow_id = decoded.value ().flow_id;
+            event.flow_origin = decoded.value ().flow_origin;
+        }
+        return event;
+    });
+}
+
 } // namespace
 
 class channel_host_service_t::server_loop_t
@@ -306,7 +337,7 @@ class channel_host_service_t::server_loop_t
         auto parts = messaging::message_parts_t (record.take_parts ());
         detail::message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
         if (flow.enabled_for (message_flow_outcome_t::received)) {
-            auto header = messaging::envelope_codec_t{}.decode_header (parts, true);
+            auto header = messaging::envelope_codec_t{}.decode_header_view (parts, true);
             if (header && header.value ().kind != messaging::message_kind_t::publish) {
                 auto flow_scope =
                   flow_context_t::enter (header.value ().flow_id, header.value ().flow_origin,
@@ -443,7 +474,7 @@ class channel_host_service_t::server_loop_t
                     failure = std::current_exception ();
                 }
                 if (!result || failure)
-                    report_dispatch_failure (parts, failure);
+                    report_dispatch_failure (_runtime, _channel_name, parts, failure);
             };
             auto pending = _dispatcher.dispatch_server_message_in_handler (
               _channel_name, std::move (parts), *_services, *_serializers, *_handlers,
@@ -452,14 +483,14 @@ class channel_host_service_t::server_loop_t
               record.received_at.value_or (std::chrono::system_clock::now ()));
         }
         catch (...) {
-            report_dispatch_failure (parts, std::current_exception ());
+            report_dispatch_failure (_runtime, _channel_name, parts, std::current_exception ());
         }
     }
 
     void report_dispatch_rejection (const messaging::message_parts_t &parts)
     {
         detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
-            auto decoded = messaging::envelope_codec_t{}.decode_header (
+            auto decoded = messaging::envelope_codec_t{}.decode_header_view (
               parts,
               detail::message_flow_tracer_t (_runtime.dispatch_options_ref ()).flow_tracing ());
             message_dispatch_error_event_t event{
@@ -477,36 +508,6 @@ class channel_host_service_t::server_loop_t
               std::nullopt,
               decoded ? std::optional<std::string> (decoded.value ().correlation_id)
                       : std::nullopt};
-            if (decoded) {
-                event.flow_id = decoded.value ().flow_id;
-                event.flow_origin = decoded.value ().flow_origin;
-            }
-            return event;
-        });
-    }
-
-    void report_dispatch_failure (const messaging::message_parts_t &parts,
-                                  std::exception_ptr failure)
-    {
-        detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
-            auto decoded = messaging::envelope_codec_t{}.decode_header (
-              parts,
-              detail::message_flow_tracer_t (_runtime.dispatch_options_ref ()).flow_tracing ());
-            message_dispatch_error_event_t event{
-              dispatch_error_surface_t::channel,
-              decoded && decoded.value ().kind == messaging::message_kind_t::request
-                ? dispatch_message_kind_t::request
-                : dispatch_message_kind_t::send,
-              dispatch_error_reason_t::handler_exception,
-              dispatch_error_action_t::drop,
-              decoded ? std::optional<std::string> (decoded.value ().message_name) : std::nullopt,
-              _channel_name,
-              std::nullopt,
-              std::nullopt,
-              std::nullopt,
-              std::nullopt,
-              decoded ? std::optional<std::string> (decoded.value ().correlation_id) : std::nullopt,
-              failure};
             if (decoded) {
                 event.flow_id = decoded.value ().flow_id;
                 event.flow_origin = decoded.value ().flow_origin;
@@ -685,6 +686,7 @@ class channel_host_service_t::subscriber_loop_t
                        std::shared_ptr<zlink::context_t> core_context,
                        std::shared_ptr<application_job_queue_t> application_jobs) :
         _runtime (detail::channel_runtime_t::from (bus)),
+        _dispatcher (_runtime),
         _channel_name (std::move (channel_name)),
         _bundle (&bundle),
         _capability (std::move (capability)),
@@ -745,9 +747,7 @@ class channel_host_service_t::subscriber_loop_t
             if (rc != static_cast<int> (zlink::recv_result_t::ok)) {
                 continue;
             }
-            dispatch_async (
-              std::make_shared<zlink::topic_message_t> (std::move (_received_message)),
-              std::move (**permit));
+            dispatch_async (std::move (_received_message), std::move (**permit));
         }
     }
 
@@ -766,34 +766,35 @@ class channel_host_service_t::subscriber_loop_t
     }
 
   private:
-    void dispatch_async (std::shared_ptr<zlink::topic_message_t> message,
-                         application_job_queue_t::permit_t permit)
+    void dispatch_async (zlink::topic_message_t message, application_job_queue_t::permit_t permit)
     {
         const auto received_at = std::chrono::system_clock::now ();
         auto application_job =
           std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
         application_job->mark_queued ();
         auto parts = zlink::framework::runtime::messaging::message_parts_t (
-          detail::backend::copy_binding_messages (message->parts ()));
+          detail::backend::copy_binding_messages (message.parts ()));
         auto shared_parts =
           std::make_shared<zlink::framework::runtime::messaging::message_parts_t> (
             std::move (parts));
-        auto work = [this, message = std::move (message), shared_parts, application_job,
-                     received_at] () mutable {
-            try {
-                detail::channel_packet_dispatcher_t dispatcher (_runtime);
+        auto work = [this, shared_parts, application_job, received_at] () mutable {
+            _runtime.runtime_failures ()->capture ([&] {
                 auto scope = detail::service_scope_t::create (
                   *_services, detail::service_scope_kind_t::handler_invocation);
-                (void) dispatcher.dispatch_server_message (
-                  _channel_name, std::move (*shared_parts), scope.provider (), *_serializers,
-                  *_handlers, [application_job] { application_job->release_for_handler_entry (); },
+                auto pending = _dispatcher.dispatch_server_message_in_handler (
+                  _channel_name, std::move (*shared_parts), *_services, *_serializers, *_handlers,
+                  [application_job] { application_job->release_for_handler_entry (); },
+                  std::move (scope), _handler_executor.get (),
+                  [this, application_job] (const result_t<messaging::message_parts_t> &result,
+                                           const messaging::message_parts_t &parts) {
+                      if (!result)
+                          report_dispatch_failure (_runtime, _channel_name, parts,
+                                                   result.exception ());
+                  },
                   received_at);
-            }
-            catch (...) {
-            }
+            });
         };
-        if (!_handler_executor || !_handler_executor->try_submit_internal (std::move (work))) {
-        }
+        (void) _handler_executor->try_submit_internal (std::move (work));
     }
 
     void apply_runtime_connections ()
@@ -823,6 +824,7 @@ class channel_host_service_t::subscriber_loop_t
     }
 
     detail::channel_runtime_t _runtime;
+    detail::channel_packet_dispatcher_t _dispatcher;
     std::string _channel_name;
     detail::channel_runtime_bundle_t *_bundle;
     channel_capability_snapshot_t _capability;

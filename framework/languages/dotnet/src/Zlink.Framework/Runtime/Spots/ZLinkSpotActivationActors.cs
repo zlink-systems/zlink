@@ -686,16 +686,18 @@ internal abstract partial class ZLinkSpotActivation
         var localDeadline = absoluteDeadline is { } value
             ? Stopwatch.GetElapsedTime(0) + (value - DateTimeOffset.UtcNow)
             : (TimeSpan?)null;
+        cancellationToken.ThrowIfCancellationRequested();
+        StopToken.ThrowIfCancellationRequested();
+        if (localDeadline is { } deadline && deadline <= Stopwatch.GetElapsedTime(0))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                "Actor membership post-commit lifecycle did not finish before the deadline.",
+                ZLinkRetryAdvice.DoNotRetry
+            );
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             StopToken.ThrowIfCancellationRequested();
-            if (localDeadline is { } deadline && deadline <= Stopwatch.GetElapsedTime(0))
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    "Actor membership post-commit lifecycle did not finish before the deadline.",
-                    ZLinkRetryAdvice.DoNotRetry
-                );
             try
             {
                 await callback(cancellationToken).ConfigureAwait(false);
@@ -705,22 +707,33 @@ internal abstract partial class ZLinkSpotActivation
             {
                 throw;
             }
-            catch
+            catch (Exception error) when (!StopToken.IsCancellationRequested)
             {
                 var delay = ActorHandoffPollInterval;
                 if (localDeadline is { } deadlineValue)
                 {
                     var remaining = deadlineValue - Stopwatch.GetElapsedTime(0);
-                    if (remaining <= TimeSpan.Zero)
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DeadlineExceeded,
-                            "Actor membership post-commit lifecycle did not finish before the deadline.",
-                            ZLinkRetryAdvice.DoNotRetry
-                        );
                     if (remaining < delay)
-                        delay = remaining;
+                        delay = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
                 }
-                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                if (ZLinkSerialTurn.Current is { } turn)
+                    await turn.YieldFrameworkCallAsync(
+                            ct => new ValueTask(Task.Delay(delay, ct)),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                else
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                if (
+                    localDeadline is { } retryDeadline
+                    && retryDeadline <= Stopwatch.GetElapsedTime(0)
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DeadlineExceeded,
+                        "Actor membership post-commit lifecycle did not finish before the deadline.",
+                        ZLinkRetryAdvice.DoNotRetry,
+                        error
+                    );
             }
         }
     }

@@ -4,6 +4,14 @@ plugins {
     `java-library`
     `java-test-fixtures`
     `maven-publish`
+    id("com.google.protobuf") version "0.9.4"
+    id("com.gradleup.shadow") version "9.6.1"
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:4.30.2"
+    }
 }
 
 // Test fixtures are shared by this repository's test source sets only, not published.
@@ -23,9 +31,18 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.add("-Xlint:-module")
 }
 
+tasks.named<JavaCompile>("compileJava") {
+    options.compilerArgs.add("--add-reads=systems.zlink.framework=com.google.protobuf")
+}
+
 sourceSets {
     val main by getting {
         java.srcDir("../../../runtime/protocol/generated/jvm")
+        proto {
+            srcDir("../../../runtime/protocol")
+            include("channel-header-v1.proto")
+            exclude("etcd/**")
+        }
     }
     test {
         resources.srcDir("../../../runtime/protocol/golden")
@@ -202,13 +219,39 @@ dependencies {
     implementation(project(":zlink-framework-binding-internal"))
     api(project(":zlink-framework-provider-abstractions"))
     api(zlinkLibs.zlink.bindings)
-    // Typed JSON reads @Nullable by reflection, which drops annotations whose class is absent
-    // at runtime, so applications and tests get JSpecify on both classpaths (spec 05 5).
-    api("org.jspecify:jspecify:1.0.0")
     api("io.netty:netty-buffer:4.1.100.Final")
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     implementation("org.lz4:lz4-java:1.8.0")
     implementation("org.slf4j:slf4j-api:2.0.16")
+    compileOnly("com.google.protobuf:protobuf-java:4.30.2")
+    testImplementation("com.google.protobuf:protobuf-java:4.30.2")
+}
+
+val protobufShaded by configurations.creating
+dependencies {
+    protobufShaded("com.google.protobuf:protobuf-java:4.30.2")
+}
+
+shadow {
+    addShadowVariantIntoJavaComponent = false
+}
+
+tasks.shadowJar {
+    configurations = listOf(protobufShaded)
+    excludes.remove("module-info.class")
+    archiveClassifier.set("")
+    relocate("com.google.protobuf", "systems.zlink.framework.internal.shaded.protobuf")
+}
+
+listOf("apiElements", "runtimeElements").forEach { variantName ->
+    configurations.named(variantName) {
+        outgoing.artifacts.clear()
+        outgoing.artifact(tasks.shadowJar)
+    }
+}
+
+tasks.jar {
+    archiveClassifier.set("plain")
 }
 
 // Shared observability contract; the fixture remains outside language source trees.

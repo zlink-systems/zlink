@@ -33,6 +33,7 @@ import {
 } from '../../../../Domain/Bingo/bingo-room-models';
 import { SampleNames } from '../../../../../Configuration/sample-names';
 import { BingoRoomTimerHandler } from './Handlers/bingo-room-timer-handler';
+import { BingoRoomCloseTimerHandler } from './Handlers/bingo-room-close-timer-handler';
 import { PlayerActor } from '../../Actors/player-actor';
 import type {
   ZLinkActorClient,
@@ -80,6 +81,8 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     }
   >();
   private drawTimer?: ZLinkTimer;
+  private closeTimer?: ZLinkTimer;
+  private closeRequested = false;
   private cleanupStarted = false;
   private announcedRewardDrawSeq?: number;
 
@@ -105,6 +108,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
 
   async onClosing(): Promise<void> {
     await this.drawTimer?.cancel();
+    await this.closeTimer?.cancel();
     this.drawTimer = undefined;
   }
 
@@ -234,8 +238,8 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
   async onLeaveActor(actor: PlayerActor): Promise<void> {
     const actorId = actor.actorId;
     if (this.observerActors.delete(actorId)) {
-      if (this.observerActors.size === 0) void this.context.close();
       console.error(`bingo-lifecycle room-leave actor=${actorId} spot=${this.context.spotId}`);
+      if (this.observerActors.size === 0) await this.scheduleClose();
       return;
     }
     const state = this.snapshot();
@@ -256,8 +260,23 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     );
     console.error(`bingo-lifecycle room-leave actor=${actorId} spot=${this.context.spotId}`);
     if (this.cleanupStarted && this.playerIds.size === 0) {
-      void this.context.close();
+      await this.scheduleClose();
     }
+  }
+
+  tryRequestClose(): boolean {
+    if (this.closeRequested) return false;
+    this.closeRequested = true;
+    return true;
+  }
+
+  private async scheduleClose(): Promise<void> {
+    if (this.closeTimer !== undefined) return;
+    this.closeTimer = await this.context.addTimer(
+      'bingo-room-close',
+      1,
+      BingoRoomCloseTimerHandler
+    );
   }
 
   async onDisconnectActor(_actor: PlayerActor): Promise<void> {}

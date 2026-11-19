@@ -8,20 +8,15 @@ const {
   wireReplyFailureException
 } = require('../../packages/framework/dist/runtime/framework-errors-internal');
 
-function bindFixture(t, lookupElapsedMs, bindElapsedMs) {
+function bindFixture(t, bindElapsedMs) {
   let now = 1000;
   t.mock.method(performance, 'now', () => now);
   const actor = { nodeRid: 'actor-owner', actorId: 'deadline-actor', generation: 7n };
   const binding = { actor, bindingGeneration: 11n };
-  const lookupTimeouts = [];
   const bindTimeouts = [];
   const bindings = [];
   const service = {
     status: () => ({ state: 2 }),
-    lookupActor(_nodeRid, _actorId, timeoutMs) {
-      lookupTimeouts.push(timeoutMs);
-      return { kind: 'lookup' };
-    },
     bindActor(_sessionRid, _actor, timeoutMs) {
       bindTimeouts.push(timeoutMs);
       return { kind: 'bind', timeoutMs };
@@ -32,27 +27,19 @@ function bindFixture(t, lookupElapsedMs, bindElapsedMs) {
     async submit(submit) {
       const operation = submit();
       let terminalResult = RequestResult.Ok;
-      if (operation.kind === 'lookup') {
-        now += lookupElapsedMs;
-      } else {
-        now += Math.min(bindElapsedMs, operation.timeoutMs);
-        if (bindElapsedMs >= operation.timeoutMs) terminalResult = RequestResult.TimedOut;
-        else bindings.push(binding);
-      }
+      now += Math.min(bindElapsedMs, operation.timeoutMs);
+      if (bindElapsedMs >= operation.timeoutMs) terminalResult = RequestResult.TimedOut;
+      else bindings.push(binding);
       return {
         terminalResult,
         failureErrno: 0,
         parts: [],
-        kindData:
-          operation.kind === 'lookup'
-            ? { kind: 'actorLookupCompletion', location: { actor } }
-            : undefined
+        kindData: undefined
       };
     }
   };
   const stream = new ZLinkManagedStream({}, 'session-rid', undefined, service, completions);
   return {
-    lookupTimeouts,
     bindTimeouts,
     bindings,
     elapsedMs: () => now - 1000,
@@ -61,38 +48,22 @@ function bindFixture(t, lookupElapsedMs, bindElapsedMs) {
   };
 }
 
-test('STREAM Actor bind uses the time remaining after lookup and succeeds within the deadline', async (t) => {
-  const fixture = bindFixture(t, 30, 10);
+test('STREAM Actor bind succeeds within its request deadline', async (t) => {
+  const fixture = bindFixture(t, 10);
   await fixture.bind();
-  assert.deepEqual(fixture.lookupTimeouts, [80]);
-  assert.deepEqual(fixture.bindTimeouts, [50]);
-  assert.equal(fixture.elapsedMs(), 40);
+  assert.deepEqual(fixture.bindTimeouts, [80]);
+  assert.equal(fixture.elapsedMs(), 10);
   assert.equal(fixture.bindings.length, 1);
 });
 
-test('STREAM Actor lookup and bind together consume only one deadline', async (t) => {
-  const fixture = bindFixture(t, 30, 80);
+test('STREAM Actor admission and completion consume only one deadline', async (t) => {
+  const fixture = bindFixture(t, 80);
   const deadlineKind = wireReplyFailureException(RequestResult.TimedOut, 0, 'bind deadline').kind;
   await assert.rejects(fixture.bind(), (error) => {
     assert.equal(error.kind, deadlineKind);
     return true;
   });
-  assert.deepEqual(fixture.bindTimeouts, [50]);
+  assert.deepEqual(fixture.bindTimeouts, [80]);
   assert.equal(fixture.elapsedMs(), 80);
   assert.equal(fixture.bindings.length, 0);
 });
-
-for (const lookupElapsedMs of [80, 81]) {
-  test(`STREAM Actor bind is not submitted after lookup uses the deadline (${lookupElapsedMs} ms)`, async (t) => {
-    const fixture = bindFixture(t, lookupElapsedMs, 0);
-    const deadlineKind = wireReplyFailureException(RequestResult.TimedOut, 0, 'bind deadline').kind;
-    await assert.rejects(fixture.bind(), (error) => {
-      assert.equal(error.kind, deadlineKind);
-      return true;
-    });
-    assert.deepEqual(fixture.lookupTimeouts, [80]);
-    assert.deepEqual(fixture.bindTimeouts, []);
-    assert.equal(fixture.elapsedMs(), lookupElapsedMs);
-    assert.equal(fixture.bindings.length, 0);
-  });
-}

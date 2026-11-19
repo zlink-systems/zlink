@@ -4,7 +4,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import org.slf4j.LoggerFactory
-import systems.zlink.framework.errors.ZLinkConfigurationException
 import systems.zlink.framework.monitoring.ZLinkPeerState
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 
@@ -38,15 +37,9 @@ private constructor(private val checks: List<ReadinessCheck>) : AutoCloseable {
 
         fun reportIfReady() {
             if (reported) return
-            try {
-                if (ready()) {
-                    logger.info(evidence)
-                    reported = true
-                }
-            } catch (_: IllegalStateException) {
-                // The public runtime view is available after Framework startup completes.
-            } catch (_: ZLinkConfigurationException) {
-                // The public runtime view is available after Framework startup completes.
+            if (ready()) {
+                logger.info(evidence)
+                reported = true
             }
         }
     }

@@ -31,6 +31,8 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
+import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.spots.SpotHandle;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -56,8 +58,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private final Services services;
     private final String internalRouteChannel;
     private final RoutingId internalTargetNode;
-    private final RoutingId explicitTargetNode;
-    private final String explicitRouterChannelId;
+    private final Function<Duration, CompletionStage<SpotTransportAddress>> explicitTarget;
     private final boolean entryTarget;
     private AtomicBoolean deferred = new AtomicBoolean();
     //  Set only on the bounded call executing a deferred Join: the handle to
@@ -77,8 +78,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         this.services = services;
         this.internalRouteChannel = null;
         this.internalTargetNode = null;
-        this.explicitTargetNode = null;
-        this.explicitRouterChannelId = null;
+        this.explicitTarget = null;
         this.entryTarget = false;
     }
 
@@ -96,8 +96,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         this.services = services;
         this.internalRouteChannel = null;
         this.internalTargetNode = null;
-        this.explicitTargetNode = null;
-        this.explicitRouterChannelId = null;
+        this.explicitTarget = null;
         this.entryTarget = entryTarget;
     }
 
@@ -117,8 +116,33 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         this.services = services;
         this.internalRouteChannel = null;
         this.internalTargetNode = null;
-        this.explicitTargetNode = targetNode;
-        this.explicitRouterChannelId = routerChannelId;
+        this.explicitTarget =
+                ignored -> {
+                    if (routerChannelId != null && !routerChannelId.isBlank())
+                        return CompletableFuture.completedFuture(
+                                new SpotTransportAddress(
+                                        routerChannelId,
+                                        targetNode,
+                                        spotId,
+                                        0L,
+                                        entryTarget ? ZLinkSpotKind.ENTRY : ZLinkSpotKind.USER));
+                    return resolveRemoteAddress(spotId)
+                            .thenApply(
+                                    address ->
+                                            new SpotTransportAddress(
+                                                    address.routerChannelId(),
+                                                    targetNode,
+                                                    spotId,
+                                                    address.spotGeneration(),
+                                                    address.targetNodeGeneration(),
+                                                    address.authorityOwnerGeneration(),
+                                                    address.ownerLeaseGeneration(),
+                                                    address.spotKind(),
+                                                    address.stableType(),
+                                                    address.ownerId(),
+                                                    address.storeVersion(),
+                                                    address.authorityState()));
+                };
         this.entryTarget = entryTarget;
     }
 
@@ -136,9 +160,26 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         this.services = services;
         this.internalRouteChannel = routeChannel;
         this.internalTargetNode = targetNode;
-        this.explicitTargetNode = targetNode;
-        this.explicitRouterChannelId = routeChannel;
+        this.explicitTarget = null;
         this.entryTarget = true;
+    }
+
+    ZLinkActorSpotJoinCall(
+            ZLinkActorRuntime.DefaultActorContext context,
+            Function<Duration, CompletionStage<SpotTransportAddress>> target,
+            Message request,
+            Duration timeout,
+            Services services,
+            boolean entryTarget) {
+        this.context = context;
+        this.spotId = "";
+        this.request = request;
+        this.timeout = timeout;
+        this.services = services;
+        this.internalRouteChannel = null;
+        this.internalTargetNode = null;
+        this.explicitTarget = target;
+        this.entryTarget = entryTarget;
     }
 
     @Override
@@ -147,26 +188,24 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             throw new ZLinkConfigurationException("timeout must be positive");
         }
         ZLinkActorSpotJoinCall configured =
-                internalRouteChannel == null
-                        ? explicitTargetNode == null
-                                ? new ZLinkActorSpotJoinCall(
-                                        context, spotId, request, timeout, services, entryTarget)
-                                : new ZLinkActorSpotJoinCall(
-                                        context,
-                                        spotId,
-                                        explicitTargetNode,
-                                        explicitRouterChannelId,
-                                        request,
-                                        timeout,
-                                        services,
-                                        entryTarget)
-                        : new ZLinkActorSpotJoinCall(
+                internalRouteChannel != null
+                        ? new ZLinkActorSpotJoinCall(
                                 context,
                                 internalRouteChannel,
                                 internalTargetNode,
                                 request,
                                 timeout,
-                                services);
+                                services)
+                        : explicitTarget != null
+                                ? new ZLinkActorSpotJoinCall(
+                                        context,
+                                        explicitTarget,
+                                        request,
+                                        timeout,
+                                        services,
+                                        entryTarget)
+                                : new ZLinkActorSpotJoinCall(
+                                        context, spotId, request, timeout, services, entryTarget);
         configured.deferred = deferred;
         return configured;
     }
@@ -241,15 +280,19 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         traceJoinSent();
         Message requestPart = Message.from(request);
         return manage(
-                resolveJoinTarget()
+                resolveJoinTarget(remaining)
                         .thenCompose(
                                 target -> {
+                                    if (target.authorityState()
+                                            == ZLinkServiceAuthorityPayloadCodec.State.CLOSING) {
+                                        throw ZLinkFrameworkErrorOrigin.closingSpot();
+                                    }
                                     if (target.targetNodeRid()
                                             .equals(context.actorRef().nodeRid())) {
                                         return services.actors()
                                                 .joinLocalActor(
                                                         context.actor(),
-                                                        spotId,
+                                                        target.spotId(),
                                                         requestPart,
                                                         deadlineNanos)
                                                 .thenApply(
@@ -259,9 +302,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                                                         context.actorRef(),
                                                                         context.meshName()));
                                     }
-                                    if ((services.routedTransport() != null
+                                    if ((services.canonicalMeshNode() != null
+                                                    || services.routedTransport() != null
                                                     || services.transferTransport() != null)
-                                            && (internalRouteChannel != null
+                                            && (explicitTarget != null
+                                                    || internalRouteChannel != null
                                                     || services.remoteAddressResolver() != null)) {
                                         return joinRemoteRoutedSpot(
                                                 target, requestPart, operationId, deadlineNanos);
@@ -569,19 +614,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         return joinedSpotId == null || joinedSpotId.toString().isBlank() ? spotId : joinedSpotId;
     }
 
-    private CompletionStage<SpotTransportAddress> resolveJoinTarget() {
-        if (internalRouteChannel == null
-                && explicitRouterChannelId != null
-                && !explicitRouterChannelId.isBlank()) {
-            return CompletableFuture.completedFuture(
-                    new SpotTransportAddress(
-                            explicitRouterChannelId,
-                            explicitTargetNode,
-                            spotId,
-                            0L,
-                            0L,
-                            ZLinkSpotKind.ENTRY));
-        }
+    private CompletionStage<SpotTransportAddress> resolveJoinTarget(Duration remaining) {
+        if (explicitTarget != null) return explicitTarget.apply(remaining);
         return resolveRemoteAddress(spotId)
                 .thenApply(
                         address -> {
@@ -599,18 +633,13 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                         address.targetNodeGeneration(),
                                         address.authorityOwnerGeneration(),
                                         address.ownerLeaseGeneration(),
-                                        address.spotKind());
+                                        address.spotKind(),
+                                        address.stableType(),
+                                        address.ownerId(),
+                                        address.storeVersion(),
+                                        address.authorityState());
                             }
-                            if (explicitTargetNode == null) return address;
-                            return new SpotTransportAddress(
-                                    address.routerChannelId(),
-                                    explicitTargetNode,
-                                    spotId,
-                                    address.spotGeneration(),
-                                    address.targetNodeGeneration(),
-                                    address.authorityOwnerGeneration(),
-                                    address.ownerLeaseGeneration(),
-                                    address.spotKind());
+                            return address;
                         });
     }
 

@@ -12,6 +12,7 @@ export interface ZLinkSpotRouteResolver {
 }
 
 export interface ZLinkSpotRouteTarget {
+  readonly authorityState?: 'ready' | 'closing';
   readonly routerChannelId: string;
   readonly targetNodeRid: RoutingId;
   readonly spotId: RoutingId;

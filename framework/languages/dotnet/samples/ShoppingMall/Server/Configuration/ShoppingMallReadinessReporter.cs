@@ -46,28 +46,21 @@ public sealed class ShoppingMallReadinessReporter(
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            try
+            var status = routeMesh.GetStatus(SampleNames.MeshName);
+            if (
+                status.IsReady
+                && status.Peers.Count(static peer => peer.State == ZLinkPeerState.Ready) >= 2
+            )
             {
-                var status = routeMesh.GetStatus(SampleNames.MeshName);
-                if (
-                    status.IsReady
-                    && status.Peers.Count(static peer => peer.State == ZLinkPeerState.Ready) >= 2
-                )
-                {
-                    logger.LogInformation(
-                        "shoppingmall-ready kind=object-route node={NodeId} target=workflow-a",
-                        instance.InstanceId
-                    );
-                    logger.LogInformation(
-                        "shoppingmall-ready kind=object-route node={NodeId} target=workflow-b",
-                        instance.InstanceId
-                    );
-                    return;
-                }
-            }
-            catch (InvalidOperationException)
-            {
-                // Framework startup has not published RouteMesh status yet.
+                logger.LogInformation(
+                    "shoppingmall-ready kind=object-route node={NodeId} target=workflow-a",
+                    instance.InstanceId
+                );
+                logger.LogInformation(
+                    "shoppingmall-ready kind=object-route node={NodeId} target=workflow-b",
+                    instance.InstanceId
+                );
+                return;
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);

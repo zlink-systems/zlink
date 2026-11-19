@@ -4,7 +4,7 @@ using System.Reflection;
 
 namespace Zlink.Framework.Runtime.Handlers;
 
-internal delegate object? ZLinkHandlerMethodInvoker(
+internal delegate ValueTask<object?> ZLinkHandlerMethodInvoker(
     object target,
     object? arg0,
     object? arg1,
@@ -60,15 +60,9 @@ internal static class ZLinkHandlerMethodInvokerFactory
         var instance = method.IsStatic ? null : Expression.Convert(target, method.DeclaringType!);
         var call = Expression.Call(instance, method, convertedArguments);
 
-        Expression body =
-            method.ReturnType == typeof(void)
-                ? Expression.Block(call, Expression.Constant(null, typeof(object)))
-                : Expression.Convert(call, typeof(object));
-
-        var invoke = Expression
+        var body = ZLinkHandlerResultAwaiter.Prepare(call);
+        return Expression
             .Lambda<ZLinkHandlerMethodInvoker>(body, target, arg0, arg1, arg2, arg3, arg4)
             .Compile();
-        var awaitResult = ZLinkHandlerResultAwaiter.Prepare(method.ReturnType);
-        return (instance, a0, a1, a2, a3, a4) => awaitResult(invoke(instance, a0, a1, a2, a3, a4));
     }
 }

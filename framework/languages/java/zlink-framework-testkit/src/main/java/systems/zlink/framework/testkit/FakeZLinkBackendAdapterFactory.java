@@ -8,7 +8,6 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
@@ -1269,28 +1268,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                             1,
                             0,
                             List.of(reply)));
-        }
-
-        @Override
-        public CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
-                ZLinkBackendActorRef actor,
-                RoutingId targetNodeRid,
-                Message request,
-                Duration timeout) {
-            record("joinActorEntrySpot." + actor.actorId() + "." + targetNodeRid);
-            return CompletableFuture.completedFuture(
-                    new ZLinkBackendActorJoinEntrySpotResult(
-                            ZLinkBackendRequestResult.OK,
-                            0,
-                            new ZLinkBackendActorRef(
-                                    targetNodeRid, actor.actorId(), actor.generation()),
-                            targetNodeRid,
-                            targetNodeRid.toString(),
-                            1,
-                            0,
-                            List.of(
-                                    Message.from(
-                                            "entry-joined".getBytes(StandardCharsets.UTF_8)))));
         }
 
         @Override

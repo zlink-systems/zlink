@@ -247,6 +247,7 @@ wait_log_count 1 \
 wait_log_count 1 \
   "bingo-lifecycle session-disconnect actor=player-2 destroy=false" \
   "${session_logs[@]}"
+wait_log_count 2 "bingo-lifecycle room-close spot=" "${play_logs[@]}"
 wait_log_count 0 "bingo-record reported actor=observer" "${play_logs[@]}"
 wait_log_count 0 "bingo-lifecycle entry-destroy-complete actor=observer" "${play_logs[@]}"
 

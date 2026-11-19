@@ -575,6 +575,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                     {
                         var requestTimeout = RemainingTimeout(deadline.Monotonic);
                         var admissionHeader = ZLinkClientCallCodec.CreateEnvelope(
+                            registration.TimeProvider,
                             ZLinkMessageKind.Request,
                             snapshot.RouterChannelId,
                             ZLinkRemoteActorJoinPackets.AdmissionPacketName,
@@ -1453,6 +1454,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         try
         {
             var header = ZLinkClientCallCodec.CreateEnvelope(
+                registration.TimeProvider,
                 ZLinkMessageKind.Request,
                 reservation.RouterChannelId,
                 ZLinkRemoteActorJoinPackets.AdmissionAbortPacketName,

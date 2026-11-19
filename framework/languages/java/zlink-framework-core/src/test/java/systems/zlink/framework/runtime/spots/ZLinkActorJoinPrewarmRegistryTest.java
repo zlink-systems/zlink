@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -52,7 +54,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
                                 () ->
                                         serials.discardApplications()
                                                 .thenCompose(ignored -> registry.discard(id)));
-                queue.executionPolicy(execution);
+                ZLinkSpotCloseCallAccess.executionPolicy(queue, execution);
                 execution.ready().toCompletableFuture().join();
                 fixture.failRenewal();
                 fixture.now.set(fixture.runtime.ownerLeaseSnapshot().outageCutoffNanos());
@@ -86,7 +88,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
                         new ZLinkSpotSerialExecutor(
                                 queue, Runnable::run, Runnable::run, mode, false);
                 var execution = fixture.runtime.execution(() -> true, () -> {});
-                queue.executionPolicy(execution);
+                ZLinkSpotCloseCallAccess.executionPolicy(queue, execution);
                 var registry = new ZLinkActorJoinPrewarmRegistry();
                 var id = UUID.randomUUID();
                 execution.discardAsync().toCompletableFuture().join();

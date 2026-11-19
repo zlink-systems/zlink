@@ -32,6 +32,61 @@ function frame(value) {
   return [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];
 }
 
+test('an empty transferred prefix retains target arrivals until dispatch opens', async () => {
+  const { coordinator } = harness();
+  const executed = [];
+  let open;
+  const start = new Promise((resolve) => {
+    open = resolve;
+  });
+  const admission = coordinator.admitTransferredPrefix(
+    'actor-1',
+    1n,
+    [],
+    (records) => ({
+      terminal: (async () => {
+        for (const record of records) {
+          record.onWithdrawable(() => false);
+          await record.preparation.prepare(new AbortController().signal);
+          await record.drain(async (parts) => {
+            const value = parts[1].data().toString();
+            executed.push(value);
+            return value;
+          });
+        }
+      })()
+    }),
+    undefined,
+    start,
+    () => assert.fail('live arrivals retain their own terminal')
+  );
+  const requestParts = frame('direct');
+  const sendParts = frame('followed');
+  try {
+    const request = coordinator.capture(
+      'remote',
+      'actor-1',
+      requestParts,
+      true,
+      undefined,
+      actorRef()
+    );
+    assert.notEqual(request, undefined);
+    await coordinator.capture('remote', 'actor-1', sendParts, false, undefined, actorRef());
+    assert.deepEqual(executed, []);
+    assert.equal(coordinator.snapshot('actor-1').length, 2);
+    open();
+    assert.equal(await request, 'direct');
+    await admission.terminal;
+    assert.deepEqual(executed, ['direct', 'followed']);
+    assert.equal(coordinator.isActive('actor-1'), false);
+  } finally {
+    open();
+    requestParts.forEach((part) => part.close());
+    sendParts.forEach((part) => part.close());
+  }
+});
+
 test('relocation captures the original requester fence and reply route', async () => {
   const { coordinator } = harness();
   coordinator.beginProvisional('actor-1', 1n);

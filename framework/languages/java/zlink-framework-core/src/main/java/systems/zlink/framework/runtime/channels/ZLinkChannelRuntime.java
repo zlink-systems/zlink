@@ -22,8 +22,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkLocationRole;
-import systems.zlink.framework.monitoring.ZLinkClientServerRuntime;
-import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
@@ -50,6 +48,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLivene
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
@@ -129,8 +128,6 @@ public final class ZLinkChannelRuntime
     ZLinkClientServerLocationRuntime clientServerLocationRuntime;
     private volatile Supplier<ZLinkFrameworkRuntimeState> hostState =
             () -> ZLinkFrameworkRuntimeState.SERVING;
-    private final ZLinkClientServerRuntime clientServerRuntime;
-    private final ZLinkFanoutRuntime fanoutRuntime;
     private Supplier<ZLinkInternalSpotNode> spotRouteBridgeOwner;
     private volatile Supplier<ZLinkInternalSpotNode> requestSourceMeshOwner;
     final ScheduledExecutorService timeoutExecutor;
@@ -163,12 +160,12 @@ public final class ZLinkChannelRuntime
         return new DefaultRouteMeshChannelRuntimeOptions();
     }
 
-    public ZLinkClientServerRuntime clientServerRuntime() {
-        return clientServerRuntime;
+    ZLinkFanoutLocationRuntime monitoringFanoutLocation() {
+        return fanoutLocationRuntime;
     }
 
-    public ZLinkFanoutRuntime fanoutRuntime() {
-        return fanoutRuntime;
+    ZLinkManualFanoutRuntime monitoringManualFanout() {
+        return manualFanoutRuntime;
     }
 
     public String listenerEndpoint(ZLinkListenerKind kind, String name) {
@@ -185,10 +182,6 @@ public final class ZLinkChannelRuntime
 
     ZLinkChannelSocketRegistry channelSocketRegistry() {
         return sockets;
-    }
-
-    public void signalTopologyStatus() {
-        sockets.signalTopologyChanged();
     }
 
     public void setHostStateSupplier(Supplier<ZLinkFrameworkRuntimeState> hostState) {
@@ -634,13 +627,6 @@ public final class ZLinkChannelRuntime
                         actualNanoTime,
                         () -> !running,
                         actualStateLane);
-        this.clientServerRuntime = new ZLinkClientServerRuntimeView(sockets, () -> hostState.get());
-        this.fanoutRuntime =
-                new ZLinkFanoutRuntimeView(
-                        sockets,
-                        () -> fanoutLocationRuntime,
-                        () -> manualFanoutRuntime,
-                        () -> hostState.get());
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.callFactories = new ZLinkChannelCalls(registration, serializer, () -> this);
         this.replyDecoder = new ZLinkChannelReplyDecoder(this.serializer);
@@ -1350,7 +1336,12 @@ public final class ZLinkChannelRuntime
             Duration timeout) {
         Duration effectiveTimeout = effectiveRouteTimeout(timeout);
         List<Message> requestParts =
-                ZLinkChannelCallRuntime.parts(Optional.of(packetName), payload);
+                ZLinkChannelCallRuntime.parts(
+                        channelName,
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        Optional.of(packetName),
+                        payload,
+                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
         var result =
                 systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
                         .<ZLinkBackendReceived, Message>prepareOperation(

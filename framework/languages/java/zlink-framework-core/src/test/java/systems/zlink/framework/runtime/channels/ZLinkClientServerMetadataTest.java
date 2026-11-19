@@ -171,31 +171,35 @@ final class ZLinkClientServerMetadataTest {
             sockets.addClientServerConnection("server", descriptor, dealer);
             assertTrue(sockets.admitClientServerConnection("server", descriptor));
             try {
-                var json = new com.fasterxml.jackson.databind.ObjectMapper();
-                var fixtures =
-                        json.readTree(
-                                        java.nio.file.Path.of(
-                                                        "../../../runtime/protocol/fixtures/client-server-metadata.json")
-                                                .toFile())
-                                .get("cases");
-                for (var fixture : fixtures) {
-                    if (fixture.get("valid").asBoolean()) continue;
-                    var header =
-                            json.createObjectNode()
-                                    .put("formatMarker", 242)
-                                    .put("kind", 1)
-                                    .put("channelName", "work")
-                                    .put("messageName", "Request")
-                                    .put("contentType", "application/json");
-                    header.set("metadata", fixture.get("metadata"));
-                    String headerJson = header.toString();
-                    if (fixture.has("receivedEncoded")) {
-                        headerJson =
-                                headerJson.substring(0, headerJson.lastIndexOf("\"metadata\":"))
-                                        + "\"metadata\":"
-                                        + fixture.get("receivedEncoded").asText()
-                                        + "}";
-                    }
+                var duplicateEntry =
+                        zlink.framework.channel.v1.ChannelHeaderV1.MetadataEntry.newBuilder()
+                                .setKey("tenant")
+                                .setValue("blue")
+                                .build();
+                var duplicateHeader =
+                        zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader.newBuilder()
+                                .setKindValue(1)
+                                .setChannelName("work")
+                                .setMessageName("Request")
+                                .setContentType("application/json")
+                                .addMetadata(duplicateEntry)
+                                .addMetadata(duplicateEntry.toBuilder().setValue("green"))
+                                .build()
+                                .toByteArray();
+                var oversizedHeader =
+                        zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader.newBuilder()
+                                .setKindValue(1)
+                                .setChannelName("work")
+                                .setMessageName("Request")
+                                .setContentType("application/json")
+                                .addMetadata(
+                                        zlink.framework.channel.v1.ChannelHeaderV1.MetadataEntry
+                                                .newBuilder()
+                                                .setKey("tenant")
+                                                .setValue("x".repeat(1100)))
+                                .build()
+                                .toByteArray();
+                for (byte[] invalidHeader : List.of(duplicateHeader, oversizedHeader)) {
                     var rejected =
                             new CompletableFuture<
                                     systems.zlink.framework.errors.ZLinkFrameworkErrorKind>();
@@ -205,9 +209,7 @@ final class ZLinkClientServerMetadataTest {
                                     Optional.of(RoutingId.from("client")),
                                     Optional.empty(),
                                     Optional.of(2L),
-                                    List.of(
-                                            Message.from(headerJson),
-                                            Message.from("{\"value\":\"bad\"}")),
+                                    List.of(Message.from(invalidHeader), Message.from("{}")),
                                     response ->
                                             rejected.complete(
                                                     systems.zlink.framework.runtime.messaging
@@ -217,8 +219,7 @@ final class ZLinkClientServerMetadataTest {
                     dispatcher.dispatchRequest("work", null, invalid);
                     assertEquals(
                             systems.zlink.framework.errors.ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                            rejected.get(2, TimeUnit.SECONDS),
-                            fixture.get("name").asText());
+                            rejected.get(2, TimeUnit.SECONDS));
                     assertNull(requested);
                     assertNull(sent);
                 }

@@ -242,9 +242,8 @@ public sealed class StartupStoreStallTests
         await firstHosted.StartAsync(CancellationToken.None).WaitAsync(Hang);
         try
         {
-            Assert.True(
-                await first.GetRequiredService<ZLinkLocationRuntime>().RenewOwnerLeaseOnceAsync()
-            );
+            // The first host's heartbeat owns lease renewal; a second renew submitted here
+            // would race it on the same Store version.
             using var startupTimeout = new CancellationTokenSource(Hang);
             await foreach (
                 var observed in first

@@ -190,23 +190,24 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     )
     {
         Func<CancellationToken, ValueTask>? drain;
+        var candidate = new ZLinkSerialWorkItem(
+            callback,
+            ready: ready,
+            executionAllowed: _executionAllowed
+        )
+        {
+            Preparation = new ZLinkSerialWorkPreparation(prepare, cancel, NotifyReadiness),
+            ErrorReporter = errorReporter,
+        };
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0 || _applicationAdmissionClosed)
+            if (!CanAcceptApplicationUnderLock(candidate))
             {
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
             }
-            item = new ZLinkSerialWorkItem(
-                callback,
-                ready: ready,
-                executionAllowed: _executionAllowed
-            )
-            {
-                Preparation = new ZLinkSerialWorkPreparation(prepare, cancel, NotifyReadiness),
-                ErrorReporter = errorReporter,
-            };
-            CommitWorkItemUnderLock(_applicationQueue, item, ZLinkSerialWorkLane.Application);
+            item = candidate;
+            CommitWorkItemUnderLock(_applicationQueue, candidate, ZLinkSerialWorkLane.Application);
             drain = ReserveDrainUnderLock();
         }
         PublishDrain(drain);
@@ -545,7 +546,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         ZLinkApplicationJobQueueInvocation.Scope? durable = null;
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0 || _applicationAdmissionClosed)
+            if (!CanAcceptApplicationUnderLock(candidate))
             {
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
@@ -729,7 +730,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0 || _applicationAdmissionClosed)
+            var candidate = new ZLinkSerialWorkItem(
+                callback,
+                relocationRelease,
+                previousOwnerMessageFollow,
+                ZLinkSerialWorkLane.Application,
+                _nextAcceptedSequence,
+                payload,
+                payloadFactory,
+                executionAllowed: _executionAllowed
+            );
+            candidate.AcceptedState = acceptedState;
+            if (!CanAcceptApplicationUnderLock(candidate))
             {
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.Closed;
@@ -739,17 +751,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.RelocationMoving;
             }
-            TryCommitAcceptedWorkUnderLock(
-                callback,
-                relocationRelease,
-                previousOwnerMessageFollow,
-                payloadLength,
-                payload,
-                payloadFactory,
-                out item,
-                out var scheduleDrain,
-                acceptedState
-            );
+            TryCommitAcceptedWorkUnderLock(candidate, out item, out var scheduleDrain);
             drain = scheduleDrain ? ReserveDrainUnderLock() : null;
         }
 
@@ -1226,16 +1228,15 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             _sharedOwner!._applicationQueue.Publish(new ZLinkSerialWorkItem(this));
     }
 
+    private bool CanAcceptApplicationUnderLock(ZLinkSerialWorkItem candidate) =>
+        Volatile.Read(ref _completed) == 0
+        && !_applicationAdmissionClosed
+        && candidate.ExecutionStatus != ZLinkObjectExecutionStatus.Paused;
+
     private void TryCommitAcceptedWorkUnderLock(
-        Func<CancellationToken, ValueTask> callback,
-        Action relocationRelease,
-        bool previousOwnerMessageFollow,
-        int payloadLength,
-        ReadOnlyMemory<byte> payload,
-        Func<ReadOnlyMemory<byte>>? payloadFactory,
+        ZLinkSerialWorkItem candidate,
         out ZLinkSerialWorkItem item,
-        out bool scheduleDrain,
-        object? acceptedState = null
+        out bool scheduleDrain
     )
     {
         if (_nextAcceptedSequence == ulong.MaxValue)
@@ -1243,18 +1244,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
         var acceptedSequence = _nextAcceptedSequence;
         var destination = _relocation?.Held ?? _applicationQueue;
-        var candidate = new ZLinkSerialWorkItem(
-            callback,
-            relocationRelease,
-            previousOwnerMessageFollow,
-            ZLinkSerialWorkLane.Application,
-            acceptedSequence,
-            payload,
-            payloadFactory,
-            executionAllowed: _executionAllowed
-        );
-        candidate.AcceptedState = acceptedState;
-
         CommitWorkItemUnderLock(destination, candidate, ZLinkSerialWorkLane.Application);
         _nextAcceptedSequence = acceptedSequence + 1;
 
@@ -2278,11 +2267,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             async _ =>
             {
                 turn.ResetSuspension();
-                resume(
-                    lifecycleOwner is not null && !turn.Item.IsExecutionAllowed
-                        ? ZLinkSerialPostAdmission.Closed
-                        : ZLinkSerialPostAdmission.Accepted
-                );
+                resume(ZLinkSerialPostAdmission.Accepted);
                 var ownerTask = turn.OwnerTask;
                 if (ownerTask is null || ownerTask.IsCompleted)
                     return;
@@ -2293,8 +2278,16 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 ? ZLinkSerialWorkLane.Application
                 : ZLinkSerialWorkLane.Lifecycle,
             reservationHeld: false,
-            relocationRelease: () => resume(ZLinkSerialPostAdmission.Closed),
-            executionAllowed: lifecycleOwner is null ? () => turn.Item.ExecutionStatus : null
+            relocationRelease: () => resume(GetResumeAdmission(turn)),
+            executionAllowed: () =>
+                GetResumeAdmission(turn) switch
+                {
+                    ZLinkSerialPostAdmission.Accepted => ZLinkObjectExecutionStatus.Allowed,
+                    ZLinkSerialPostAdmission.Paused => ZLinkObjectExecutionStatus.Paused,
+                    ZLinkSerialPostAdmission.OwnershipLost =>
+                        ZLinkObjectExecutionStatus.OwnershipLost,
+                    _ => ZLinkObjectExecutionStatus.Stopped,
+                }
         );
         Func<CancellationToken, ValueTask>? drain;
         lock (_admissionGate)
@@ -2329,6 +2322,40 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
 
         PublishDrain(drain);
+        return ZLinkSerialPostAdmission.Accepted;
+    }
+
+    private ZLinkSerialPostAdmission GetResumeAdmission(ZLinkSerialTurn turn)
+    {
+        if (Volatile.Read(ref _completed) != 0)
+            return ZLinkSerialPostAdmission.Closed;
+        if (
+            _relocated
+            || _relocation is { } relocation
+                && !(
+                    relocation.PreparationOwner is { } preparation
+                    && ReferenceEquals(turn.LifecycleOwner, preparation)
+                )
+        )
+            return ZLinkSerialPostAdmission.Sealed;
+
+        var queueStatus = _executionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed;
+        var recordStatus = turn.Item.ExecutionStatus;
+        if (
+            queueStatus == ZLinkObjectExecutionStatus.OwnershipLost
+            || recordStatus == ZLinkObjectExecutionStatus.OwnershipLost
+        )
+            return ZLinkSerialPostAdmission.OwnershipLost;
+        if (queueStatus == ZLinkObjectExecutionStatus.Stopped)
+            return ZLinkSerialPostAdmission.Closed;
+        if (
+            queueStatus == ZLinkObjectExecutionStatus.Paused
+            || recordStatus == ZLinkObjectExecutionStatus.Paused
+        )
+            return ZLinkSerialPostAdmission.Paused;
+
+        // Actor destroy closes new payload admission. The existing turn still
+        // owns its terminal; only the queue and Location can prevent its resume.
         return ZLinkSerialPostAdmission.Accepted;
     }
 
@@ -2411,4 +2438,7 @@ internal enum ZLinkSerialPostAdmission
 {
     Accepted = 0,
     Closed = 1,
+    Sealed,
+    OwnershipLost,
+    Paused,
 }
