@@ -718,6 +718,8 @@ class raw_mesh_node_owner_t
     // itself is admitted through _lane.
     mutable std::mutex _lifecycle_mutex;
     std::shared_ptr<std::mutex> _socket_mutex = std::make_shared<std::mutex> ();
+    // True only while this owner created the Core context and has not ended it.
+    bool _owns_context;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
     application_job_queue_t::receive_flow_registration_t _receive_flow_registration;
