@@ -132,3 +132,5 @@ export async function runWireChecks(): Promise<void> {
     await app.close();
   }
 }
+
+void runWireChecks();
