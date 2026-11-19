@@ -660,6 +660,149 @@ TEST (ZLinkStateLane, SynchronousTurnQueuesAfterAcceptedPredecessors)
     EXPECT_LE (allocations, 4u);
 }
 
+TEST (ZLinkStateLane, SynchronousResultQueuesOnTheExistingDrain)
+{
+    using namespace zlink::framework;
+    test::manual_internal_scheduler_t executor;
+    state_lane_t lane (executor);
+    std::vector<int> order;
+    ASSERT_TRUE (lane.try_post ([&] { order.push_back (0); }));
+    auto predecessor = lane.run ([&] { order.push_back (1); });
+    std::thread::id caller_id;
+    std::thread::id work_id;
+    int result = 0;
+    std::thread caller ([&] {
+        caller_id = std::this_thread::get_id ();
+        result = lane.run_sync_result ([&] {
+            work_id = std::this_thread::get_id ();
+            order.push_back (2);
+            return 42;
+        });
+    });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (runtime::state_lane_test_access_t::pending_work (lane) < 3
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    ASSERT_EQ (3u, runtime::state_lane_test_access_t::pending_work (lane));
+    ASSERT_TRUE (lane.try_post ([&] { order.push_back (3); }));
+    executor.run_all ();
+    caller.join ();
+    predecessor.get ();
+    EXPECT_EQ (42, result);
+    EXPECT_NE (caller_id, work_id);
+    EXPECT_EQ (std::this_thread::get_id (), work_id);
+    EXPECT_EQ ((std::vector<int>{0, 1, 2, 3}), order);
+}
+
+TEST (ZLinkStateLane, ContendedSynchronousResultsKeepFifoResultsAndAcceptedWorkDuringClose)
+{
+    using namespace zlink::framework;
+    using namespace std::chrono_literals;
+    constexpr int caller_count = 4;
+    struct caller_error_t
+    {
+        int caller;
+    };
+
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> drain_entered;
+    std::promise<void> release_drain;
+    auto drain_released = release_drain.get_future ();
+    std::thread::id drain_thread;
+    ASSERT_TRUE (lane.try_post ([&] {
+        drain_thread = std::this_thread::get_id ();
+        drain_entered.set_value ();
+        drain_released.wait ();
+    }));
+    ASSERT_EQ (std::future_status::ready, drain_entered.get_future ().wait_for (2s));
+
+    std::mutex submit_mutex;
+    std::condition_variable submit_changed;
+    bool start_callers = false;
+    int next_to_submit = 0;
+    std::array<int, caller_count> values{};
+    std::array<int, caller_count> errors{};
+    std::array<bool, caller_count> reentrant_rejected{};
+    std::array<std::thread::id, caller_count> caller_threads{};
+    std::array<std::thread::id, caller_count> work_threads{};
+    std::vector<int> order;
+    std::vector<std::thread> callers;
+    callers.reserve (caller_count);
+    for (int caller = 0; caller < caller_count; ++caller) {
+        callers.emplace_back ([&, caller] {
+            int ticket;
+            {
+                std::unique_lock lock (submit_mutex);
+                submit_changed.wait (lock, [&] { return start_callers; });
+                ticket = caller;
+                submit_changed.wait (lock, [&] { return next_to_submit == ticket; });
+            }
+            caller_threads[caller] = std::this_thread::get_id ();
+            try {
+                values[caller] = lane.run_sync_result ([&, caller] {
+                    work_threads[caller] = std::this_thread::get_id ();
+                    order.push_back (caller);
+                    if (caller == 0) {
+                        try {
+                            lane.run_sync_result ([] {});
+                        }
+                        catch (const std::logic_error &) {
+                            reentrant_rejected[caller] = true;
+                        }
+                    }
+                    if (caller == 2)
+                        throw caller_error_t{caller};
+                    return caller * 10;
+                });
+            }
+            catch (const caller_error_t &error) {
+                errors[caller] = error.caller + 1;
+            }
+        });
+    }
+    {
+        std::lock_guard lock (submit_mutex);
+        start_callers = true;
+    }
+    submit_changed.notify_all ();
+
+    for (int accepted = 1; accepted <= caller_count; ++accepted) {
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (runtime::state_lane_test_access_t::pending_work (lane)
+                 < static_cast<std::size_t> (accepted)
+               && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        ASSERT_EQ (static_cast<std::size_t> (accepted),
+                   runtime::state_lane_test_access_t::pending_work (lane));
+        {
+            std::lock_guard lock (submit_mutex);
+            next_to_submit = accepted;
+        }
+        submit_changed.notify_all ();
+    }
+
+    auto closed = lane.close_async ();
+    EXPECT_THROW (lane.run_sync_result ([] {}), std::runtime_error);
+    release_drain.set_value ();
+    for (auto &caller : callers)
+        caller.join ();
+    closed.result ().value ();
+
+    EXPECT_EQ ((std::vector<int>{0, 1, 2, 3}), order);
+    for (int caller = 0; caller < caller_count; ++caller) {
+        EXPECT_EQ (drain_thread, work_threads[caller]);
+        EXPECT_NE (caller_threads[caller], work_threads[caller]);
+        if (caller == 2) {
+            EXPECT_EQ (3, errors[caller]);
+        } else {
+            EXPECT_EQ (0, errors[caller]);
+            EXPECT_EQ (caller * 10, values[caller]);
+        }
+    }
+    EXPECT_TRUE (reentrant_rejected[0]);
+}
+
 TEST (ZLinkStateLane, WaitingSynchronousCallerDrainsAcceptedWorkDuringClose)
 {
     using namespace zlink::framework;
