@@ -385,7 +385,6 @@ export interface StreamSessionService {
   shutdown(timeoutMs: number): RequestResult;
   close(): void;
   status(): StreamSessionStatus;
-  lookupActor(targetNodeRid: RoutingId, actorId: string, timeoutMs?: number): MeshOperationId;
   bindActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,

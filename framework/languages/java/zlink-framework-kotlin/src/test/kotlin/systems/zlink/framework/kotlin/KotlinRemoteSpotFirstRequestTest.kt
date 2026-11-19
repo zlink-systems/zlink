@@ -9,6 +9,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.channels.ZLinkRouteClient
@@ -25,20 +26,21 @@ import systems.zlink.framework.testsupport.ZLinkHostServing
 
 class KotlinRemoteSpotFirstRequestTest {
     @Test
+    // Bounds host startup and Serving, which run outside the scenario deadline.
+    @Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     fun freshObjectClientAwaitsItsFirstExistingRemoteSpotRequestOnce() = runBlocking {
-        withTimeout(15000) {
-            calls.set(0)
-            val locations = ZLinkInMemoryLocationStore()
-            val owner = lifecycle(locations, "kotlin-owner", true)
+        calls.set(0)
+        val locations = ZLinkInMemoryLocationStore()
+        val owner = lifecycle(locations, "kotlin-owner", true)
+        try {
+            owner.start()
+            ZLinkHostServing.await(owner.runtimeBean())
+            val created = owner.spotManager().kotlin().getOrCreate(SPOT, TYPE).inMesh(MESH).await()
+            val requester = lifecycle(locations, "kotlin-requester", false)
             try {
-                owner.start()
-                ZLinkHostServing.await(owner.runtimeBean())
-                val created =
-                    owner.spotManager().kotlin().getOrCreate(SPOT, TYPE).inMesh(MESH).await()
-                val requester = lifecycle(locations, "kotlin-requester", false)
-                try {
-                    requester.start()
-                    ZLinkHostServing.await(requester.runtimeBean())
+                requester.start()
+                ZLinkHostServing.await(requester.runtimeBean())
+                withTimeout(15000) {
                     val existing =
                         requester
                             .spotManager()
@@ -62,12 +64,12 @@ class KotlinRemoteSpotFirstRequestTest {
                     )
                     assertEquals("first", reply.getOrThrow())
                     assertEquals(1, calls.get())
-                } finally {
-                    requester.stop()
                 }
             } finally {
-                owner.stop()
+                requester.stop()
             }
+        } finally {
+            owner.stop()
         }
     }
 

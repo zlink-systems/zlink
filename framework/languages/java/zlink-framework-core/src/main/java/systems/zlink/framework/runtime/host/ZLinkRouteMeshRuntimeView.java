@@ -82,10 +82,9 @@ final class ZLinkRouteMeshRuntimeView
     private ZLinkMeshNodeSnapshot buildSnapshot(String meshName, ZLinkMeshNodeSnapshot previous) {
         ZLinkFrameworkRuntimeState hostState = runtime.status().state();
         if (hostState == ZLinkFrameworkRuntimeState.PREPARING
-                || (previous != null
-                        && (runtime.closing()
-                                || hostState == ZLinkFrameworkRuntimeState.STOPPED
-                                || hostState == ZLinkFrameworkRuntimeState.ERROR))) {
+                || runtime.closing()
+                || hostState == ZLinkFrameworkRuntimeState.STOPPED
+                || hostState == ZLinkFrameworkRuntimeState.ERROR) {
             List<ZLinkMeshChannelSnapshot> channels =
                     previous == null
                             ? runtime.monitoringMeshNodeChannelNames(meshName).stream()

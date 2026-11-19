@@ -93,7 +93,7 @@ The runner owns the run result and collects connector cleanup failures separatel
 
 ## Debugging settings
 
-`runHost` enables dispatch diagnostics at `Normal` and writes Framework message flow to node stderr. Node stdout and stderr are stored separately as `session-0.out.log` and `session-0.err.log` under `.logs/run-<id>/`. Do not add a second flow listener.
+`runHost` enables dispatch diagnostics at `Normal` and writes Framework message flow to node stderr. Node stdout and stderr are stored separately as `session-0.out.log` and `session-0.err.log` under `.logs/run-<id>/`. Do not add a second flow listener. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
 
 Read the first exception and the preceding flow/correlation records. A connection-only run may contain no application message-flow events because it dispatches no game packets. Startup failures before dispatch must retain their exception and stack.
 

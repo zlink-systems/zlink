@@ -436,11 +436,13 @@ export class ZLinkFrameworkRuntimeHost
     );
     this.clientServerRuntime = new ZLinkClientServerRuntimeProjection(
       () => this.channelRuntime,
-      () => this.runtimeState
+      () => this.runtimeState,
+      options.registration
     );
     this.fanoutRuntime = new ZLinkFanoutRuntimeProjection(
       () => this.channelRuntime,
-      () => this.runtimeState
+      () => this.runtimeState,
+      options.registration
     );
     this.meshRouters = new MeshRouterResolver(options.registration);
     this.spotRouterChannelIdForMesh = this.meshRouters.spotRouterChannelIdByMesh();
@@ -866,6 +868,11 @@ export class ZLinkFrameworkRuntimeHost
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      ensureEntryActivation: (meshName) => {
+        const runtime = this.spotNodeRuntime;
+        if (runtime === undefined) throw new Error('Relocation target runtime is not started.');
+        return runtime.ensureEntryActivation(meshName);
+      },
       requestPeerReconcile: (meshName, peerRid) =>
         this.spotNodeRuntime?.requestPeerReconcile(meshName, peerRid) ?? Promise.resolve(),
       sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),

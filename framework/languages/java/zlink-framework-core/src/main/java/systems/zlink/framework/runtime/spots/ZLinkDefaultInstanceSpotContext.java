@@ -27,6 +27,16 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
 final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, SpotDispatchLine {
+    @Override
+    public void requireExecution() {
+        dispatchQueue.requireExecution(true);
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
+        return enqueueDispatch(operation);
+    }
+
     final systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution;
     private final ZLinkSpotContextHost host;
     private final ZLinkWorkerPool workerPool;

@@ -1168,6 +1168,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     });
   }
 
+  setActorMessageFollowResolver(
+    resolver: (
+      fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence
+    ) => boolean
+  ): void {
+    this.requireStateful().setActorMessageFollowResolver(resolver);
+  }
+
   restoreActorSessionBinding(
     actor: ZLinkBackendActorRef,
     sessionNodeRid: unknown,
@@ -1289,10 +1297,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requireStateful().rememberSpotRoute(route, expectedCurrentRoute);
   }
 
-  entrySpotRouteFence(targetNodeRid: string, targetSpotId: string): ServiceDirectSpotRouteFence {
+  entrySpotRouteFence(targetNodeRid: string): ServiceDirectSpotRouteFence {
     const generation = this.peerGeneration(targetNodeRid);
     return {
-      spot: { spotId: targetSpotId, generation },
+      spot: { spotId: targetNodeRid, generation },
       targetNodeRid,
       targetNodeGeneration: generation,
       authorityOwnerGeneration: generation,
@@ -2135,7 +2143,7 @@ class RawServiceSpot implements ServiceSpot {
       String(targetSpotId),
       targetSpotGeneration,
       options?.entrySpot === true
-        ? this.backend.entrySpotRouteFence(String(targetNodeRid), String(targetSpotId))
+        ? this.backend.entrySpotRouteFence(String(targetNodeRid))
         : undefined
     );
     return this.backend.sendFromSpot(this.state, routeFence, parts);
@@ -2162,7 +2170,7 @@ class RawServiceSpot implements ServiceSpot {
       String(targetSpotId),
       targetSpotGeneration,
       options?.entrySpot === true
-        ? this.backend.entrySpotRouteFence(String(targetNodeRid), String(targetSpotId))
+        ? this.backend.entrySpotRouteFence(String(targetNodeRid))
         : undefined
     );
     return this.backend.requestFromSpot(
@@ -2295,18 +2303,6 @@ class RawStreamSessionService implements StreamSessionService {
       pendingByteCount: 0n,
       lastError: 0
     };
-  }
-
-  lookupActor(
-    targetNodeRid: RoutingId,
-    actorId: string,
-    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
-  ): MeshOperationId {
-    this.requireStarted();
-    return this.observe(
-      OperationKind.ActorLookup,
-      this.stateful.lookupRemoteActor(String(targetNodeRid), actorId, timeoutMs)
-    );
   }
 
   bindActor(

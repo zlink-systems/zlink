@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 
 import java.util.List;
@@ -101,13 +100,9 @@ public final class BingoReadinessReporter implements ApplicationRunner, AutoClos
             if (reported) {
                 return;
             }
-            try {
-                if (ready.getAsBoolean()) {
-                    logger.info(evidence);
-                    reported = true;
-                }
-            } catch (IllegalStateException | ZLinkConfigurationException ignored) {
-                // The public runtime view is not available until Framework startup completes.
+            if (ready.getAsBoolean()) {
+                logger.info(evidence);
+                reported = true;
             }
         }
 

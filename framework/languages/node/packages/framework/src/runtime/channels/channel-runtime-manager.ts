@@ -116,19 +116,22 @@ export class ZLinkChannelRuntimeManager {
     });
   }
 
-  clientServerTopology(channelName: string) {
-    const channel = this.registration.channels.get(channelName);
+  static clientServerRole(registration: ZLinkFrameworkRegistration, channelName: string) {
+    const channel = registration.channels.get(channelName);
     const client = channel?.client !== undefined;
     const server = channel?.server !== undefined;
+    return client && server
+      ? ('clientAndServer' as const)
+      : client
+        ? ('client' as const)
+        : server
+          ? ('server' as const)
+          : undefined;
+  }
+
+  clientServerTopology(channelName: string) {
     return {
-      localRole:
-        client && server
-          ? ('clientAndServer' as const)
-          : client
-            ? ('client' as const)
-            : server
-              ? ('server' as const)
-              : undefined,
+      localRole: ZLinkChannelRuntimeManager.clientServerRole(this.registration, channelName),
       descriptors: this.sockets.clientServerActiveTargets(channelName),
       pendingRequestCount: this.outbound.pendingRequestCount(channelName)
     };

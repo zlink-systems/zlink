@@ -189,11 +189,30 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 RoutingId sourceNodeRid, ZLinkServiceMessageFollowWireCodec.Notice notice);
     }
 
-    public record EntrySpotTarget(RoutingId nodeRid, String spotId) {
+    public record EntrySpotTarget(SpotTransportAddress address) {
         public EntrySpotTarget {
-            Objects.requireNonNull(nodeRid, "nodeRid");
+            Objects.requireNonNull(address, "address");
+            Objects.requireNonNull(address.targetNodeRid(), "nodeRid");
             systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator.requireValid(
-                    spotId);
+                    address.spotId());
+        }
+
+        public EntrySpotTarget(RoutingId nodeRid, String spotId) {
+            this(
+                    new SpotTransportAddress(
+                            null,
+                            nodeRid,
+                            spotId,
+                            0L,
+                            systems.zlink.framework.spots.ZLinkSpotKind.ENTRY));
+        }
+
+        public RoutingId nodeRid() {
+            return address.targetNodeRid();
+        }
+
+        public String spotId() {
+            return address.spotId();
         }
     }
 
@@ -5190,22 +5209,18 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
 
         private ZLinkActorJoinCall createJoinEntrySpotCall(Message request, Duration timeout) {
-            return new ZLinkActorEntrySpotJoinCall(
+            return new ZLinkActorSpotJoinCall(
                     this,
                     requestedTimeout ->
-                            entrySpotTargetSelector.select(
-                                    actorRegistry.actorType(state.actorId()), requestedTimeout),
+                            entrySpotTargetSelector
+                                    .select(
+                                            actorRegistry.actorType(state.actorId()),
+                                            requestedTimeout)
+                                    .thenApply(EntrySpotTarget::address),
                     request,
                     timeout,
-                    entrySpotJoinServices());
-        }
-
-        private ZLinkActorEntrySpotJoinCall.Services entrySpotJoinServices() {
-            return new ZLinkActorEntrySpotJoinCall.Services(
-                    spotNode,
-                    serializer,
-                    ZLinkActorRuntime.this,
-                    ZLinkActorRuntime.this::renewActorMovedToEntrySpotLocation);
+                    spotJoinServices(),
+                    true);
         }
 
         @Override

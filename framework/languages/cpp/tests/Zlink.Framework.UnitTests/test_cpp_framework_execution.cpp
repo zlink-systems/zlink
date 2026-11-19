@@ -1946,7 +1946,7 @@ bool verify_session_control_lifecycle_priority ()
     session_serial_executor_t session (fixture.worker);
     serial_test_blocker_t first;
     std::vector<int> order;
-    if (!session.execute_application ("held", first.work ()) || !first.wait_for_entry ())
+    if (!session.execute_application (first.work ()) || !first.wait_for_entry ())
         return false;
     const auto append = [&] (int value) {
         return [&, value] (auto complete) {
@@ -1954,9 +1954,9 @@ bool verify_session_control_lifecycle_priority ()
             complete ([] {});
         };
     };
-    const bool accepted = session.execute_application ("backlog", append (3))
-                          && session.execute_control ("control-1", append (1))
-                          && session.execute_control ("control-2", append (2));
+    const bool accepted = session.execute_application (append (3))
+                          && session.execute_control (append (1))
+                          && session.execute_control (append (2));
     first.release ();
     session.drain ();
     return accepted && order == std::vector<int>{1, 2, 3};
@@ -2070,11 +2070,10 @@ bool verify_serial_executor_submission_paths_select_queues ()
       });
     const auto lifecycle =
       fixture.serial.execute_lifecycle ("submission-lifecycle", [&] { mark (8U); });
-    const auto application =
-      session.execute_application ("submission-session", [&] (auto complete) {
-          mark (16U);
-          complete ([] {});
-      });
+    const auto application = session.execute_application ([&] (auto complete) {
+        mark (16U);
+        complete ([] {});
+    });
 
     const auto ran = wait_until ([&] { return observed.load (std::memory_order_acquire) == 31U; });
     fixture.spot_queue->drain ();

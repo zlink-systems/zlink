@@ -146,6 +146,9 @@ export interface ZLinkSpotBoundSessionRuntime {
 }
 
 export interface ZLinkSpotActorHandoffRuntime {
+  acceptsDepartedRoute?(
+    fence: import('../foundation/service-stateful-wire-codec').ServiceActorRouteFence
+  ): boolean;
   capture(
     origin: ApplicationJobOrigin,
     actorId: string,

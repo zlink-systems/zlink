@@ -137,6 +137,24 @@ public final class ZLinkStateLane {
         return runSynchronousTurn(work);
     }
 
+    /**
+     * Returns after the owner finishes the work. A busy owner uses its existing result drain; the
+     * caller waits for the private result before observing the registration boundary.
+     */
+    public <T> T awaitResult(Supplier<T> work) {
+        Objects.requireNonNull(work, "work");
+        throwIfReentrant();
+        if (!tryAdmit()) throw new IllegalStateException("state lane is closed");
+        CompletableFuture<T> result;
+        try {
+            if (tryClaimInlineTurn()) return runSynchronousTurn(work);
+            result = enqueueResult(work);
+        } finally {
+            releaseAdmission();
+        }
+        return ZLinkCompletionBridge.await(result);
+    }
+
     private <T> T runSynchronousTurn(Supplier<T> work) {
         try {
             return callWithCurrent(this, work);
@@ -157,14 +175,18 @@ public final class ZLinkStateLane {
             if (runIdleTurnNow && (result = tryRunInline(work)) != null) {
                 return result;
             }
-            var queued = new ResultWork<>(work);
-            result = queued;
-            mailbox().add(queued);
-            scheduleDrain();
+            result = enqueueResult(work);
         } finally {
             releaseAdmission();
         }
         return result;
+    }
+
+    private <T> CompletableFuture<T> enqueueResult(Supplier<T> work) {
+        var queued = new ResultWork<>(work);
+        mailbox().add(queued);
+        scheduleDrain();
+        return queued;
     }
 
     private static <T> CompletionStage<T> publishOutsideLane(CompletableFuture<T> result) {
