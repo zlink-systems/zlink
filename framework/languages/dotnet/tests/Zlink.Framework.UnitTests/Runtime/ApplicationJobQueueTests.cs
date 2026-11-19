@@ -990,7 +990,8 @@ public sealed class ApplicationJobQueueTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task? handlerTask = null;
-        ZLinkHandlerMethodInvoker invoker = (_, _, _, _, _, _) => handlerTask = RunHandler();
+        ZLinkHandlerMethodInvoker invoker = (_, _, _, _, _, _) =>
+            ZLinkHandlerResultAwaiter.AwaitTaskAsync(handlerTask = RunHandler());
 
         using var scope = ZLinkApplicationJobQueueInvocation.Enter(lease);
         var invocation = ZLinkHandlerInvocationEngine.InvokeAsync(new object(), invoker);
@@ -1063,7 +1064,7 @@ public sealed class ApplicationJobQueueTests
         ZLinkHandlerMethodInvoker invoker = (_, _, _, _, _, _) =>
         {
             Interlocked.Increment(ref started);
-            return Task.CompletedTask;
+            return default;
         };
         using var concurrency = new SemaphoreSlim(128);
         var calls = leases
