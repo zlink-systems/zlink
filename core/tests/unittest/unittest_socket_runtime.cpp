@@ -108,7 +108,7 @@ void test_queued_term_endpoint_does_not_retire_new_connect_intent ()
             TEST_ASSERT_TRUE (
               zlink::session_termination_test_access_t::has_child (client, row.intent_id));
 
-    TEST_ASSERT_EQUAL_INT (0, client->term_endpoint (endpoint));
+    TEST_ASSERT_EQUAL_INT (0, client->term_endpoint (endpoint, zlink::endpoint_type_connect));
     TEST_ASSERT_EQUAL_INT (zlink::connection_attempt_result_t::removed, old->registration);
     queue_term_endpoint (client, endpoint, old_id);
     TEST_ASSERT_EQUAL_INT (0, client->connect (endpoint));

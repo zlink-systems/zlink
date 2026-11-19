@@ -33,7 +33,8 @@ zlink_connect_result_t zlink_unbind (void *s_, const char *addr_)
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
         return zlink::connect_result_internal::from_errno (errno);
-    return zlink::connect_result_internal::from_rc (handle.socket->term_endpoint (addr_));
+    return zlink::connect_result_internal::from_rc (
+      handle.socket->term_endpoint (addr_, zlink::endpoint_type_bind));
 }
 
 zlink_connect_result_t zlink_disconnect (void *s_, const char *addr_)
@@ -41,7 +42,8 @@ zlink_connect_result_t zlink_disconnect (void *s_, const char *addr_)
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
         return zlink::connect_result_internal::from_errno (errno);
-    return zlink::connect_result_internal::from_rc (handle.socket->term_endpoint (addr_));
+    return zlink::connect_result_internal::from_rc (
+      handle.socket->term_endpoint (addr_, zlink::endpoint_type_connect));
 }
 
 zlink_connect_result_t zlink_disconnect_rid (void *s_, const zlink_routing_id_t *peer_rid_)

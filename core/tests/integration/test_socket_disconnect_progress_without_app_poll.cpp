@@ -356,7 +356,7 @@ void run_disconnect_progress_case (transport_t transport_, bool register_client_
             server = NULL;
         } else {
             TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
-                                   zlink_disconnect (server, endpoint));
+                                   zlink_unbind (server, endpoint));
         }
 
         event_observation_t disconnected;
@@ -650,7 +650,7 @@ void test_stream_disconnect_reconnect_without_application_poll ()
     TEST_ASSERT_EQUAL_UINT (4, original_rid.size);
 
     // No application poller or data receiver processes the server pipe.
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (server, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_unbind (server, endpoint));
     TEST_ASSERT_TRUE (wait_monitor_event (
       monitor, ZLINK_EVENT_DISCONNECTED, original_connection_id, false,
       event_timeout_ms, &event));
