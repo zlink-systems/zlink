@@ -4,8 +4,10 @@ namespace Zlink.Framework.UnitTests;
 ///     Measures the bytes a window of calls allocates on the current thread, several times,
 ///     and returns the smallest window total. A cost the code under test pays on every call,
 ///     or once every few calls (storage growth, pooled array refill), is in every window and
-///     so is in the minimum. A one-time runtime allocation (tier-up, a lazy runtime table)
-///     lands in one window only and cannot decide a strict comparison.
+///     so is in the minimum. A one-time runtime allocation (a lazy runtime table) lands in
+///     one window only. The test host disables tiered compilation: tier promotion can remove
+///     allocations permanently, so taking minima cannot ensure both paths use the same code.
+///     Current-thread counters require calls to complete synchronously on that thread.
 /// </summary>
 internal static class PerCallAllocation
 {
@@ -99,8 +101,8 @@ internal static class PerCallAllocation
     }
 
     /// <summary>
-    ///     Two actions measured in alternating windows, so that both see the same JIT tiering
-    ///     and cache state, for tests that compare one against the other with Equal. Both
+    ///     Two actions measured in alternating windows with a fixed JIT code version,
+    ///     for tests that compare one against the other with Equal. Both
     ///     actions share a window, which is discarded if a GC overlaps either action.
     /// </summary>
     public static (long First, long Second) MinWindowPair(
