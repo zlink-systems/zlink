@@ -184,17 +184,6 @@ TEST (PrestartCall, AdmissionPrecedesStoreAndTransportAndAllowsHostedStartup)
     const auto raw_reply = [&] {
         return detail::encoded_payload_to_raw (serializers.get<std::string> ().serialize ("ok"));
     };
-    runtime.bind_client_server_transport (
-      "channel",
-      [&] (auto, auto, auto, auto) {
-          ++transports;
-          return task_t<void> (result_t<void>::success ());
-      },
-      [&] (auto, auto, auto, auto, auto) {
-          ++transports;
-          return request_task_t<zlink::message_t> (
-            result_t<zlink::message_t>::success (raw_reply ()));
-      });
     runtime.bind_fanout_transport ("channel", [&] (auto, auto, auto, auto, auto) {
         ++transports;
         return task_t<void> (result_t<void>::success ());
@@ -244,6 +233,20 @@ TEST (PrestartCall, AdmissionPrecedesStoreAndTransportAndAllowsHostedStartup)
     bool visited = false;
     app.add_hosted_service (std::make_unique<startup_probe_t> ([&] (auto &) {
         visited = true;
+        // The configured manual client started the real ClientServer runtime, which owns the
+        // channel transport; the test substitutes its counting transport for the hosted phase.
+        runtime.unbind_client_server_transport ("channel");
+        runtime.bind_client_server_transport (
+          "channel",
+          [&] (auto, auto, auto, auto) {
+              ++transports;
+              return task_t<void> (result_t<void>::success ());
+          },
+          [&] (auto, auto, auto, auto, auto) {
+              ++transports;
+              return request_task_t<zlink::message_t> (
+                result_t<zlink::message_t>::success (raw_reply ()));
+          });
         std::size_t admissions = 0;
         runtime.bind_runtime_admission ([&] {
             ++admissions;
