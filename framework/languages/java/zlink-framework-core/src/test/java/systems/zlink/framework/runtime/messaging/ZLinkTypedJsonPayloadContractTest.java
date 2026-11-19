@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -51,6 +52,19 @@ final class ZLinkTypedJsonPayloadContractTest {
     record ObjectPayload(@JsonProperty("wireValue") Child value) {}
 
     record MapPayload(Map<String, Object> value) {}
+
+    record ListPayload(@Nullable List<Child> items, Child @Nullable [] array) {}
+
+    record ChildMapPayload(Map<String, Child> value) {}
+
+    record DepthPayload(@Nullable Object a, @Nullable Object b) {}
+
+    record ArraysPayload(
+            String @Nullable [] names,
+            int @Nullable [] nums,
+            long @Nullable [] longs,
+            boolean @Nullable [] flags,
+            @Nullable Child child) {}
 
     record NullableReferences(@Nullable String text, @Nullable Child child) {}
 
@@ -88,6 +102,72 @@ final class ZLinkTypedJsonPayloadContractTest {
         assertThrows(
                 JsonProcessingException.class,
                 () -> mapper.readValue("{\"value\":{\"key\":1,\"key\":2}}", MapPayload.class));
+    }
+
+    private static void rejectsDuplicate(String json, Class<?> type) {
+        var error =
+                assertThrows(
+                        JsonProcessingException.class,
+                        () -> ZLinkFrameworkJsonProfile.mapper().readValue(json, type),
+                        json);
+        assertTrue(error.getOriginalMessage().startsWith("Duplicate field"), error.getMessage());
+    }
+
+    @Test
+    void duplicatesInsideArrayAndMapValueDtosAreRejected() {
+        rejectsDuplicate("{\"items\":[{\"text\":\"a\",\"text\":\"b\"}]}", ListPayload.class);
+        rejectsDuplicate(
+                "{\"items\":[{\"text\":\"a\"},{\"text\":\"b\",\"text\":\"c\"}]}",
+                ListPayload.class);
+        rejectsDuplicate("{\"array\":[{\"text\":\"a\",\"text\":\"b\"}]}", ListPayload.class);
+        rejectsDuplicate(
+                "{\"value\":{\"k\":{\"text\":\"a\",\"text\":\"b\"}}}", ChildMapPayload.class);
+    }
+
+    @Test
+    void duplicateScopeReturnsToTheOuterObject() throws Exception {
+        var mapper = ZLinkFrameworkJsonProfile.mapper();
+        var accepted = mapper.readValue("{\"a\":{\"a\":1},\"b\":2}", DepthPayload.class);
+        assertEquals(Map.of("a", 1), accepted.a());
+        assertEquals(2, accepted.b());
+        var siblings =
+                mapper.readValue(
+                        "{\"items\":[{\"text\":\"a\"},{\"text\":\"b\"}],"
+                                + "\"array\":[{\"text\":\"c\"}]}",
+                        ListPayload.class);
+        assertEquals(2, siblings.items().size());
+        rejectsDuplicate("{\"a\":{\"x\":1},\"a\":2}", DepthPayload.class);
+        rejectsDuplicate("{\"a\":{\"x\":{\"y\":1}},\"b\":1,\"b\":2}", DepthPayload.class);
+    }
+
+    @Test
+    void duplicateCreatorPropertiesAreRejectedWhenJacksonBuffers() {
+        rejectsDuplicate(
+                "{\"wireValue\":{\"text\":\"a\"},\"wireValue\":{\"text\":\"b\"}}",
+                ObjectPayload.class);
+        rejectsDuplicate(
+                "{\"extra\":{\"k\":1},\"wireValue\":{\"text\":\"a\"},"
+                        + "\"wireValue\":{\"text\":\"b\"}}",
+                ObjectPayload.class);
+        rejectsDuplicate(
+                "{\"extra\":1,\"wireValue\":{\"text\":\"a\"},\"extra\":2}",
+                ObjectPayload.class);
+    }
+
+    @Test
+    void primitiveArrayReadersKeepDuplicateDepth() throws Exception {
+        String arrays = "\"names\":[\"a\"],\"nums\":[1],\"longs\":[2],\"flags\":[true]";
+        rejectsDuplicate(
+                "{" + arrays + ",\"child\":{\"text\":\"x\",\"text\":\"y\"}}",
+                ArraysPayload.class);
+        rejectsDuplicate("{" + arrays + ",\"names\":[\"b\"]}", ArraysPayload.class);
+        var accepted =
+                ZLinkFrameworkJsonProfile.mapper()
+                        .readValue(
+                                "{" + arrays + ",\"child\":{\"names\":1,\"text\":\"x\"}}",
+                                ArraysPayload.class);
+        assertEquals("x", accepted.child().text());
+        assertEquals(1, accepted.nums()[0]);
     }
 
     @Test
