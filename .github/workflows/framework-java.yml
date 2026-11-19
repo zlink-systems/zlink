@@ -221,6 +221,7 @@ jobs:
             :zlink-framework-spring-boot-starter:test \
             :zlink-framework-spring-boot-starter:integrationTest \
             :zlink-framework-locations-redis:test \
+            :zlink-framework-testkit:test \
             -Pzlink.includeSamples=false
 
       - name: Upload Java test thread dumps
