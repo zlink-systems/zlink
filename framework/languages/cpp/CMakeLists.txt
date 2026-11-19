@@ -319,6 +319,7 @@ target_link_libraries(zlink_framework_m6c_runtime PUBLIC
   Threads::Threads)
 
 add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
+  framework/src/runtime/codecs/json_profile_engine.cpp
   $<TARGET_OBJECTS:zlink_framework_m6a_objects>
   $<TARGET_OBJECTS:zlink_framework_channel_header_proto>
   $<TARGET_OBJECTS:zlink_framework_m6b_objects>
@@ -407,6 +408,10 @@ target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 target_link_libraries(zlink_framework PUBLIC zlink::cpp zlink::framework_provider_abstractions)
+target_link_libraries(zlink_framework PRIVATE yyjson::yyjson)
+target_compile_definitions(zlink_framework
+  PRIVATE ZLINK_JSON_PROFILE_ENGINE_NS=framework_engine
+  INTERFACE ZLINK_JSON_PROFILE_ENGINE_FRAMEWORK)
 target_link_libraries(zlink_framework PRIVATE protobuf::libprotobuf)
 # Applications own the SDK, reader and exporter for the supplied Metrics API provider.
 target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
@@ -897,6 +902,7 @@ set(ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES
     "${ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES}"
+    "find_dependency(yyjson CONFIG)\n"
     "find_package(protobuf CONFIG QUIET)\n"
     "if(NOT protobuf_FOUND)\n"
     "  find_dependency(Protobuf MODULE)\n"
@@ -1403,6 +1409,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
   target_link_libraries(bench_cpp_framework_registry_requests PRIVATE
+    nlohmann_json::nlohmann_json
     zlink::framework_provider_abstractions zlink::cpp opentelemetry-cpp::metrics Threads::Threads)
 
   add_executable(bench_cpp_framework_dealer_requests
