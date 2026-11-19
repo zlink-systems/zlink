@@ -30,6 +30,12 @@ import {
 } from '../application-jobs/application-job-queue-scope';
 
 export class ZLinkSpotSerialTurnExecutor {
+  static closingAdmissionError(): ZLinkFrameworkException {
+    return createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+      'Spot incarnation is closing (committed Close).'
+    );
+  }
   private readonly scheduler: ZLinkSerialExecutionQueue;
   private depth = 0;
   private turnSequence = 0;
@@ -104,10 +110,7 @@ export class ZLinkSpotSerialTurnExecutor {
           ZLinkFrameworkInternalErrorKind.SpotMoving,
           'The Spot incarnation released its authority before admitting this Instance intent message.'
         )
-      : createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-          'The Spot incarnation is closed.'
-        );
+      : ZLinkSpotSerialTurnExecutor.closingAdmissionError();
   }
 
   /**
@@ -224,10 +227,7 @@ export class ZLinkSpotSerialTurnExecutor {
   executeLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
     const requireAdmission = (): void => {
       if (this.lifecycleAdmissionClosed) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-          'Spot incarnation is closing (committed Close).'
-        );
+        throw ZLinkSpotSerialTurnExecutor.closingAdmissionError();
       }
     };
     let entry: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> | undefined;

@@ -30,6 +30,7 @@ import { frameworkPayloadContentType } from '../messaging/payload-codec';
 import { remainingActorRequestTimeout } from './actor-request-deadline';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { ZLinkSpotSerialTurnExecutor } from '../spots/spot-serial-turn-executor';
 import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
 import { ZLINK_REMOTE_ACTOR_JOIN_PACKET } from './actor-remote-wire';
 import type { ZLinkActorJoinRuntimeResult } from './actor-runtime-contracts';
@@ -87,6 +88,9 @@ export class ZLinkLocalNativeActorJoin {
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     if (signal?.aborted === true) throw createAbortError();
     const target = requireUserSpotRoute(spotRouteTarget, spotId);
+    if (target.authorityState === 'closing') {
+      throw ZLinkSpotSerialTurnExecutor.closingAdmissionError();
+    }
     const remote = !routingIdsEqual(
       toFrameworkRoutingId(node.status().routingId),
       target.targetNodeRid
