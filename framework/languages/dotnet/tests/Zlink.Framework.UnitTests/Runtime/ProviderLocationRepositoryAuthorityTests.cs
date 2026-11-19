@@ -272,6 +272,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         actor.BindNativeActorRef(
             new ZLinkBackendActorRef(descriptor.Rid, "recovery", snapshot.ObjectGeneration)
         );
+        var actorInstance = actor.Actor;
         await lifecycle.ActorOwnership.AdoptCommittedActorAuthorityAsync(
             "recovery",
             "player",
@@ -499,7 +500,24 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             Assert.True(secondActor!.ContextInvalidated);
             observed.ReleaseRecoveryCas.TrySetResult();
         }
-        await recovery;
+        var recoveryResult = await recovery;
+        if (scenario == 13)
+        {
+            Assert.False(recoveryResult);
+            Assert.Equal(owner, runtime.OwnerToken);
+            Assert.Equal(1, observed.Claims);
+            Assert.Equal(0, observed.ReplacementWrites);
+            Assert.Same(episode, runtime.GetHealthSnapshot().StoreOutage);
+            Assert.Equal(
+                episode.LeaseOperationStartedAt,
+                runtime.GetHealthSnapshot().StoreOutage!.LeaseOperationStartedAt
+            );
+            Assert.Equal(episode.Lifetime, runtime.GetHealthSnapshot().StoreOutage!.Lifetime);
+            Assert.True(time.GetElapsedTime(episode.LeaseOperationStartedAt) < episode.Lifetime);
+            Assert.Same(actorInstance, actor.Actor);
+            Assert.False(actor.ContextInvalidated);
+            Assert.True(runtime.IsExecutionAllowed(actor));
+        }
         if (scenario is 16 or 17)
         {
             Assert.False(actor.ContextInvalidated);
@@ -525,10 +543,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 Assert.Equal(1, racing.InjectedConflicts);
         }
         var expectedRecovery = scenario is 0 or 1 or 5 or 11 or 12 or 15 or 16 or 18 or 19;
-        Assert.Equal(
-            expectedRecovery,
-            runtime.IsExecutionAllowed(actor) && !actor.ContextInvalidated
-        );
+        if (scenario != 13)
+            Assert.Equal(
+                expectedRecovery,
+                runtime.IsExecutionAllowed(actor) && !actor.ContextInvalidated
+            );
         Assert.Equal(
             scenario is 15 or 16 ? 2
                 : scenario is 1 or 3 or 4 or 5 or 11 or 12 or 17 or 19 or 20 or 21 ? 1

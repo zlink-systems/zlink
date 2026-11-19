@@ -22,6 +22,13 @@ case "$(uname -s 2>/dev/null || true)" in
   MINGW*|MSYS*|CYGWIN*) IS_WINDOWS_NATIVE=1 ;;
 esac
 
+# Every outage host reads the same lease profile, including installed launchers.
+ZLINK_OUTAGE_LEASE_PROFILE="${SCRIPT_DIR}/outage-lease-profile.properties"
+if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
+  ZLINK_OUTAGE_LEASE_PROFILE="$(cygpath -m "${ZLINK_OUTAGE_LEASE_PROFILE}")"
+fi
+export ZLINK_OUTAGE_LEASE_PROFILE
+
 resolve_executable() {
   local fallback="$1"
   local candidate extension resolved
@@ -296,8 +303,16 @@ wait_for_line() {
   local file="$1"
   local needle="$2"
   local timeout_seconds="${3:-30}"
+  local error_needle="${4:-}"
   local deadline=$((SECONDS + timeout_seconds))
   while ((SECONDS < deadline)); do
+    if [[ -n "${error_needle}" ]] \
+      && [[ -f "${file}" ]] \
+      && grep -qF -- "${error_needle}" "${file}"; then
+      echo "failed while waiting for '${needle}' in ${file}" >&2
+      tail -40 "${file}" >&2
+      return 1
+    fi
     if [[ -f "${file}" ]] && grep -qF -- "${needle}" "${file}"; then
       return 0
     fi
@@ -1288,6 +1303,83 @@ stage_node_source_dotnet_target_user_spot_join() {
   RESULTS+=("User-Spot Join: Node source -> .NET target (canonical actorJoin(28), admission, joined lifecycle, target-owner probe)")
 }
 
+# All outage hosts use the same run-scoped, monotonically sequenced file protocol.
+outage_command() {
+  local prefix="$1" events="$2" run_id="$3" sequence="$4" phase="$5"
+  printf '%s\t%s\t%s\n' "${run_id}" "${sequence}" "${phase}" >"${prefix}.next"
+  mv "${prefix}.next" "${prefix}.command"
+  wait_for_line "${events}" "outage-ack|run=${run_id}|seq=${sequence}|phase=${phase}" 60 \
+    "outage-error|run=${run_id}|"
+}
+
+start_outage_host() {
+  local language="$1" name="$2" role="$3"
+  shift 3
+  case "${language}" in
+    node)
+      if [[ "${role}" == source ]]; then role=join-source; fi
+      start_node_user_spot_join "${name}" "user-spot-${role}" "$@"
+      ;;
+    dotnet) start_dotnet "${name}" "user-spot-${role}" "$@" ;;
+    java) start_java "${name}" "user-spot-${role}" "$@" ;;
+    cpp) start_cpp "${name}" "user-spot-${role}" "$@" --ready-file "${RUN_DIR}/${name}.ready" ;;
+    *) echo "unsupported outage host: ${language}" >&2; return 1 ;;
+  esac
+}
+
+stage_outage_relocation() {
+  local source="$1" target="$2" order="$3"
+  local redis_port source_port target_port run_id start_file source_prefix target_prefix
+  local source_events target_events source_rid target_rid source_sequence=0 target_sequence=0
+  local first second phase
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
+  run_id="outage-${source}-${target}-${order}-${redis_port}"
+  source_prefix="${RUN_DIR}/${run_id}.source"
+  target_prefix="${RUN_DIR}/${run_id}.target"
+  source_events="${source_prefix}.events"
+  target_events="${target_prefix}.events"
+  start_file="${RUN_DIR}/${run_id}.start"
+  source_rid="${source}-user-spot-join-source"
+  target_rid="${target}-user-spot-join-target"
+  local common=(--mesh-name cross.user-spot-join --redis-endpoint "127.0.0.1:${redis_port}"
+    --redis-key-prefix "zlink-cross-${run_id}" --spot-id cross-lang-user-spot
+    --actor-id cross-lang-user-spot-actor --outage-run-id "${run_id}" --outage-order "${order}")
+
+  start_redis "${run_id}-redis" "${redis_port}"
+  start_outage_host "${target}" "${run_id}-target" target "${common[@]}" \
+    --placement-weight 0 --node-rid "${target_rid}" --peer-rid "${source_rid}" \
+    --bind-endpoint "tcp://127.0.0.1:${target_port}" --event-file "${target_events}" \
+    --outage-control-prefix "${target_prefix}"
+  wait_for_ready "${RUN_DIR}/${run_id}-target.ready" 180
+  wait_for_line "${target_events}" 'user-spot-created|spot=cross-lang-user-spot' 30
+  start_outage_host "${source}" "${run_id}-source" source "${common[@]}" \
+    --node-rid "${source_rid}" --peer-rid "${target_rid}" \
+    --bind-endpoint "tcp://127.0.0.1:${source_port}" --event-file "${source_events}" \
+    --start-file "${start_file}" --outage-control-prefix "${source_prefix}"
+  wait_for_line "${source_events}" 'user-spot-source-peer-ready|ready=true' 90
+  touch "${start_file}"
+  assert_source_actor_create "${source_events}" "${source_rid}" "${target_rid}"
+
+  outage_command "${target_prefix}" "${target_events}" "${run_id}" "$((++target_sequence))" steady
+  for phase in steady outage expired recover; do
+    outage_command "${source_prefix}" "${source_events}" "${run_id}" "$((++source_sequence))" "${phase}"
+  done
+  first=release-descriptor; second=release-cas
+  if [[ "${order}" == cas-first ]]; then first=release-cas; second=release-descriptor; fi
+  for phase in "${first}" partial "${second}" resumed relocation; do
+    outage_command "${source_prefix}" "${source_events}" "${run_id}" "$((++source_sequence))" "${phase}"
+  done
+  for phase in staged commit completed; do
+    if [[ "${phase}" == completed ]]; then
+      wait_for_line "${target_events}" 'user-spot-joined|actor=cross-lang-user-spot-actor' 90
+    fi
+    outage_command "${target_prefix}" "${target_events}" "${run_id}" "$((++target_sequence))" "${phase}"
+  done
+  outage_command "${source_prefix}" "${source_events}" "${run_id}" "$((++source_sequence))" completed
+  stop_all
+  RESULTS+=("Outage recovery + public relocation: ${source} -> ${target}, ${order}")
+}
+
 # --- User-Spot JoinSpot: .NET source -> Node target, canonical actorJoin(28) --
 stage_dotnet_source_node_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint
@@ -2091,6 +2183,19 @@ run_java_cross_stages() {
 }
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
+  outage-relocation-node-dotnet-descriptor-first|outage-relocation-node-dotnet-cas-first|\
+  outage-relocation-dotnet-java-descriptor-first|outage-relocation-dotnet-java-cas-first|\
+  outage-relocation-java-cpp-descriptor-first|outage-relocation-java-cpp-cas-first|\
+  outage-relocation-cpp-node-descriptor-first|outage-relocation-cpp-node-cas-first)
+    outage_stage="${ZLINK_CPP_CROSS_LANGUAGE_STAGE#outage-relocation-}"
+    outage_source="${outage_stage%%-*}"
+    outage_stage="${outage_stage#*-}"
+    outage_target="${outage_stage%%-*}"
+    stage_outage_relocation "${outage_source}" "${outage_target}" "${outage_stage#*-}"
+    for result in "${RESULTS[@]}"; do echo "ok - ${result}"; done
+    echo "cross-language smoke stage=${ZLINK_CPP_CROSS_LANGUAGE_STAGE} result=passed"
+    exit 0
+    ;;
   client-server-metadata)
     stage_client_server_metadata
     for result in "${RESULTS[@]}"; do echo "ok - ${result}"; done
@@ -2345,6 +2450,14 @@ stage_dotnet_source_cpp_target_user_spot_join
 stage_cpp_source_node_target_user_spot_join
 stage_java_source_cpp_target_user_spot_join
 stage_cpp_source_java_target_user_spot_join
+for outage_order in descriptor-first cas-first; do
+  stage_outage_relocation node dotnet "${outage_order}"
+  # dotnet -> java runs only as its own stage until the Java target serves its first
+  # request right after relocation commit: https://github.com/zlink-systems/zlink/issues/4743
+  stage_outage_relocation java cpp "${outage_order}"
+  # cpp -> node runs only as its own stage until the C++ source stops running
+  # requests after relocation commit: https://github.com/zlink-systems/zlink/issues/4730
+done
 # All four remote Actor-create cells are now part of the default run. The
 # three C++ requester cells passed after #763 removed requester-side duplicate
 # completion; the .NET requester -> Java target control cell also passes.

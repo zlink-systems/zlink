@@ -214,8 +214,11 @@ public sealed class SerialExecutorTests
             item.Completion.WaitAsync(TimeSpan.FromSeconds(5))
         );
         Assert.Equal(0, calls);
-        Assert.Equal(useRecord ? 0 : 1, checks);
-        Assert.Equal(useRecord ? 1 : 0, record.Checks);
+        // New-operation admission and the start of accepted work each read the same
+        // execution-status decider once; recovery can begin between the two, so the
+        // start check is required. Only the record or the queue decides, never both.
+        Assert.Equal(useRecord ? 0 : 2, checks);
+        Assert.Equal(useRecord ? 2 : 0, record.Checks);
         // The worker completes the item before it releases the slot; wait for the release.
         await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, queue.ApplicationPendingCount);
