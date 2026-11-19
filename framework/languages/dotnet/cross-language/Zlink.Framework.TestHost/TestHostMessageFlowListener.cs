@@ -31,6 +31,20 @@ internal sealed class TestHostMessageFlowListener : IDisposable
             return File.ReadAllLines(_filePath);
     }
 
+    public bool HasRelocationDetail(string actorId, string detail) =>
+        ReadLines()
+            .Any(line =>
+            {
+                var tagsOffset = line.IndexOf(" tags=", StringComparison.Ordinal);
+                if (tagsOffset < 0)
+                    return false;
+                using var tags = System.Text.Json.JsonDocument.Parse(line[(tagsOffset + 6)..]);
+                return tags.RootElement.TryGetProperty("actor_id", out var actor)
+                    && actor.GetString() == actorId
+                    && tags.RootElement.TryGetProperty("detail", out var stage)
+                    && stage.GetString() == detail;
+            });
+
     private void Capture(Activity activity)
     {
         var line =

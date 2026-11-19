@@ -235,23 +235,6 @@ internal sealed class ZLinkSpotTimerRegistry(
             .ConfigureAwait(false);
     }
 
-    internal void FreezeForApplicationAdmissionSeal()
-    {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_closed || _frozen)
-                    return;
-                _frozen = true;
-                foreach (var registration in _timers)
-                {
-                    if (!registration.Timer.IsDisposed)
-                        _ = registration.Timer.Freeze();
-                }
-            })
-        );
-    }
-
     internal void RestoreRelocation(
         IReadOnlyList<ZLinkRelocationLogicalTimer> logicalTimers,
         CancellationToken stopToken,

@@ -403,12 +403,18 @@ internal static class TestHostScenarioConfigurator
                     "user-spot-target mode requires --redis-endpoint."
                 );
             var keyPrefix = options.RedisKeyPrefix ?? "zlink-cross-user-spot-join";
+            OutageLocationStore.ConfigureProfile(framework.ConfigureLocations(), options);
             framework.AddLocationStore(
-                new ZLinkRedisLocationStore(o =>
-                {
-                    o.ConnectionString = redisEndpoint;
-                    o.KeyPrefix = $"{keyPrefix}:location";
-                })
+                OutageLocationStore.Wrap(
+                    services,
+                    new ZLinkRedisLocationStore(o =>
+                    {
+                        o.ConnectionString = redisEndpoint;
+                        o.KeyPrefix = $"{keyPrefix}:location";
+                    }),
+                    options,
+                    false
+                )
             );
             framework.AddRelocationStore(
                 new ZLinkRedisRelocationStore(o =>
@@ -432,6 +438,8 @@ internal static class TestHostScenarioConfigurator
                         )
                 )
                 .SetPlacementWeight(100);
+            if (options.NodeRid is not null)
+                mesh.SetRoutingId(RoutingId.From(options.NodeRid));
             mesh.Channel(meshName).Server();
             var objects = mesh.Objects().Server();
             objects.AddEntrySpot<RelocationEntrySpot>();
@@ -446,6 +454,7 @@ internal static class TestHostScenarioConfigurator
         });
 
         services.AddHostedService(provider => new UserSpotTargetHostedService(
+            provider.GetRequiredService<IZLinkFrameworkRuntime>(),
             provider.GetRequiredService<IZLinkSpotManager>(),
             provider.GetRequiredService<IZLinkActorClient>(),
             provider.GetRequiredService<IZLinkRouteClient>(),
@@ -485,12 +494,18 @@ internal static class TestHostScenarioConfigurator
                     "user-spot-source mode requires --redis-endpoint."
                 );
             var keyPrefix = options.RedisKeyPrefix ?? "zlink-cross-user-spot-join";
+            OutageLocationStore.ConfigureProfile(framework.ConfigureLocations(), options);
             framework.AddLocationStore(
-                new ZLinkRedisLocationStore(o =>
-                {
-                    o.ConnectionString = redisEndpoint;
-                    o.KeyPrefix = $"{keyPrefix}:location";
-                })
+                OutageLocationStore.Wrap(
+                    services,
+                    new ZLinkRedisLocationStore(o =>
+                    {
+                        o.ConnectionString = redisEndpoint;
+                        o.KeyPrefix = $"{keyPrefix}:location";
+                    }),
+                    options,
+                    true
+                )
             );
             framework.AddRelocationStore(
                 new ZLinkRedisRelocationStore(o =>
@@ -514,6 +529,8 @@ internal static class TestHostScenarioConfigurator
                         )
                 )
                 .SetPlacementWeight(100);
+            if (options.NodeRid is not null)
+                mesh.SetRoutingId(RoutingId.From(options.NodeRid));
             mesh.Channel(meshName).Server();
             var objects = mesh.Objects().Server();
             objects.AddEntrySpot<RelocationEntrySpot>();
@@ -533,7 +550,9 @@ internal static class TestHostScenarioConfigurator
                 ?? throw new InvalidOperationException("user-spot-source mode requires --spot-id."),
             options.MeshName ?? "cross.user-spot-join",
             provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
-            options.PlacementWeight ?? 100
+            options.PlacementWeight ?? 100,
+            provider.GetService<OutageLocationStore>(),
+            options.StartFilePath
         ));
     }
 
