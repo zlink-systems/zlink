@@ -475,7 +475,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 ZLinkMessageKind.Publish,
                 "SharedEvent",
                 typeof(NeverInvokedHandler),
-                static (_, _, _, _, _, _) => null,
+                static (_, _, _, _, _, _) => default,
                 [ZLinkHandlerArgumentKind.Message],
                 typeof(int),
                 null,
@@ -489,7 +489,9 @@ public sealed partial class UnhandledDispatchPolicyTests
                 "SharedEvent",
                 typeof(CapturingPublishHandler),
                 static (target, message, _, _, _, _) =>
-                    ((CapturingPublishHandler)target).Handle((TestPublishedEvent)message!),
+                    ZLinkHandlerResultAwaiter.AwaitValueTaskAsync(
+                        ((CapturingPublishHandler)target).Handle((TestPublishedEvent)message!)
+                    ),
                 [ZLinkHandlerArgumentKind.Message],
                 typeof(TestPublishedEvent),
                 null,

@@ -19,7 +19,7 @@ public sealed class RouteCodecTests
             services.GetRequiredService<IServiceScopeFactory>(),
             new ZLinkFrameworkRegistration()
         );
-        ZLinkHandlerMethodInvoker invoke = static (_, _, _, _, _, _) => ValueTask.CompletedTask;
+        ZLinkHandlerMethodInvoker invoke = static (_, _, _, _, _, _) => default;
         var descriptor = new ZLinkRouteHandlerDescriptor(
             ZLinkMessageKind.Command,
             "mesh",
