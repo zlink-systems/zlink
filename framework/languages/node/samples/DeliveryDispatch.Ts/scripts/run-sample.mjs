@@ -172,6 +172,7 @@ function createContext(redisEndpoint) {
     waitHttp,
     waitLog,
     waitAnyLog,
+    waitLogCount,
     assertLogCount,
     async runNode(entry, args = [], extraEnv = {}) {
       await run(process.execPath, [entry, ...args], { cwd: sampleRoot, env: { ...env, ...extraEnv } });
@@ -450,6 +451,17 @@ async function waitAnyLog(candidates) {
       const target = path.join(logDir, `${name}.log`);
       return fs.existsSync(target) && fs.readFileSync(target, 'utf8').includes(marker);
     })
+  );
+}
+
+async function waitLogCount(names, marker, expected) {
+  await waitUntil(`${names.join('/')} log marker '${marker}' ${expected} time(s)`, async () =>
+    names.reduce((count, name) => {
+      const target = path.join(logDir, `${name}.log`);
+      return fs.existsSync(target)
+        ? count + fs.readFileSync(target, 'utf8').split(marker).length - 1
+        : count;
+    }, 0) >= expected
   );
 }
 

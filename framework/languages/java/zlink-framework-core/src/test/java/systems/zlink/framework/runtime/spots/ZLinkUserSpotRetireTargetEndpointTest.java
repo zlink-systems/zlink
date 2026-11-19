@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
@@ -1919,19 +1920,16 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             (ZLinkActorRuntime.PreparedTransferredActor) actor)
                     .thenCompose(
                             dispatch ->
-                                    dispatch.activation()
-                                            .relocationLane()
-                                            .admitDurablePrefix(
-                                                    records,
-                                                    (record, terminal) -> {
-                                                        var operation =
-                                                                replay.apply(record, terminal);
-                                                        return () ->
-                                                                actorRuntime.runActorDispatchTurn(
-                                                                        request.actorId(),
-                                                                        operation);
-                                                    },
-                                                    jobs))
+                                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                            dispatch.activation().relocationLane(),
+                                            records,
+                                            (record, terminal) -> {
+                                                var operation = replay.apply(record, terminal);
+                                                return () ->
+                                                        actorRuntime.runActorDispatchTurn(
+                                                                request.actorId(), operation);
+                                            },
+                                            jobs))
                     .whenComplete(
                             (accepted, failure) -> {
                                 if (failure != null) jobs.close();

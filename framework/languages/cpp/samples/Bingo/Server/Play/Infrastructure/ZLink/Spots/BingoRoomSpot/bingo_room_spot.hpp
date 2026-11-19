@@ -63,6 +63,12 @@ class bingo_room_draw_timer_handler_t
     task_t<void> handle (bingo_room_spot_t &spot, const timer_tick_t &tick) const;
 };
 
+class bingo_room_close_timer_handler_t
+{
+  public:
+    task_t<void> handle (bingo_room_spot_t &spot, const timer_tick_t &tick) const;
+};
+
 class bingo_room_spot_t : public spot_t<player_actor_t>
 {
   public:
@@ -74,6 +80,14 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
 
     spot_context_t &context () noexcept override { return *_context; }
     const spot_context_t &context () const noexcept override { return *_context; }
+
+    bool try_request_close ()
+    {
+        if (_close_requested)
+            return false;
+        _close_requested = true;
+        return true;
+    }
 
     void configure () override
     {
@@ -119,6 +133,8 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
     task_t<void> on_closing (const spot_closing_context_t &, std::stop_token) override
     {
         co_await _draw_timer.cancel ();
+        if (_close_timer)
+            co_await _close_timer->cancel ();
         co_return;
     }
 
@@ -274,10 +290,9 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         observers.erase (actor.actor_id);
         // Membership is tracked above; the game snapshot retains the round's players.
         std::cout << "bingo-lifecycle room-leave actor=" << actor.actor_id << std::endl;
-        if (actors.empty () && observers.empty ()) {
-            // Close runs after this leave callback ends, so request it without
-            // waiting here.
-            (void) _context->close ();
+        if (actors.empty () && observers.empty () && !_close_timer) {
+            _close_timer = _context->add_timer<bingo_room_close_timer_handler_t> (
+              "bingo-room-close", std::chrono::milliseconds (1));
         }
         co_return;
     }
@@ -397,12 +412,15 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
     std::string _observed_room_id;
     bool cleanup_started = false;
     framework::timer_t _draw_timer;
+    std::optional<framework::timer_t> _close_timer;
+    bool _close_requested = false;
 };
 
 } // namespace zlink::samples::bingo
 
 #include "Handlers/bingo_reward_acquired_event_handler.hpp"
 #include "Handlers/bingo_room_draw_timer_handler.hpp"
+#include "Handlers/bingo_room_close_timer_handler.hpp"
 #include "Handlers/observe_bingo_events_handler.hpp"
 #include "Handlers/stop_observing_bingo_events_handler.hpp"
 #include "Handlers/submit_bingo_card_handler.hpp"

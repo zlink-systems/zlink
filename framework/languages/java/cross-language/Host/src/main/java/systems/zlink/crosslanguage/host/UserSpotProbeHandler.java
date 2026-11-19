@@ -23,6 +23,7 @@ public final class UserSpotProbeHandler implements ZLinkSpotActorRequestHandler<
         RelocationActor actor,
         ZLinkMessageContext context,
         UserSpotProbeReq request) {
+        actor.recordProbe();
         String nodeRid = spot.context().nodeRid().toString();
         sink.append("user-spot-probe-served|nodeRid=" + nodeRid + "|actor=" + actor.actorId());
         return CompletableFuture.completedFuture(new UserSpotProbeRes(

@@ -29,20 +29,35 @@ export async function runSample(ctx) {
     logDir: path.join(ctx.logDir, 'flow'),
     peerPlaySpotEndpoint: endpoints.playSpot[peerPlayIndex]
   });
-  const roleConfig = (name, value, keys) => ctx.writeConfig(name,
-    Object.fromEntries(keys.map((key) => [key, value[key]])));
+  const roleConfig = (name, value, keys) =>
+    ctx.writeConfig(name, Object.fromEntries(keys.map((key) => [key, value[key]])));
   const playA = config('play-a', 0, 0, 1);
   const playB = config('play-b', 0, 1, 0);
   const apiA = config('api-a', 0, 0, 1);
   const apiB = config('api-b', 1, 0, 1);
   const playKeys = [
-    'apiEndpoints', 'playIndex', 'playSpotEndpoint', 'playStreamEndpoint', 'playEndpoints',
-    'redisEndpoint', 'redisKeyPrefix', 'peerPlaySpotEndpoint', 'instanceName',
+    'apiEndpoints',
+    'playIndex',
+    'playSpotEndpoint',
+    'playStreamEndpoint',
+    'playEndpoints',
+    'redisEndpoint',
+    'redisKeyPrefix',
+    'peerPlaySpotEndpoint',
+    'instanceName',
     'logDir'
   ];
   const apiKeys = [
-    'apiHttpEndpoint', 'apiEndpoints', 'apiSpotEndpoint', 'apiIndex', 'playSpotEndpoints', 'playEndpoints',
-    'redisEndpoint', 'redisKeyPrefix', 'logDir', 'instanceName'
+    'apiHttpEndpoint',
+    'apiEndpoints',
+    'apiSpotEndpoint',
+    'apiIndex',
+    'playSpotEndpoints',
+    'playEndpoints',
+    'redisEndpoint',
+    'redisKeyPrefix',
+    'logDir',
+    'instanceName'
   ];
   const configs = {
     playA: roleConfig('play-a', playA, playKeys),
@@ -79,7 +94,8 @@ export async function runSample(ctx) {
     ['tictactoe-lifecycle leave-completed actor=player-o', 1],
     ['tictactoe-lifecycle actor-destroy-complete actor=player-x', 1],
     ['tictactoe-lifecycle actor-destroy-complete actor=player-o', 1],
-    ['tictactoe-lifecycle actor-destroy-complete actor=observer', 0]
+    ['tictactoe-lifecycle actor-destroy-complete actor=observer', 0],
+    ['tictactoe-lifecycle game-close spot=', 1]
   ];
   for (const [marker, expected] of playEvidence) {
     if (expected > 0) await waitPlayLog(ctx, marker);
@@ -92,15 +108,19 @@ export async function runSample(ctx) {
     ['reconnected-game-state=verified actor=player-x room=', 1],
     ['tictactoe=completed', 1]
   ];
-  for (const [marker, expected] of clientEvidence) ctx.assertLogCount('browser-client', marker, expected);
-  for (const [marker, expected] of playEvidence) assertCombinedLogCount(ctx, ['play-a', 'play-b'], marker, expected);
+  for (const [marker, expected] of clientEvidence)
+    ctx.assertLogCount('browser-client', marker, expected);
+  for (const [marker, expected] of playEvidence)
+    assertCombinedLogCount(ctx, ['play-a', 'play-b'], marker, expected);
   console.log('tictactoe-placement=completed');
 }
 
 function assertCombinedLogCount(ctx, roles, marker, expected) {
   const actual = roles.reduce((count, role) => {
     const file = path.join(ctx.logDir, `${role}.log`);
-    return count + (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split(marker).length - 1 : 0);
+    return (
+      count + (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split(marker).length - 1 : 0)
+    );
   }, 0);
   if (actual !== expected) throw new Error(`${marker} count was ${actual}; expected ${expected}.`);
 }
