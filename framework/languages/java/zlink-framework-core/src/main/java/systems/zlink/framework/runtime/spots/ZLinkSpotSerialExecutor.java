@@ -6,6 +6,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.actors.ZLinkActorSerialExecutor;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 
@@ -86,7 +87,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     public void requireExecution(boolean application) {
-        spotQueue.requireExecution(application);
+        ZLinkSpotCloseCallAccess.requireExecution(spotQueue, application);
     }
 
     CompletionStage<Void> executeSpot(

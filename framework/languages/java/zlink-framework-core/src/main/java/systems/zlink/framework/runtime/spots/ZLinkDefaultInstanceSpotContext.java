@@ -29,7 +29,7 @@ import java.util.function.Supplier;
 final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, SpotDispatchLine {
     @Override
     public void requireExecution() {
-        dispatchQueue.requireExecution(true);
+        ZLinkSpotCloseCallAccess.requireExecution(dispatchQueue, true);
     }
 
     @Override
@@ -101,7 +101,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                         (timerName, operation) ->
                                 enqueueDispatch(() -> host.runWithOutbound(outbound, operation)));
         execution = host.execution(this);
-        dispatchQueue.executionPolicy(execution);
+        ZLinkSpotCloseCallAccess.executionPolicy(dispatchQueue, execution);
     }
 
     void bind(ZLinkInstanceSpot value, ZLinkInstanceSpotActivation owner) {

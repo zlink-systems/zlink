@@ -10,6 +10,7 @@ import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.*;
 import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.locations.*;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
@@ -105,7 +106,7 @@ final class ZLinkActorOutageExecutionTest {
                                         actors.discardLocalMembers(spot);
                                         spotQueue.discardApplications();
                                     });
-                    spotQueue.executionPolicy(spotExecution);
+                    ZLinkSpotCloseCallAccess.executionPolicy(spotQueue, spotExecution);
                     spotExecution.ready().toCompletableFuture().join();
                     actors.confirmReady("first").toCompletableFuture().join();
                     actors.confirmReady("second").toCompletableFuture().join();

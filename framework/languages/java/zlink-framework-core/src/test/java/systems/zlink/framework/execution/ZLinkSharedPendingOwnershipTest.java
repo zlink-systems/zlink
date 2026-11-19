@@ -9,6 +9,7 @@ import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.dispatch.QueuedOwnershipProbe;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 
 import java.util.ArrayDeque;
 import java.util.Iterator;
@@ -164,7 +165,8 @@ final class ZLinkSharedPendingOwnershipTest {
                                     () -> {
                                         try {
                                             var terminals =
-                                                    actor.admitDurablePrefix(
+                                                    ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                                                    actor,
                                                                     List.of(
                                                                             new ZLinkSerialExecutionQueue
                                                                                     .QueuedRecord(
@@ -317,7 +319,8 @@ final class ZLinkSharedPendingOwnershipTest {
                     actor.underSharedSpotGateAsync(
                                     () -> {
                                         var terminals =
-                                                actor.admitDurablePrefix(
+                                                ZLinkSpotCloseCallAccess.admitDurablePrefix(
+                                                                actor,
                                                                 List.of(
                                                                         new ZLinkSerialExecutionQueue
                                                                                 .QueuedRecord(
