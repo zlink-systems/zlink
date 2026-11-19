@@ -21,7 +21,8 @@ test('Bingo runner proves room leave and actor destroy lifecycle boundaries', ()
   assert.match(runner, /\['bingo-lifecycle entry-leave actor=player-1', 1\]/);
   assert.match(runner, /\['bingo-lifecycle entry-leave actor=player-2', 1\]/);
   assert.match(runner, /\['bingo-record reported actor=observer', 0\]/);
-  assert.match(runner, /waitCombinedLog\(ctx, \['play-a', 'play-b'\], marker\)/);
+  assert.match(runner, /\['bingo-lifecycle room-close spot=', 2\]/);
+  assert.match(runner, /ctx\.waitLogCount\(\['play-a', 'play-b'\], marker, expected\)/);
   assert.match(runner, /assertCombinedLogCount\(ctx, \['play-a', 'play-b'\], marker, expected\)/);
   assert.match(runner, /bingo-lifecycle session-disconnect actor=player-1 destroy=false/);
   assert.match(runner, /bingo-lifecycle session-disconnect actor=player-2 destroy=false/);
