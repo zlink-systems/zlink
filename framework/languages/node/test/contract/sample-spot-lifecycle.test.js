@@ -116,10 +116,19 @@ test('TicTacToe closes a terminal room Spot after every actor leaves', async () 
       const spot = new TicTacToeGameSpot({
         sendToActor: () => ({ submit: async () => ({ status: 'submitted' }) })
       });
+      const { TicTacToeGameCloseTimerHandler } = require(path.join(
+        outputRoot,
+        'Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/tictactoe-game-close-timer-handler.js'
+      ));
       let closeCalls = 0;
+      const timers = [];
       spot.context = {
         spotId: 'room-1',
-        close: async () => { closeCalls += 1; return true; }
+        close: async () => { closeCalls += 1; return true; },
+        addTimer: async (name, periodMs, handlerType) => {
+          timers.push({ name, periodMs, handlerType });
+          return { cancel: async () => undefined };
+        }
       };
       await spot.onInitialize();
       const player1 = player('player-1', 'Player 1');
@@ -133,8 +142,18 @@ test('TicTacToe closes a terminal room Spot after every actor leaves', async () 
       await spot.placeMark(player1.actorId, 2);
 
       await spot.onLeaveActor(player1);
-      assert.equal(closeCalls, 0);
+      assert.equal(timers.filter((timer) => timer.name === 'tictactoe-game-close').length, 0);
       await spot.onLeaveActor(player2);
+      // A lifecycle callback must not close its own Spot; it hands closure to a timer turn.
+      assert.equal(closeCalls, 0);
+      const closeTimers = timers.filter((timer) => timer.name === 'tictactoe-game-close');
+      assert.equal(closeTimers.length, 1);
+      assert.equal(closeTimers[0].handlerType, TicTacToeGameCloseTimerHandler);
+
+      const handler = new TicTacToeGameCloseTimerHandler();
+      await handler.handle(spot, {});
+      assert.equal(closeCalls, 1);
+      await handler.handle(spot, {});
       assert.equal(closeCalls, 1);
     }
   );

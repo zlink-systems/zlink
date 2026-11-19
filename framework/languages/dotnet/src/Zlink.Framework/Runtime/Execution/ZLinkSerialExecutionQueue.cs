@@ -190,23 +190,24 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     )
     {
         Func<CancellationToken, ValueTask>? drain;
+        var candidate = new ZLinkSerialWorkItem(
+            callback,
+            ready: ready,
+            executionAllowed: _executionAllowed
+        )
+        {
+            Preparation = new ZLinkSerialWorkPreparation(prepare, cancel, NotifyReadiness),
+            ErrorReporter = errorReporter,
+        };
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0 || _applicationAdmissionClosed)
+            if (!CanAcceptApplicationUnderLock(candidate))
             {
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
             }
-            item = new ZLinkSerialWorkItem(
-                callback,
-                ready: ready,
-                executionAllowed: _executionAllowed
-            )
-            {
-                Preparation = new ZLinkSerialWorkPreparation(prepare, cancel, NotifyReadiness),
-                ErrorReporter = errorReporter,
-            };
-            CommitWorkItemUnderLock(_applicationQueue, item, ZLinkSerialWorkLane.Application);
+            item = candidate;
+            CommitWorkItemUnderLock(_applicationQueue, candidate, ZLinkSerialWorkLane.Application);
             drain = ReserveDrainUnderLock();
         }
         PublishDrain(drain);
@@ -545,7 +546,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         ZLinkApplicationJobQueueInvocation.Scope? durable = null;
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0 || _applicationAdmissionClosed)
+            if (!CanAcceptApplicationUnderLock(candidate))
             {
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
@@ -729,7 +730,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0 || _applicationAdmissionClosed)
+            var candidate = new ZLinkSerialWorkItem(
+                callback,
+                relocationRelease,
+                previousOwnerMessageFollow,
+                ZLinkSerialWorkLane.Application,
+                _nextAcceptedSequence,
+                payload,
+                payloadFactory,
+                executionAllowed: _executionAllowed
+            );
+            candidate.AcceptedState = acceptedState;
+            if (!CanAcceptApplicationUnderLock(candidate))
             {
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.Closed;
@@ -739,17 +751,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.RelocationMoving;
             }
-            TryCommitAcceptedWorkUnderLock(
-                callback,
-                relocationRelease,
-                previousOwnerMessageFollow,
-                payloadLength,
-                payload,
-                payloadFactory,
-                out item,
-                out var scheduleDrain,
-                acceptedState
-            );
+            TryCommitAcceptedWorkUnderLock(candidate, out item, out var scheduleDrain);
             drain = scheduleDrain ? ReserveDrainUnderLock() : null;
         }
 
@@ -1226,16 +1228,15 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             _sharedOwner!._applicationQueue.Publish(new ZLinkSerialWorkItem(this));
     }
 
+    private bool CanAcceptApplicationUnderLock(ZLinkSerialWorkItem candidate) =>
+        Volatile.Read(ref _completed) == 0
+        && !_applicationAdmissionClosed
+        && candidate.ExecutionStatus != ZLinkObjectExecutionStatus.Paused;
+
     private void TryCommitAcceptedWorkUnderLock(
-        Func<CancellationToken, ValueTask> callback,
-        Action relocationRelease,
-        bool previousOwnerMessageFollow,
-        int payloadLength,
-        ReadOnlyMemory<byte> payload,
-        Func<ReadOnlyMemory<byte>>? payloadFactory,
+        ZLinkSerialWorkItem candidate,
         out ZLinkSerialWorkItem item,
-        out bool scheduleDrain,
-        object? acceptedState = null
+        out bool scheduleDrain
     )
     {
         if (_nextAcceptedSequence == ulong.MaxValue)
@@ -1243,18 +1244,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
         var acceptedSequence = _nextAcceptedSequence;
         var destination = _relocation?.Held ?? _applicationQueue;
-        var candidate = new ZLinkSerialWorkItem(
-            callback,
-            relocationRelease,
-            previousOwnerMessageFollow,
-            ZLinkSerialWorkLane.Application,
-            acceptedSequence,
-            payload,
-            payloadFactory,
-            executionAllowed: _executionAllowed
-        );
-        candidate.AcceptedState = acceptedState;
-
         CommitWorkItemUnderLock(destination, candidate, ZLinkSerialWorkLane.Application);
         _nextAcceptedSequence = acceptedSequence + 1;
 

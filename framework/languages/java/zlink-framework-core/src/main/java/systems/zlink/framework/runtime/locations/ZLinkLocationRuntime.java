@@ -5,6 +5,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
@@ -359,7 +360,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     /** Incarnation execution policy; only this owner interprets the outage and lease deadlines. */
     public final class Execution
             implements AutoCloseable,
-                    systems.zlink.framework.execution.ZLinkSerialExecutionQueue.ExecutionPolicy,
+                    ZLinkSpotCloseCallAccess.ExecutionPolicy,
                     ZLinkExecutionAvailability {
         private final BooleanSupplier steady;
         private final AtomicReference<Supplier<CompletionStage<Void>>> cleanup;
