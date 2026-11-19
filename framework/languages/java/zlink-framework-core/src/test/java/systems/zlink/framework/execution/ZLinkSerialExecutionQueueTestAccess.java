@@ -10,4 +10,11 @@ public final class ZLinkSerialExecutionQueueTestAccess {
     public static Object relocationState(ZLinkSerialExecutionQueue queue) {
         return queue.relocation;
     }
+
+    /** Tells whether an accepted application entry waits in the queue, published or not. */
+    public static boolean retainsApplication(ZLinkSerialExecutionQueue queue) {
+        synchronized (queue) {
+            return !queue.applicationPending.isEmpty() || !queue.publishedApplication.isEmpty();
+        }
+    }
 }
