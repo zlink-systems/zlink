@@ -4,17 +4,29 @@
 #include <yyjson.h>
 
 #include <memory>
+#include <vector>
 
 namespace zlink::detail::json_profile
 {
 namespace
 {
 
-bool flatten (yyjson_val *value, token_buffer &output, std::string_view key = {})
+// yyjson reads without recursion; flattening keeps that property with an
+// explicit stack so nesting depth never grows the call stack.
+struct open_container
 {
-    const auto parent_index = output.tokens.size ();
-    output.tokens.emplace_back ();
-    auto &entry = output.tokens[parent_index];
+    std::size_t token_index;
+    bool object;
+    yyjson_obj_iter properties;
+    yyjson_arr_iter items;
+};
+
+thread_local std::vector<open_container> open_containers;
+
+void append_token (yyjson_val *value, std::string_view key, token_buffer &output)
+{
+    const auto index = output.tokens.size ();
+    auto &entry = output.tokens.emplace_back ();
     if (!key.empty ()) {
         entry.key_offset = output.strings.size ();
         entry.key_length = key.size ();
@@ -22,30 +34,17 @@ bool flatten (yyjson_val *value, token_buffer &output, std::string_view key = {}
     }
     if (yyjson_is_obj (value)) {
         entry.kind = token_kind::object;
-        std::size_t item_index = 0, count = 0;
-        yyjson_val *property = nullptr, *child = nullptr;
-        yyjson_obj_foreach (value, item_index, count, property, child)
-        {
-            const std::string_view name (yyjson_get_str (property), yyjson_get_len (property));
-            if (!flatten (child, output, name))
-                return false;
-            ++output.tokens[parent_index].child_count;
-        }
-        return true;
-    }
-    if (yyjson_is_arr (value)) {
+        auto &container = open_containers.emplace_back ();
+        container.token_index = index;
+        container.object = true;
+        yyjson_obj_iter_init (value, &container.properties);
+    } else if (yyjson_is_arr (value)) {
         entry.kind = token_kind::array;
-        std::size_t item_index = 0, count = 0;
-        yyjson_val *child = nullptr;
-        yyjson_arr_foreach (value, item_index, count, child)
-        {
-            if (!flatten (child, output))
-                return false;
-            ++output.tokens[parent_index].child_count;
-        }
-        return true;
-    }
-    if (yyjson_is_str (value)) {
+        auto &container = open_containers.emplace_back ();
+        container.token_index = index;
+        container.object = false;
+        yyjson_arr_iter_init (value, &container.items);
+    } else if (yyjson_is_str (value)) {
         entry.kind = token_kind::string;
         entry.text_offset = output.strings.size ();
         entry.text_length = yyjson_get_len (value);
@@ -65,7 +64,33 @@ bool flatten (yyjson_val *value, token_buffer &output, std::string_view key = {}
     } else {
         entry.kind = token_kind::null;
     }
-    return true;
+}
+
+void flatten (yyjson_val *root, token_buffer &output)
+{
+    open_containers.clear ();
+    append_token (root, {}, output);
+    while (!open_containers.empty ()) {
+        auto &container = open_containers.back ();
+        const auto parent = container.token_index;
+        yyjson_val *child = nullptr;
+        std::string_view key;
+        if (container.object) {
+            yyjson_val *name = yyjson_obj_iter_next (&container.properties);
+            if (name) {
+                key = {yyjson_get_str (name), yyjson_get_len (name)};
+                child = yyjson_obj_iter_get_val (name);
+            }
+        } else {
+            child = yyjson_arr_iter_next (&container.items);
+        }
+        if (!child) {
+            open_containers.pop_back ();
+            continue;
+        }
+        ++output.tokens[parent].child_count;
+        append_token (child, key, output);
+    }
 }
 
 } // namespace
@@ -81,7 +106,10 @@ bool parse_tokens (std::string_view input, token_buffer &output)
     output.strings.clear ();
     const std::unique_ptr<yyjson_doc, decltype (&yyjson_doc_free)> document (
       yyjson_read (input.data (), input.size (), 0), &yyjson_doc_free);
-    return document && flatten (yyjson_doc_get_root (document.get ()), output);
+    if (!document)
+        return false;
+    flatten (yyjson_doc_get_root (document.get ()), output);
+    return true;
 }
 } // namespace ZLINK_JSON_PROFILE_ENGINE_NS
 

@@ -624,8 +624,27 @@ void verify_parser_boundaries ()
       !p::try_decode<required_presence_dto> (duplicate_unknown.begin (), duplicate_unknown.end ()));
 }
 
+// Nesting depth must not grow the call stack: a peer can send a body nested
+// far deeper than any DTO, and decoding it has to fail or skip, not overflow.
+void verify_deep_nesting ()
+{
+    namespace p = zlink::detail::json_profile;
+    constexpr std::size_t depth = 100000;
+    const std::string arrays = std::string (depth, '[') + std::string (depth, ']');
+    std::string objects;
+    for (std::size_t i = 0; i < depth; ++i)
+        objects += "{\"a\":";
+    objects += "1" + std::string (depth, '}');
+    for (const std::string &nested : {arrays, objects}) {
+        assert (!p::try_decode<std::vector<std::int64_t>> (nested.begin (), nested.end ()));
+        const std::string unknown = "{\"future\":" + nested + "}";
+        assert (p::try_decode<empty_dto> (unknown.begin (), unknown.end ()));
+    }
+}
+
 int main ()
 {
+    verify_deep_nesting ();
     verify_parser_boundaries ();
     verify_payload_contract ();
     verify_byte_sequence_wire ();

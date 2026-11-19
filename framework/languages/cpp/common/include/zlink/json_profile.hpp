@@ -480,22 +480,6 @@ template <typename Output> void write_float (double value, Output &out)
     out.append (buffer, static_cast<std::size_t> (converted.ptr - buffer));
 }
 
-class fixed_text_buffer
-{
-    char text[64];
-    std::size_t length = 0;
-
-  public:
-    void append (const char *value, std::size_t size)
-    {
-        std::memcpy (text + length, value, size);
-        length += size;
-    }
-    void operator+= (std::string_view value) { append (value.data (), value.size ()); }
-    const char *data () const { return text; }
-    std::size_t size () const { return length; }
-};
-
 // Field names are compile-time constants; a name that needs no escaping is
 // laid out once as `<lead>"name":` and written with a single append.
 constexpr bool plain_key (std::string_view name)
@@ -1056,41 +1040,67 @@ class typed_sax final
     bool end_array () { return end (); }
 };
 // Walk every parsed value, including unknown properties, through typed_sax.
-inline bool visit_tokens (const token_buffer &buffer, std::size_t &cursor, typed_sax &handler)
+// Tokens are in document order with child counts, so an explicit stack of
+// open containers replaces recursion and nesting depth never grows the call stack.
+struct open_token_container
 {
-    const token &entry = buffer.tokens[cursor++];
-    switch (entry.kind) {
-        case token_kind::null: return handler.null ();
-        case token_kind::boolean: return handler.boolean (entry.boolean);
-        case token_kind::integer: return handler.number_integer (entry.integer);
-        case token_kind::unsigned_integer: return handler.number_unsigned (entry.unsigned_integer);
-        case token_kind::floating:
-            return std::isfinite (entry.floating) && handler.number_float (entry.floating);
-        case token_kind::string:
-            return handler.borrowed_string (
-              {buffer.strings.data () + entry.text_offset, entry.text_length});
-        case token_kind::object:
-            if (!handler.start_object ())
+    std::size_t remaining;
+    bool object;
+};
+inline thread_local std::vector<open_token_container> open_token_containers;
+
+inline bool visit_tokens (const token_buffer &buffer, typed_sax &handler)
+{
+    auto &open = open_token_containers;
+    open.clear ();
+    std::size_t cursor = 0;
+    do {
+        if (cursor == buffer.tokens.size ())
+            return false;
+        const token &entry = buffer.tokens[cursor++];
+        if (!open.empty ()) {
+            --open.back ().remaining;
+            if (open.back ().object
+                && !handler.borrowed_key (
+                  {buffer.strings.data () + entry.key_offset, entry.key_length}))
                 return false;
-            for (std::size_t i = 0; i < entry.child_count; ++i) {
-                const token &child = buffer.tokens[cursor];
-                const std::string_view key (buffer.strings.data () + child.key_offset,
-                                            child.key_length);
-                if (!handler.borrowed_key (key) || !visit_tokens (buffer, cursor, handler))
-                    return false;
-            }
-            return handler.end_object ();
-        case token_kind::array:
-            if (!handler.start_array ())
+        }
+        bool accepted = false;
+        switch (entry.kind) {
+            case token_kind::null: accepted = handler.null (); break;
+            case token_kind::boolean: accepted = handler.boolean (entry.boolean); break;
+            case token_kind::integer: accepted = handler.number_integer (entry.integer); break;
+            case token_kind::unsigned_integer:
+                accepted = handler.number_unsigned (entry.unsigned_integer);
+                break;
+            case token_kind::floating:
+                accepted = std::isfinite (entry.floating) && handler.number_float (entry.floating);
+                break;
+            case token_kind::string:
+                accepted = handler.borrowed_string (
+                  {buffer.strings.data () + entry.text_offset, entry.text_length});
+                break;
+            case token_kind::object:
+                accepted = handler.start_object ();
+                open.push_back ({entry.child_count, true});
+                break;
+            case token_kind::array:
+                accepted = handler.start_array ();
+                open.push_back ({entry.child_count, false});
+                break;
+            case token_kind::raw_number:
+            case token_kind::raw_json: break;
+        }
+        if (!accepted)
+            return false;
+        while (!open.empty () && open.back ().remaining == 0) {
+            const bool object = open.back ().object;
+            open.pop_back ();
+            if (!(object ? handler.end_object () : handler.end_array ()))
                 return false;
-            for (std::size_t i = 0; i < entry.child_count; ++i)
-                if (!visit_tokens (buffer, cursor, handler))
-                    return false;
-            return handler.end_array ();
-        case token_kind::raw_number:
-        case token_kind::raw_json: return false;
-    }
-    return false;
+        }
+    } while (!open.empty ());
+    return cursor == buffer.tokens.size ();
 }
 
 inline bool read_json (std::string_view text, typed_sax &handler)
@@ -1100,8 +1110,7 @@ inline bool read_json (std::string_view text, typed_sax &handler)
     auto &buffer = reusable_tokens;
     if (!parse_tokens (text, buffer))
         return false;
-    std::size_t cursor = 0;
-    return visit_tokens (buffer, cursor, handler) && cursor == buffer.tokens.size ();
+    return visit_tokens (buffer, handler);
 }
 
 template <typename T>
