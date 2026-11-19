@@ -19,10 +19,12 @@ import { isBackendRequestTimeoutError } from '../backend/runtime-values';
 import { type ZLinkFrameworkRegistration, ZLinkConfigurationException } from '../configuration';
 
 import { ZLinkStateLane } from '../execution/state-lane';
-import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
 import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
 import type { ZLinkClientServerLocationStore } from '../locations/internal-store-contracts';
-import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
+import {
+  toClientServerDiscoveryDescriptor,
+  ZLinkChannelSocketRegistry
+} from './channel-socket-registry';
 import {
   decodeClientServerControl,
   DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT,
@@ -217,7 +219,7 @@ export class ZLinkClientServerLocationRuntime {
         if (!sameDescriptor(current.descriptor, descriptor)) {
           if (current.state === 'ready') {
             const updated = this.sockets.admitClientServerConnection(
-              toDiscoveryDescriptor(descriptor),
+              toClientServerDiscoveryDescriptor(descriptor, DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT),
               connectionId
             );
             if (updated) {
@@ -363,7 +365,10 @@ export class ZLinkClientServerLocationRuntime {
       if (admittedDescriptor === undefined) return;
       if (
         !this.sockets.admitClientServerConnection(
-          toDiscoveryDescriptor(admittedDescriptor, admission.normalizedEffectiveMaxMessageBytes),
+          toClientServerDiscoveryDescriptor(
+            admittedDescriptor,
+            admission.normalizedEffectiveMaxMessageBytes
+          ),
           connectionId
         )
       ) {
@@ -518,23 +523,6 @@ function sameDescriptor(
     left.ownerId === right.ownerId &&
     left.leaseGeneration === right.leaseGeneration
   );
-}
-
-function toDiscoveryDescriptor(
-  descriptor: ZLinkClientServerServerDescriptor,
-  effectiveMaxMessageBytes: number = DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT
-) {
-  return {
-    channelName: descriptor.channelName,
-    serverRoutingId: String(descriptor.serverRid),
-    lifecycleGeneration: descriptor.lifecycleGeneration,
-    descriptorRevision: descriptor.descriptorRevision,
-    weight: descriptor.weight,
-    state: discoveryAvailabilityForRuntimeState(descriptor.state),
-    securityIdentity: descriptor.securityIdentity,
-    effectiveMaxMessageBytes,
-    advertisedEndpoint: descriptor.endpoint
-  };
 }
 
 function requestAdmission(
