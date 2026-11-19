@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.actors;
 
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 
 import java.util.List;
@@ -46,7 +47,8 @@ public final class ZLinkActorSerialExecutor {
             Supplier<CompletionStage<Void>> operation,
             Runnable release,
             CompletableFuture<Void> admission) {
-        return queue.enqueueActorWithPayloadBytes(payloadBytes, operation, release, admission);
+        return ZLinkSpotCloseCallAccess.enqueueActorWithPayloadBytes(
+                queue, payloadBytes, operation, release, admission);
     }
 
     public CompletionStage<Void> executeActor(

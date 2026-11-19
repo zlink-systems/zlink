@@ -59,6 +59,16 @@ public final class ZLinkSerialExecutionQueue {
                         queue.requireExecution(application);
                     }
 
+                    public CompletionStage<Void> enqueueActorWithPayloadBytes(
+                            ZLinkSerialExecutionQueue queue,
+                            long payloadBytes,
+                            Supplier<CompletionStage<Void>> operation,
+                            Runnable release,
+                            CompletableFuture<Void> admission) {
+                        return queue.enqueueActorWithPayloadBytes(
+                                payloadBytes, operation, release, admission);
+                    }
+
                     public CompletionStage<List<CompletableFuture<Void>>> admitDurablePrefix(
                             ZLinkSerialExecutionQueue queue,
                             List<QueuedRecord> records,
@@ -1082,7 +1092,7 @@ public final class ZLinkSerialExecutionQueue {
         return enqueueActorWithPayloadBytes(payloadBytes, operation, () -> {}, admission);
     }
 
-    public CompletionStage<Void> enqueueActorWithPayloadBytes(
+    CompletionStage<Void> enqueueActorWithPayloadBytes(
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable release,
