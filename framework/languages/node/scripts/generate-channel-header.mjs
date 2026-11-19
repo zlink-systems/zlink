@@ -16,13 +16,18 @@ const generatedModule = join(workspace, 'packages/framework/generated/channel-he
 const generatedTypes = join(generatedDirectory, 'channel-header-v1.d.ts');
 const check = process.argv.includes('--check');
 
-//  tsc emits only .ts sources, so the build copies the committed generated module into dist.
-if (process.argv.includes('--dist')) {
+//  tsc emits only .ts sources, so every emitted tree (dist, or a gate's --into tree) gets
+//  the committed generated module next to the compiled channels/ directory.
+const intoIndex = process.argv.indexOf('--into');
+if (process.argv.includes('--dist') || intoIndex >= 0) {
   const { mkdirSync } = await import('node:fs');
-  const distDirectory = join(workspace, 'packages/framework/dist/runtime/channels/generated');
-  mkdirSync(distDirectory, { recursive: true });
-  copyFileSync(generatedModule, join(distDirectory, 'channel-header-v1.js'));
-  copyFileSync(generatedTypes, join(distDirectory, 'channel-header-v1.d.ts'));
+  const targetDirectory =
+    intoIndex >= 0
+      ? resolve(workspace, process.argv[intoIndex + 1], 'runtime/channels/generated')
+      : join(workspace, 'packages/framework/dist/runtime/channels/generated');
+  mkdirSync(targetDirectory, { recursive: true });
+  copyFileSync(generatedModule, join(targetDirectory, 'channel-header-v1.js'));
+  copyFileSync(generatedTypes, join(targetDirectory, 'channel-header-v1.d.ts'));
   process.exit(0);
 }
 

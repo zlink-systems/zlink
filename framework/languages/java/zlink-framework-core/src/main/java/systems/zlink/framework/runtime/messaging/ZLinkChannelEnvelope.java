@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.messaging;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.InvalidProtocolBufferException;
 
 import systems.zlink.contracts.messaging.Message;
@@ -32,6 +33,13 @@ public final class ZLinkChannelEnvelope {
     public static final int KIND_ERROR = 5;
     public static final String DEFAULT_CONTENT_TYPE = "application/json";
     private static final int MAX_METADATA_BYTES = 1024;
+    // Native header parts are direct buffers. protobuf-java parses those by duplicating the
+    // buffer into a fresh byte[] per call when its Unsafe decoder is unavailable, so the decoder
+    // copies the header once into this per-thread array instead. Headers within the fixed fields
+    // plus MAX_METADATA_BYTES fit; a larger one uses its own array and is not retained.
+    private static final int RETAINED_HEADER_SCRATCH_BYTES = 4096;
+    private static final ThreadLocal<byte[]> HEADER_SCRATCH =
+            ThreadLocal.withInitial(() -> new byte[512]);
     private static final Comparator<String> UTF8_ORDER =
             (left, right) -> {
                 int leftIndex = 0;
@@ -322,7 +330,9 @@ public final class ZLinkChannelEnvelope {
         int start = bytes == null ? 0 : bytes.position();
         ChannelHeader decoded;
         try {
-            decoded = ChannelHeader.parseFrom(bytes);
+            CodedInputStream input = headerInput(bytes, start);
+            decoded = ChannelHeader.parser().parseFrom(input);
+            input.checkLastTagWas(0);
         } catch (InvalidProtocolBufferException | RuntimeException failure) {
             if (bytes != null) bytes.position(start);
             if (failure instanceof ZLinkFrameworkException frameworkError) throw frameworkError;
@@ -342,6 +352,19 @@ public final class ZLinkChannelEnvelope {
                     protocolError(
                             "invalid ZLink envelope header: " + failure.getMessage(), failure));
         }
+    }
+
+    private static CodedInputStream headerInput(ByteBuffer bytes, int start) {
+        int length = bytes.remaining();
+        if (bytes.hasArray())
+            return CodedInputStream.newInstance(bytes.array(), bytes.arrayOffset() + start, length);
+        byte[] scratch = HEADER_SCRATCH.get();
+        if (scratch.length < length) {
+            scratch = new byte[length];
+            if (length <= RETAINED_HEADER_SCRATCH_BYTES) HEADER_SCRATCH.set(scratch);
+        }
+        bytes.get(start, scratch, 0, length);
+        return CodedInputStream.newInstance(scratch, 0, length);
     }
 
     private static Header fromProto(ChannelHeader proto, boolean captureFlow) {

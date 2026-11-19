@@ -30,7 +30,7 @@
     "verify:m5-foundation": "node scripts/remove-output.js build/m5-foundation && node node_modules/typescript/bin/tsc -p tsconfig.m5-foundation.json && node --test build/m5-foundation/languages/node/test/m5/m5-foundation.contract.js",
     "verify:m6a-runtime": "node scripts/remove-output.js build/m6a-runtime && node node_modules/typescript/bin/tsc -p tsconfig.m6a-runtime.json && node --test build/m6a-runtime/languages/node/test/m6a/m6a-runtime.contract.js",
     "verify:m6b-runtime": "node scripts/remove-output.js build/m6b-runtime && node node_modules/typescript/bin/tsc -p tsconfig.m6b-runtime.json && node --test build/m6b-runtime/languages/node/test/m6b/m6b-runtime.contract.js",
-    "verify:m6c-runtime": "node scripts/remove-output.js build/m6c-runtime && node node_modules/typescript/bin/tsc -p tsconfig.m6c-runtime.json && node scripts/run_node_test_gate.js build/m6c-runtime/languages/node/test/m6c/m6c-*.contract.js",
+    "verify:m6c-runtime": "node scripts/remove-output.js build/m6c-runtime && node node_modules/typescript/bin/tsc -p tsconfig.m6c-runtime.json && node scripts/generate-channel-header.mjs --into build/m6c-runtime/languages/node/packages/framework/src && node scripts/run_node_test_gate.js build/m6c-runtime/languages/node/test/m6c/m6c-*.contract.js",
     "verify:coverage": "node scripts/run_node_coverage_gate.js",
     "verify:samples": "node scripts/run-samples-gate.js",
     "verify:runtime-matrix": "node scripts/verify_node_runtime_matrix.js",
