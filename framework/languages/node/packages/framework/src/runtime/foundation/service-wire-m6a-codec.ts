@@ -262,21 +262,35 @@ function writeMultipartPayload(
   offset += 4;
   for (let index = 0; index < parts.length; index += 1) {
     const part = parts[index]!;
-    const length = multipartPartLength(part);
-    result.writeUInt32BE(length, offset);
-    offset += 4;
-    if (typeof part === 'string') result.write(part, offset, length, 'utf8');
-    else result.set(part, offset);
-    offset += length;
+    if (typeof part === 'string') {
+      // multipartPayloadLength sized the frame for this exact string, so the
+      // write cannot truncate; its byte count is the length field.
+      const length = result.write(part, offset + 4, 'utf8');
+      result.writeUInt32BE(length, offset);
+      offset += 4 + length;
+    } else {
+      result.writeUInt32BE(part.byteLength, offset);
+      result.set(part, offset + 4);
+      offset += 4 + part.byteLength;
+    }
   }
 }
 
-function allocateApplicationPayload(
-  packetName: string,
-  contentType: string,
-  payloadLength: number,
-  allocate: (length: number) => Buffer
-): Buffer {
+// The packet name and content type of an application frame are validated and
+// written as two text8 fields. Every framework multipart frame carries the same
+// pair, so the validated field bytes are kept for the last pair seen.
+let textFieldsPacketName = '';
+let textFieldsContentType = '';
+let textFields: Buffer | undefined;
+
+function applicationTextFields(packetName: string, contentType: string): Buffer {
+  if (
+    textFields !== undefined &&
+    packetName === textFieldsPacketName &&
+    contentType === textFieldsContentType
+  ) {
+    return textFields;
+  }
   const packetNameLength = canonicalServiceWireTextLength(
     packetName,
     'packetName',
@@ -289,19 +303,34 @@ function allocateApplicationPayload(
     SERVICE_WIRE_TEXT8_MAX_BYTES,
     fail
   );
+  const fields = Buffer.allocUnsafeSlow(2 + packetNameLength + contentTypeLength);
+  const offset = writeText8(fields, 0, packetName, packetNameLength);
+  writeText8(fields, offset, contentType, contentTypeLength);
+  textFieldsPacketName = packetName;
+  textFieldsContentType = contentType;
+  textFields = fields;
+  return fields;
+}
+
+function allocateApplicationPayload(
+  packetName: string,
+  contentType: string,
+  payloadLength: number,
+  allocate: (length: number) => Buffer
+): Buffer {
+  const fields = applicationTextFields(packetName, contentType);
   if (payloadLength > MAX_U32) fail('Application payload exceeds u32.');
-  const frameLength =
-    APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES + packetNameLength + contentTypeLength + payloadLength;
   const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
+  const frameLength =
+    prefixLength + fields.length + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES + payloadLength;
   const bodyLength = frameLength - prefixLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
   // Both callers write every payload byte after these header fields.
   const result = allocate(frameLength);
   result[0] = APPLICATION_PAYLOAD_VERSION;
   result.writeUInt32BE(bodyLength, 1);
-  let offset = writeText8(result, prefixLength, packetName, packetNameLength);
-  offset = writeText8(result, offset, contentType, contentTypeLength);
-  result.writeUInt32BE(payloadLength, offset);
+  result.set(fields, prefixLength);
+  result.writeUInt32BE(payloadLength, prefixLength + fields.length);
   return result;
 }
 
