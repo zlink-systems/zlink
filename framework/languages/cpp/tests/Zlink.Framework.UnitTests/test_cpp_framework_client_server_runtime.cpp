@@ -2146,8 +2146,6 @@ void verify_client_server_runtime_projection_and_observation ()
 
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([endpoint] (zlink::framework::zlink_framework_options_t &options) {
-        options.add_location_store (
-          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_client_server_channel ("client-server-runtime-unit")
           .client ()
           .connect (endpoint);
@@ -2245,6 +2243,63 @@ void verify_listener_status_is_not_configured (zlink::framework::framework_runti
             return;
     }
     throw std::runtime_error ("listener status after stop did not return NotConfigured");
+}
+
+// Spec client-server-channel §3.3: a manual endpoint needs no Location Store, and the
+// client still sends hello and waits for admit (wire-protocol, ClientServer admission).
+void verify_manual_client_without_location_store_is_admitted_and_answered ()
+{
+    auto server = zlink::framework::app_t::create ();
+    server.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.handlers ().group ("no-store-manual").add<other_owner_request_handler_t> ();
+        options.add_client_server_channel ("no-store-manual")
+          .server ()
+          .listen ()
+          .add_handler_group ("no-store-manual");
+    });
+    auto server_provider = server.advanced ().services ().build_provider ();
+    assert (!server_provider.get<zlink::framework::location_repository_t> ());
+    char server_program[] = "client-server-no-store-server";
+    char *server_arguments[] = {server_program, nullptr};
+    std::thread server_thread ([&] { (void) server.run (1, server_arguments); });
+    auto &server_runtime = server_provider.get_required<zlink::framework::framework_runtime_t> ();
+    const auto deadline = std::chrono::steady_clock::now () + 10s;
+    std::optional<zlink::framework::listener_status_t> status;
+    while (!status && std::chrono::steady_clock::now () < deadline) {
+        try {
+            status = server_runtime.listener_status (
+              zlink::framework::listener_kind_t::client_server, "no-store-manual");
+        }
+        catch (const zlink::framework::framework_exception_t &) {
+            std::this_thread::sleep_for (1ms);
+        }
+    }
+    assert (status.has_value ());
+    const auto endpoint = status->endpoint;
+
+    auto client = zlink::framework::app_t::create ();
+    client.add_zlink_framework ([endpoint] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_client_server_channel ("no-store-manual").client ().connect (endpoint);
+    });
+    auto client_provider = client.advanced ().services ().build_provider ();
+    assert (!client_provider.get<zlink::framework::location_repository_t> ());
+    auto &runtime = client_provider.get_required<zlink::framework::client_server_runtime_t> ();
+    auto &channels = client_provider.get_required<zlink::framework::channel_client_t> ();
+    char client_program[] = "client-server-no-store-client";
+    char *client_arguments[] = {client_program, nullptr};
+    std::thread client_thread ([&] { (void) client.run (1, client_arguments); });
+    while (!runtime.is_ready ("no-store-manual") && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    // Ready means the hello/admit handshake completed.
+    assert (runtime.is_ready ("no-store-manual"));
+    auto reply = channels.request_to_channel ("no-store-manual", other_owner_request_t{})
+                   .async<std::string> ();
+    const auto result = reply.result_for (10s);
+    assert (result && result->value () == "other");
+    client.stop ();
+    client_thread.join ();
+    server.stop ();
+    server_thread.join ();
 }
 
 void verify_public_listener_status_reports_bound_endpoint ()
@@ -2777,6 +2832,10 @@ int main (int argc, char **argv)
         verify_client_server_owner_gate_and_budget ();
         return 0;
     }
+    if (argc == 2 && std::string (argv[1]) == "--manual-client-without-store") {
+        verify_manual_client_without_location_store_is_admitted_and_answered ();
+        return 0;
+    }
     if (argc == 2 && std::string (argv[1]) == "--same-owner-gated-control") {
         verify_gated_owner_control ();
         assert (zlink::framework::test::same_owner_claim_controls ());
@@ -2824,6 +2883,7 @@ int main (int argc, char **argv)
     verify_client_server_terminal_errors_preserve_public_boundaries ();
     verify_unready_request_fails_admission_and_reply_with_one_cause ();
     verify_client_server_runtime_projection_and_observation ();
+    verify_manual_client_without_location_store_is_admitted_and_answered ();
     verify_public_listener_status_reports_bound_endpoint ();
     verify_listener_status_during_stop_reads_record_or_not_configured ();
     return 0;
