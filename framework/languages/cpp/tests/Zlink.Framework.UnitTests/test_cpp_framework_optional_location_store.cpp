@@ -94,13 +94,21 @@ bool verify_none (bool registered)
             channel.weight (654);
             passed = weights.placement_weight () == 321 && channel.weight () == 654;
             if (registered) {
-                const auto rows =
-                  repository->get ().list_mesh_nodes ("optional-store").result ().value ();
+                // The setter records the values; the renew schedule publishes them.
+                const auto published = [&] {
+                    const auto rows =
+                      repository->get ().list_mesh_nodes ("optional-store").result ().value ();
+                    return rows.items.size () == 1
+                           && rows.items.front ().object_role == object_role_t::none
+                           && rows.items.front ().placement_weight == 321
+                           && rows.items.front ().channel_weights.contains ("optional-weight")
+                           && rows.items.front ().channel_weights.at ("optional-weight") == 654;
+                };
+                const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+                while (!published () && std::chrono::steady_clock::now () < deadline)
+                    std::this_thread::sleep_for (std::chrono::milliseconds (5));
                 passed = passed && locations->get ().current_owner_token ().has_value ()
-                         && rows.items.size () == 1
-                         && rows.items.front ().object_role == object_role_t::none
-                         && rows.items.front ().placement_weight == 321
-                         && rows.items.front ().channel_weights.at ("optional-weight") == 654;
+                         && published ();
             }
         }
     }
