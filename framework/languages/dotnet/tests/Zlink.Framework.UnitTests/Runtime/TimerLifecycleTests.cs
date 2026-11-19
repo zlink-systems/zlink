@@ -621,11 +621,11 @@ public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper out
                 var attempt = Interlocked.Increment(ref attempts);
                 if (Volatile.Read(ref admissionOpen) == 0)
                 {
-                    registry.FreezeForApplicationAdmissionSeal();
+                    registry.Freeze();
                     firstTick.TrySetResult(tick);
                     return ValueTask.FromResult(false);
                 }
-                registry.FreezeForApplicationAdmissionSeal();
+                registry.Freeze();
                 resumedTick.TrySetResult(tick);
                 return ValueTask.FromResult(true);
             },
@@ -672,7 +672,7 @@ public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper out
             CancellationToken.None,
             (_, tick, _) =>
             {
-                source.FreezeForApplicationAdmissionSeal();
+                source.Freeze();
                 sourceTick.TrySetResult(tick);
                 return ValueTask.FromResult(false);
             },
@@ -697,7 +697,7 @@ public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper out
             (_, tick, _) =>
             {
                 Interlocked.Increment(ref targetDeliveries);
-                target.FreezeForApplicationAdmissionSeal();
+                target.Freeze();
                 targetTick.TrySetResult(tick);
                 return ValueTask.FromResult(true);
             },
@@ -805,7 +805,7 @@ public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper out
             (_, tick, _) =>
             {
                 Interlocked.Increment(ref targetDeliveries);
-                target.FreezeForApplicationAdmissionSeal();
+                target.Freeze();
                 targetTick.TrySetResult(tick);
                 return ValueTask.FromResult(true);
             },

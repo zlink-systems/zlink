@@ -42,7 +42,37 @@ import java.util.function.Supplier;
  */
 public final class ZLinkSerialExecutionQueue {
     static {
-        ZLinkSpotCloseCallAccess.registerAccess(queue -> queue.ensureSpotCloseCallAllowed());
+        ZLinkSpotCloseCallAccess.registerAccess(
+                new ZLinkSpotCloseCallAccess.SpotCloseCallAccess() {
+                    public void ensureAllowed(ZLinkSerialExecutionQueue queue) {
+                        queue.ensureSpotCloseCallAllowed();
+                    }
+
+                    public void executionPolicy(
+                            ZLinkSerialExecutionQueue queue,
+                            ZLinkSpotCloseCallAccess.ExecutionPolicy policy) {
+                        queue.executionPolicy(policy);
+                    }
+
+                    public void requireExecution(
+                            ZLinkSerialExecutionQueue queue, boolean application) {
+                        queue.requireExecution(application);
+                    }
+
+                    public CompletionStage<List<CompletableFuture<Void>>> admitDurablePrefix(
+                            ZLinkSerialExecutionQueue queue,
+                            List<QueuedRecord> records,
+                            java.util.function.BiFunction<
+                                            QueuedRecord,
+                                            CompletableFuture<Void>,
+                                            Supplier<CompletionStage<Void>>>
+                                    replay,
+                            systems.zlink.framework.runtime.internal.dispatch
+                                            .ZLinkApplicationJobQueue
+                                    jobs) {
+                        return queue.admitDurablePrefix(records, replay, jobs);
+                    }
+                });
     }
 
     private static final VarHandle OUTSTANDING;
@@ -872,14 +902,9 @@ public final class ZLinkSerialExecutionQueue {
         return relocation == null && !closingAdmissionSealed && lifecycleTransitionLocked() == null;
     }
 
-    @FunctionalInterface
-    public interface ExecutionPolicy {
-        void check(boolean application);
-    }
+    private volatile ZLinkSpotCloseCallAccess.ExecutionPolicy executionPolicy;
 
-    private volatile ExecutionPolicy executionPolicy;
-
-    public void executionPolicy(ExecutionPolicy policy) {
+    void executionPolicy(ZLinkSpotCloseCallAccess.ExecutionPolicy policy) {
         executionPolicy = policy;
         if (policy
                 instanceof
@@ -887,8 +912,8 @@ public final class ZLinkSerialExecutionQueue {
                         availability) availability.onResume(this::resumePending);
     }
 
-    public void requireExecution(boolean application) {
-        ExecutionPolicy policy = executionPolicy;
+    void requireExecution(boolean application) {
+        ZLinkSpotCloseCallAccess.ExecutionPolicy policy = executionPolicy;
         if (policy != null) policy.check(application);
     }
 
@@ -1447,7 +1472,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /** Atomically transfers a non-executing relocation prefix into its existing owner FIFO. */
-    public CompletionStage<java.util.List<CompletableFuture<Void>>> admitDurablePrefix(
+    CompletionStage<java.util.List<CompletableFuture<Void>>> admitDurablePrefix(
             List<QueuedRecord> records,
             java.util.function.BiFunction<
                             QueuedRecord, CompletableFuture<Void>, Supplier<CompletionStage<Void>>>

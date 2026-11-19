@@ -8,6 +8,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
+import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -202,9 +203,8 @@ final class ZLinkActorDispatchSerials {
 
     private QueuedTurn initializeOnRegistry(QueuedTurn turn) {
         if (turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {
-            turn.activation()
-                    .relocationLane()
-                    .executionPolicy(new IncarnationExecution(turn, context));
+            ZLinkSpotCloseCallAccess.executionPolicy(
+                    turn.activation().relocationLane(), new IncarnationExecution(turn, context));
         }
         CompletionStage<Void> barrier = lifecycleBarriers.get(turn.actorId());
         if (barrier == null
@@ -230,7 +230,7 @@ final class ZLinkActorDispatchSerials {
 
     private record IncarnationExecution(
             QueuedTurn turn, ZLinkActorRuntime.DefaultActorContext context)
-            implements ZLinkSerialExecutionQueue.ExecutionPolicy,
+            implements ZLinkSpotCloseCallAccess.ExecutionPolicy,
                     systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability {
         public void check(boolean application) {
             if (turn.target() instanceof ZLinkSpotSerialExecutor spot)

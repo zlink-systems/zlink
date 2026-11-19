@@ -10,6 +10,12 @@ import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
  * byte array sized by the caller so relocation chunking (fixed 32 KiB
  * JoinEntrySpot chunk limit, spec 15:938) actually spans multiple chunks. */
 public final class RelocationActor implements ZLinkActor {
+    private static final java.util.concurrent.ConcurrentHashMap<String, RelocationActor> INSTANCES =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> CREATIONS =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private final String instanceId = java.util.UUID.randomUUID().toString();
+    private final java.util.concurrent.atomic.AtomicInteger probeExecutions = new java.util.concurrent.atomic.AtomicInteger();
     private final String actorId;
     private final ZLinkActorContext context;
     private final EventSink sink;
@@ -20,6 +26,8 @@ public final class RelocationActor implements ZLinkActor {
         this.actorId = actorId;
         this.context = context;
         this.sink = sink;
+        INSTANCES.put(actorId, this);
+        CREATIONS.computeIfAbsent(actorId, ignored -> new java.util.concurrent.atomic.AtomicInteger()).incrementAndGet();
     }
 
     /** Terminal fate of a deferred joinSpot(): the only place a canonical
@@ -42,6 +50,12 @@ public final class RelocationActor implements ZLinkActor {
     public String actorId() {
         return actorId;
     }
+
+    static RelocationActor observed(String actorId) { return INSTANCES.get(actorId); }
+    static int creations(String actorId) { return CREATIONS.get(actorId).get(); }
+    String instanceId() { return instanceId; }
+    int probeExecutions() { return probeExecutions.get(); }
+    void recordProbe() { probeExecutions.incrementAndGet(); }
 
     @Override
     public ZLinkActorContext context() {
