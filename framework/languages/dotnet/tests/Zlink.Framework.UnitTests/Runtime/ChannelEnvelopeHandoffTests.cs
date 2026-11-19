@@ -219,7 +219,7 @@ public sealed class ChannelEnvelopeHandoffTests
                     var handler = (PublishHandler)target;
                     handler.Probe.Calls++;
                     handler.Probe.Value = ((PublishPayload)message!).Value;
-                    return null;
+                    return default;
                 },
                 [ZLinkHandlerArgumentKind.Message],
                 typeof(PublishPayload),
