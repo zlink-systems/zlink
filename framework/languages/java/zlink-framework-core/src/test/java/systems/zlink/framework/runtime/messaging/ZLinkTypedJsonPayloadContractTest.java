@@ -150,16 +150,14 @@ final class ZLinkTypedJsonPayloadContractTest {
                         + "\"wireValue\":{\"text\":\"b\"}}",
                 ObjectPayload.class);
         rejectsDuplicate(
-                "{\"extra\":1,\"wireValue\":{\"text\":\"a\"},\"extra\":2}",
-                ObjectPayload.class);
+                "{\"extra\":1,\"wireValue\":{\"text\":\"a\"},\"extra\":2}", ObjectPayload.class);
     }
 
     @Test
     void primitiveArrayReadersKeepDuplicateDepth() throws Exception {
         String arrays = "\"names\":[\"a\"],\"nums\":[1],\"longs\":[2],\"flags\":[true]";
         rejectsDuplicate(
-                "{" + arrays + ",\"child\":{\"text\":\"x\",\"text\":\"y\"}}",
-                ArraysPayload.class);
+                "{" + arrays + ",\"child\":{\"text\":\"x\",\"text\":\"y\"}}", ArraysPayload.class);
         rejectsDuplicate("{" + arrays + ",\"names\":[\"b\"]}", ArraysPayload.class);
         var accepted =
                 ZLinkFrameworkJsonProfile.mapper()
