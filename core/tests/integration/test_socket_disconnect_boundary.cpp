@@ -286,7 +286,134 @@ void run_boundary (const char *transport_, bool handover_)
         TEST_ASSERT_EQUAL_INT (20, reply_ok + timed_out + not_connected);
     }
 }
+
+//  socket spec zlink_disconnect/zlink_unbind: each call ends only the
+//  registrations of its own kind for that endpoint string.
+std::string endpoint_for (const char *transport_, const char *name_)
+{
+    return strcmp (transport_, "inproc") == 0
+             ? std::string ("inproc://") + name_
+             : std::string (transport_) + "://127.0.0.1:*";
 }
+
+std::string bind_endpoint (void *socket_, const std::string &endpoint_)
+{
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (socket_, endpoint_.c_str ()));
+    char actual[MAX_SOCKET_STRING];
+    size_t size = sizeof (actual);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (socket_, ZLINK_OPT_LAST_ENDPOINT, actual, &size));
+    return actual;
+}
+
+void roundtrip (void *client_, void *server_, char payload_)
+{
+    zlink_completion_id_t id = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit (client_, payload_, &id));
+    await_request (server_, payload_, true);
+    zlink_completion_t result = completion (client_);
+    assert_reply (&result, id, payload_);
+    zlink_completion_close (&result);
+}
+
+void *open_ready_client (const std::string &endpoint_, void **monitor_)
+{
+    void *client = test_context_socket (ZLINK_SOCKET_DEALER);
+    set_int (client, ZLINK_OPT_LINGER, 0);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (client, "keep-client", 11));
+    zlink_socket_monitor_open_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED;
+    *monitor_ = zlink_socket_monitor_open (client, &options);
+    TEST_ASSERT_NOT_NULL (*monitor_);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_.c_str ()));
+    (void) ready (*monitor_, 0);
+    return client;
+}
+
+void assert_no_disconnect (void *monitor_)
+{
+    for (;;) {
+        zlink_monitor_event_t event;
+        memset (&event, 0, sizeof (event));
+        const zlink_recv_result_t rc = zlink_socket_monitor_recv (
+          monitor_, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA)
+            return;
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
+        TEST_ASSERT_NOT_EQUAL (ZLINK_EVENT_DISCONNECTED, event.event);
+    }
+}
+
+//  (a) A binds E and also connects to E. disconnect(E) ends only A's own
+//  connect registration; B's inbound connection and A's listener stay.
+void run_disconnect_keeps_bind (const char *transport_)
+{
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    set_int (server, ZLINK_OPT_LINGER, 0);
+    const std::string endpoint = bind_endpoint (
+      server, endpoint_for (transport_, "disconnect-keeps-bind"));
+    void *monitor = NULL;
+    void *client = open_ready_client (endpoint, &monitor);
+    roundtrip (client, server, 'A');
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (server, endpoint.c_str ()));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (server, endpoint.c_str ()));
+
+    roundtrip (client, server, 'B');
+    assert_no_disconnect (monitor);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_unbind (server, endpoint.c_str ()));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (client);
+    test_context_socket_close_zero_linger (server);
+}
+
+//  (b) E has only a bind. disconnect(E) finds no connect registration.
+void run_disconnect_bind_only (const char *transport_)
+{
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    set_int (server, ZLINK_OPT_LINGER, 0);
+    const std::string endpoint = bind_endpoint (
+      server, endpoint_for (transport_, "disconnect-bind-only"));
+    void *monitor = NULL;
+    void *client = open_ready_client (endpoint, &monitor);
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_NOT_FOUND, zlink_disconnect (server, endpoint.c_str ()));
+
+    roundtrip (client, server, 'A');
+    assert_no_disconnect (monitor);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_unbind (server, endpoint.c_str ()));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (client);
+    test_context_socket_close_zero_linger (server);
+}
+
+//  (c) The reverse direction: unbind(E) leaves A's connect registration to E.
+void run_unbind_keeps_connect (const char *transport_)
+{
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    set_int (server, ZLINK_OPT_LINGER, 0);
+    const std::string endpoint = bind_endpoint (
+      server, endpoint_for (transport_, "unbind-keeps-connect"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (server, endpoint.c_str ()));
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_unbind (server, endpoint.c_str ()));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_NOT_FOUND, zlink_unbind (server, endpoint.c_str ()));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (server, endpoint.c_str ()));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_NOT_FOUND, zlink_disconnect (server, endpoint.c_str ()));
+
+    test_context_socket_close_zero_linger (server);
+}
+}
+
+#define ENDPOINT_KIND_TEST(transport) \
+    void test_##transport##_disconnect_keeps_bind () { run_disconnect_keeps_bind (#transport); } \
+    void test_##transport##_disconnect_bind_only () { run_disconnect_bind_only (#transport); } \
+    void test_##transport##_unbind_keeps_connect () { run_unbind_keeps_connect (#transport); }
+ENDPOINT_KIND_TEST (tcp)
+ENDPOINT_KIND_TEST (inproc)
 
 #define BOUNDARY_TEST(transport, policy, handover) \
     void test_##transport##_##policy () { run_boundary (#transport, handover); }
@@ -319,5 +446,11 @@ int main ()
     RUN_BOUNDARY (inproc_reject);
     RUN_BOUNDARY (ws_handover);
     RUN_BOUNDARY (ws_reject);
+    RUN_BOUNDARY (tcp_disconnect_keeps_bind);
+    RUN_BOUNDARY (tcp_disconnect_bind_only);
+    RUN_BOUNDARY (tcp_unbind_keeps_connect);
+    RUN_BOUNDARY (inproc_disconnect_keeps_bind);
+    RUN_BOUNDARY (inproc_disconnect_bind_only);
+    RUN_BOUNDARY (inproc_unbind_keeps_connect);
     return UNITY_END ();
 }
