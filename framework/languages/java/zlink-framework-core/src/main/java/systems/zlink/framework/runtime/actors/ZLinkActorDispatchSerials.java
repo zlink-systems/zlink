@@ -378,7 +378,11 @@ final class ZLinkActorDispatchSerials {
                 accepted ->
                         turn.target()
                                 .executeActor(
-                                        turn.activation(), payloadBytes, turnOperation, accepted));
+                                        turn.activation(),
+                                        payloadBytes,
+                                        turnOperation,
+                                        relocationRelease,
+                                        accepted));
     }
 
     CompletionStage<Void> enqueue(
@@ -400,7 +404,12 @@ final class ZLinkActorDispatchSerials {
                 accepted ->
                         acceptedJournalRecord == null || acceptedJournalRecord.length == 0
                                 ? turn.target()
-                                        .executeActor(turn.activation(), 0, turnOperation, accepted)
+                                        .executeActor(
+                                                turn.activation(),
+                                                0,
+                                                turnOperation,
+                                                relocationRelease,
+                                                accepted)
                                 : turn.target()
                                         .executeActor(
                                                 turn.activation(),

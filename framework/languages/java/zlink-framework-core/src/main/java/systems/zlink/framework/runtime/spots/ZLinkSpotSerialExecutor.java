@@ -127,8 +127,17 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                                         activation,
                                                         payloadBytes,
                                                         operation,
+                                                        () -> {},
                                                         admission)),
                 null);
+    }
+
+    public CompletionStage<Void> executeActor(
+            ZLinkActorSerialExecutor activation,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return executeActor(activation, payloadBytes, operation, () -> {}, admission);
     }
 
     @Override
@@ -136,17 +145,19 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
             ZLinkActorSerialExecutor activation,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission) {
         return submitActor(
-                () -> enqueueActor(activation, payloadBytes, operation, admission), null);
+                () -> enqueueActor(activation, payloadBytes, operation, release, admission), null);
     }
 
     private CompletionStage<Void> enqueueActor(
             ZLinkActorSerialExecutor activation,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission) {
-        return activation.executeActor(payloadBytes, operation, admission);
+        return activation.executeActor(payloadBytes, operation, release, admission);
     }
 
     @Override

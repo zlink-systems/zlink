@@ -59,6 +59,16 @@ public final class ZLinkSerialExecutionQueue {
                         queue.requireExecution(application);
                     }
 
+                    public CompletionStage<Void> enqueueActorWithPayloadBytes(
+                            ZLinkSerialExecutionQueue queue,
+                            long payloadBytes,
+                            Supplier<CompletionStage<Void>> operation,
+                            Runnable release,
+                            CompletableFuture<Void> admission) {
+                        return queue.enqueueActorWithPayloadBytes(
+                                payloadBytes, operation, release, admission);
+                    }
+
                     public CompletionStage<List<CompletableFuture<Void>>> admitDurablePrefix(
                             ZLinkSerialExecutionQueue queue,
                             List<QueuedRecord> records,
@@ -502,7 +512,7 @@ public final class ZLinkSerialExecutionQueue {
         materializePublished();
         Entry entry = takeNextForDrainLocked(false);
         if (entry == null) return;
-        entry.result.completeExceptionally(failure);
+        rejectUnstarted(entry, failure);
         finishShared(entry);
     }
 
@@ -1079,12 +1089,28 @@ public final class ZLinkSerialExecutionQueue {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
-        return enqueueWithPayloadBytesResult(payloadBytes, operation, admission).result();
+        return enqueueActorWithPayloadBytes(payloadBytes, operation, () -> {}, admission);
+    }
+
+    CompletionStage<Void> enqueueActorWithPayloadBytes(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
+            CompletableFuture<Void> admission) {
+        return enqueueWithPayloadBytesResult(payloadBytes, operation, release, admission).result();
     }
 
     private EnqueueResult enqueueWithPayloadBytesResult(
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return enqueueWithPayloadBytesResult(payloadBytes, operation, () -> {}, admission);
+    }
+
+    private EnqueueResult enqueueWithPayloadBytesResult(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission) {
         EnqueueResult result;
         CompletionStage<Void> rejection = null;
@@ -1094,7 +1120,7 @@ public final class ZLinkSerialExecutionQueue {
             result =
                     rejection == null
                             ? enqueueAccepted(
-                                    null, payloadBytes, operation, () -> {}, null, admission)
+                                    null, payloadBytes, operation, release, null, admission)
                             : null;
         }
         if (result == null) return new EnqueueResult(rejection, false, null);
@@ -2080,6 +2106,15 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
+    private void rejectUnstarted(Entry entry, Throwable failure) {
+        try {
+            entry.relocationRelease.run();
+        } catch (RuntimeException releaseFailure) {
+            if (releaseFailure != failure) failure.addSuppressed(releaseFailure);
+        }
+        entry.result.completeExceptionally(failure);
+    }
+
     private void rejectDrain(RuntimeException rejected) {
         Entry entry;
         synchronized (this) {
@@ -2087,7 +2122,7 @@ public final class ZLinkSerialExecutionQueue {
             entry = takeNextForDrainLocked(false);
         }
         if (entry != null) {
-            entry.result.completeExceptionally(rejected);
+            rejectUnstarted(entry, rejected);
             finish(entry, false);
         }
     }
@@ -2647,9 +2682,14 @@ public final class ZLinkSerialExecutionQueue {
                         entry.flow == null ? () -> {} : ZLinkFlowContext.enter(entry.flow);
                 ZLinkApplicationJobContext.Scope applicationJob =
                         ZLinkApplicationJobContext.enterQueued(entry.applicationJobOwnership)) {
-            requireEntryExecution(entry);
-            if (entry.applicationJobOwnership != null)
-                entry.applicationJobOwnership.requireRunnable();
+            try {
+                requireEntryExecution(entry);
+                if (entry.applicationJobOwnership != null)
+                    entry.applicationJobOwnership.requireRunnable();
+            } catch (RuntimeException | Error failure) {
+                rejectUnstarted(entry, failure);
+                throw failure;
+            }
             CompletionStage<Void> execution =
                     Objects.requireNonNull(entry.operation.get(), "operation result");
             execution.whenComplete(completion);
