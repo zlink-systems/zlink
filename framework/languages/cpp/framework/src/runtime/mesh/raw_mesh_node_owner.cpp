@@ -459,6 +459,7 @@ catch (...) {
 raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
                                               std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
+    _owns_context (!context),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _liveness (_lane),
     _topology (_lane,
@@ -670,10 +671,15 @@ void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
 
 void raw_mesh_node_owner_t::close ()
 {
-    auto [resources, operations] =
+    auto [resources, operations, owned_context] =
       _lane
         .run ([this] {
             std::shared_ptr<foundation::operation_registry_t> operations;
+            // Only the owner that created the Core context ends it. A context
+            // passed in stays with its creator.
+            auto owned_context = std::exchange (_owns_context, false)
+                                   ? _context
+                                   : std::shared_ptr<zlink::context_t> ();
             if (!_closed) {
                 _receive_flow_registration.close ();
                 _mailbox.close ();
@@ -681,9 +687,9 @@ void raw_mesh_node_owner_t::close ()
                 operations = _operations;
             }
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
-            return std::pair{
+            return std::tuple{
               std::tuple{std::move (_port), std::move (_ingress_poller), std::move (_router)},
-              std::move (operations)};
+              std::move (operations), std::move (owned_context)};
         })
         .get ();
     // Only an open owner's close borrows the Registry for draining outside
@@ -700,14 +706,18 @@ void raw_mesh_node_owner_t::close ()
         failure = std::current_exception ();
     }
     _lane
-      .run ([this, &resources, &failure] {
+      .run ([this, &resources, &failure, &owned_context] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           std::tie (_port, _ingress_poller, _router) = std::move (resources);
           _closed = !failure;
+          _owns_context = failure && owned_context;
       })
       .get ();
     if (failure)
         std::rethrow_exception (failure);
+    // The sockets and poller are closed, so termination does not wait on them.
+    if (owned_context)
+        owned_context->term ();
 }
 
 bool raw_mesh_node_owner_t::started () const noexcept

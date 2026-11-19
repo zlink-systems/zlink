@@ -452,6 +452,9 @@ TEST (CppFrameworkDecodeFailure, RepliesOnlyWithCompleteCorrelationAndRequestTok
     ASSERT_FALSE (port.try_receive ());
     EXPECT_EQ (0u,
                target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application));
+    // The remote socket borrows the owner's Core context, so it closes before the owner ends it.
+    port.close ();
+    remote.close ();
     target.close ();
 }
 
@@ -544,6 +547,8 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
     ASSERT_TRUE (receive ());
     EXPECT_EQ (protocol::encode_route_mesh_admission (protocol::command::update, latest),
                received->parts ().front ().to_bytes ());
+    port.close ();
+    remote.close ();
     source.close ();
 }
 
