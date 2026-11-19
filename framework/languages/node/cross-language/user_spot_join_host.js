@@ -370,7 +370,13 @@ class BeginUserSpotJoinHandler {
       .joinSpot(request.targetSpotId, new UserSpotJoinReq(request.marker))
       .timeout(30_000)
       .defer();
-    return { accepted: true, actorId: actor.actorId, targetSpotId: request.targetSpotId };
+    return {
+      accepted: true,
+      actorId: actor.actorId,
+      spotId: request.targetSpotId,
+      nodeRid: require_('node-rid'),
+      marker: request.marker
+    };
   }
 }
 Injectable()(BeginUserSpotJoinHandler);
@@ -513,7 +519,7 @@ async function userSpotJoinSource() {
     .submit();
   appendEvent(
     `user-spot-join-request-reply|accepted=${reply.accepted === true}`
-    + `|actor=${reply.actorId}|spot=${reply.targetSpotId}`
+    + `|actor=${reply.actorId}|spot=${reply.spotId}`
   );
 
   if (process.env.ZLINK_NODE_JAVA_STATEFUL_PROBE === '1') {
