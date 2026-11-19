@@ -29,7 +29,7 @@ import java.util.function.Supplier;
 final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, SpotDispatchLine {
     @Override
     public void requireExecution() {
-        dispatchQueue.requireExecution(true);
+        ZLinkSpotCloseCallAccess.requireExecution(dispatchQueue, true);
     }
 
     @Override
