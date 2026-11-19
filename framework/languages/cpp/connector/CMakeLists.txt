@@ -40,6 +40,7 @@ endif()
 add_library(zlink_stream_connector ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   core/src/runtime/calls/zlink_stream_calls.cpp
   core/src/runtime/connector_runtime.cpp
+  ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src/runtime/codecs/json_profile_engine.cpp
   core/src/runtime/protocol/compression/lz4_compression_codec.cpp
   core/src/runtime/protocol/framing/frame_codec.cpp
   core/src/runtime/protocol/framing.cpp
@@ -63,8 +64,11 @@ target_include_directories(zlink_stream_connector PRIVATE
 zlink_framework_cpp_add_boost_headers(zlink_stream_connector)
 zlink_framework_cpp_add_asio_system_libraries(zlink_stream_connector)
 target_link_libraries(zlink_stream_connector
-  PUBLIC nlohmann_json::nlohmann_json yyjson::yyjson
-  PRIVATE Threads::Threads)
+  PUBLIC nlohmann_json::nlohmann_json
+  PRIVATE Threads::Threads yyjson::yyjson)
+target_compile_definitions(zlink_stream_connector
+  PRIVATE ZLINK_JSON_PROFILE_ENGINE_NS=connector_engine
+  INTERFACE ZLINK_JSON_PROFILE_ENGINE_CONNECTOR)
 if(ZLINK_STREAM_CONNECTOR_WITH_TLS AND OpenSSL_FOUND)
   target_compile_definitions(zlink_stream_connector PRIVATE
     ZLINK_STREAM_CONNECTOR_WITH_OPENSSL)
@@ -99,7 +103,7 @@ target_include_directories(zlink_stream_connector_codecs INTERFACE
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(zlink_stream_connector_codecs INTERFACE
   zlink::stream_connector
-  nlohmann_json::nlohmann_json yyjson::yyjson)
+  nlohmann_json::nlohmann_json)
 
 if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
   add_library(zlink_stream_e2e_client INTERFACE)
@@ -215,6 +219,7 @@ install(EXPORT zlink_stream_connector_cppTargets
 set(ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES
+    "find_dependency(yyjson CONFIG)\n"
     "${ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY}\n"
     "set(_zlink_saved_module_path \"\${CMAKE_MODULE_PATH}\")\n"
     "list(APPEND CMAKE_MODULE_PATH \"\${CMAKE_CURRENT_LIST_DIR}\")\n"

@@ -18,7 +18,6 @@ endif()
 find_dependency(zlink_cpp @ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION@ EXACT CONFIG)
 find_dependency(Threads)
 find_dependency(nlohmann_json CONFIG)
-find_dependency(yyjson CONFIG)
 @ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES@
 
 include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppTargets.cmake")

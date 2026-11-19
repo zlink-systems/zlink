@@ -4,7 +4,7 @@
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
 #include <zlink/detail/json_profile/string_primitives.hpp>
-#include <yyjson.h>
+#include <zlink/detail/json_profile/engine.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -34,7 +34,7 @@ namespace zlink::detail::json_profile
 
 inline constexpr char content_type[] = "application/json";
 inline constexpr char empty_object[] = "{}";
-inline constexpr std::size_t initial_output_capacity = 256;
+inline constexpr std::size_t initial_output_capacity = 512;
 inline constexpr std::size_t initial_frame_capacity = 4;
 inline constexpr std::size_t field_mask_bits = std::numeric_limits<std::uint64_t>::digits;
 
@@ -353,16 +353,23 @@ class byte_output
     }
 };
 
-// Generated RFC 4648 symbols need no JSON escaping or UTF-8 validation.
-template <typename Output> void write_bytes (const std::vector<std::byte> &bytes, Output &out)
+// Grow the output by count bytes and return where they start. Writing one
+// token through one extension keeps the per-call growth check out of the loop.
+template <typename Output> char *extend (Output &out, std::size_t count)
 {
     const auto start = out.size ();
-    const auto length = (bytes.size () / 3 + (bytes.size () % 3 != 0)) * 4;
-    const auto end = start + length + 2;
+    const auto end = start + count;
     if (end > out.capacity ())
         out.reserve (std::max (end + initial_output_capacity, out.capacity () * 2));
     out.resize (end);
-    auto *text = out.data () + start;
+    return reinterpret_cast<char *> (out.data ()) + start;
+}
+
+// Generated RFC 4648 symbols need no JSON escaping or UTF-8 validation.
+template <typename Output> void write_bytes (const std::vector<std::byte> &bytes, Output &out)
+{
+    const auto length = (bytes.size () / 3 + (bytes.size () % 3 != 0)) * 4;
+    auto *text = extend (out, length + 2);
     *text++ = '"';
     std::size_t i = 0;
     for (; bytes.size () - i >= 3; i += 3) {
@@ -391,6 +398,16 @@ template <typename T, typename Output> void write_integer (T value, Output &out)
 {
     char buffer[32];
     auto result = std::to_chars (buffer, buffer + sizeof buffer, value);
+    out.append (buffer, static_cast<std::size_t> (result.ptr - buffer));
+}
+
+// A 64-bit integer is a JSON string; one append writes quotes and digits.
+template <typename T, typename Output> void write_quoted_integer (T value, Output &out)
+{
+    char buffer[32];
+    buffer[0] = '"';
+    auto result = std::to_chars (buffer + 1, buffer + sizeof buffer - 1, value);
+    *result.ptr++ = '"';
     out.append (buffer, static_cast<std::size_t> (result.ptr - buffer));
 }
 
@@ -479,158 +496,232 @@ class fixed_text_buffer
     std::size_t size () const { return length; }
 };
 
-// yyjson owns syntax and escaping; the profile owns typed representation.
-template <typename T, typename Output>
-yyjson_mut_val *encode_node (const T &value, yyjson_mut_doc *doc, Output *staging,
-                             std::size_t staging_start, std::string *error)
+// Field names are compile-time constants; a name that needs no escaping is
+// laid out once as `<lead>"name":` and written with a single append.
+constexpr bool plain_key (std::string_view name)
 {
-    if constexpr (!std::is_same_v<T, std::string_view>)
-        static_assert (validate_type<T> ());
-    if constexpr (std::is_same_v<T, nlohmann::json>) {
-        if (!has_finite_numbers (value) || !has_valid_strings (value)) {
-            fail (error, "invalid JSON value");
-            return nullptr;
-        }
-        const auto text = dump (value);
-        return yyjson_mut_rawncpy (doc, text.data (), text.size ());
-    } else if constexpr (optional_type<T>::value) {
-        return value ? encode_node (*value, doc, staging, staging_start, error)
-                     : yyjson_mut_null (doc);
-    } else if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::string_view>) {
-        return yyjson_mut_strn (doc, value.data (), value.size ());
-    } else if constexpr (std::is_same_v<T, bool>) {
-        return yyjson_mut_bool (doc, value);
-    } else if constexpr (std::is_integral_v<T>) {
-        if constexpr (sizeof (T) == 8) {
-            char text[32];
-            const auto end = std::to_chars (text, text + sizeof text, value).ptr;
-            return yyjson_mut_strncpy (doc, text, static_cast<std::size_t> (end - text));
-        } else if constexpr (std::is_signed_v<T>) {
-            return yyjson_mut_sint (doc, value);
-        } else {
-            return yyjson_mut_uint (doc, value);
-        }
-    } else if constexpr (std::is_floating_point_v<T>) {
-        if (!valid_float (value)) {
-            fail (error, "non-finite number");
-            return nullptr;
-        }
-        fixed_text_buffer text;
-        write_float (static_cast<double> (value), text);
-        return yyjson_mut_rawncpy (doc, text.data (), text.size ());
-    } else if constexpr (std::is_enum_v<T>) {
-        yyjson_mut_val *node = nullptr;
-        if (!visit_enum_entry<T> ([&] (auto entry) { return entry.value == value; },
-                                  [&] (auto entry) {
-                                      node = yyjson_mut_strn (doc, entry.name.data (),
-                                                              entry.name.size ());
-                                  }))
-            fail (error, "undeclared enum value");
-        return node;
-    } else if constexpr (std::is_same_v<T, std::vector<std::byte>>) {
-        staging->resize (staging_start);
-        write_bytes (value, *staging);
-        const auto size = staging->size () - staging_start - 2;
-        const auto *text = reinterpret_cast<const char *> (staging->data ()) + staging_start + 1;
-        auto *node = yyjson_mut_strncpy (doc, text, size);
-        staging->resize (staging_start);
-        return node;
-    } else if constexpr (vector_type<T>::value) {
-        auto *array = yyjson_mut_arr (doc);
-        if (!array)
-            return nullptr;
-        for (const auto &element : value) {
-            auto *node = encode_node<typename vector_type<T>::value_type> (
-              element, doc, staging, staging_start, error);
-            if (!node || !yyjson_mut_arr_append (array, node))
-                return nullptr;
-        }
-        return array;
-    } else {
-        auto *object = yyjson_mut_obj (doc);
-        if (!object)
-            return nullptr;
-        const auto field = [&] (std::string_view name, const auto &element) {
-            auto *key = yyjson_mut_strn (doc, name.data (), name.size ());
-            auto *node = encode_node (element, doc, staging, staging_start, error);
-            return key && node && yyjson_mut_obj_add (object, key, node);
-        };
-        if constexpr (map_type<T>::value) {
-            std::vector<const typename T::value_type *> entries;
-            entries.reserve (value.size ());
-            for (const auto &entry : value)
-                entries.push_back (&entry);
-            std::sort (entries.begin (), entries.end (),
-                       [] (auto a, auto b) { return a->first < b->first; });
-            for (const auto *entry : entries)
-                if (!field (entry->first, entry->second))
-                    return nullptr;
-        } else {
-            using layout = dto_layout<T>;
-            if (![&]<std::size_t... I> (std::index_sequence<I...>) {
-                    return (field (std::get<layout::order[I]> (layout::fields).name,
-                                   value.*(std::get<layout::order[I]> (layout::fields).member))
-                            && ...);
-                }(std::make_index_sequence<layout::count>{}))
-                return nullptr;
-        }
-        return object;
-    }
-}
-
-// 0.12 writes hexadecimal escapes in uppercase. Preserve the profile's bytes
-// in place, skipping escaped backslashes so literal text stays unchanged.
-inline void canonical_escapes (char *text, std::size_t size)
-{
-    auto *cursor = text;
-    const auto *end = text + size;
-    while (cursor < end) {
-        auto *escape =
-          static_cast<char *> (std::memchr (cursor, '\\', static_cast<std::size_t> (end - cursor)));
-        if (!escape)
-            break;
-        cursor = escape + 2;
-        if (escape[1] == 'u') {
-            for (unsigned i = 0; i < 4; ++i, ++cursor)
-                if (*cursor >= 'A' && *cursor <= 'F')
-                    *cursor += 'a' - 'A';
-        }
-    }
-}
-
-template <typename T, typename Output>
-bool write_value (const T &value, Output &out, std::string *error)
-{
-    if constexpr (std::is_same_v<T, nlohmann::json>) {
-        if (!has_finite_numbers (value) || !has_valid_strings (value))
-            return fail (error, "invalid JSON value");
-        out += dump (value);
-        return true;
-    } else {
-        const std::unique_ptr<yyjson_mut_doc, decltype (&yyjson_mut_doc_free)> doc (
-          yyjson_mut_doc_new (nullptr), &yyjson_mut_doc_free);
-        if (!doc)
-            return fail (error, "JSON allocation failed");
-        const auto staging_start = out.size ();
-        auto *root = encode_node (value, doc.get (), &out, staging_start, error);
-        if (!root)
+    for (const char ch : name)
+        if (static_cast<unsigned char> (ch) < 0x20 || static_cast<unsigned char> (ch) >= 0x80
+            || ch == '"' || ch == '\\')
             return false;
-        yyjson_mut_doc_set_root (doc.get (), root);
-        std::size_t size = 0;
-        const std::unique_ptr<char, decltype (&std::free)> text (
-          yyjson_mut_write (doc.get (), 0, &size), &std::free);
-        if (!text)
-            return fail (error, "invalid UTF-8 string");
-        canonical_escapes (text.get (), size);
-        out.append (text.get (), size);
-        return true;
+    return true;
+}
+template <std::size_t N>
+constexpr std::array<char, N + 4> key_prefix (std::string_view name, char lead)
+{
+    std::array<char, N + 4> text{};
+    text[0] = lead;
+    text[1] = '"';
+    for (std::size_t i = 0; i < N; ++i)
+        text[i + 2] = name[i];
+    text[N + 2] = '"';
+    text[N + 3] = ':';
+    return text;
+}
+
+// Word at a time through the shared primitive; the tail runs byte by byte so a
+// short string never pays for a variable-length copy.
+inline std::size_t plain_run (const char *text, std::size_t size)
+{
+    std::size_t index = 0;
+    for (; size - index >= 8; index += 8) {
+        std::uint64_t word;
+        std::memcpy (&word, text + index, sizeof word);
+        const auto count = plain_ascii_prefix (word);
+        if (count != 8)
+            return index + count;
     }
+    for (; index < size; ++index) {
+        const auto byte = static_cast<unsigned char> (text[index]);
+        if (byte < 0x20 || byte >= 0x80 || byte == '"' || byte == '\\')
+            break;
+    }
+    return index;
+}
+
+// One traversal validates the UTF-8 and sizes the escapes, so the write that
+// follows extends the output exactly once.
+inline bool measure_escapes (std::string_view value, std::size_t &extra)
+{
+    const char *const text = value.data ();
+    const std::size_t size = value.size ();
+    extra = 0;
+    for (std::size_t index = 0; index < size;) {
+        index += plain_run (text + index, size - index);
+        if (index == size)
+            break;
+        const auto lead = static_cast<unsigned char> (text[index++]);
+        if (lead >= 0x80) {
+            if (!consume_utf8 (value, index, lead))
+                return false;
+        } else
+            extra += lead == '"' || lead == '\\' || lead == '\b' || lead == '\f' || lead == '\n'
+                         || lead == '\r' || lead == '\t'
+                       ? 1
+                       : 5;
+    }
+    return true;
 }
 
 template <typename Output>
 bool write_string (std::string_view value, Output &out, std::string *error)
 {
-    return write_value (value, out, error);
+    std::size_t extra;
+    if (!measure_escapes (value, extra))
+        return fail (error, "invalid UTF-8 string");
+    const char *const text = value.data ();
+    const std::size_t size = value.size ();
+    auto *destination = extend (out, size + extra + 2);
+    *destination++ = '"';
+    if (extra == 0) {
+        if (size != 0)
+            std::memcpy (destination, text, size);
+        destination += size;
+    } else {
+        constexpr char hex[] = "0123456789abcdef";
+        std::size_t copied = 0;
+        for (std::size_t index = 0; index < size;) {
+            index += plain_run (text + index, size - index);
+            if (index == size)
+                break;
+            const auto byte = static_cast<unsigned char> (text[index]);
+            if (byte >= 0x80) {
+                ++index;
+                continue;
+            }
+            if (index != copied) {
+                std::memcpy (destination, text + copied, index - copied);
+                destination += index - copied;
+            }
+            copied = ++index;
+            *destination++ = '\\';
+            switch (byte) {
+                case '"':
+                case '\\':
+                    *destination++ = static_cast<char> (byte);
+                    break;
+                case '\b':
+                    *destination++ = 'b';
+                    break;
+                case '\f':
+                    *destination++ = 'f';
+                    break;
+                case '\n':
+                    *destination++ = 'n';
+                    break;
+                case '\r':
+                    *destination++ = 'r';
+                    break;
+                case '\t':
+                    *destination++ = 't';
+                    break;
+                default:
+                    *destination++ = 'u';
+                    *destination++ = '0';
+                    *destination++ = '0';
+                    *destination++ = hex[byte >> 4];
+                    *destination++ = hex[byte & 15];
+            }
+        }
+        if (size != copied) {
+            std::memcpy (destination, text + copied, size - copied);
+            destination += size - copied;
+        }
+    }
+    *destination = '"';
+    return true;
+}
+
+template <typename T, typename Output>
+bool write_value (const T &value, Output &out, std::string *error)
+{
+    static_assert (validate_type<T> ());
+    if constexpr (std::is_same_v<T, nlohmann::json>) {
+        if (!has_finite_numbers (value) || !has_valid_strings (value))
+            return fail (error, "invalid JSON value");
+        out += dump (value);
+    } else if constexpr (optional_type<T>::value) {
+        if (value)
+            return write_value (*value, out, error);
+        out += "null";
+    } else if constexpr (std::is_same_v<T, std::string>)
+        return write_string (value, out, error);
+    else if constexpr (std::is_same_v<T, bool>)
+        out += value ? "true" : "false";
+    else if constexpr (std::is_integral_v<T>) {
+        if constexpr (sizeof (T) == 8)
+            write_quoted_integer (value, out);
+        else
+            write_integer (value, out);
+    } else if constexpr (std::is_floating_point_v<T>) {
+        if (!valid_float (value))
+            return fail (error, "non-finite number");
+        write_float (static_cast<double> (value), out);
+    } else if constexpr (std::is_enum_v<T>) {
+        bool written = false;
+        const auto found = visit_enum_entry<T> (
+          [&] (auto entry) { return entry.value == value; },
+          [&] (auto entry) { written = write_string (entry.name, out, error); });
+        return (found && written) || fail (error, "undeclared enum value");
+    } else if constexpr (std::is_same_v<T, std::vector<std::byte>>)
+        write_bytes (value, out);
+    else if constexpr (vector_type<T>::value) {
+        out += '[';
+        bool first = true;
+        for (const auto &element : value) {
+            if (!first)
+                out += ',';
+            first = false;
+            if (!write_value<typename vector_type<T>::value_type> (element, out, error))
+                return false;
+        }
+        out += ']';
+    } else if constexpr (map_type<T>::value) {
+        out += '{';
+        bool first = true;
+        // JSON object order is lexical even when the application's map comparator differs.
+        std::vector<const typename T::value_type *> entries;
+        entries.reserve (value.size ());
+        for (const auto &entry : value)
+            entries.push_back (&entry);
+        std::sort (entries.begin (), entries.end (),
+                   [] (auto a, auto b) { return a->first < b->first; });
+        for (const auto entry : entries) {
+            if (!first)
+                out += ',';
+            first = false;
+            if (!write_string (entry->first, out, error))
+                return false;
+            out += ':';
+            if (!write_value (entry->second, out, error))
+                return false;
+        }
+        out += '}';
+    } else {
+        using layout = dto_layout<T>;
+        const auto write_field = [&]<std::size_t Position> () {
+            constexpr auto field = std::get<layout::order[Position]> (layout::fields);
+            if constexpr (plain_key (field.name)) {
+                constexpr auto prefix =
+                  key_prefix<field.name.size ()> (field.name, Position == 0 ? '{' : ',');
+                out.append (prefix.data (), prefix.size ());
+            } else {
+                out += Position == 0 ? '{' : ',';
+                if (!write_string (field.name, out, error))
+                    return false;
+                out += ':';
+            }
+            return write_value (value.*(field.member), out, error);
+        };
+        if constexpr (layout::count == 0)
+            out += '{';
+        else if (![&]<std::size_t... I> (std::index_sequence<I...>) {
+                     return (write_field.template operator()<I> () && ...);
+                 }(std::make_index_sequence<layout::count>{}))
+            return false;
+        out += '}';
+    }
+    return true;
 }
 
 enum class sax_kind
@@ -964,62 +1055,65 @@ class typed_sax final
     bool start_array () { return dispatch ({sax_kind::array}); }
     bool end_array () { return end (); }
 };
-// Walk every parsed value, including unknown properties, through the same
-// duplicate-key and finite-number decisions as typed destinations.
-inline bool visit_json (yyjson_val *value, typed_sax &handler)
+// Walk every parsed value, including unknown properties, through typed_sax.
+inline bool visit_tokens (const token_buffer &buffer, std::size_t &cursor, typed_sax &handler)
 {
-    if (yyjson_is_obj (value)) {
-        if (!handler.start_object ())
-            return false;
-        std::size_t index, count;
-        yyjson_val *key, *child;
-        yyjson_obj_foreach (value, index, count, key, child)
-        {
-            if (!handler.borrowed_key ({yyjson_get_str (key), yyjson_get_len (key)})
-                || !visit_json (child, handler))
+    const token &entry = buffer.tokens[cursor++];
+    switch (entry.kind) {
+        case token_kind::null: return handler.null ();
+        case token_kind::boolean: return handler.boolean (entry.boolean);
+        case token_kind::integer: return handler.number_integer (entry.integer);
+        case token_kind::unsigned_integer: return handler.number_unsigned (entry.unsigned_integer);
+        case token_kind::floating:
+            return std::isfinite (entry.floating) && handler.number_float (entry.floating);
+        case token_kind::string:
+            return handler.borrowed_string (
+              {buffer.strings.data () + entry.text_offset, entry.text_length});
+        case token_kind::object:
+            if (!handler.start_object ())
                 return false;
-        }
-        return handler.end_object ();
-    }
-    if (yyjson_is_arr (value)) {
-        if (!handler.start_array ())
-            return false;
-        std::size_t index, count;
-        yyjson_val *child;
-        yyjson_arr_foreach (value, index, count, child)
-        {
-            if (!visit_json (child, handler))
+            for (std::size_t i = 0; i < entry.child_count; ++i) {
+                const token &child = buffer.tokens[cursor];
+                const std::string_view key (buffer.strings.data () + child.key_offset,
+                                            child.key_length);
+                if (!handler.borrowed_key (key) || !visit_tokens (buffer, cursor, handler))
+                    return false;
+            }
+            return handler.end_object ();
+        case token_kind::array:
+            if (!handler.start_array ())
                 return false;
-        }
-        return handler.end_array ();
+            for (std::size_t i = 0; i < entry.child_count; ++i)
+                if (!visit_tokens (buffer, cursor, handler))
+                    return false;
+            return handler.end_array ();
+        case token_kind::raw_number:
+        case token_kind::raw_json: return false;
     }
-    if (yyjson_is_str (value))
-        return handler.borrowed_string ({yyjson_get_str (value), yyjson_get_len (value)});
-    if (yyjson_is_uint (value))
-        return handler.number_unsigned (yyjson_get_uint (value));
-    if (yyjson_is_sint (value))
-        return handler.number_integer (yyjson_get_sint (value));
-    if (yyjson_is_real (value)) {
-        const double number = yyjson_get_real (value);
-        return std::isfinite (number) && handler.number_float (number);
-    }
-    if (yyjson_is_bool (value))
-        return handler.boolean (yyjson_get_bool (value));
-    return handler.null ();
+    return false;
 }
+
 inline bool read_json (std::string_view text, typed_sax &handler)
 {
     // Preserve the existing reader's NUL-as-EOF behavior.
     text = text.substr (0, text.find ('\0'));
-    const std::unique_ptr<yyjson_doc, decltype (&yyjson_doc_free)> doc (
-      yyjson_read (text.data (), text.size (), 0), &yyjson_doc_free);
-    return doc && visit_json (yyjson_doc_get_root (doc.get ()), handler);
+    auto &buffer = reusable_tokens;
+    if (!parse_tokens (text, buffer))
+        return false;
+    std::size_t cursor = 0;
+    return visit_tokens (buffer, cursor, handler) && cursor == buffer.tokens.size ();
 }
+
 template <typename T>
 std::optional<std::string> try_encode (const T &value, std::string *error = nullptr)
 {
     static_assert (validate_type<T> ());
     std::string out;
+    // A top-level byte array has a known RFC 4648 length, so one allocation holds it.
+    if constexpr (std::is_same_v<T, std::vector<std::byte>>)
+        out.reserve ((value.size () + 2) / 3 * 4 + 2);
+    else
+        out.reserve (initial_output_capacity);
     if (!write_value (value, out, error))
         return std::nullopt;
     return out;

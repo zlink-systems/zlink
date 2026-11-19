@@ -25,8 +25,7 @@ add_executable(test_cpp_framework_typed_json_allocations
   tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_allocations.cpp
   tests/support/allocation_counter.cpp)
 zlink_framework_cpp_enable_test_unused_result_errors(test_cpp_framework_typed_json_allocations)
-target_link_libraries(test_cpp_framework_typed_json_allocations PRIVATE nlohmann_json::nlohmann_json yyjson::yyjson)
-# This target links no framework library, so it does not inherit their C++20 requirement.
+target_link_libraries(test_cpp_framework_typed_json_allocations PRIVATE zlink_framework nlohmann_json::nlohmann_json)
 target_compile_features(test_cpp_framework_typed_json_allocations PRIVATE cxx_std_20)
 target_include_directories(test_cpp_framework_typed_json_allocations BEFORE PRIVATE
   "${_json_instrument_dir}" common/include tests/support)

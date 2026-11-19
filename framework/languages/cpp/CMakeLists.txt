@@ -310,6 +310,7 @@ target_link_libraries(zlink_framework_m6c_runtime PUBLIC
   Threads::Threads)
 
 add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
+  framework/src/runtime/codecs/json_profile_engine.cpp
   $<TARGET_OBJECTS:zlink_framework_m6a_objects>
   $<TARGET_OBJECTS:zlink_framework_m6b_objects>
   $<TARGET_OBJECTS:zlink_framework_m6c_objects>
@@ -397,6 +398,10 @@ target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 target_link_libraries(zlink_framework PUBLIC zlink::cpp zlink::framework_provider_abstractions)
+target_link_libraries(zlink_framework PRIVATE yyjson::yyjson)
+target_compile_definitions(zlink_framework
+  PRIVATE ZLINK_JSON_PROFILE_ENGINE_NS=framework_engine
+  INTERFACE ZLINK_JSON_PROFILE_ENGINE_FRAMEWORK)
 # Applications own the SDK, reader and exporter for the supplied Metrics API provider.
 target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
 if(WIN32)
@@ -423,9 +428,9 @@ foreach(M6ObjectTarget IN ITEMS
     zlink_framework_m6a_objects
     zlink_framework_m6b_objects
     zlink_framework_m6c_objects)
-  target_link_libraries(${M6ObjectTarget} PRIVATE nlohmann_json::nlohmann_json yyjson::yyjson)
+  target_link_libraries(${M6ObjectTarget} PRIVATE nlohmann_json::nlohmann_json)
 endforeach()
-target_link_libraries(zlink_framework PUBLIC nlohmann_json::nlohmann_json yyjson::yyjson)
+target_link_libraries(zlink_framework PUBLIC nlohmann_json::nlohmann_json)
 if(OpenSSL_FOUND)
   target_compile_definitions(zlink_framework PRIVATE
     ZLINK_FRAMEWORK_HTTP_WITH_OPENSSL
@@ -459,7 +464,7 @@ target_include_directories(zlink_http_client PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/http-client/src)
 target_link_libraries(zlink_http_client PUBLIC
   zlink::framework
-  nlohmann_json::nlohmann_json yyjson::yyjson)
+  nlohmann_json::nlohmann_json)
 target_link_libraries(zlink_http_client PRIVATE Threads::Threads)
 # Targets built in this tree must resolve one Boost checkout: mixing trees in a
 # single translation unit (for example vendored asio with a system beast) is
@@ -674,7 +679,7 @@ if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
   add_executable(zlink_location_store_provider_adapter EXCLUDE_FROM_ALL
     tests/location-store-provider-adapter/main.cpp)
   target_link_libraries(zlink_location_store_provider_adapter PRIVATE
-    zlink::framework_locations_etcd nlohmann_json::nlohmann_json yyjson::yyjson)
+    zlink::framework_locations_etcd nlohmann_json::nlohmann_json)
   string(CONCAT ZLINK_FRAMEWORK_ETCD_EXPORT_DEPENDENCIES
     "if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsEtcdTargets.cmake\")\n"
     "  find_dependency(gRPC CONFIG)\n"
@@ -688,7 +693,7 @@ set(ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
 # find_dependency must be reachable from the consumer prefix path.
 foreach(dependency_dir IN ITEMS
     "${redis++_DIR}" "${hiredis_DIR}" "${libuv_DIR}"
-    "${opentelemetry-cpp_DIR}" "${nlohmann_json_DIR}" "${yyjson_DIR}" "${Protobuf_DIR}"
+    "${opentelemetry-cpp_DIR}" "${nlohmann_json_DIR}" "${Protobuf_DIR}"
     "${protobuf_DIR}" "${gRPC_DIR}")
   if(dependency_dir)
     list(APPEND ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
@@ -881,6 +886,7 @@ set(ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES
     "${ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES}"
+    "find_dependency(yyjson CONFIG)\n"
     "find_package(protobuf CONFIG QUIET)\n"
     "if(NOT protobuf_FOUND)\n"
     "  find_dependency(Protobuf MODULE)\n"
@@ -1059,14 +1065,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation" TIMEOUT 30)
 
   get_target_property(_typed_json_include nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
-  get_target_property(_typed_yyjson_include yyjson::yyjson INTERFACE_INCLUDE_DIRECTORIES)
   foreach(_case RANGE 0 11)
     add_test(NAME test_cpp_framework_typed_json_compile_fail_${_case}
       COMMAND ${CMAKE_COMMAND}
         -DCOMPILER=${CMAKE_CXX_COMPILER} -DMSVC=${MSVC} -DCASE=${_case}
         -DCOMMON_INCLUDE=${CMAKE_CURRENT_SOURCE_DIR}/common/include
         -DJSON_INCLUDE=${_typed_json_include}
-        -DYYJSON_INCLUDE=${_typed_yyjson_include}
         -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/Zlink.Framework.UnitTests/typed_json_compile_fail.cpp
         -DLOG=${CMAKE_CURRENT_BINARY_DIR}/typed-json-compile-fail-${_case}.log
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/typed-json-compile-fail.cmake)
@@ -1144,7 +1148,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_error_mapping PRIVATE
     ZLINK_ERROR_MAPPING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/framework-error-mapping-v1.json")
-  target_link_libraries(test_cpp_framework_error_mapping PRIVATE zlink::cpp nlohmann_json::nlohmann_json yyjson::yyjson)
+  target_link_libraries(test_cpp_framework_error_mapping PRIVATE zlink::cpp nlohmann_json::nlohmann_json)
   zlink_framework_cpp_add_test(NAME test_cpp_framework_error_mapping
     COMMAND test_cpp_framework_error_mapping LABELS "framework-unit;framework-foundation;protocol" TIMEOUT 30)
 
@@ -1213,7 +1217,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::framework
     zlink::framework_provider_abstractions
-    nlohmann_json::nlohmann_json yyjson::yyjson
+    nlohmann_json::nlohmann_json
     opentelemetry-cpp::api
     Threads::Threads)
   zlink_framework_cpp_add_test(
@@ -1230,7 +1234,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_service_wire_codec_generated PRIVATE
     ZLINK_SERVICE_WIRE_FIXTURE_INDEX_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/fixtures/index.json")
   target_link_libraries(test_cpp_framework_service_wire_codec_generated PRIVATE
-    nlohmann_json::nlohmann_json yyjson::yyjson)
+    nlohmann_json::nlohmann_json)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_service_wire_codec_generated
     COMMAND test_cpp_framework_service_wire_codec_generated
@@ -1259,7 +1263,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ZLINK_AUTHORITY_KEY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/authority-key-v1.json")
   target_link_libraries(test_cpp_framework_authority_key_codec PRIVATE
     zlink::framework
-    nlohmann_json::nlohmann_json yyjson::yyjson)
+    nlohmann_json::nlohmann_json)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_authority_key_codec
     COMMAND test_cpp_framework_authority_key_codec
@@ -1276,7 +1280,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_relocation_envelope_golden PRIVATE
     ZLINK_RELOCATION_ENVELOPE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/relocation-envelope-v1.json")
   target_link_libraries(test_cpp_framework_relocation_envelope_golden PRIVATE
-    nlohmann_json::nlohmann_json yyjson::yyjson
+    nlohmann_json::nlohmann_json
     zlink::framework
     Threads::Threads)
   zlink_framework_cpp_add_test(
@@ -1295,7 +1299,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ZLINK_DURABLE_AUTHORITY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/durable-authority-v1.json"
     ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/authority-relocation-state-v1.json")
   target_link_libraries(test_cpp_framework_actor_authority_payload PRIVATE
-    nlohmann_json::nlohmann_json yyjson::yyjson
+    nlohmann_json::nlohmann_json
     zlink::framework)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_actor_authority_payload
@@ -1315,7 +1319,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_store_record_golden PRIVATE
     ZLINK_STORE_RECORD_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/store-record-v1.json")
   target_link_libraries(test_cpp_framework_store_record_golden PRIVATE
-    nlohmann_json::nlohmann_json yyjson::yyjson
+    nlohmann_json::nlohmann_json
     zlink::framework
     Threads::Threads)
   zlink_framework_cpp_add_test(
@@ -1362,7 +1366,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink::cpp
     opentelemetry-cpp::metrics
     Threads::Threads
-    nlohmann_json::nlohmann_json yyjson::yyjson)
+    nlohmann_json::nlohmann_json)
   add_executable(test_cpp_framework_available_processor_count
     tests/Zlink.Framework.UnitTests/test_cpp_framework_available_processor_count.cpp)
   target_compile_features(test_cpp_framework_available_processor_count PRIVATE cxx_std_20)
@@ -1387,7 +1391,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
   target_link_libraries(bench_cpp_framework_registry_requests PRIVATE
-    nlohmann_json::nlohmann_json yyjson::yyjson
+    nlohmann_json::nlohmann_json
     zlink::framework_provider_abstractions zlink::cpp opentelemetry-cpp::metrics Threads::Threads)
 
   add_executable(bench_cpp_framework_dealer_requests
@@ -1623,7 +1627,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_route_mesh_placement_conformance PRIVATE
     zlink_framework
     Threads::Threads
-    nlohmann_json::nlohmann_json yyjson::yyjson)
+    nlohmann_json::nlohmann_json)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_route_mesh_placement_conformance
     COMMAND test_cpp_framework_route_mesh_placement_conformance
@@ -2726,7 +2730,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     opentelemetry-cpp::metrics
     zlink::framework
     zlink::stream_connector
-    nlohmann_json::nlohmann_json yyjson::yyjson)
+    nlohmann_json::nlohmann_json)
   target_include_directories(test_cpp_framework_spot_close_conformance PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
@@ -3489,7 +3493,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink_enable_coverage(test_cpp_framework_locations_etcd)
     target_use_zlink_gtest_main(test_cpp_framework_locations_etcd)
     target_link_libraries(test_cpp_framework_locations_etcd PRIVATE
-      zlink::framework_locations_etcd gRPC::grpc++ protobuf::libprotobuf nlohmann_json::nlohmann_json yyjson::yyjson)
+      zlink::framework_locations_etcd gRPC::grpc++ protobuf::libprotobuf nlohmann_json::nlohmann_json)
     target_include_directories(test_cpp_framework_locations_etcd PRIVATE
       "${ZLINK_ETCD_GENERATED_DIR}"
       "${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-etcd/src")

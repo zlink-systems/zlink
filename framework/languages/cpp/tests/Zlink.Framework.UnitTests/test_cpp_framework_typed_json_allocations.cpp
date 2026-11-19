@@ -169,8 +169,10 @@ int main (int argc, char **argv)
               << " decode_dom=" << dec_dom << " positive_control_new=" << control << std::endl;
     // Public helpers must add no allocation or nlohmann DOM to codec primitives.
     std::string reference_encoded;
-    const auto reference_enc = zlink::framework::tests::count_allocations (
-      [&] { assert (write_value (input, reference_encoded, nullptr)); });
+    const auto reference_enc = zlink::framework::tests::count_allocations ([&] {
+        reference_encoded.reserve (initial_output_capacity);
+        assert (write_value (input, reference_encoded, nullptr));
+    });
     std::optional<allocation_dto_t> reference_decoded;
     const auto parse_reference = [&] () -> std::optional<allocation_dto_t> {
         allocation_dto_t value;
