@@ -107,8 +107,8 @@ bool verify_none (bool registered)
                 const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
                 while (!published () && std::chrono::steady_clock::now () < deadline)
                     std::this_thread::sleep_for (std::chrono::milliseconds (5));
-                passed = passed && locations->get ().current_owner_token ().has_value ()
-                         && published ();
+                passed =
+                  passed && locations->get ().current_owner_token ().has_value () && published ();
             }
         }
     }
