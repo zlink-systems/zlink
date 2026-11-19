@@ -6,6 +6,7 @@ const {
   ZLinkRuntimeRouteTransport
 } = require('../../packages/framework/dist/runtime/channels/channel-transports');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const { decodeChannelHeader } = require('./helpers/protobuf-channel-header');
 
 function capturingRouteTransport(flowCreationEnabled) {
   const sent = [];
@@ -33,7 +34,7 @@ function capturingRouteTransport(flowCreationEnabled) {
 }
 
 function header(parts) {
-  return JSON.parse(Buffer.from(parts[0]).toString('utf8'));
+  return decodeChannelHeader(Buffer.from(parts[0]));
 }
 
 test('Node route transport reads the host-owned flow mode for each outbound envelope', async () => {

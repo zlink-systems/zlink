@@ -44,6 +44,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
             var header = ZLinkClientCallCodec.CreateEnvelope(
+                TimeProvider.System,
                 ZLinkMessageKind.Request,
                 "entry",
                 nameof(SourceDiscoveryPing)

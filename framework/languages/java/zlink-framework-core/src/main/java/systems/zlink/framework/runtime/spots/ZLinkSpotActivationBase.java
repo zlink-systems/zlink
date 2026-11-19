@@ -341,37 +341,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
 
     final CompletionStage<Void> dispatchSpotRouteHandler(
             ZLinkBackendReceived received, ParsedPacket packet, CompletableFuture<Void> admission) {
-        //  Shared envelope requests carry content type and application
-        //  metadata in the JSON header (cross-language canonical form);
-        //  legacy raw parts fall back to the backend-carried values.
         var requestHeader = packet.header();
-        String contentType =
-                requestHeader != null ? requestHeader.contentType() : received.contentType();
-        Map<String, String> metadata;
-        try {
-            metadata =
-                    requestHeader != null && !requestHeader.metadata().isEmpty()
-                            ? requestHeader.metadata()
-                            : ZLinkApplicationMetadata.decode(received.applicationMetadata());
-        } catch (IllegalArgumentException error) {
-            if (received.requestSeq().isPresent()) {
-                host.replySpotRouteDispatchError(
-                        received,
-                        packet.packetName(),
-                        requestHeader,
-                        context.spotId(),
-                        ZLinkDispatchErrorReason.INVALID_FRAME,
-                        error);
-            } else {
-                host.reportSpotRouteInvalidFrameDropped(
-                        received, packet.packetName(), context.spotId(), error);
-            }
-            closeRouteReceived(received);
-            return CompletableFuture.completedFuture(null);
-        }
         SpotPacketHandlerRegistration handler =
                 context.handlerCatalog().packetHandler(packet.packetName());
-        if (handler == null) {
+        if (requestHeader == null || handler == null) {
             if (received.requestSeq().isPresent()) {
                 host.replySpotRouteDispatchError(
                         received,
@@ -386,6 +359,9 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             closeRouteReceived(received);
             return CompletableFuture.completedFuture(null);
         }
+        // Shared envelope requests carry content type and application metadata in ChannelHeader.
+        String contentType = requestHeader.contentType();
+        Map<String, String> metadata = requestHeader.metadata();
         if (received.requestSeq().isPresent()) {
             if (!handler.request()) {
                 host.replySpotRouteDispatchError(
@@ -790,19 +766,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         }
     }
 
-    /**
-     * Writes a successful SPOT route request reply. An envelope request gets a kind-2 envelope
-     * reply echoing the request identifiers (shared cross-language wire); a legacy raw request
-     * keeps the raw single-part reply.
-     */
+    /** Writes a kind-2 reply with the request's identity and flow fields. */
     private static void replySpotRoutePayload(
             ZLinkBackendReceived received,
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
             Message reply) {
-        if (requestHeader == null) {
-            received.reply(List.of(reply));
-            return;
-        }
         Message replyHeader =
                 systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(

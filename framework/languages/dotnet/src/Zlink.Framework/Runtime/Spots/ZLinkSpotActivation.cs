@@ -238,6 +238,8 @@ internal abstract partial class ZLinkSpotActivation
 
     public ZLinkCodecRegistryBuilder Codecs => _runtime.Registration.Codecs;
 
+    TimeProvider IZLinkCurrentSpotActivation.TimeProvider => _runtime.Registration.TimeProvider;
+
     ZLinkMessageFlowTracer IZLinkCurrentSpotActivation.Flow => _runtime.Flow;
 
     protected IZLinkSpotRelocationReadyCall CreateRelocationReadyCall()

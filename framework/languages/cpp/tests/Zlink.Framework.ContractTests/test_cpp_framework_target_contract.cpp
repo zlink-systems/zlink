@@ -517,16 +517,23 @@ int main ()
     gate.require (tree_contains (include_root, "route_mesh_channel_runtime_options_t"),
                   "CPP-G0-ROUTEMESH-001", "route-mesh runtime options surface is missing");
 
-    /* CPP-G0-FLOW-001 — flow correlation fields and wire marker. */
+    /* CPP-G0-FLOW-001 — flow correlation fields and the single header parser/encoder. */
     gate.require (dispatch_events.find ("flow_id") != std::string::npos, "CPP-G0-FLOW-001",
                   "internal message flow record lacks flow_id");
     gate.require (execution_hpp.find ("flow_origin_t") != std::string::npos, "CPP-G0-FLOW-001",
                   "flow_origin_t enum is missing");
     gate.require (stream_hpp.find ("has_flow_id") != std::string::npos, "CPP-G0-FLOW-001",
                   "stream header flag has_flow_id is missing");
-    gate.require (tree_contains (root / "framework/src", "0xF2")
-                    || tree_contains (root / "framework/src", "0xf2"),
-                  "CPP-G0-FLOW-001", "0xF2 envelope format marker is not encoded");
+    const auto codec_source = root / "framework/src";
+    const bool has_generated_header_codec =
+      tree_contains (codec_source, "channel-header-v1.pb.h")
+      && tree_contains (codec_source, "parse_channel_header_view")
+      && (tree_contains (codec_source, "SerializeToArray")
+          || (tree_contains (codec_source, "ByteSizeLong")
+              && tree_contains (codec_source, "GetCachedSize")
+              && tree_contains (codec_source, "SerializeWithCachedSizesToArray")));
+    gate.require (has_generated_header_codec, "CPP-G0-FLOW-001",
+                  "generated ChannelHeader protobuf codec is missing");
 
     /* CPP-CONTRACT-DIAG-001 — diagnostics exports the four exact levels. */
     for (const std::string required :
@@ -766,11 +773,14 @@ int main ()
     gate.require (execution_hpp.find ("include_native_diagnostics") == std::string::npos,
                   "IMP-CP-33", "no-op include_native_diagnostics remains public");
 
-    /* E2E-CP-33 — RL-D4 owns raw error-envelope proof; RL-D5 must not report a burst as soak. */
-    gate.require (messaging_test.find (R"("errorCode":"not_found")") != std::string::npos,
-                  "E2E-CP-33", "RL-D4 has no raw camelCase errorCode assertion");
-    gate.require (messaging_test.find ("\"errorMessage\":\"missing handler\"") != std::string::npos,
-                  "E2E-CP-33", "RL-D4 has no raw camelCase errorMessage assertion");
+    /* E2E-CP-33 — RL-D4 owns semantic error-envelope proof; RL-D5 must not report a burst as soak. */
+    gate.require (messaging_test.find ("decoded_wire_error.value ().error_code != \"not_found\"")
+                    != std::string::npos,
+                  "E2E-CP-33", "RL-D4 has no decoded errorCode assertion");
+    gate.require (
+      messaging_test.find ("decoded_wire_error.value ().error_message != \"missing handler\"")
+        != std::string::npos,
+      "E2E-CP-33", "RL-D4 has no decoded errorMessage assertion");
 
     /* IMP-CP-06 — recovery connects new targets immediately and defers missing-target removal by owner lease TTL. */
     const auto complete_recovery_snapshot =

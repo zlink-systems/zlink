@@ -3671,28 +3671,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         foreach (var spot in localTargets)
         {
             var retained = CloneParts(parts);
-            EnqueueOwned(
-                MailboxKey.ForSpot(spot, MeshReadyDomains.Application),
-                new MeshReceiveRecord(
-                    MeshRecordKind.SpotMulticast,
-                    MeshReadyDomains.Application,
-                    _routingId,
-                    sourceSpotId,
-                    _lifecycleGeneration,
-                    default,
-                    default,
-                    default,
-                    channelName,
-                    topic,
-                    metadata.IsEmpty ? null : metadata.ToArray(),
-                    0,
-                    retained.Count,
-                    0,
-                    0,
-                    null
-                ),
-                retained
+            var record = new MeshReceiveRecord(
+                MeshRecordKind.SpotMulticast,
+                MeshReadyDomains.Application,
+                _routingId,
+                sourceSpotId,
+                _lifecycleGeneration,
+                default,
+                default,
+                default,
+                channelName,
+                topic,
+                metadata.IsEmpty ? null : metadata.ToArray(),
+                0,
+                retained.Count,
+                0,
+                0,
+                null
             );
+            record.ApplicationPayloadBytes = SumParts(retained, 1);
+            EnqueueOwned(MailboxKey.ForSpot(spot, MeshReadyDomains.Application), record, retained);
         }
 
         var targets = RunState(() => _channelSelection.Candidates(channelName));
@@ -4731,6 +4729,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             joinReply: (result, reply, _) =>
                 CompleteJoin(operation, actor, previous, targetSpot, result, reply, entry)
         );
+        record.ApplicationPayloadBytes = SumParts(parts, 1);
         EnqueueOwned(MailboxKey.ForSpot(targetSpot, MeshReadyDomains.Application), record, parts);
         return operation.OperationId;
     }
@@ -5301,6 +5300,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 : 0,
             instanceIntent: readyRoute?.InstanceIntent == ServiceWireCodec.Bool8.True
         );
+        record.ApplicationPayloadBytes = SumParts(retained, 1);
         EnqueueOwned(
             MailboxKey.ForSpot(spot, MeshReadyDomains.Application),
             record,
@@ -5628,6 +5628,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         )
                     : 0
             );
+            record.ApplicationPayloadBytes = SumParts(retained, 1);
             EnqueueOwned(
                 MailboxKey.ForActor(actor.Ref, MeshReadyDomains.Application),
                 record,
@@ -6318,28 +6319,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             0
         );
         var retained = CloneParts(parts);
-        EnqueueOwned(
-            MailboxKey.ForSpot(spot, MeshReadyDomains.Application),
-            new MeshReceiveRecord(
-                MeshRecordKind.SpotControl,
-                MeshReadyDomains.Application,
-                _routingId,
-                previous.SpotId,
-                _lifecycleGeneration,
-                previous.Ref,
-                default,
-                default,
-                null,
-                null,
-                null,
-                0,
-                retained.Count,
-                0,
-                0,
-                control
-            ),
-            retained
+        var record = new MeshReceiveRecord(
+            MeshRecordKind.SpotControl,
+            MeshReadyDomains.Application,
+            _routingId,
+            previous.SpotId,
+            _lifecycleGeneration,
+            previous.Ref,
+            default,
+            default,
+            null,
+            null,
+            null,
+            0,
+            retained.Count,
+            0,
+            0,
+            control
         );
+        record.ApplicationPayloadBytes = SumParts(retained, 0);
+        EnqueueOwned(MailboxKey.ForSpot(spot, MeshReadyDomains.Application), record, retained);
     }
 
     private static IReadOnlyList<Message> CloneParts(IReadOnlyList<Message> parts) =>
@@ -7479,26 +7478,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                     .OrderBy(static spot => spot.RoutingId.ToHex(), StringComparer.Ordinal)
                     .ToArray();
+                var multicastRecord = new MeshReceiveRecord(
+                    MeshRecordKind.SpotMulticast,
+                    MeshReadyDomains.Application,
+                    sourceRid,
+                    logicalMulticast.SourceSpotId,
+                    sourceGeneration,
+                    default,
+                    default,
+                    default,
+                    logicalMulticast.ChannelName,
+                    logicalMulticast.Topic,
+                    multicastMetadata,
+                    0,
+                    decodedMulticastParts.Length,
+                    0,
+                    0,
+                    null
+                );
+                multicastRecord.ApplicationPayloadBytes = SumParts(decodedMulticastParts, 1);
                 var fanout = new RawMulticastFanout(
                     matchingSpots,
-                    new MeshReceiveRecord(
-                        MeshRecordKind.SpotMulticast,
-                        MeshReadyDomains.Application,
-                        sourceRid,
-                        logicalMulticast.SourceSpotId,
-                        sourceGeneration,
-                        default,
-                        default,
-                        default,
-                        logicalMulticast.ChannelName,
-                        logicalMulticast.Topic,
-                        multicastMetadata,
-                        0,
-                        decodedMulticastParts.Length,
-                        0,
-                        0,
-                        null
-                    ),
+                    multicastRecord,
                     decodedMulticastParts,
                     ownership.ShareEnvelope()
                 );
@@ -7559,32 +7560,34 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var replyHandler = request
             ? CreateNativeReplyHandler(sourceRid, received.Reply(), application.Correlation)
             : null;
+        var applicationRecord = new MeshReceiveRecord(
+            kind,
+            MeshReadyDomains.Application,
+            sourceRid,
+            string.Empty,
+            sourceGeneration,
+            default,
+            request ? new MeshOperationId(0, application.Correlation) : default,
+            application.Command == ServiceWireConstants.Command.NodeRequest
+                    ? MeshOperationKind.NodeRequest
+                : application.Command == ServiceWireConstants.Command.ChannelRequest
+                    ? MeshOperationKind.ChannelRequest
+                : default,
+            application.ChannelName,
+            null,
+            metadata,
+            0,
+            parts.Count,
+            0,
+            0,
+            null,
+            replyHandler,
+            applicationPayloadView: parts
+        );
+        applicationRecord.ApplicationPayloadBytes = SumParts(parts, 1);
         return EnqueueOwned(
             MailboxKey.ForNode(MeshReadyDomains.Application, application.ChannelName),
-            new MeshReceiveRecord(
-                kind,
-                MeshReadyDomains.Application,
-                sourceRid,
-                string.Empty,
-                sourceGeneration,
-                default,
-                request ? new MeshOperationId(0, application.Correlation) : default,
-                application.Command == ServiceWireConstants.Command.NodeRequest
-                        ? MeshOperationKind.NodeRequest
-                    : application.Command == ServiceWireConstants.Command.ChannelRequest
-                        ? MeshOperationKind.ChannelRequest
-                    : default,
-                application.ChannelName,
-                null,
-                metadata,
-                0,
-                parts.Count,
-                0,
-                0,
-                null,
-                replyHandler,
-                applicationPayloadView: parts
-            ),
+            applicationRecord,
             Array.Empty<Message>(),
             true,
             ownership.TakeApplicationOwner()
@@ -7785,6 +7788,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             joinReply: ReplyJoin,
             terminalReply: ReplyTerminal
         );
+        record.ApplicationPayloadBytes = SumParts(parts, 1);
         if (
             EnqueueOwned(
                 MailboxKey.ForSpot(targetSpot, MeshReadyDomains.Application),
@@ -9037,37 +9041,33 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
         if (request)
             reply = replyParts => Reply(RequestResult.Ok, 0, replyParts);
-        return EnqueueOwned(
-            owner,
-            new MeshReceiveRecord(
-                kind,
-                MeshReadyDomains.Application,
-                sourceRid,
-                sourceSpotId,
-                sourceGeneration,
-                sourceActor,
-                stateful.OperationId,
-                request ? operationKind : default,
-                null,
-                null,
-                metadata,
-                0,
-                parts.Length,
-                0,
-                0,
-                null,
-                reply,
-                targetNodeGeneration: stateful.TargetNodeGeneration,
-                authorityOwnerGeneration: stateful.AuthorityOwnerGeneration,
-                ownerLeaseGeneration: stateful.OwnerLeaseGeneration,
-                messageFollowHopCount: stateful.MessageFollowHopCount,
-                replyRouteId: stateful.Correlation,
-                instanceIntent: stateful.InstanceIntent
-            ),
-            parts,
-            true,
-            ownership.TakeApplicationOwner()
+        var record = new MeshReceiveRecord(
+            kind,
+            MeshReadyDomains.Application,
+            sourceRid,
+            sourceSpotId,
+            sourceGeneration,
+            sourceActor,
+            stateful.OperationId,
+            request ? operationKind : default,
+            null,
+            null,
+            metadata,
+            0,
+            parts.Length,
+            0,
+            0,
+            null,
+            reply,
+            targetNodeGeneration: stateful.TargetNodeGeneration,
+            authorityOwnerGeneration: stateful.AuthorityOwnerGeneration,
+            ownerLeaseGeneration: stateful.OwnerLeaseGeneration,
+            messageFollowHopCount: stateful.MessageFollowHopCount,
+            replyRouteId: stateful.Correlation,
+            instanceIntent: stateful.InstanceIntent
         );
+        record.ApplicationPayloadBytes = SumParts(parts, 1);
+        return EnqueueOwned(owner, record, parts, true, ownership.TakeApplicationOwner());
     }
 
     private void ProcessUserSpotOperation(
@@ -12467,31 +12467,32 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     CompleteLocalOperation(correlation, replyParts);
                     return SubmitResult.Ok;
                 };
+            var record = new MeshReceiveRecord(
+                recordKind,
+                MeshReadyDomains.Application,
+                _routingId,
+                string.Empty,
+                _lifecycleGeneration,
+                default,
+                correlation == 0 ? default : new MeshOperationId(0, correlation),
+                command == ServiceWireConstants.Command.NodeRequest ? MeshOperationKind.NodeRequest
+                    : command == ServiceWireConstants.Command.ChannelRequest
+                        ? MeshOperationKind.ChannelRequest
+                    : default,
+                channelName,
+                null,
+                metadata.IsEmpty ? null : metadata.ToArray(),
+                0,
+                retained.Count,
+                0,
+                0,
+                null,
+                reply
+            );
+            record.ApplicationPayloadBytes = SumParts(retained, 1);
             EnqueueOwned(
                 MailboxKey.ForNode(MeshReadyDomains.Application, channelName),
-                new MeshReceiveRecord(
-                    recordKind,
-                    MeshReadyDomains.Application,
-                    _routingId,
-                    string.Empty,
-                    _lifecycleGeneration,
-                    default,
-                    correlation == 0 ? default : new MeshOperationId(0, correlation),
-                    command == ServiceWireConstants.Command.NodeRequest
-                            ? MeshOperationKind.NodeRequest
-                        : command == ServiceWireConstants.Command.ChannelRequest
-                            ? MeshOperationKind.ChannelRequest
-                        : default,
-                    channelName,
-                    null,
-                    metadata.IsEmpty ? null : metadata.ToArray(),
-                    0,
-                    retained.Count,
-                    0,
-                    0,
-                    null,
-                    reply
-                ),
+                record,
                 retained
             );
             return SubmitResult.Ok;
@@ -12974,6 +12975,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             kindData,
             submitFailure: submitFailure
         );
+        completionRecord.ApplicationPayloadBytes = SumParts(parts, 1);
         var terminal = Volatile.Read(ref _completionHandler);
         if (terminal is null || !terminal(completionRecord, parts))
         {
@@ -12983,7 +12985,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var queued = new QueuedRecord(
                 completionRecord,
                 parts,
-                GetApplicationPayloadBytes(completionRecord, parts)
+                GetApplicationPayloadBytes(completionRecord)
             );
             if (!TryEnqueueInfrastructureCompletion(queued))
                 queued.Dispose();
@@ -13124,7 +13126,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             EnqueueLocalApplication(key, record, parts, operation, payloadOwner, requestAdmission);
             return true;
         }
-        var payloadBytes = GetApplicationPayloadBytes(record, parts);
+        var payloadBytes = GetApplicationPayloadBytes(record);
         record.ApplicationPayloadBytes = payloadBytes;
         var queued = new QueuedRecord(record, parts, payloadBytes, payloadOwner);
         try
@@ -13157,21 +13159,29 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private static ulong GetApplicationPayloadBytes(
-        MeshReceiveRecord record,
-        IReadOnlyList<Message> parts
-    ) =>
+    private static ulong GetApplicationPayloadBytes(MeshReceiveRecord record) =>
         record.ApplicationPayloadBytes
-        ?? (
-            record.ApplicationPayloadView is { } view ? MeasureApplicationPayloadView(view)
-            : parts is IZLinkApplicationPayloadSized sized ? sized.ApplicationPayloadBytes
-            : ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(parts)
+        ?? throw new InvalidOperationException(
+            "Queued mesh records must carry application payload bytes."
         );
 
-    private static ulong MeasureApplicationPayloadView(ZLinkMultipartPayloadView parts)
+    private static ulong SumParts(IReadOnlyList<Message> parts, int firstPart)
     {
         var total = 0UL;
-        for (var index = Math.Min(1, parts.Count); index < parts.Count; index++)
+        for (var index = Math.Min(firstPart, parts.Count); index < parts.Count; index++)
+        {
+            var size = (ulong)Math.Max(parts[index].Size, 0);
+            if (size > ulong.MaxValue - total)
+                return ulong.MaxValue;
+            total += size;
+        }
+        return total;
+    }
+
+    private static ulong SumParts(ZLinkMultipartPayloadView parts, int firstPart)
+    {
+        var total = 0UL;
+        for (var index = Math.Min(firstPart, parts.Count); index < parts.Count; index++)
         {
             var size = checked((ulong)parts.GetSpan(index).Length);
             if (size > ulong.MaxValue - total)

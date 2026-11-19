@@ -129,7 +129,7 @@ final class ZLinkM6ARuntimeContractTest {
         assertEquals(
                 ServiceWireConstants.REQUIRED_CAPABILITY,
                 ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
-        assertEquals("framework-service-v13", ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
+        assertEquals("framework-service-v14", ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
     }
 
     @Test

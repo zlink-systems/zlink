@@ -12,6 +12,8 @@ internal interface IZLinkCurrentSpotActivation
 
     TimeSpan DefaultRequestTimeout { get; }
 
+    TimeProvider TimeProvider { get; }
+
     ZLinkCodecRegistryBuilder Codecs { get; }
 
     ZLinkMessageFlowTracer Flow { get; }

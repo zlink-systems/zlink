@@ -66,12 +66,17 @@ cross-language conformance mechanism: every generated codec, and every
 transitional handwritten codec until its swap, must accept and produce the same
 declared bytes and failures.
 
+The channel envelope header's normative source is `framework/runtime/protocol/channel-header-v1.proto`, not
+the service-wire schema. Each runtime's header codec is generated from that `.proto` by the official protobuf
+generator, and no handwritten encode/decode path exists. Header value validation and format-change rules are
+owned by [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract).
+
 ### Normative Format by Layer
 
 | Layer | Normative format | Owner and interpretation |
 |---|---|---|
 | Location Store records | Canonical JSON envelope | [Location runtime §2.4](../05-location-relocation/01-location-runtime.en.md) defines the JSON record's byte layout precisely; the provider treats it as opaque bytes. |
-| ClientServer application records | JSON `0xF2` channel envelope | The one-directional service boundary where a Client starts a send/request and a Server runs the handler and reply, the [ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel) ([details](03-client-server-channel.en.md)), owns this envelope's application-record contract and its JSON semantics. |
+| ClientServer application records | protobuf `ChannelHeader` channel envelope | The one-directional service boundary where a Client starts a send/request and a Server runs the handler and reply, the [ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel) ([details](03-client-server-channel.en.md)), owns this envelope's application-record contract, its value validation, and its semantics. |
 | Internal mesh commands and relocation direct-transfer stream | `service-wire-v1.schema.json` binary formats | Generated codecs own command frames; `relocation-envelope-v1` is its big-endian logical stream. |
 | Application payload bytes | Opaque, application-owned bytes | The Framework validates only the declared envelope boundary and does not assign business meaning to the bytes. |
 
@@ -100,7 +105,7 @@ node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
 ```
 
-The wire major is `1` and the required capability is `framework-service-v13`.
+The wire major is `1` and the required capability is `framework-service-v14`.
 The build stops if the schema and golden fixtures diverge, or if the
 validator finds an undefined type, a duplicate ID, or an invalid
 enum/bound/conditional field.
@@ -394,7 +399,7 @@ owns physical pipe selection and replacement.
 
 - A ClientServer connection fixes a single application-attached channel name, the [ChannelName](../00-foundation/02-glossary.en.md#channelname), and a client-to-server direction.
 - The only service-wire records on a ClientServer connection are the infrastructure commands: the client starts `hello` as a Core request and sends/answers the liveness pair; the server answers `admit`/`reject` only on that hello request's reply leg and pushes `update` and liveness.
-- Application records on a ClientServer connection do not use service-wire commands. They ride the channel envelope — the two-frame record `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` all four runtimes share for channel messaging. A request rides the Core request envelope and its response/error rides the matching reply leg; a one-way command is a plain send. `channelSend`(18)/`channelRequest`(19) and the command 20 reply travel only on RouteMesh connections.
+- Application records on a ClientServer connection do not use service-wire commands. They ride the channel envelope — the two-frame record `[protobuf ChannelHeader, payload]` all four runtimes share for channel messaging. A request rides the Core request envelope and its response/error rides the matching reply leg; a one-way command is a plain send. `channelSend`(18)/`channelRequest`(19) and the command 20 reply travel only on RouteMesh connections. The first part of the application payload carried by RouteMesh `channelSend`(18)/`channelRequest`(19) and `spotSend`(21)/`spotRequest`(22) is the same `ChannelHeader`.
 - [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract) defines the internal wire representation of ClientServer application metadata.
 - Reusing a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
 
@@ -733,9 +738,10 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   the retained store paths below) uses the same CRC-32C (Castagnoli) convention:
   polynomial `0x1EDC6F41`, initial value `0xFFFFFFFF`, reflected input and output, XOR
   output `0xFFFFFFFF`, and `check("123456789") == 0xE3069283`.
-- The wire major is `1` and the required capability is `framework-service-v13` — bumped
-  from v12 for commands 52/53 and the Prepare/Cutover manifest fields, with all four
-  runtimes bumped together.
+- The wire major is `1` and the required capability is `framework-service-v14` — bumped
+  from v13 when the channel envelope header moved from JSON to the protobuf `ChannelHeader`
+  (v13 was bumped from v12 for commands 52/53 and the Prepare/Cutover manifest fields). All
+  four runtimes are bumped together.
 - A target's effective inbound chunk-byte limit is negotiated in the admission-accept
   reply's `receiveChunkLimitBytes` field, or via host preflight where that reply is
   unavailable. Where no negotiation path exists (`JoinEntrySpot`), the effective limit is

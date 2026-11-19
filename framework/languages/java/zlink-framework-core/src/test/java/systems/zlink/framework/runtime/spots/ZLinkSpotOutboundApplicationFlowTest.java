@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.lang.reflect.Proxy;
@@ -56,7 +57,7 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                     .join();
         }
 
-        ZLinkFlowContext.State flow = ZLinkSpotFlowFrame.decode(sentParts.get());
+        ZLinkFlowContext.State flow = flow(sentParts.get());
         assertNotNull(flow);
         assertEquals(ZLinkFlowOrigin.APPLICATION, flow.origin());
         assertTrue(ZLinkFlowContext.isValidFlowId(flow.flowId()));
@@ -85,7 +86,7 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                     .join();
         }
 
-        ZLinkFlowContext.State flow = ZLinkSpotFlowFrame.decode(sentParts.get());
+        ZLinkFlowContext.State flow = flow(sentParts.get());
         assertNotNull(flow);
         assertEquals(ambient.flowId(), flow.flowId());
         assertEquals(ZLinkFlowOrigin.INBOUND, flow.origin());
@@ -112,7 +113,7 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                     .join();
         }
 
-        assertNull(ZLinkSpotFlowFrame.decode(sentParts.get()));
+        assertNull(flow(sentParts.get()));
         assertEquals(2, sentParts.get().size());
     }
 
@@ -141,7 +142,7 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                             .toCompletableFuture();
 
             //  The flow frame is attached at encode time by value passing…
-            ZLinkFlowContext.State flow = ZLinkSpotFlowFrame.decode(publishedParts.get());
+            ZLinkFlowContext.State flow = flow(publishedParts.get());
             assertNotNull(flow);
             assertEquals(ZLinkFlowOrigin.APPLICATION, flow.origin());
 
@@ -161,6 +162,11 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                 new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
                 new ZLinkMessageFlowTracer(
                         options, ZLinkHandlerActivator.reflection(), Runnable::run));
+    }
+
+    private static ZLinkFlowContext.State flow(List<Message> parts) {
+        return ZLinkSpotFlowFrame.fromEnvelopeHeader(
+                ZLinkChannelEnvelope.decodeDispatchHeader(parts, true));
     }
 
     private static ZLinkBackendSpot spotCapturing(

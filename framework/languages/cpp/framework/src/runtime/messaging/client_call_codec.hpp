@@ -43,13 +43,11 @@ class client_call_codec_t
     message_parts_t
     encode_payload_parts (envelope_header_t &&header,
                           encoded_payload_t payload,
-                          std::shared_ptr<const detail::request_type_plan_t> type,
-                          std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
-    message_parts_t encode_service_payload_parts (
-      envelope_header_t &&header,
-      encoded_payload_t payload,
-      std::shared_ptr<const detail::request_type_plan_t> type,
-      std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
+                          std::shared_ptr<const detail::request_type_plan_t> type) const;
+    message_parts_t
+    encode_service_payload_parts (envelope_header_t &&header,
+                                  encoded_payload_t payload,
+                                  std::shared_ptr<const detail::request_type_plan_t> type) const;
 
     template <typename TEncodePayload>
     message_parts_t encode_node_send_parts (const std::string &channel_name,

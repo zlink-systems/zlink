@@ -13,17 +13,8 @@ record ActorMessageRead(
         ZLinkBackendActorReceived nextPendingHeader,
         int nextIndex) {}
 
-/**
- * Parsed inbound SPOT route packet. {@code header} is the decoded shared cross-language envelope
- * header when the message arrived as an envelope, or {@code null} for legacy internal raw-parts
- * packets.
- */
+/** Parsed inbound SPOT route packet and its ChannelHeader. */
 record ParsedPacket(
         String packetName,
         Message payload,
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
-
-    ParsedPacket(String packetName, Message payload) {
-        this(packetName, payload, null);
-    }
-}
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {}

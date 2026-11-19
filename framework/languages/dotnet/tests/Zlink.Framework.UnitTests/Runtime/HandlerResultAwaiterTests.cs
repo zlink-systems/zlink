@@ -34,7 +34,6 @@ public sealed class HandlerResultAwaiterTests
         var prepared = ZLinkEnvelopeCodec.PrepareResponse("prepared", typeof(int), codecs);
         Assert.Equal(1, selections);
         codecs.Freeze();
-        var preparedHeaderCount = ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders;
         for (var index = 0; index < 4; index++)
         {
             var request = new ZLinkEnvelopeHeader(
@@ -71,7 +70,6 @@ public sealed class HandlerResultAwaiterTests
             }
         }
         Assert.Equal(1, selections);
-        Assert.Equal(preparedHeaderCount, ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders);
     }
 
     public ValueTask<int> PreparedReply() => new(42);

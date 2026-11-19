@@ -6,6 +6,7 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.channels.ZLinkFanoutPublishCall;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
 import java.util.List;
 import java.util.Optional;
@@ -127,7 +128,12 @@ final class PublishCall implements ZLinkFanoutPublishCall, Runnable {
         }
         try (var flowScope = runtime.enterApplicationFlow()) {
             List<Message> publishParts =
-                    ZLinkChannelCallRuntime.parts(packetName, payload, contentType);
+                    ZLinkChannelCallRuntime.parts(
+                            publisherChannel == null ? "" : publisherChannel,
+                            ZLinkChannelEnvelope.KIND_PUBLISH,
+                            packetName,
+                            payload,
+                            contentType);
             try {
                 publisher.publish(topic, publishParts, SendFlags.NONE);
                 return ZLinkOneWayCalls.oneWayStatus(ZLinkOneWayCalls.SUBMITTED);

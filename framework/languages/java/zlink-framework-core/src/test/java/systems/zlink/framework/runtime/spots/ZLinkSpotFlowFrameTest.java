@@ -10,43 +10,22 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
-import java.nio.charset.StandardCharsets;
+import zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader;
+
 import java.util.List;
 
 final class ZLinkSpotFlowFrameTest {
     private static final String FLOW_ID = "018f2f1d-5d52-7b70-8f08-13fecf6f6abc";
 
     @Test
-    void decodeReadsFlowFrameAfterPayload() {
-        List<Message> parts =
-                List.of(
-                        Message.from("Packet".getBytes(StandardCharsets.UTF_8)),
-                        Message.from(new byte[] {1}),
-                        flowFrame(FLOW_ID, "INBOUND"));
+    void readsFlowFromChannelHeader() {
+        List<Message> parts = parts(header(FLOW_ID, 3));
         try {
-            var decoded = ZLinkSpotFlowFrame.decode(parts);
-            assertEquals(FLOW_ID, decoded.flowId());
-            assertEquals(ZLinkFlowOrigin.INBOUND, decoded.origin());
-        } finally {
-            Message.closeAll(parts);
-        }
-    }
-
-    @Test
-    void decodeReadsFlowFrameBehindContentTypeFrame() {
-        //  ZLinkSpotRouteMessages.encode places the flow frame after the
-        //  content-type frame; the decoder must not lose the inbound pair.
-        List<Message> parts =
-                List.of(
-                        Message.from("Packet".getBytes(StandardCharsets.UTF_8)),
-                        Message.from(new byte[] {1}),
-                        Message.from(
-                                "__zlink.content_type\napplication/json"
-                                        .getBytes(StandardCharsets.UTF_8)),
-                        flowFrame(FLOW_ID, "APPLICATION"));
-        try {
-            var decoded = ZLinkSpotFlowFrame.decode(parts);
+            var decoded =
+                    ZLinkSpotFlowFrame.fromEnvelopeHeader(
+                            ZLinkChannelEnvelope.decodeDispatchHeader(parts, true));
             assertEquals(FLOW_ID, decoded.flowId());
             assertEquals(ZLinkFlowOrigin.APPLICATION, decoded.origin());
         } finally {
@@ -55,46 +34,38 @@ final class ZLinkSpotFlowFrameTest {
     }
 
     @Test
-    void decodeReturnsNullWithoutFlowFrame() {
-        List<Message> parts =
-                List.of(
-                        Message.from("Packet".getBytes(StandardCharsets.UTF_8)),
-                        Message.from(new byte[] {1}));
+    void returnsNullWhenChannelHeaderHasNoFlow() {
+        List<Message> parts = parts(header(null, 0));
         try {
-            assertNull(ZLinkSpotFlowFrame.decode(parts));
+            assertNull(
+                    ZLinkSpotFlowFrame.fromEnvelopeHeader(
+                            ZLinkChannelEnvelope.decodeDispatchHeader(parts, true)));
         } finally {
             Message.closeAll(parts);
         }
     }
 
     @Test
-    void decodeRejectsMalformedFlowAsProtocolError() {
-        for (Message frame :
-                List.of(
-                        flowFrame("018f2f1d-5d52-6b70-8f08-13fecf6f6abc", "INBOUND"),
-                        flowFrame("018F2F1D-5D52-7B70-8F08-13FECF6F6ABC", "INBOUND"),
-                        flowFrame(FLOW_ID, "NOT_AN_ORIGIN"),
-                        Message.from(
-                                "__zlink.flow\nonly-one-field".getBytes(StandardCharsets.UTF_8)))) {
-            List<Message> parts =
-                    List.of(
-                            Message.from("Packet".getBytes(StandardCharsets.UTF_8)),
-                            Message.from(new byte[] {1}),
-                            frame);
-            try {
-                ZLinkFrameworkException failure =
-                        assertThrows(
-                                ZLinkFrameworkException.class,
-                                () -> ZLinkSpotFlowFrame.decode(parts));
-                assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
-            } finally {
-                Message.closeAll(parts);
-            }
+    void rejectsInvalidFlowIdAsProtocolError() {
+        List<Message> parts = parts(header("018f2f1d-5d52-6b70-8f08-13fecf6f6abc", 3));
+        try {
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ZLinkChannelEnvelope.decodeDispatchHeader(parts, true));
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
+        } finally {
+            Message.closeAll(parts);
         }
     }
 
-    private static Message flowFrame(String flowId, String origin) {
-        return Message.from(
-                ("__zlink.flow\n" + flowId + "\n" + origin).getBytes(StandardCharsets.UTF_8));
+    private static byte[] header(String flowId, int origin) {
+        var builder = ChannelHeader.newBuilder().setKindValue(3).setMessageName("Move");
+        if (flowId != null) builder.setFlowId(flowId).setFlowOriginValue(origin);
+        return builder.build().toByteArray();
+    }
+
+    private static List<Message> parts(byte[] header) {
+        return List.of(Message.from(header), Message.from(new byte[] {1}));
     }
 }

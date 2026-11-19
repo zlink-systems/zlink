@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -528,19 +529,34 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             {
                 if (scenario.GetProperty("valid").GetBoolean())
                     continue;
-                var rawMetadata = scenario.TryGetProperty(
-                    "receivedEncoded",
-                    out var receivedMetadata
-                )
-                    ? receivedMetadata.GetString()
-                    : scenario.GetProperty("metadata").GetRawText();
-                var rawHeader =
-                    "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"work\",\"messageName\":\"EchoRequest\","
-                    + "\"contentType\":\"application/json\",\"correlationId\":\"invalid-metadata\",\"metadata\":"
-                    + rawMetadata
-                    + "}";
+                var scenarioName = scenario.GetProperty("name").GetString();
+                if (scenarioName is not ("empty-key" or "nul-key" or "nul-value"))
+                    continue;
+                var protoHeader =
+                    new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.ChannelHeader
+                    {
+                        Kind = global::Zlink
+                            .Framework
+                            .Runtime
+                            .Protocol
+                            .ChannelHeaderV1
+                            .ChannelKind
+                            .Request,
+                        ChannelName = "work",
+                        MessageName = "EchoRequest",
+                        ContentType = "application/json",
+                        CorrelationId = "invalid-metadata",
+                    };
+                foreach (var entry in scenario.GetProperty("metadata").EnumerateObject())
+                    protoHeader.Metadata.Add(
+                        new global::Zlink.Framework.Runtime.Protocol.ChannelHeaderV1.MetadataEntry
+                        {
+                            Key = entry.Name,
+                            Value = entry.Value.GetString()!,
+                        }
+                    );
                 var invalidParts = ZLinkMessageParts.Create(
-                    Message.From(System.Text.Encoding.UTF8.GetBytes(rawHeader)),
+                    Message.From(protoHeader.ToByteArray()),
                     Message.From(System.Text.Encoding.UTF8.GetBytes("{\"value\":\"invalid\"}"))
                 );
                 var rejected = await clientRuntime
@@ -5007,6 +5023,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         public ZLinkUserSpotExecutionMode ExecutionMode => default;
 
         public TimeSpan DefaultRequestTimeout => TimeSpan.FromSeconds(1);
+
+        public TimeProvider TimeProvider => TimeProvider.System;
 
         public ZLinkCodecRegistryBuilder Codecs { get; } = new();
 
