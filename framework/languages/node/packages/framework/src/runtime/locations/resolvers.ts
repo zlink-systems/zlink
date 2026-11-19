@@ -982,6 +982,7 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
             );
           }
           const target: ZLinkSpotRouteTarget = {
+            authorityState: ready === undefined ? 'closing' : 'ready',
             routerChannelId: this.routerChannelIdForMesh(decoded.ownerMeshName),
             targetNodeRid: decoded.ownerNodeRid,
             spotId,

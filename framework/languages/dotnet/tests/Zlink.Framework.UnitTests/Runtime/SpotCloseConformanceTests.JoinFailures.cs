@@ -61,6 +61,22 @@ public sealed partial class SpotCloseConformanceTests
     [MemberData(nameof(JoinFailureCases))]
     public async Task DeferredJoinFailureContract(string target, bool warmRoute, string expected)
     {
+        await AssertDeferredJoinFailureContract(target, warmRoute, expected);
+    }
+
+    [Fact]
+    public async Task DeferredJoin_ClosingResolutionSurvivesActivationRemoval()
+    {
+        await AssertDeferredJoinFailureContract("closing", false, "NotFound", true);
+    }
+
+    private async Task AssertDeferredJoinFailureContract(
+        string target,
+        bool warmRoute,
+        string expected,
+        bool removeAfterResolution = false
+    )
+    {
         using var flow = ClosingFlow("JoinFailure-" + target, warmRoute, 0);
         var snapshot = new JoinSnapshotStore();
         await using var host = await SpotCloseHost.StartAsync(new SpotCloseFaultStore(snapshot));
@@ -89,6 +105,7 @@ public sealed partial class SpotCloseConformanceTests
                 closing = host.Manager.CloseAsync(spot).AsTask();
                 await host.State.OnClosingEntered.Task.WaitAsync(Wait);
                 Assert.Equal("Closing", await host.AuthorityAsync(spot.SpotId));
+                snapshot.HoldClosingRead = removeAfterResolution;
             }
             else
             {
@@ -101,6 +118,14 @@ public sealed partial class SpotCloseConformanceTests
                 await host.GetExistingActorAsync(actorId)
             );
             await host.JoinActorAsync(joinId, actorId);
+            if (removeAfterResolution)
+            {
+                await snapshot.ReadHeld.Task.WaitAsync(Wait);
+                Assert.False(host.State.JoinCompletion.Task.IsCompleted);
+                host.State.ReleaseOnClosing.TrySetResult();
+                Assert.True(await closing!.WaitAsync(Wait));
+                snapshot.ReleaseRead.TrySetResult();
+            }
             var result = Assert.IsType<ZLinkActorJoinCompletion.Failed>(
                 await host.State.JoinCompletion.Task.WaitAsync(Wait)
             );
@@ -112,6 +137,7 @@ public sealed partial class SpotCloseConformanceTests
         finally
         {
             snapshot.Replay = false;
+            snapshot.ReleaseRead.TrySetResult();
             host.State.ReleaseOnClosing.TrySetResult();
             if (closing is not null)
                 Assert.True(await closing.WaitAsync(Wait));
@@ -128,6 +154,11 @@ public sealed partial class SpotCloseConformanceTests
         public string? SpotId { get; set; }
         public bool Capture { get; set; } = true;
         public bool Replay { get; set; }
+        public bool HoldClosingRead { get; set; }
+        public TaskCompletionSource ReadHeld { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
@@ -137,6 +168,17 @@ public sealed partial class SpotCloseConformanceTests
             if (Replay && _ready.TryGetValue(key, out var saved))
                 return saved;
             var result = await _inner.ReadAsync(key, cancellationToken);
+            if (
+                HoldClosingRead
+                && key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                && SpotId is not null
+                && key.Value.EndsWith("\0" + SpotId, StringComparison.Ordinal)
+            )
+            {
+                HoldClosingRead = false;
+                ReadHeld.TrySetResult();
+                await ReleaseRead.Task.WaitAsync(cancellationToken);
+            }
             if (
                 Capture
                 && SpotId is not null
