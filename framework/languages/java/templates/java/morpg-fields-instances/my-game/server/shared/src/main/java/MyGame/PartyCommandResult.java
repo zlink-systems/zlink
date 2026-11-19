@@ -1,3 +1,5 @@
 package MyGame;
 
-public record PartyCommandResult(PartyView view, ActionRejected rejection) {}
+import org.jspecify.annotations.Nullable;
+
+public record PartyCommandResult(@Nullable PartyView view, @Nullable ActionRejected rejection) {}
