@@ -3,6 +3,9 @@
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
+        <!-- Allocation comparisons require a fixed JIT code version throughout all windows.
+             Tier promotion can remove allocations between the baseline and comparison. -->
+        <TieredCompilation>false</TieredCompilation>
         <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
         <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
     </PropertyGroup>
