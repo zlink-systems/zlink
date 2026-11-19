@@ -305,7 +305,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
-  foreach(_test dispatch unreal_fifo wait_isolation)
+  foreach(_test dispatch unreal_fifo wait_isolation wait_queue_race)
     add_executable(test_connector_${_test} tests/test_connector_${_test}.cpp)
     target_compile_features(test_connector_${_test} PRIVATE cxx_std_20)
     target_include_directories(test_connector_${_test} PRIVATE
@@ -325,6 +325,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     add_test(NAME test_connector_wait_isolation_${_mode}
       COMMAND test_connector_wait_isolation ${_mode})
     set_tests_properties(test_connector_wait_isolation_${_mode} PROPERTIES
+      LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+  endforeach()
+  foreach(_mode manual immediate)
+    add_test(NAME test_connector_wait_queue_race_${_mode}
+      COMMAND test_connector_wait_queue_race ${_mode})
+    set_tests_properties(test_connector_wait_queue_race_${_mode} PROPERTIES
       LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
   endforeach()
   add_test(NAME test_connector_unreal_fifo COMMAND test_connector_unreal_fifo)
