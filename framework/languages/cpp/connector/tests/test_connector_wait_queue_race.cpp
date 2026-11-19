@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include <zlink/stream_connector.hpp>
 #include "runtime/protocol/header_codec.hpp"
 #include "runtime/protocol/framing/frame_codec.hpp"
