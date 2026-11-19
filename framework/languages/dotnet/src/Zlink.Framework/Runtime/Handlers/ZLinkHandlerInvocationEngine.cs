@@ -59,8 +59,7 @@ internal static class ZLinkHandlerInvocationEngine
         if (!release.IsCompletedSuccessfully)
             return InvokeAfterReleaseAsync(release, handler, invoker, arg0, arg1, arg2, arg3, arg4);
 
-        var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
-        return ZLinkHandlerResultAwaiter.AwaitAsync(result);
+        return invoker(handler, arg0, arg1, arg2, arg3, arg4);
     }
 
     public static ValueTask<object?> InvokeAsync(
@@ -77,8 +76,7 @@ internal static class ZLinkHandlerInvocationEngine
         if (!release.IsCompletedSuccessfully)
             return InvokeAfterReleaseAsync(release, handler, invoker, arg0, arg1, arg2, arg3, arg4);
 
-        var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
-        return ZLinkHandlerResultAwaiter.AwaitAsync(result);
+        return invoker(handler, arg0, arg1, arg2, arg3, arg4);
     }
 
     private static async ValueTask<object?> InvokeAfterReleaseAsync(
@@ -93,7 +91,6 @@ internal static class ZLinkHandlerInvocationEngine
     )
     {
         await release.ConfigureAwait(false);
-        var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
-        return await ZLinkHandlerResultAwaiter.AwaitAsync(result).ConfigureAwait(false);
+        return await invoker(handler, arg0, arg1, arg2, arg3, arg4).ConfigureAwait(false);
     }
 }
