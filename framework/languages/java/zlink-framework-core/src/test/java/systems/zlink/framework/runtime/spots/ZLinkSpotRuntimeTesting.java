@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueueTestAccess;
 import systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
@@ -69,9 +70,18 @@ public final class ZLinkSpotRuntimeTesting {
         return ((DefaultSpotContext) context).serials.spotQueue;
     }
 
-    public static boolean hasNoPendingSubscriptions(ZLinkSpotContext context) {
-        return ZLinkJavaRawSpotTestAccess.hasNoPendingSubscriptions(
-                ((DefaultSpotContext) context).backendSpot);
+    /**
+     * Completes after the infrastructure queue turn that publishes accepted local topics has
+     * finished. The value tells whether the Spot application queue retains an entry.
+     */
+    public static CompletionStage<Boolean> retainsApplicationAfterPublication(
+            ZLinkSpotContext context) {
+        var serials = ((DefaultSpotContext) context).serials;
+        return serials.executeInfrastructure(() -> CompletableFuture.completedFuture(null))
+                .thenApply(
+                        ignored ->
+                                ZLinkSerialExecutionQueueTestAccess.retainsApplication(
+                                        serials.spotQueue));
     }
 
     public static AutoCloseable observeNextTopic(
