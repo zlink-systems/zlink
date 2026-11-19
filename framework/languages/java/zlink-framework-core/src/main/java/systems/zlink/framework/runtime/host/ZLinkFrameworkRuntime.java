@@ -166,6 +166,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus lastCoreHwmStatus;
     private final AtomicBoolean coreHwmContextActive = new AtomicBoolean(false);
     private final ZLinkFrameworkRegistration registration;
+    private final systems.zlink.framework.runtime.channels.ZLinkTopologyRuntimeViews
+            topologyRuntime;
     private ZLinkRegisteredLocationStores locationStores;
     final ZLinkMeshDrainCoordinator meshDrains;
     ZLinkLocationRuntime locationRuntime;
@@ -250,6 +252,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 eventDispatcher == null ? new ZLinkRuntimeEventDispatcher() : eventDispatcher;
         this.eventDispatcher = eventDispatcher;
         this.registration = options.registration();
+        this.topologyRuntime =
+                new systems.zlink.framework.runtime.channels.ZLinkTopologyRuntimeViews(
+                        registration.channels(), this::channels, () -> runtimeState.get());
         this.callSerializer = serializerFor(options);
         this.actorCalls =
                 new systems.zlink.framework.runtime.actors.ZLinkActorClientCalls(
@@ -381,6 +386,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             .channels();
             pendingCalls.add(channels);
             channels.setCallFactories(channelCalls);
+            topologyRuntime.attach(channels);
             channels.setHostStateSupplier(runtimeState::get);
             if (!this.registration.meshNodes().isEmpty()) {
                 ZLinkMeshBackendAdapter meshAdapter =
@@ -1086,11 +1092,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public ZLinkClientServerRuntime clientServerRuntime() {
-        return channels().clientServerRuntime();
+        return topologyRuntime.clientServer();
     }
 
     public ZLinkFanoutRuntime fanoutRuntime() {
-        return channels().fanoutRuntime();
+        return topologyRuntime.fanout();
     }
 
     /**
@@ -2350,9 +2356,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE);
         routeMeshRuntime.signalAll();
-        if (channels() != null) {
-            channels().signalTopologyStatus();
-        }
+        topologyRuntime.signalAll();
     }
 
     private CompletionStage<Void> publishRuntimeStateAwaited(ZLinkFrameworkRuntimeState state) {
@@ -2493,7 +2497,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                     ZLinkFrameworkRuntime.class
                                                                             .getName())
                                                             .warning(
-                                                                    "Object Server descriptor state publication failed: "
+                                                                    "Object Server descriptor state"
+                                                                            + " publication failed: "
                                                                             + failure.getMessage());
                                                     return null;
                                                 }));

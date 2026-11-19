@@ -26,7 +26,10 @@ internal sealed class ZLinkClientServerRuntimeService(
         var channel = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
         var state = _runtime.ClientServerMonitoringState(channelName);
         if (_monitorHubs.TryGetValue(channel, out var hub))
+        {
             hub.RefreshClientSubscription(state.Client);
+            hub.RefreshServerSubscription(state.Server);
+        }
         var servers =
             state
                 .Client?.SnapshotConnections()
@@ -123,11 +126,10 @@ internal sealed class ZLinkClientServerRuntimeService(
     {
         if (_monitorHubs.TryGetValue(channel, out var hub))
             return hub;
+        _ = _runtime.ClientServerMonitoringState(channel.Value);
         hub = new MonitorHub(this, channel);
         _monitorHubs.Add(channel, hub);
         hub.Start();
-        if (_runtime.ClientServerMonitoringState(channel.Value).Server is { } server)
-            server.SnapshotChanged += hub.SignalServer;
         return hub;
     }
 
@@ -139,8 +141,6 @@ internal sealed class ZLinkClientServerRuntimeService(
             hubs = _monitorHubs.Values.ToArray();
             foreach (var channel in _monitorHubs.Keys)
             {
-                if (_runtime.ClientServerMonitoringState(channel.Value).Server is { } server)
-                    server.SnapshotChanged -= _monitorHubs[channel].SignalServer;
                 var current = _statuses.GetValueOrDefault(channel);
                 if (current is not null)
                     PublishStatusOnGate(
@@ -237,6 +237,7 @@ internal sealed class ZLinkClientServerRuntimeService(
         private readonly Action _signalClient;
         private readonly Action<ZLinkFrameworkRuntimeState> _signalHost;
         private ZLinkClientServerClientRuntime? _client;
+        private ZLinkClientServerServerIdentity? _server;
         private Task _producer = Task.CompletedTask;
 
         internal MonitorHub(ZLinkClientServerRuntimeService owner, ZLinkChannelName channel)
@@ -288,6 +289,8 @@ internal sealed class ZLinkClientServerRuntimeService(
             {
                 if (_client is not null)
                     _client.StateChanged -= _signalClient;
+                if (_server is not null)
+                    _server.SnapshotChanged -= SignalServer;
                 _stop.Dispose();
                 _signal.Dispose();
             }
@@ -300,6 +303,17 @@ internal sealed class ZLinkClientServerRuntimeService(
                 while (_signal.TryRead()) { }
                 _ = _owner.GetStatus(_channel.Value);
             }
+        }
+
+        internal void RefreshServerSubscription(ZLinkClientServerServerIdentity? server)
+        {
+            if (ReferenceEquals(server, _server))
+                return;
+            if (_server is not null)
+                _server.SnapshotChanged -= SignalServer;
+            _server = server;
+            if (_server is not null)
+                _server.SnapshotChanged += SignalServer;
         }
 
         internal void RefreshClientSubscription(ZLinkClientServerClientRuntime? client)

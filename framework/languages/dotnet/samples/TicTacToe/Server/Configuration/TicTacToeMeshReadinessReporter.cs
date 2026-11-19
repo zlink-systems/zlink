@@ -59,16 +59,8 @@ internal sealed class TicTacToeMeshReadinessReporter(
             for (var index = pending.Count - 1; index >= 0; index--)
             {
                 var report = pending[index];
-                try
-                {
-                    if (!IsReady(report))
-                        continue;
-                }
-                catch (InvalidOperationException)
-                {
-                    // The public runtime status becomes available during Framework startup.
+                if (!IsReady(report))
                     continue;
-                }
 
                 LogReady(report);
                 pending.RemoveAt(index);

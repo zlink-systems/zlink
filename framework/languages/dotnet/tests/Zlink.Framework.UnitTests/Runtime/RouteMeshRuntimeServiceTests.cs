@@ -9,6 +9,85 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class RouteMeshRuntimeServiceTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task RegisteredStatusBeforeStartUsesTheObservationPublisher()
+    {
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options =>
+        {
+            options
+                .AddRouteMesh("status-before-start")
+                .Listen("tcp://127.0.0.1:0")
+                .Channel("registered")
+                .Server();
+            options.AddRouteMesh("unqueried").Listen("tcp://127.0.0.1:0");
+            options.UseTestLocationStore();
+            options.AddClientServerChannel("work").Client();
+            options
+                .AddFanoutChannel("events")
+                .EnableSubscriber()
+                .AddHandler<StatusEventHandler, string>();
+        });
+        await using var provider = services.BuildServiceProvider();
+        var mesh = provider.GetRequiredService<IZLinkRouteMeshRuntime>();
+        var clientServer = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        var fanout = provider.GetRequiredService<IZLinkFanoutRuntime>();
+        var fanoutInitial = fanout.GetStatus("events");
+        Assert.Equal(ZLinkTopologyState.Starting, fanoutInitial.State);
+        Assert.False(fanoutInitial.IsReady);
+        await using var fanoutObservation = fanout.ObserveAsync("events").GetAsyncEnumerator();
+        Assert.True(await fanoutObservation.MoveNextAsync());
+        Assert.Equal(fanoutInitial.Sequence, fanoutObservation.Current.Status.Sequence);
+        var initial = mesh.GetStatus("status-before-start");
+        Assert.Equal(ZLinkTopologyState.Starting, initial.State);
+        Assert.False(initial.IsReady);
+        Assert.Equal("registered", Assert.Single(initial.Channels).ChannelName);
+        Assert.Same(initial, mesh.GetStatus("status-before-start"));
+        await using var observation = mesh.ObserveAsync("status-before-start").GetAsyncEnumerator();
+        Assert.True(await observation.MoveNextAsync());
+        Assert.Equal(initial.Sequence, observation.Current.Status.Sequence);
+        var channel = clientServer.GetStatus("work");
+        Assert.Equal(ZLinkTopologyState.Starting, channel.State);
+        Assert.False(channel.IsReady);
+        await using var channelObservation = clientServer.ObserveAsync("work").GetAsyncEnumerator();
+        Assert.True(await channelObservation.MoveNextAsync());
+        Assert.Equal(channel.Sequence, channelObservation.Current.Status.Sequence);
+        Assert.Throws<ZLinkConfigurationException>(() => mesh.GetStatus("missing"));
+        Assert.Throws<ZLinkConfigurationException>(() => clientServer.GetStatus("missing"));
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await provider
+            .GetRequiredService<ZLinkFrameworkRuntime>()
+            .StartAsync(CancellationToken.None);
+        provider.GetRequiredService<ZLinkRouteMeshRuntimeService>().Start();
+        Assert.Equal(ZLinkTopologyState.Starting, mesh.GetStatus("status-before-start").State);
+        Assert.False(mesh.GetStatus("status-before-start").IsReady);
+        Assert.Equal(ZLinkTopologyState.Starting, clientServer.GetStatus("work").State);
+        Assert.Equal(ZLinkTopologyState.Starting, fanout.GetStatus("events").State);
+        await hosted.StartAsync(CancellationToken.None);
+        Assert.True(mesh.GetStatus("status-before-start").IsReady);
+        await hosted.StopAsync(CancellationToken.None);
+        Assert.Equal(ZLinkTopologyState.Stopped, mesh.GetStatus("unqueried").State);
+        var stopped = mesh.GetStatus("status-before-start");
+        Assert.Equal(ZLinkTopologyState.Stopped, stopped.State);
+        Assert.False(stopped.IsReady);
+        Assert.Equal(ZLinkTopologyState.Stopped, clientServer.GetStatus("work").State);
+        Assert.Equal(ZLinkTopologyState.Stopped, fanout.GetStatus("events").State);
+        await using var terminal = mesh.ObserveAsync("status-before-start").GetAsyncEnumerator();
+        Assert.True(await terminal.MoveNextAsync());
+        Assert.Equal(stopped.Sequence, terminal.Current.Status.Sequence);
+    }
+
+    public sealed class StatusEventHandler : IZLinkFanoutHandler<string>
+    {
+        public ValueTask HandleAsync(
+            string message,
+            ZLinkPublishMessageContext context,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
 #if DEBUG
     [Fact]
     public async Task LifecycleChecksDoNotReadFullStatus()

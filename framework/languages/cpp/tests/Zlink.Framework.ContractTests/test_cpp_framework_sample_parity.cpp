@@ -485,14 +485,25 @@ TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
                       / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/"
                         "bingo_room_spot.hpp");
 
-    EXPECT_NE (room.find ("if (actors.empty () && observers.empty ())"), std::string::npos)
-      << "Bingo room must close only after both player and observer occupancy are empty";
-    EXPECT_NE (room.find ("_context->close ()"), std::string::npos)
-      << "Bingo room must request spot closure after its last actor leaves";
-    // Close is a lifecycle item queued behind the running OnLeaveActor
-    // (handler turn and execution gate §7), as in the .NET and Node samples.
-    EXPECT_EQ (room.find ("co_await _context->close ()"), std::string::npos)
-      << "Bingo OnLeaveActor must request Close without awaiting its own lifecycle successor";
+    const auto close_handler = read_text_file (
+      cpp_language_root ()
+      / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
+        "bingo_room_close_timer_handler.hpp");
+
+    EXPECT_NE (room.find ("if (actors.empty () && observers.empty () && !_close_timer)"),
+               std::string::npos)
+      << "Bingo room must schedule closure once, after both player and observer occupancy "
+         "are empty";
+    EXPECT_NE (room.find ("add_timer<bingo_room_close_timer_handler_t>"), std::string::npos)
+      << "Bingo OnLeaveActor must hand closure to a timer handler turn";
+    // A Spot must not call its own close inside its lifecycle callback
+    // (handler turn and execution gate, lifecycle self-close row).
+    EXPECT_EQ (room.find ("_context->close ()"), std::string::npos)
+      << "Bingo lifecycle callbacks must not close their own Spot";
+    EXPECT_NE (close_handler.find ("spot.context ().close ()"), std::string::npos)
+      << "Bingo close timer handler must request spot closure";
+    EXPECT_EQ (close_handler.find ("co_await spot.context ().close ()"), std::string::npos)
+      << "Bingo close timer handler must not await its own Spot's closure";
 }
 
 TEST (CppFrameworkSampleParity, BingoFinalCleanupGuardsRelocationAfterClose)

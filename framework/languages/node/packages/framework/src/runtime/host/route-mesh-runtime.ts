@@ -122,16 +122,13 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
   }
 
   snapshot(meshName: string): ZLinkRouteMeshStatus {
-    const published = this.publishCurrentStatus(meshName, this.requireState(meshName));
-    if (published === undefined) throw routeNotFound(meshName);
-    return published;
+    return this.publishCurrentStatus(meshName, this.requireState(meshName));
   }
 
   private buildSnapshot(meshName: string, sequence: bigint): ZLinkRouteMeshStatus {
     const drain = this.requireState(meshName);
     const node = this.options.meshNode(meshName);
-    if (node === undefined) throw routeNotFound(meshName);
-    const status = node.status();
+    const status = node?.status();
     const descriptor = this.options.meshNodeDescriptor?.(meshName);
     const localPlacementCounts = this.options.localPlacementCounts?.(meshName);
     // Active counts come only from this MeshNode's activation records (runtime monitoring §5);
@@ -150,11 +147,11 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
               active: localPlacementCounts?.activeSpotCount ?? 0
             }
           };
-    const backendPeers = node.peers();
+    const backendPeers = node?.peers() ?? [];
     const peerChannels = backendPeers.map((peer) =>
       peer.routingId === null
         ? { names: [] as readonly string[], weights: [] as readonly number[] }
-        : node.peerChannels(peer.routingId, peer.lifecycleGeneration)
+        : node!.peerChannels(peer.routingId, peer.lifecycleGeneration)
     );
     const peers = backendPeers.map((peer) => {
       const state = peerState(peer.state);
@@ -179,11 +176,13 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         const localWeight =
           descriptor?.channelWeights[channelName] ?? channel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
         const readyTargetCount =
-          Number(readyMemberCount) + (channel.server === true && localWeight > 0 ? 1 : 0);
+          Number(readyMemberCount) +
+          (node !== undefined && channel.server === true && localWeight > 0 ? 1 : 0);
         return { channelName, isReady: readyTargetCount > 0, readyTargetCount };
       }
     );
-    const backendTopologyState = backendState(status.state);
+    const backendTopologyState =
+      status === undefined ? ZLinkTopologyState.Starting : backendState(status.state);
     const hasUnavailableRequiredPeer = peers.some(
       (peer) =>
         peer.state === ZLinkPeerState.Connecting || peer.state === ZLinkPeerState.NotConnected
@@ -270,15 +269,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       const published = state.lastSnapshot;
       if (published !== undefined && topologyObservationIsTerminal(published.state)) continue;
       const current = published ?? this.publishCurrentStatus(meshName, state);
-      if (current === undefined) {
-        for (const observer of [...state.observers]) observer.close();
-      } else {
-        this.publishSnapshot(
-          meshName,
-          state,
-          terminalSnapshot(current, ZLinkTopologyState.Stopped)
-        );
-      }
+      this.publishSnapshot(meshName, state, terminalSnapshot(current, ZLinkTopologyState.Stopped));
     }
   }
 
@@ -636,16 +627,10 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
   private transition(meshName: string, state: ZLinkMeshDrainState, next: ZLinkTopologyState): void {
     if (state.state === next) return;
     state.state = next;
-    const published = this.publishCurrentStatus(meshName, state);
-    if (topologyObservationIsTerminal(next) && published === undefined) {
-      for (const observer of [...state.observers]) observer.close();
-    }
+    this.publishCurrentStatus(meshName, state);
   }
 
-  private publishCurrentStatus(
-    meshName: string,
-    state: ZLinkMeshDrainState
-  ): ZLinkRouteMeshStatus | undefined {
+  private publishCurrentStatus(meshName: string, state: ZLinkMeshDrainState): ZLinkRouteMeshStatus {
     const published = state.lastSnapshot;
     if (published !== undefined && topologyObservationIsTerminal(published.state)) return published;
     const desired = topologyObservationIsTerminal(state.state)
@@ -657,7 +642,6 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     if (published !== undefined && topologyObservationIsTerminal(desired)) {
       return this.publishSnapshot(meshName, state, terminalSnapshot(published, desired));
     }
-    if (this.options.meshNode(meshName) === undefined) return undefined;
     const current = this.buildSnapshot(meshName, published?.sequence ?? 0n);
     return this.publishSnapshot(
       meshName,

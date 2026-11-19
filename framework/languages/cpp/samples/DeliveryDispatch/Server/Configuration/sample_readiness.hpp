@@ -51,11 +51,7 @@ class route_readiness_service_t final : public hosted_service_t
                                 node_name = _node_name,
                                 target_rids = _target_rids] () mutable {
             while (!state->stopping.load (std::memory_order_acquire)) {
-                try {
-                    report_if_ready (state, node_name, target_rids, runtime->snapshot (mesh_name));
-                }
-                catch (...) {
-                }
+                report_if_ready (state, node_name, target_rids, runtime->snapshot (mesh_name));
                 if (state->reported.load (std::memory_order_acquire))
                     return;
                 std::this_thread::sleep_for (std::chrono::milliseconds (50));
@@ -145,12 +141,8 @@ class actor_route_readiness_service_t final : public hosted_service_t
                                 target_rid = _target_rid,
                                 target_node_name = _target_node_name] () mutable {
             while (!state->stopping.load (std::memory_order_acquire)) {
-                try {
-                    report_if_ready (
-                      state, target_rid, target_node_name, runtime->snapshot (mesh_name));
-                }
-                catch (...) {
-                }
+                report_if_ready (
+                  state, target_rid, target_node_name, runtime->snapshot (mesh_name));
                 if (state->reported.load (std::memory_order_acquire))
                     return;
                 std::this_thread::sleep_for (std::chrono::milliseconds (50));
