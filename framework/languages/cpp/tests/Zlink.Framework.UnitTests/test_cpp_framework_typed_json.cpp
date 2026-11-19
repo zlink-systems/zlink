@@ -576,8 +576,76 @@ void verify_payload_contract ()
     }
     assert (failures == 0);
 }
+// Exercise syntax and profile validation across skipped and typed containers.
+void verify_parser_boundaries ()
+{
+    namespace p = zlink::detail::json_profile;
+    for (const std::string text : {"null", "true", "false", "-0", "18446744073709551616", "1e-400",
+                                   R"([{},[],{"a":[true,null,{"b":"\uD83D\uDE00"}]},"é",-2.5e+3])",
+                                   R"({"a":"\"\\\n","b":[0,1],"c":{"d":"last"}})"}) {
+        const auto actual = p::try_decode<nlohmann::json> (text.begin (), text.end ());
+        assert (actual && *actual == nlohmann::json::parse (text));
+    }
+    for (const std::string text : {"",
+                                   " ",
+                                   "-",
+                                   "00",
+                                   "-01",
+                                   "1.",
+                                   "1e",
+                                   "1e+",
+                                   "1e400",
+                                   "[1,]",
+                                   "[,1]",
+                                   "[}",
+                                   "{]",
+                                   R"({"a" 1})",
+                                   R"({"a":})",
+                                   R"({"a":1,})",
+                                   R"({"a":1 "b":2})",
+                                   R"({"a":1,"\u0061":2})",
+                                   "{}[]",
+                                   R"("\uD800")"}) {
+        assert (!p::try_decode<nlohmann::json> (text.begin (), text.end ()));
+    }
+    for (const auto &[text, expected] :
+         {std::pair{std::string (R"("01")"), "invalid decimal string"},
+          std::pair{std::string (R"("9223372036854775808")"), "64-bit integer out of range"}}) {
+        std::string error;
+        assert (!p::try_decode<std::int64_t> (text.begin (), text.end (), &error));
+        assert (error == expected);
+    }
+    const std::string skipped =
+      R"({"code":"ok","accessToken":null,"accountId":1,"future":[{"text":"é\n","n":1.5}]})";
+    assert (p::try_decode<required_presence_dto> (skipped.begin (), skipped.end ()));
+    const std::string duplicate_unknown =
+      R"({"code":"ok","accessToken":null,"accountId":1,"future":{"x":[],"x":{}}})";
+    assert (
+      !p::try_decode<required_presence_dto> (duplicate_unknown.begin (), duplicate_unknown.end ()));
+}
+
+// Nesting depth must not grow the call stack: a peer can send a body nested
+// far deeper than any DTO, and decoding it has to fail or skip, not overflow.
+void verify_deep_nesting ()
+{
+    namespace p = zlink::detail::json_profile;
+    constexpr std::size_t depth = 100000;
+    const std::string arrays = std::string (depth, '[') + std::string (depth, ']');
+    std::string objects;
+    for (std::size_t i = 0; i < depth; ++i)
+        objects += "{\"a\":";
+    objects += "1" + std::string (depth, '}');
+    for (const std::string &nested : {arrays, objects}) {
+        assert (!p::try_decode<std::vector<std::int64_t>> (nested.begin (), nested.end ()));
+        const std::string unknown = "{\"future\":" + nested + "}";
+        assert (p::try_decode<empty_dto> (unknown.begin (), unknown.end ()));
+    }
+}
+
 int main ()
 {
+    verify_deep_nesting ();
+    verify_parser_boundaries ();
     verify_payload_contract ();
     verify_byte_sequence_wire ();
     verify_base64_padding ();

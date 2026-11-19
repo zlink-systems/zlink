@@ -46,6 +46,10 @@
       "package_id": "8e6f0c58e555a7766f53df73136cacdc902fd844"
     },
     {
+      "ref": "yyjson/0.12.0#6726456725e38fd67327e8590f5135c9",
+      "package_id": "2c99cd87200c000a3a9379a12ede8f0d296e5f4b"
+    },
+    {
       "ref": "zlib/1.4#f51abf05ab684e2283b6d4c1243b624f",
       "package_id": "258056170a5add18e564ac86c77027634e725af3"
     }
