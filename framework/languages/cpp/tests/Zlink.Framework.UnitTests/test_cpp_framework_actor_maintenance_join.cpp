@@ -1863,6 +1863,27 @@ bool peer_ready (fw::route_mesh_runtime_t &routes,
     return ready ();
 }
 
+// A runtime weight change is recorded at once and published by the renew schedule. Placement
+// reads the published descriptors, so wait until one more Store row carries the new weight.
+bool set_published_placement_weight (fw::service_provider_t &services, int weight)
+{
+    auto &store = services.get_required<fw::location_repository_t> ();
+    const auto rows_with_weight = [&] {
+        const auto page = store.list_mesh_nodes (mesh_name).result ().value ();
+        return std::count_if (page.items.begin (), page.items.end (),
+                              [&] (const auto &row) { return row.placement_weight == weight; });
+    };
+    auto &options = services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name);
+    if (options.placement_weight () == weight)
+        return true;
+    const auto before = rows_with_weight ();
+    options.placement_weight (weight);
+    const auto deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (rows_with_weight () <= before && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    return rows_with_weight () > before;
+}
+
 // Exercises the same raw admission boundary without a discovery scheduling race.
 struct relay_peer_pair_t
 {
@@ -2479,8 +2500,7 @@ TEST (ActorMaintenanceJoin, ConsecutiveDeferredJoinsDoNotHoldTargetSpotDuringCap
     auto services = source.app.advanced ().services ().build_provider ();
     auto &actors = services.get_required<fw::actor_manager_t> ();
     ASSERT_TRUE (actors.get_or_create (fw::actor_id_t (actor_id), actor_type).async ().result ());
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     // Source Capture may occupy P1's Host. P2 has an independent source
     // so this test isolates the target Spot FIFO.
     configure_public (other_source, third_rid);
@@ -2491,9 +2511,7 @@ TEST (ActorMaintenanceJoin, ConsecutiveDeferredJoinsDoNotHoldTargetSpotDuringCap
                    .get_or_create (fw::actor_id_t ("second-member"), actor_type)
                    .async ()
                    .result ());
-    other_services.get_required<fw::route_mesh_runtime_options_t> ()
-      .mesh (mesh_name)
-      .placement_weight (0);
+    ASSERT_TRUE (set_published_placement_weight (other_services, 0));
     configure_public (target, second_rid);
     target.start ();
     ASSERT_TRUE (ready (target));
@@ -3088,9 +3106,7 @@ void joined_first_view_reaches_client (bool remote)
         ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
         ASSERT_TRUE (
           peer_ready (target_services->get_required<fw::route_mesh_runtime_t> (), first_rid));
-        services.get_required<fw::route_mesh_runtime_options_t> ()
-          .mesh (mesh_name)
-          .placement_weight (0);
+        ASSERT_TRUE (set_published_placement_weight (services, 0));
         destination = &*target_services;
     }
     ASSERT_TRUE (destination->get_required<fw::spot_manager_t> ()
@@ -3456,9 +3472,7 @@ void next_join_suffix (bool remote,
         target.start ();
         ASSERT_TRUE (ready (target));
         ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
-        services.get_required<fw::route_mesh_runtime_options_t> ()
-          .mesh (mesh_name)
-          .placement_weight (0);
+        ASSERT_TRUE (set_published_placement_weight (services, 0));
         auto target_services = target.app.advanced ().services ().build_provider ();
         ASSERT_TRUE (target_services.get_required<fw::spot_manager_t> ()
                        .get_or_create (fw::spot_id_t (suffix_spot), room_type)
@@ -5293,8 +5307,7 @@ TEST (ActorMaintenanceJoin, RemoteEntryJoinMovesExistingActorToCompatibleNode)
                    .get_or_create (fw::actor_id_t (actor_id), actor_type)
                    .async ()
                    .result ());
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     configure (target, evidence_owner, second_rid, store, relocations);
     target.start ();
     ASSERT_TRUE (ready (target));
@@ -6229,7 +6242,7 @@ TEST_P (ActorHostRelocation, AfterRemoteActorJoin)
                    .result ());
     auto &entry_options = entry_services.get_required<fw::route_mesh_runtime_options_t> ();
     const auto entry_weight = entry_options.mesh (mesh_name).placement_weight ();
-    entry_options.mesh (mesh_name).placement_weight (0);
+    ASSERT_TRUE (set_published_placement_weight (entry_services, 0));
     configure (source, evidence_owner, second_rid, store, relocations, source_follow_duration, 0,
                true);
     source.start ();
@@ -6321,7 +6334,7 @@ TEST_P (ActorHostRelocation, ExistingSessionRelaysAfterRelocation)
                    .result ());
     auto &entry_options = entry_services.get_required<fw::route_mesh_runtime_options_t> ();
     const auto entry_weight = entry_options.mesh (mesh_name).placement_weight ();
-    entry_options.mesh (mesh_name).placement_weight (0);
+    ASSERT_TRUE (set_published_placement_weight (entry_services, 0));
     configure (source, evidence_owner, second_rid, store, relocations, source_follow_duration, 0,
                true);
     source.start ();
@@ -6974,8 +6987,7 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
     auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
     ASSERT_TRUE (peer_ready (routes));
     // First node cannot place this new room; placement is selected by the public weight API.
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     auto second_services = second.app.advanced ().services ().build_provider ();
     const auto created = second_services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (current_spot), room_type)
@@ -7117,8 +7129,7 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
           evidence.changed.notify_all ();
       });
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     auto second_services = second.app.advanced ().services ().build_provider ();
     ASSERT_TRUE (second_services.get_required<fw::spot_manager_t> ()
                    .get_or_create (fw::spot_id_t (current_spot), room_type)
@@ -7183,8 +7194,7 @@ TEST (ActorMaintenanceJoin, PreservesEarlierIdentityWhenRestoreIsRejected)
     auto previous_actor =
       target->create_reserved_actor_async (actor_type, previous).result ().value ();
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     auto second_services = second.app.advanced ().services ().build_provider ();
     ASSERT_TRUE (second_services.get_required<fw::spot_manager_t> ()
                    .get_or_create (fw::spot_id_t (current_spot), room_type)
@@ -7229,8 +7239,7 @@ TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
     second.start ();
     ASSERT_TRUE (ready (second));
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     auto second_services = second.app.advanced ().services ().build_provider ();
     ASSERT_TRUE (second_services.get_required<fw::spot_manager_t> ()
                    .get_or_create (fw::spot_id_t (current_spot), room_type)
@@ -7302,9 +7311,7 @@ TEST (ActorMaintenanceJoin, ReboundActorReturnsWithCurrentSession)
                    .get_or_create (fw::spot_id_t (source_spot), room_type)
                    .async ()
                    .result ());
-    first_services.get_required<fw::route_mesh_runtime_options_t> ()
-      .mesh (mesh_name)
-      .placement_weight (0);
+    ASSERT_TRUE (set_published_placement_weight (first_services, 0));
     configure_public (second, second_rid);
     second.start ();
     ASSERT_TRUE (ready (second));
@@ -7581,9 +7588,7 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
     const auto [remote, target] = GetParam ();
     auto &target_services = remote ? second_services : services;
     auto &other_services = remote ? services : second_services;
-    other_services.get_required<fw::route_mesh_runtime_options_t> ()
-      .mesh (mesh_name)
-      .placement_weight (0);
+    ASSERT_TRUE (set_published_placement_weight (other_services, 0));
     auto &spots = target_services.get_required<fw::spot_manager_t> ();
     ASSERT_TRUE (spots.get_or_create (fw::spot_id_t (target), room_type)
                    .timeout (wait_budget)
@@ -8027,9 +8032,7 @@ TEST (ActorEntryPlacementExisting, RequiresLiveOwnerWithoutNewCreationCandidates
                    .get_or_create (fw::actor_id_t (actor_id), actor_type)
                    .async ()
                    .result ());
-    accepting_services.get_required<fw::route_mesh_runtime_options_t> ()
-      .mesh (mesh_name)
-      .placement_weight (0);
+    ASSERT_TRUE (set_published_placement_weight (accepting_services, 0));
     const auto current = accepting_services.get_required<fw::location_repository_t> ()
                            .read_authority (fw::runtime::actor_authority_key (actor_id))
                            .result ();
@@ -8082,9 +8085,7 @@ TEST (ActorEntryPlacementRegression, EntrylessNodeTakesJoinAndRelocation)
                    .get_or_create (fw::actor_id_t (actor_id), actor_type)
                    .async ()
                    .result ());
-    accepting_services.get_required<fw::route_mesh_runtime_options_t> ()
-      .mesh (mesh_name)
-      .placement_weight (0);
+    ASSERT_TRUE (set_published_placement_weight (accepting_services, 0));
     configure (source, evidence_owner, second_rid, store, relocations, source_follow_duration, 0,
                true, entry_kind_t::none);
     source.start ();
@@ -8170,8 +8171,7 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
         ASSERT_NE (new_actor, nullptr);
         generations.emplace (id, new_actor->actor.object_generation ());
     }
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     configure (joined, evidence_owner, second_rid, store, relocations, default_follow_duration, 0,
                true);
     joined.start ();
@@ -8181,9 +8181,7 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
                    .get_or_create (fw::spot_id_t (local_spot), room_type)
                    .async ()
                    .result ());
-    joined_services.get_required<fw::route_mesh_runtime_options_t> ()
-      .mesh (mesh_name)
-      .placement_weight (0);
+    ASSERT_TRUE (set_published_placement_weight (joined_services, 0));
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
     configure (target, evidence_owner, third_rid, store, relocations);
     target.start ();
@@ -8249,8 +8247,7 @@ TEST (ActorMaintenanceJoin, RemoteJoinDoesNotLeaveLocalRelocationWork)
                    .get_or_create (fw::actor_id_t (actor_id), actor_type)
                    .async ()
                    .result ());
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     configure (target, evidence_owner, second_rid, store, relocations, default_follow_duration, 0,
                true);
     target.start ();
@@ -8708,8 +8705,7 @@ TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnS
         if (item.value.version.value == authority.store_version)
             source_store->authority_key = item.key;
     ASSERT_FALSE (source_store->authority_key.value.empty ());
-    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
-      0);
+    ASSERT_TRUE (set_published_placement_weight (services, 0));
     configure (target, evidence_owner, second_rid, store, relocations, default_follow_duration, 0,
                true);
     target.start ();
