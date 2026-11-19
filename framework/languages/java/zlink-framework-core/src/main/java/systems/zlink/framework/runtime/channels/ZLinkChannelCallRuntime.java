@@ -21,7 +21,6 @@ import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -366,23 +365,22 @@ final class ZLinkChannelCallRuntime {
                 ZLinkFrameworkErrorKind.SHUTTING_DOWN, "channel runtime is closed");
     }
 
-    static List<Message> parts(Optional<String> packetName, Message payload) {
-        return parts(packetName, payload, ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
-    }
-
-    static List<Message> parts(Optional<String> packetName, Message payload, String contentType) {
-        if (packetName.isEmpty()) {
-            return List.of(payload);
-        }
-        Message flow = ZLinkChannelFlowFrame.current();
-        Message packet = Message.from(packetName.get().getBytes(StandardCharsets.UTF_8));
-        if (ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE.equalsIgnoreCase(contentType)) {
-            return flow == null ? List.of(packet, payload) : List.of(packet, payload, flow);
-        }
-        Message contentTypeFrame = ZLinkChannelContentTypeFrame.encode(contentType);
-        return flow == null
-                ? List.of(packet, payload, contentTypeFrame)
-                : List.of(packet, payload, contentTypeFrame, flow);
+    static List<Message> parts(
+            String channelName,
+            int kind,
+            Optional<String> packetName,
+            Message payload,
+            String contentType) {
+        return ZLinkChannelEnvelope.encode(
+                ZLinkChannelEnvelope.create(
+                        kind,
+                        channelName,
+                        packetName.orElse(""),
+                        contentType,
+                        null,
+                        Map.of(),
+                        ZLinkFlowContext.current()),
+                payload);
     }
 
     /**

@@ -77,6 +77,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 object message = request ? new ProbeRouteMessage("race") : new RecoveryRaceEvent();
                 var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                     ZLinkClientCallCodec.CreateEnvelope(
+                        TimeProvider.System,
                         request ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
                         "entry",
                         ZLinkMessageNameResolver.ResolveFromMessage(message)
@@ -433,6 +434,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 );
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
                     ZLinkMessageKind.Request,
                     "entry",
                     ZLinkMessageNameResolver.ResolveFromMessage(new ProbeRouteMessage("new"))
@@ -571,6 +573,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 object message = request ? new ProbeRouteMessage("query") : new JoinedColdEvent();
                 var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                     ZLinkClientCallCodec.CreateEnvelope(
+                        TimeProvider.System,
                         request ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
                         "entry",
                         ZLinkMessageNameResolver.ResolveFromMessage(message)

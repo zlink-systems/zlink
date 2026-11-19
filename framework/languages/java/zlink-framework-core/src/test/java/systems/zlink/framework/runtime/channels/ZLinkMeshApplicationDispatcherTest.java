@@ -149,6 +149,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         NodeHandler.received = new CompletableFuture<>();
         ChannelHandler.received = new CompletableFuture<>();
         ChannelRouteHandler.received = new CompletableFuture<>();
+        ChannelRouteHandler.metadata = new CompletableFuture<>();
         NodeHandler.metadata = new CompletableFuture<>();
         NodeHandler.contentType = new CompletableFuture<>();
         ChannelHandler.metadata = new CompletableFuture<>();
@@ -357,6 +358,30 @@ final class ZLinkMeshApplicationDispatcherTest {
         assertEquals(
                 "channel-route-value@source-node@play",
                 ChannelRouteHandler.received.get(2, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void channelRouteSendHandlerReadsMetadataFromServiceFrameWhenHeaderIsEmpty() throws Exception {
+        MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+        mesh.listen("inproc://mesh-dispatch-channel-route-frame-metadata");
+        mesh.channelName("play")
+                .server()
+                .addRouteSendHandler(ChannelRouteHandler.class, String.class);
+        ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
+
+        dispatcher.accept(
+                recordWithFrameMetadata(
+                        RecordKind.CHANNEL_SEND,
+                        "play",
+                        "frame-metadata",
+                        Map.of("trace-id", "from-service-frame")));
+
+        assertEquals(
+                "frame-metadata@source-node@play",
+                ChannelRouteHandler.received.get(2, TimeUnit.SECONDS));
+        assertEquals(
+                Map.of("trace-id", "from-service-frame"),
+                ChannelRouteHandler.metadata.get(2, TimeUnit.SECONDS));
     }
 
     @Test
@@ -600,7 +625,7 @@ final class ZLinkMeshApplicationDispatcherTest {
     }
 
     @Test
-    void malformedReplyRouteMatchesSharedFourLanguageContract() throws Exception {
+    void malformedReplyRouteMatchesSharedProtobufContract() throws Exception {
         var events = new java.util.concurrent.LinkedBlockingQueue<String>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Level previousLevel = logger.getLevel();
@@ -636,19 +661,43 @@ final class ZLinkMeshApplicationDispatcherTest {
                             (token, parts) -> {
                                 throw new AssertionError("record callback must own replies");
                             });
-            var fixture =
-                    java.nio.file.Path.of(
-                            "../../../test/fixtures/malformed-envelope-reply-route.tsv");
-            int count = 0;
-            for (String row : java.nio.file.Files.readAllLines(fixture)) {
-                if (row.isEmpty() || row.startsWith("#")) continue;
-                String[] fields = row.split("\t");
-                boolean request = Boolean.parseBoolean(fields[1]);
-                boolean expectedReply = fields[3].equals("reply_error");
+            var duplicate =
+                    zlink.framework.channel.v1.ChannelHeaderV1.MetadataEntry.newBuilder()
+                            .setKey("bad")
+                            .setValue("first")
+                            .build();
+            var duplicateMetadata =
+                    zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader.newBuilder()
+                            .setKindValue(1)
+                            .setChannelName("play")
+                            .setMessageName("String")
+                            .setContentType("application/json")
+                            .setCorrelationId("reply-correlation")
+                            .addMetadata(duplicate)
+                            .addMetadata(duplicate.toBuilder().setValue("last"))
+                            .build()
+                            .toByteArray();
+            var invalidCorrelation =
+                    zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader.newBuilder()
+                            .setKindValue(1)
+                            .setChannelName("play")
+                            .setMessageName("String")
+                            .setContentType("application/json")
+                            .setCorrelationId("x".repeat(65))
+                            .build()
+                            .toByteArray();
+            byte[][] headers = {duplicateMetadata, invalidCorrelation, {0x08}};
+            boolean[] replyExpected = {true, false, false};
+            String[] ids = {"duplicate-metadata", "correlation-65", "parse-failure"};
+            for (int i = 0; i < headers.length; i++) {
+                boolean request = true;
                 for (var kind :
-                        request
-                                ? List.of(RecordKind.NODE_REQUEST, RecordKind.CHANNEL_REQUEST)
-                                : List.of(RecordKind.NODE_SEND, RecordKind.CHANNEL_SEND)) {
+                        List.of(
+                                RecordKind.NODE_REQUEST,
+                                RecordKind.CHANNEL_REQUEST,
+                                RecordKind.NODE_SEND,
+                                RecordKind.CHANNEL_SEND)) {
+                    request = kind == RecordKind.NODE_REQUEST || kind == RecordKind.CHANNEL_REQUEST;
                     var reply = new CompletableFuture<ZLinkChannelEnvelope.Header>();
                     var closed = new CompletableFuture<Void>();
                     try (var base = record(kind, "play", "request")) {
@@ -656,7 +705,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                                 new ZLinkMeshDispatchRecord(
                                         base.owner(),
                                         base.receive(),
-                                        List.of(Message.from(fields[2]), Message.from("request")),
+                                        List.of(Message.from(headers[i]), Message.from("request")),
                                         parts ->
                                                 reply.complete(
                                                         ZLinkChannelEnvelope.decodeHeader(
@@ -664,27 +713,21 @@ final class ZLinkMeshApplicationDispatcherTest {
                                         () -> closed.complete(null)));
                     }
                     closed.get(2, TimeUnit.SECONDS);
-                    assertEquals(expectedReply, reply.isDone(), fields[0] + ":" + kind);
+                    boolean expectedReply = request && replyExpected[i];
+                    assertEquals(expectedReply, reply.isDone(), ids[i] + ":" + kind);
                     if (expectedReply) {
-                        assertEquals(
-                                ZLinkChannelEnvelope.KIND_ERROR, reply.get().kind(), fields[0]);
-                        assertEquals("protocol_error", reply.get().errorCode(), fields[0]);
-                        var json =
-                                new com.fasterxml.jackson.databind.ObjectMapper()
-                                        .readTree(fields[2]);
-                        assertEquals(
-                                json.get("correlationId").textValue(),
-                                reply.get().correlationId(),
-                                fields[0]);
+                        assertEquals(ZLinkChannelEnvelope.KIND_ERROR, reply.get().kind(), ids[i]);
+                        assertEquals("reply-correlation", reply.get().correlationId(), ids[i]);
+                        assertEquals("protocol_error", reply.get().errorCode(), ids[i]);
                     }
                     String event = events.poll(2, TimeUnit.SECONDS);
-                    assertTrue(event != null && event.contains("reason=invalid_frame"), fields[0]);
-                    assertTrue(event.contains("action=" + fields[3]), fields[0]);
-                    assertTrue(events.isEmpty(), fields[0] + ": one dispatch error");
+                    assertTrue(event != null && event.contains("reason=invalid_frame"), ids[i]);
+                    assertTrue(
+                            event.contains("action=" + (expectedReply ? "reply_error" : "drop")),
+                            ids[i]);
+                    assertTrue(events.isEmpty(), ids[i] + ": one dispatch error");
                 }
-                count++;
             }
-            assertEquals(22, count);
         } finally {
             systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(listener);
@@ -944,8 +987,21 @@ final class ZLinkMeshApplicationDispatcherTest {
         mesh.addRouteSendHandler(GatedNodeHandler.class, String.class);
         ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
         List<Message> parts =
-                List.of(
-                        Message.from("String".getBytes(StandardCharsets.UTF_8)),
+                ZLinkChannelEnvelope.encode(
+                        new ZLinkChannelEnvelope.Header(
+                                ZLinkChannelEnvelope.KIND_COMMAND,
+                                null,
+                                "String",
+                                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                Map.of(),
+                                null,
+                                null),
                         Message.from("owned-value".getBytes(StandardCharsets.UTF_8)));
 
         Integer status =
@@ -1115,7 +1171,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                     var header =
                             ZLinkChannelEnvelope.create(
                                     ZLinkChannelEnvelope.KIND_COMMAND,
-                                    null,
+                                    "game",
                                     "String",
                                     null,
                                     null,
@@ -1156,8 +1212,21 @@ final class ZLinkMeshApplicationDispatcherTest {
     private static CompletionStage<Integer> submitLocalAsync(
             ZLinkMeshApplicationDispatcher dispatcher, String packetName, String value) {
         List<Message> parts =
-                List.of(
-                        Message.from(packetName.getBytes(StandardCharsets.UTF_8)),
+                ZLinkChannelEnvelope.encode(
+                        new ZLinkChannelEnvelope.Header(
+                                ZLinkChannelEnvelope.KIND_COMMAND,
+                                null,
+                                packetName,
+                                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                Map.of(),
+                                null,
+                                null),
                         Message.from(value.getBytes(StandardCharsets.UTF_8)));
         try {
             return dispatcher.submitLocalNodeSend(
@@ -1216,12 +1285,32 @@ final class ZLinkMeshApplicationDispatcherTest {
                         0,
                         0,
                         2);
+        int headerKind =
+                kind == RecordKind.CHANNEL_REQUEST
+                        ? ZLinkChannelEnvelope.KIND_REQUEST
+                        : ZLinkChannelEnvelope.KIND_COMMAND;
+        var header =
+                new ZLinkChannelEnvelope.Header(
+                        headerKind,
+                        channelName,
+                        "String",
+                        contentType == null
+                                ? ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE
+                                : contentType,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        metadata,
+                        null,
+                        null);
         return new ZLinkMeshDispatchRecord(
                 owner,
                 receive,
-                List.of(
-                        Message.from("String".getBytes(StandardCharsets.UTF_8)),
-                        Message.from(value.getBytes(StandardCharsets.UTF_8))),
+                ZLinkChannelEnvelope.encode(
+                        header, Message.from(value.getBytes(StandardCharsets.UTF_8))),
                 reply);
     }
 
@@ -1250,10 +1339,66 @@ final class ZLinkMeshApplicationDispatcherTest {
         return new ZLinkMeshDispatchRecord(
                 owner,
                 receive,
-                List.of(
-                        Message.from("String".getBytes(StandardCharsets.UTF_8)),
-                        Message.from(value.getBytes(StandardCharsets.UTF_8)),
-                        ZLinkChannelContentTypeFrame.encode(contentType)),
+                ZLinkChannelEnvelope.encode(
+                        new ZLinkChannelEnvelope.Header(
+                                ZLinkChannelEnvelope.KIND_COMMAND,
+                                null,
+                                "String",
+                                contentType,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                Map.of(),
+                                null,
+                                null),
+                        Message.from(value.getBytes(StandardCharsets.UTF_8))),
+                null);
+    }
+
+    private static ZLinkMeshDispatchRecord recordWithFrameMetadata(
+            RecordKind kind, String channelName, String value, Map<String, String> metadata) {
+        RoutingId source = RoutingId.from("source-node");
+        ReadyRecord owner = new ReadyRecord(OwnerKind.NODE, 1, null, null);
+        ReceiveRecord receive =
+                new ReceiveRecord(
+                        kind,
+                        1,
+                        source,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        channelName,
+                        null,
+                        null,
+                        ZLinkApplicationMetadata.copyOf(metadata).encode(),
+                        0,
+                        0,
+                        0,
+                        2);
+        return new ZLinkMeshDispatchRecord(
+                owner,
+                receive,
+                ZLinkChannelEnvelope.encode(
+                        new ZLinkChannelEnvelope.Header(
+                                ZLinkChannelEnvelope.KIND_COMMAND,
+                                channelName,
+                                "String",
+                                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                Map.of(),
+                                null,
+                                null),
+                        Message.from(value.getBytes(StandardCharsets.UTF_8))),
                 null);
     }
 
@@ -1318,21 +1463,22 @@ final class ZLinkMeshApplicationDispatcherTest {
                         0,
                         0,
                         2);
-        String header =
-                "{\"formatMarker\":242,\"flowId\":\""
-                        + malformed.flowId
-                        + "\",\"flowOrigin\":"
-                        + malformed.flowOrigin
-                        + ",\"kind\":1,\"channelName\":\"flow-profile\","
-                        + "\"messageName\":\"String\",\"contentType\":\"application/json\","
-                        + "\"correlationId\":\""
-                        + malformed.correlationId
-                        + "\",\"metadata\":{}}";
+        byte[] header =
+                zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader.newBuilder()
+                        .setKindValue(1)
+                        .setChannelName("flow-profile")
+                        .setMessageName("String")
+                        .setContentType("application/json")
+                        .setCorrelationId(malformed.correlationId)
+                        .setFlowId(malformed.flowId)
+                        .setFlowOriginValue(malformed.flowOrigin)
+                        .build()
+                        .toByteArray();
         return new ZLinkMeshDispatchRecord(
                 owner,
                 receive,
                 List.of(
-                        Message.from(header.getBytes(StandardCharsets.UTF_8)),
+                        Message.from(header),
                         Message.from("request".getBytes(StandardCharsets.UTF_8))),
                 reply);
     }
@@ -1459,6 +1605,7 @@ final class ZLinkMeshApplicationDispatcherTest {
 
     public static final class ChannelRouteHandler implements ZLinkRouteSendHandler<String> {
         private static CompletableFuture<String> received;
+        private static CompletableFuture<Map<String, String>> metadata;
 
         @Override
         public CompletionStage<Void> handle(String message, ZLinkRouteMessageContext context) {
@@ -1468,6 +1615,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                             + context.sourceNodeRid()
                             + "@"
                             + context.channelName().orElse(""));
+            metadata.complete(context.metadata());
             return CompletableFuture.completedFuture(null);
         }
     }

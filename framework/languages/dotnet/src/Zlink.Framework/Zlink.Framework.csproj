@@ -15,6 +15,8 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions"/>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions"/>
+        <PackageReference Include="Google.Protobuf"/>
+        <PackageReference Include="Grpc.Tools" PrivateAssets="all"/>
         <PackageReference Include="Zlink" Condition="'$(ZLinkUseBindingsSource)' != 'true'"/>
     </ItemGroup>
 
@@ -40,6 +42,9 @@
                  Link="Runtime/Protocol/ServiceWirePilotCodec.g.cs"/>
         <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWireCodec.g.cs"
                  Link="Runtime/Protocol/ServiceWireCodec.g.cs"/>
+        <Protobuf Include="../../../../runtime/protocol/channel-header-v1.proto"
+                  GrpcServices="None"
+                  Access="Internal" />
     </ItemGroup>
 
     <Target Name="PinStreamConnectorPackageDependency"

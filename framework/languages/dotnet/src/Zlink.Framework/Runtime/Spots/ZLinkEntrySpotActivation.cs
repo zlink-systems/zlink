@@ -242,6 +242,8 @@ internal sealed partial class ZLinkEntrySpotActivation
 
     public ZLinkCodecRegistryBuilder Codecs => _runtime.Registration.Codecs;
 
+    TimeProvider IZLinkCurrentSpotActivation.TimeProvider => _runtime.Registration.TimeProvider;
+
     ZLinkMessageFlowTracer IZLinkCurrentSpotActivation.Flow => _runtime.Flow;
 
     public IZLinkSpotHandlerRegistry Handlers { get; }

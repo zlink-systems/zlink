@@ -145,7 +145,7 @@ test('a synchronous permit turn does not allocate operation Promises', async () 
   assert.equal(promises, 0);
 });
 
-test('trace-off command headers are prepared once while request fields remain per operation', () => {
+test('trace-off command headers are encoded per operation and keep request fields per operation', () => {
   const codecs = { serializers: new Map() };
   const payload = Buffer.alloc(1024);
   const first = encodeChannelEnvelopeParts(
@@ -170,7 +170,9 @@ test('trace-off command headers are prepared once while request fields remain pe
     undefined,
     false
   );
-  assert.equal(next[0], first[0], 'constant command header must be registration-owned storage');
+  // S1 forbids result caches (#4352): each operation encodes its own header with the same bytes.
+  assert.notEqual(next[0], first[0]);
+  assert.deepEqual(next[0], first[0]);
   const firstId = 'a'.repeat(32);
   const nextId = 'b'.repeat(32);
   const request = encodeChannelEnvelopeParts(

@@ -135,12 +135,11 @@ dispatch_error_surface_t application_dispatch_surface (host::record_kind_t kind)
 }
 }
 
-template <bool BorrowHeader>
 result_t<std::optional<messaging::envelope_header_t>>
-decode_mesh_record_header_impl (const host::receive_record_t &record,
-                                std::vector<zlink::message_t> &parts,
-                                bool capture_flow,
-                                const dispatch_options_t &dispatch_options)
+decode_mesh_record_header (const host::receive_record_t &record,
+                           std::vector<zlink::message_t> &parts,
+                           bool capture_flow,
+                           const dispatch_options_t &dispatch_options)
 {
     using kind_t = host::record_kind_t;
     using header_result_t = result_t<std::optional<messaging::envelope_header_t>>;
@@ -160,15 +159,16 @@ decode_mesh_record_header_impl (const host::receive_record_t &record,
     messaging::message_parts_t encoded (std::move (parts));
     std::optional<messaging::envelope_header_t> rejected_header;
     const bool actor = record.kind == kind_t::actor_send || record.kind == kind_t::actor_request;
-    auto decoded =
-      actor ? detail::decode_actor_packet_header (encoded,
-                                                  record.kind == kind_t::actor_send
-                                                    ? detail::stream_message_kind_t::send
-                                                    : detail::stream_message_kind_t::request,
-                                                  capture_flow)
-      : BorrowHeader
-        ? messaging::envelope_codec_t{}.decode_header_view (encoded, capture_flow, &rejected_header)
-        : messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
+    auto decoded = [&] {
+        if (actor)
+            return detail::decode_actor_packet_header (encoded,
+                                                       record.kind == kind_t::actor_send
+                                                         ? detail::stream_message_kind_t::send
+                                                         : detail::stream_message_kind_t::request,
+                                                       capture_flow);
+        return messaging::envelope_codec_t{}.decode_header_view (encoded, capture_flow,
+                                                                 &rejected_header);
+    }();
     parts = std::move (encoded).take_items ();
     if (decoded)
         return header_result_t::success (std::move (decoded.value ()));
@@ -247,24 +247,6 @@ struct mesh_node_host_service_t::actor_destroy_callback_gate_t
         changed.wait (lock, [this] { return active == 0; });
     }
 };
-
-result_t<std::optional<messaging::envelope_header_t>>
-decode_mesh_record_header (const host::receive_record_t &record,
-                           std::vector<zlink::message_t> &parts,
-                           bool capture_flow,
-                           const dispatch_options_t &dispatch_options)
-{
-    return decode_mesh_record_header_impl<false> (record, parts, capture_flow, dispatch_options);
-}
-
-result_t<std::optional<messaging::envelope_header_t>>
-decode_mesh_record_header_view (const host::receive_record_t &record,
-                                std::vector<zlink::message_t> &parts,
-                                bool capture_flow,
-                                const dispatch_options_t &dispatch_options)
-{
-    return decode_mesh_record_header_impl<true> (record, parts, capture_flow, dispatch_options);
-}
 
 application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
   std::shared_ptr<detail::mesh_node_runtime_t> node,
@@ -2289,7 +2271,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       bool handled = false;
                       try {
                           run_direct ([&] {
-                              const auto header = decode_mesh_record_header_view (
+                              const auto header = decode_mesh_record_header (
                                 record, parts,
                                 detail::message_flow_tracer_t (host._dispatch_options)
                                   .flow_tracing (),
@@ -2338,7 +2320,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       return;
                   }
                   run_direct ([&] {
-                      auto decoded_header = decode_mesh_record_header_view (
+                      auto decoded_header = decode_mesh_record_header (
                         record, parts,
                         detail::message_flow_tracer_t (host._dispatch_options).flow_tracing (),
                         host._dispatch_options);
@@ -3821,7 +3803,7 @@ void mesh_node_host_service_t::dispatch_application (
         }
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
-        auto decoded_header = decode_mesh_record_header_view (
+        auto decoded_header = decode_mesh_record_header (
           record, parts, detail::message_flow_tracer_t (dispatch_options).flow_tracing (),
           dispatch_options);
         if (!decoded_header) {

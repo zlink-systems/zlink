@@ -568,7 +568,12 @@ public sealed class RelocationRuntimeTests
     [Fact]
     public void ProductionSpotWriterCreatesCanonicalInitialRoot()
     {
-        var header = ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "mesh", "Ping");
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
+            ZLinkMessageKind.Request,
+            "mesh",
+            "Ping"
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(header, new { Value = 1 }, typeof(object), null);
         byte[] journal;
         using (
@@ -816,7 +821,12 @@ public sealed class RelocationRuntimeTests
     [Fact]
     public void CanonicalSavedWorkRejectsDuplicateOperationWithinExactSourceFence()
     {
-        var header = ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "mesh", "Ping");
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
+            ZLinkMessageKind.Request,
+            "mesh",
+            "Ping"
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(header, new { Value = 1 }, typeof(object), null);
         byte[] journal;
         using (
@@ -2759,7 +2769,12 @@ public sealed class RelocationRuntimeTests
     {
         using var services = CreateRuntimeServices();
         var runtime = CreateBareRuntime(services);
-        var header = ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "mesh", "Ping");
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
+            ZLinkMessageKind.Request,
+            "mesh",
+            "Ping"
+        );
         var request = ZLinkEnvelopeCodec.EncodeParts(
             header,
             new { Value = 1 },

@@ -10,7 +10,7 @@
     "wireMajor": 1,
     "byteOrder": "big-endian",
     "headPrefixBytes": 5,
-    "requiredCapability": "framework-service-v13"
+    "requiredCapability": "framework-service-v14"
   },
   "bounds": [
     {

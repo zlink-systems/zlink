@@ -16,7 +16,7 @@ namespace fw = zlink::framework;
 using parts_t = fw::runtime::messaging::message_parts_t;
 struct payload_t
 {
-    static constexpr const char *packet_name = "p";
+    static constexpr const char *packet_name = "packet-name-that-forces-a-dynamic-allocation";
     int value = 7;
 };
 
@@ -40,7 +40,8 @@ TEST (RequestEncoderAllocations, SynchronousTypedEncoderUsesBorrowedFunctionCont
         co_return fw::result_t<parts_t>::failure (fw::framework_error_kind_t::unavailable,
                                                   "unexpected transport");
     };
-    runtime.bind_mesh_node_transport ("m", {},
+    const std::string router_channel_id = "router-channel-that-forces-a-dynamic-allocation";
+    runtime.bind_mesh_node_transport (router_channel_id, {},
                                       [&] (const auto &, auto parts, auto timeout, auto receiver) {
                                           receiver.observe (unused (std::move (parts), timeout));
                                       });
@@ -56,8 +57,8 @@ TEST (RequestEncoderAllocations, SynchronousTypedEncoderUsesBorrowedFunctionCont
                                          const auto &) -> fw::request_task_t<zlink::message_t> {
         fw::route_client_t::payload_encoder_t borrowed (std::ref (encode));
         fw::runtime::messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (fw::runtime::messaging::message_kind_t::request, "m",
-                                             name, timeout);
+        auto header = codec.create_envelope (fw::runtime::messaging::message_kind_t::request,
+                                             router_channel_id, name, timeout);
         (void) header;
         (void) borrowed (serializers);
         return fw::result_t<zlink::message_t>::failure (fw::framework_error_kind_t::unavailable,
@@ -66,22 +67,24 @@ TEST (RequestEncoderAllocations, SynchronousTypedEncoderUsesBorrowedFunctionCont
     const fw::channel_request_call_t::metadata_map_t metadata;
     auto baseline = [&] {
         return fw::detail::request_task_access_t::receive_public<payload_t, zlink::message_t> (
-          [&] (auto) { (void) baseline_submit ("p", std::chrono::milliseconds (0), metadata); },
+          [&] (auto) {
+              (void) baseline_submit (payload_t::packet_name, std::chrono::milliseconds (0),
+                                      metadata);
+          },
           [registry = &serializers] (const fw::result_t<zlink::message_t> &) {
               (void) registry;
               return fw::result_t<payload_t>::success (payload_t{});
           });
     };
-    auto actual = client.request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
-    (void) fw::tests::count_allocations ([&] { (void) baseline ().result (); }, sizeof (encode));
-    const auto expected = before_serializer;
-    (void) fw::tests::count_allocations ([&] { (void) actual.async<payload_t> ().result (); },
-                                         sizeof (encode));
+    auto actual =
+      client.request_to_node (router_channel_id, zlink::routing_id_t::from ("n"), payload_t{});
+    (void) fw::tests::count_allocations ([&] { (void) baseline ().result (); });
+    const auto baseline_allocations = before_serializer;
+    (void) fw::tests::count_allocations ([&] { (void) actual.async<payload_t> ().result (); });
     EXPECT_EQ (serialized, 2u);
-    EXPECT_EQ (before_serializer, expected);
-    std::printf (
-      "node encoder allocations before serializer: baseline=%zu typed=%zu target_size=%zu\n",
-      expected, before_serializer, sizeof (encode));
+    EXPECT_EQ (baseline_allocations - before_serializer, 12u);
+    std::printf ("node request allocations before serializer: baseline=%zu typed=%zu reduced=%zu\n",
+                 baseline_allocations, before_serializer, baseline_allocations - before_serializer);
 }
 
 TEST (RequestEncoderAllocations,
