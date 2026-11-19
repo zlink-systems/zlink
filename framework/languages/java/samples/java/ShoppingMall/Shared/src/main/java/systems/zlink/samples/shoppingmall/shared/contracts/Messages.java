@@ -1,5 +1,7 @@
 package systems.zlink.samples.shoppingmall.shared.contracts;
 
+import org.jspecify.annotations.Nullable;
+
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -31,12 +33,12 @@ public final class Messages {
     public record OrderState(
             String orderId,
             String status,
-            String shippingAddressId,
-            String reservationId,
-            String paymentId,
-            String reason,
-            BigDecimal amount,
-            String currency,
+            @Nullable String shippingAddressId,
+            @Nullable String reservationId,
+            @Nullable String paymentId,
+            @Nullable String reason,
+            @Nullable BigDecimal amount,
+            @Nullable String currency,
             long updatedAtUnixMs) {}
 
     public record OrderLineInput(String sku, int quantity) {}
@@ -47,7 +49,7 @@ public final class Messages {
     public record InventorySeed(String sku, int availableQuantity) {}
 
     public record PaymentMethodSeed(
-            String paymentMethodId, boolean shouldAuthorize, String failureReason) {}
+            String paymentMethodId, boolean shouldAuthorize, @Nullable String failureReason) {}
 
     public record StartOrderWorkflowReq(
             String orderId,
