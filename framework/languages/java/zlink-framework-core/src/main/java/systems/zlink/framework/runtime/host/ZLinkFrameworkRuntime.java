@@ -448,23 +448,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             this.routeMeshRuntimeOptions =
                     new systems.zlink.framework.runtime.channels
                             .ZLinkRouteMeshRuntimeOptionsRuntime(
-                            this.meshNodes.nodesByName(),
-                            () -> {
-                                if (this.objectDescriptors != null) {
-                                    try {
-                                        this.objectDescriptors
-                                                .publish(this.runtimeState.get())
-                                                .toCompletableFuture()
-                                                .join();
-                                    } catch (CompletionException failure) {
-                                        Throwable cause = unwrapCompletionFailure(failure);
-                                        if (cause instanceof RuntimeException runtimeFailure) {
-                                            throw runtimeFailure;
-                                        }
-                                        throw failure;
-                                    }
-                                }
-                            });
+                            this.meshNodes.nodesByName(), this::recordDescriptorOptionChange);
             runtimeHandlers.add(ZLinkRouteMeshRuntimeOptions.class, this.routeMeshRuntimeOptions);
 
             ZLinkFrameworkSpotSubsystem spotSubsystem =
@@ -780,6 +764,21 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 .recordListener(ZLinkListenerKind.ROUTE_MESH, meshName, node.advertisedEndpoint());
     }
 
+    /**
+     * A runtime option change is already in the node values every descriptor reads. The publisher
+     * records it as pending and publishes it now when the host serves; its owner lease renewal
+     * publishes it again until a publication confirms it.
+     */
+    private void recordDescriptorOptionChange() {
+        if (this.objectDescriptors == null) {
+            return;
+        }
+        this.objectDescriptors.markChanged();
+        if (runtimeState.get() == ZLinkFrameworkRuntimeState.SERVING) {
+            this.objectDescriptors.publishChanged(ZLinkFrameworkRuntimeState.SERVING);
+        }
+    }
+
     private boolean publishesDescriptors() {
         return this.locationRuntime != null && this.objectDescriptors != null;
     }
@@ -798,12 +797,29 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 return CompletableFuture.completedFuture(null);
             }
             if (admissionWasOpen && state != ZLinkFrameworkRuntimeState.PREPARING) {
-                return CompletableFuture.completedFuture(null);
+                return state == ZLinkFrameworkRuntimeState.SERVING && this.objectDescriptors != null
+                        ? publishRecordedOptionChange()
+                        : CompletableFuture.completedFuture(null);
             }
             return state == ZLinkFrameworkRuntimeState.PREPARING
                     ? preparing.get()
                     : recoverOwnerLeaseDescriptors(state);
         };
+    }
+
+    /** An unconfirmed publication leaves the change recorded for the next renewal. */
+    private CompletionStage<Void> publishRecordedOptionChange() {
+        return this.objectDescriptors
+                .publishChanged(ZLinkFrameworkRuntimeState.SERVING)
+                .exceptionallyCompose(
+                        failure ->
+                                unwrapCompletionFailure(failure)
+                                                instanceof
+                                                systems.zlink.framework.runtime.internal.locations
+                                                        .ZLinkObjectServerDescriptorPublisher
+                                                        .UnconfirmedPublicationException
+                                        ? CompletableFuture.completedFuture(null)
+                                        : CompletableFuture.failedFuture(failure));
     }
 
     private CompletionStage<Void> recoverOwnerLeaseDescriptors(ZLinkFrameworkRuntimeState state) {
