@@ -320,7 +320,7 @@ class socket_base_t : public own_t,
     void set_all_pipes_nodelay ();
     int bind (const char *endpoint_uri_);
     int connect (const char *endpoint_uri_);
-    int term_endpoint (const char *endpoint_uri_);
+    int term_endpoint (const char *endpoint_uri_, endpoint_type_t endpoint_filter_);
     int term_peer_rid (const zlink_routing_id_t *peer_rid_);
     int send (zlink::msg_t *msg_, int flags_);
     int send_complete_record (zlink::msg_t *msg_, int flags_,

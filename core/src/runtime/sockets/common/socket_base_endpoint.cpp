@@ -1092,17 +1092,29 @@ int zlink::socket_base_t::term_endpoint_internal (
           }
     };
     if (uri_protocol == protocol_name::inproc) {
-        const bool cancelled_retry =
-          cancel_scheduled_inproc_reconnects (endpoint_uri_str);
-        fail_public_pending_for_endpoint (endpoint_uri_str);
-        if (unregister_endpoint (endpoint_uri_str, this) == 0) {
+        if (endpoint_filter_ == endpoint_type_bind) {
+            //  Only the listener registration and the pipes accepted through
+            //  it end; a connect registration to the same name stays.
+            bool retained_connect = false;
+            {
+                std::lock_guard<std::recursive_mutex> attempt_lock (
+                  endpoint_runtime ().attempts_sync);
+                retained_connect =
+                  endpoint_runtime ().inprocs.has_endpoint (endpoint_uri_str);
+            }
+            if (!retained_connect)
+                fail_public_pending_for_endpoint (endpoint_uri_str);
+            if (unregister_endpoint (endpoint_uri_str, this) != 0)
+                return -1;
             std::vector<pipe_t *> attached;
             snapshot_attached_pipes (&attached);
             for (size_t i = 0; i != attached.size (); ++i) {
                 pipe_t *const pipe = attached[i];
                 if (pipe
                     && pipe->get_endpoint_pair ().identifier ()
-                         == endpoint_uri_str) {
+                         == endpoint_uri_str
+                    && pipe->get_endpoint_pair ().local_type
+                         == endpoint_type_bind) {
                     if (pipe->retain_lifetime_ref ())
                         terminating_pipes_->push_back (pipe);
                     begin_inproc_pipe_termination (pipe, peer_progress_pipes_);
@@ -1112,6 +1124,9 @@ int zlink::socket_base_t::term_endpoint_internal (
             // socket's turn; reciprocal acknowledgement remains asynchronous.
             return 0;
         }
+        const bool cancelled_retry =
+          cancel_scheduled_inproc_reconnects (endpoint_uri_str);
+        fail_public_pending_for_endpoint (endpoint_uri_str);
         std::lock_guard<std::recursive_mutex> attempt_lock (endpoint_runtime ().attempts_sync);
         const auto removed_attempt = endpoint_runtime ().inprocs.has_endpoint (endpoint_uri_str);
         const int rc = endpoint_runtime ().inprocs.erase_pipes (
@@ -1144,8 +1159,7 @@ int zlink::socket_base_t::term_endpoint_internal (
     size_t matching_endpoints = 0;
     bool retained_endpoint = false;
     for (endpoints_t::iterator it = range.first; it != range.second; ++it)
-        if (endpoint_filter_ == endpoint_type_none
-            || it->second.local_type == endpoint_filter_)
+        if (it->second.local_type == endpoint_filter_)
             ++matching_endpoints;
         else
             retained_endpoint = true;
@@ -1160,8 +1174,7 @@ int zlink::socket_base_t::term_endpoint_internal (
 
     for (endpoints_t::iterator it = range.first; it != range.second;) {
         endpoints_t::iterator current = it++;
-        if (endpoint_filter_ != endpoint_type_none
-            && current->second.local_type != endpoint_filter_)
+        if (current->second.local_type != endpoint_filter_)
             continue;
         //  A disconnect ends the whole pair. Without this the surviving lane's
         //  session would treat the peer pipe termination as a transport failure
@@ -1196,14 +1209,14 @@ int zlink::socket_base_t::term_endpoint_internal (
         if (!pipe)
             continue;
         if (pipe->get_endpoint_pair ().identifier () == resolved_endpoint_uri
-            && (endpoint_filter_ == endpoint_type_none
-                || pipe->get_endpoint_pair ().local_type == endpoint_filter_))
+            && pipe->get_endpoint_pair ().local_type == endpoint_filter_)
             pipe->terminate (false);
     }
     return 0;
 }
 
-int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_)
+int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_,
+                                         endpoint_type_t endpoint_filter_)
 {
     socket_public_api_scope_t admission (lifecycle_coordinator ());
     if (!admission.acquired ())
@@ -1222,7 +1235,7 @@ int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_)
         term_rc = term_endpoint_internal (endpoint_uri_, &terminating_pipes,
                                           &peer_progress_pipes,
                                           &bound_children,
-                                          endpoint_type_none);
+                                          endpoint_filter_);
         term_errno = errno;
     }
 
