@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.springframework.beans.factory.ObjectProvider;
@@ -39,6 +40,8 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -47,9 +50,12 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
@@ -120,14 +126,17 @@ public final class Program {
     }
 
     @Bean
-    ZLinkRedisLocationStore relocationLocationStore(HostArgs args) {
+    ZLinkLocationStore relocationLocationStore(HostArgs args) {
         String redisEndpoint = args.option("redis-endpoint", null);
         if (redisEndpoint == null || redisEndpoint.isBlank()) {
             return null;
         }
-        return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
+        ZLinkRedisLocationStore redis = new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
             .setConnectionString(redisEndpoint)
             .setKeyPrefix(args.option("redis-key-prefix", "zlink-cross-relocation") + ":location"));
+        if (args.option("outage-control-prefix", null) == null) return redis;
+        return new CrossLanguageOutageStore(redis, args.require("mesh-name"), args.require("node-rid"),
+            args.option("actor-id", "cross-lang-user-spot-actor"));
     }
 
     @Bean
@@ -144,14 +153,23 @@ public final class Program {
     @Bean
     ZLinkFrameworkConfigurer crossLanguageFramework(
         HostArgs args,
-        ObjectProvider<ZLinkRedisLocationStore> locationStoreProvider,
+        ObjectProvider<ZLinkLocationStore> locationStoreProvider,
         ObjectProvider<ZLinkRedisRelocationStore> relocationStoreProvider) {
         // The store beans are null in modes without --redis-endpoint
         // (spot-route, channel); ObjectProvider keeps them optional so those
         // modes can still wire this configurer.
-        ZLinkRedisLocationStore locationStore = locationStoreProvider.getIfAvailable();
+        ZLinkLocationStore locationStore = locationStoreProvider.getIfAvailable();
         ZLinkRedisRelocationStore relocationStore = relocationStoreProvider.getIfAvailable();
         return options -> {
+            if (args.option("outage-control-prefix", null) != null) {
+                var locations = options.configureLocations();
+                locations.setStoreOutageRetention(OutageLeaseProfile.retention());
+                locations.setOwnerLeaseTtl(OutageLeaseProfile.duration("ttlMs"));
+                locations.setOwnerLeaseRenewInterval(OutageLeaseProfile.duration("renewIntervalMs"));
+                locations.setOwnerLeaseFencingMargin(OutageLeaseProfile.duration("fencingMarginMs"));
+                locations.setOwnerLeaseRenewTimeout(OutageLeaseProfile.duration("renewTimeoutMs"));
+                locations.setStoreFailureGrace(OutageLeaseProfile.duration("storeFailureGraceMs"));
+            }
             String mode = args.mode();
             if ("entry-spot-source".equals(mode) || "entry-spot-target".equals(mode)) {
                 String meshName = args.require("mesh-name");
@@ -310,7 +328,9 @@ public final class Program {
         ObjectProvider<ZLinkActorClient> actorClientProvider,
         ObjectProvider<ZLinkRouteClient> routeClientProvider,
         ObjectProvider<ZLinkRouteMeshRuntime> meshRuntimeProvider,
-        ObjectProvider<ZLinkRouteMeshRuntimeOptions> runtimeOptionsProvider) {
+        ObjectProvider<ZLinkRouteMeshRuntimeOptions> runtimeOptionsProvider,
+        ObjectProvider<ZLinkLocationStore> locationStoreProvider,
+        ObjectProvider<ZLinkFrameworkLifecycle> lifecycleProvider) {
         return applicationArguments -> {
             String mode = args.mode();
             if ("user-spot-source".equals(mode)) {
@@ -320,7 +340,9 @@ public final class Program {
                         sink,
                         actorsProvider.getObject(),
                         actorClientProvider.getObject(),
-                        meshRuntimeProvider.getObject()),
+                        meshRuntimeProvider.getObject(),
+                        locationStoreProvider.getIfAvailable(),
+                        lifecycleProvider.getObject()),
                     "user-spot-source");
                 worker.setDaemon(true);
                 worker.start();
@@ -331,11 +353,17 @@ public final class Program {
                     args,
                     sink,
                     observer,
+                    lifecycleProvider.getObject().runtimeBean(),
                     spotsProvider.getObject(),
                     actorClientProvider.getObject(),
                     routeClientProvider.getObject(),
                     meshRuntimeProvider.getObject(),
                     runtimeOptionsProvider.getObject());
+                if (locationStoreProvider.getIfAvailable() instanceof CrossLanguageOutageStore outageStore) {
+                    startDaemon("user-spot-outage-target", () -> new OutageScenario(args, sink, outageStore,
+                        actorsProvider.getObject(), actorClientProvider.getObject(),
+                        lifecycleProvider.getObject().runtimeBean()).run());
+                }
             }
         };
     }
@@ -345,7 +373,9 @@ public final class Program {
         EventSink sink,
         ZLinkActorManager actors,
         ZLinkActorClient actorClient,
-        ZLinkRouteMeshRuntime meshRuntime) {
+        ZLinkRouteMeshRuntime meshRuntime,
+        ZLinkLocationStore locationStore,
+        ZLinkFrameworkLifecycle lifecycle) {
         String meshName = args.require("mesh-name");
         String actorId = args.option("actor-id", "cross-lang-user-spot-actor");
         String targetSpotId = args.require("spot-id");
@@ -396,6 +426,11 @@ public final class Program {
             sink.append("user-spot-source-actor-created|status=" + createStatus
                 + "|node=" + ownerNode);
 
+            if (locationStore instanceof CrossLanguageOutageStore outageStore) {
+                new OutageScenario(args, sink, outageStore, actors, actorClient, lifecycle.runtimeBean()).run();
+                return;
+            }
+
             UserSpotJoinRes reply = actorClient
                 .requestToActor(actorId, new BeginUserSpotJoinReq(targetSpotId, "canonical-28"))
                 .timeout(Duration.ofSeconds(45))
@@ -415,6 +450,7 @@ public final class Program {
         HostArgs args,
         EventSink sink,
         UserSpotJoinObserver observer,
+        ZLinkFrameworkRuntime runtime,
         ZLinkSpotManager spots,
         ZLinkActorClient actorClient,
         ZLinkRouteClient routes,
@@ -425,6 +461,7 @@ public final class Program {
         String actorId = args.option("actor-id", "cross-lang-user-spot-actor");
         String sourceNodeRid = args.option("peer-rid", null);
         try {
+            awaitServing(runtime);
             ZLinkSpotCreateResult created = spots
                 .getOrCreate(spotId, RelocationUserSpot.SPOT_TYPE)
                 .inMesh(meshName)
@@ -450,13 +487,55 @@ public final class Program {
                 startDaemon("user-spot-target-discovery",
                     () -> observeSourcePeer(sink, routes, meshRuntime, meshName, sourceNodeRid));
             }
-            startDaemon("user-spot-target-probe",
-                () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
+            if (args.option("outage-control-prefix", null) == null) {
+                startDaemon("user-spot-target-probe",
+                    () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
+            }
         } catch (ExecutionException | TimeoutException error) {
             sink.append("user-spot-target-error|" + describe(error));
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static void awaitServing(ZLinkFrameworkRuntime runtime)
+            throws InterruptedException, ExecutionException {
+        var serving = new java.util.concurrent.CompletableFuture<Void>();
+        runtime.observe().subscribe(new Flow.Subscriber<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>() {
+            private Flow.Subscription subscription;
+
+            @Override
+            public void onSubscribe(Flow.Subscription value) {
+                subscription = value;
+                value.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> observed) {
+                var state = observed.status().state();
+                if (state == ZLinkFrameworkRuntimeState.SERVING) {
+                    serving.complete(null);
+                    subscription.cancel();
+                } else if (state == ZLinkFrameworkRuntimeState.ERROR
+                        || state == ZLinkFrameworkRuntimeState.STOPPED) {
+                    serving.completeExceptionally(
+                            new IllegalStateException("Framework runtime reached " + state + " before serving"));
+                    subscription.cancel();
+                }
+            }
+
+            @Override
+            public void onError(Throwable failure) {
+                serving.completeExceptionally(failure);
+            }
+
+            @Override
+            public void onComplete() {
+                serving.completeExceptionally(
+                        new IllegalStateException("Framework runtime observation ended before serving"));
+            }
+        });
+        serving.get();
     }
 
     private static void observeSourcePeer(

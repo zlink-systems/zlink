@@ -111,6 +111,8 @@ internal sealed class ChannelClientStartupRequestHostedService(
 /// </summary>
 internal sealed class RelocationActor(string actorId, IZLinkActorContext context) : IZLinkActor
 {
+    public string InstanceId { get; } = Guid.NewGuid().ToString("N");
+    public int CreationCount { get; } = OutageActorObservations.Created(actorId);
     public string ActorId { get; } = actorId;
     public IZLinkActorContext Context { get; } = context;
     public byte[] ApplicationState { get; set; } = [];
@@ -204,6 +206,7 @@ internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
     {
         Context.Handlers.AddHandler<RelocationProbeHandler>();
         Context.Handlers.AddHandler<BeginUserSpotJoinHandler>();
+        Context.Handlers.AddHandler<OutageProbeHandler>();
     }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
@@ -417,6 +420,7 @@ internal sealed class UserSpotProbeHandler(TestHostEventSink sink)
     {
         _ = context;
         cancellationToken.ThrowIfCancellationRequested();
+        OutageActorObservations.Enter(actor.ActorId, request.Marker);
         var nodeRid = spot.Context.NodeRid.ToString();
         sink.Append($"user-spot-probe-served|nodeRid={nodeRid}|actor={actor.ActorId}");
         return ValueTask.FromResult(
@@ -432,6 +436,7 @@ internal sealed class UserSpotProbeHandler(TestHostEventSink sink)
 }
 
 internal sealed class UserSpotTargetHostedService(
+    IZLinkFrameworkRuntime runtime,
     IZLinkSpotManager spots,
     IZLinkActorClient actors,
     IZLinkRouteClient routes,
@@ -448,6 +453,33 @@ internal sealed class UserSpotTargetHostedService(
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        var serving = false;
+        await foreach (var observed in runtime.ObserveAsync(cancellationToken))
+        {
+            if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+            {
+                serving = true;
+                break;
+            }
+
+            if (
+                observed.Status.State
+                is ZLinkFrameworkRuntimeState.Error
+                    or ZLinkFrameworkRuntimeState.Stopped
+            )
+            {
+                throw new InvalidOperationException(
+                    $"Framework runtime reached {observed.Status.State} before serving."
+                );
+            }
+        }
+        if (!serving)
+        {
+            throw new InvalidOperationException(
+                "Framework runtime observation ended before serving."
+            );
+        }
+
         var created = await spots
             .GetOrCreate(spotId, RelocationUserSpot.SpotType)
             .InMesh(meshName)
@@ -553,7 +585,9 @@ internal sealed class UserSpotSourceHostedService(
     string spotId,
     string meshName,
     IZLinkRouteMeshRuntimeOptions runtimeOptions,
-    int placementWeight
+    int placementWeight,
+    OutageLocationStore? outage = null,
+    string? startFilePath = null
 ) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
@@ -585,6 +619,16 @@ internal sealed class UserSpotSourceHostedService(
             sink.Append($"user-spot-source-placement-weight|weight={placementWeight}");
         }
 
+        if (startFilePath is not null)
+        {
+            using var startDeadline = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken
+            );
+            startDeadline.CancelAfter(TimeSpan.FromSeconds(60));
+            while (!File.Exists(startFilePath))
+                await Task.Delay(10, startDeadline.Token);
+        }
+
         var created = await actors
             .GetOrCreate(actorId, RelocationEntrySpot.ActorType)
             .Request(new CrossLangActorCreateReq(7, 4))
@@ -605,6 +649,12 @@ internal sealed class UserSpotSourceHostedService(
         };
         sink.Append($"user-spot-source-actor-created|status={status}|node={nodeRid}");
 
+        if (outage is not null)
+        {
+            outage.SourceCreated.TrySetResult();
+            await outage.Relocate.Task.WaitAsync(cancellationToken);
+        }
+
         var reply = await actorClient
             .RequestToActor(actorId, new BeginUserSpotJoinReq(spotId, "canonical-28"))
             .Timeout(TimeSpan.FromSeconds(45))
@@ -613,6 +663,12 @@ internal sealed class UserSpotSourceHostedService(
             $"user-spot-join-request-reply|accepted={reply.Accepted.ToString().ToLowerInvariant()}"
                 + $"|actor={reply.ActorId}|spot={reply.SpotId}"
         );
+        if (outage is not null)
+        {
+            if (!reply.Accepted)
+                throw new InvalidOperationException("Outage relocation Join was rejected.");
+            outage.JoinCompleted.TrySetResult();
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
