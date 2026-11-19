@@ -2544,12 +2544,13 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
     spot_node_runtime_t spot_runtime (_state->spot_state);
     const auto completion_source_spot = spot_runtime.actor_spot (actor);
     auto located = co_await resolver->resolve_spot_address ({}, target_spot);
-    if (!located || located->object_generation == 0) {
+    if (!located || located->object_generation == 0
+        || located->authority_state == runtime::user_spot_authority_state_t::closing) {
         const auto reserved = spot_runtime.reserved_actor_transfer_id (actor);
         const auto operation = spot_runtime.actor_join_operation_id (
           reserved ? *reserved : spot_runtime.next_actor_transfer_id ());
-        const auto failure = result_t<actor_join_reply_t>::failure (
-          framework_error_kind_t::not_found, "target Spot location was not found");
+        const auto failure = detail::result_access_t::failure<actor_join_reply_t> (
+          spot_context_state_t::target_not_found ("target Spot location was not found"));
         const auto delivered = co_await deliver_actor_join (
           actor, completion_source_spot, operation.first, operation.second, failure);
         if (!delivered)

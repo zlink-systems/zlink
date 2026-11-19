@@ -973,9 +973,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 () -> {
                     if (closeCommitted.getAsBoolean()) {
                         return CompletableFuture.failedFuture(
-                                ZLinkFrameworkErrorOrigin.framework(
-                                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                                        "Spot incarnation is closing (committed Close)"));
+                                ZLinkFrameworkErrorOrigin.closingSpot());
                     }
                     return runLifecycleExecution(operation);
                 });

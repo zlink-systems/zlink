@@ -254,7 +254,8 @@ public final class ZLinkStoreLocationResolvers
                         authority.user().isPresent() ? ZLinkSpotKind.USER : ZLinkSpotKind.INSTANCE,
                         authority.stableType(),
                         snapshot.ownerId(),
-                        snapshot.storeVersion());
+                        snapshot.storeVersion(),
+                        authority.state());
         if (authority.state() != ZLinkServiceAuthorityPayloadCodec.State.READY) {
             spotRoutes.remove(spotId);
             return CompletableFuture.completedFuture(route);
@@ -445,7 +446,8 @@ public final class ZLinkStoreLocationResolvers
             ZLinkSpotKind spotKind,
             String stableType,
             String ownerId,
-            String storeVersion) {}
+            String storeVersion,
+            ZLinkServiceAuthorityPayloadCodec.State authorityState) {}
 
     public record ActorRoute(
             ActorRef actorRef,

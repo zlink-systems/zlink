@@ -31,6 +31,8 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
+import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.spots.SpotHandle;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -135,7 +137,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                                     address.targetNodeGeneration(),
                                                     address.authorityOwnerGeneration(),
                                                     address.ownerLeaseGeneration(),
-                                                    address.spotKind()));
+                                                    address.spotKind(),
+                                                    address.stableType(),
+                                                    address.ownerId(),
+                                                    address.storeVersion(),
+                                                    address.authorityState()));
                 };
         this.entryTarget = entryTarget;
     }
@@ -277,6 +283,10 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 resolveJoinTarget(remaining)
                         .thenCompose(
                                 target -> {
+                                    if (target.authorityState()
+                                            == ZLinkServiceAuthorityPayloadCodec.State.CLOSING) {
+                                        throw ZLinkFrameworkErrorOrigin.closingSpot();
+                                    }
                                     if (target.targetNodeRid()
                                             .equals(context.actorRef().nodeRid())) {
                                         return services.actors()
@@ -623,7 +633,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                         address.targetNodeGeneration(),
                                         address.authorityOwnerGeneration(),
                                         address.ownerLeaseGeneration(),
-                                        address.spotKind());
+                                        address.spotKind(),
+                                        address.stableType(),
+                                        address.ownerId(),
+                                        address.storeVersion(),
+                                        address.authorityState());
                             }
                             return address;
                         });

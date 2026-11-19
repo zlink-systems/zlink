@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
 #include <runtime/locations/location_repository_values.hpp>
+#include <runtime/locations/actor_authority_payload.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -29,6 +30,7 @@ struct spot_address_t
     std::uint64_t node_generation = 0;
     // A type without an authority fence carries the stored cold activation route.
     std::string stable_type;
+    user_spot_authority_state_t authority_state = user_spot_authority_state_t::ready;
 };
 
 class spot_address_resolver_t

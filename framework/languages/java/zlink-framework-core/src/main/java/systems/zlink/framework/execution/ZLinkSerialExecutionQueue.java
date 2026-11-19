@@ -535,9 +535,10 @@ public final class ZLinkSerialExecutionQueue {
                                 "Spot incarnation released its authority"));
             }
             return CompletableFuture.failedFuture(
-                    ZLinkFrameworkErrorOrigin.framework(
-                            closing ? ZLinkFrameworkErrorKind.NOT_FOUND : sealedKind,
-                            "Spot incarnation is closing"));
+                    closing
+                            ? ZLinkFrameworkErrorOrigin.closingSpot()
+                            : ZLinkFrameworkErrorOrigin.framework(
+                                    sealedKind, "Spot incarnation is closing"));
         }
         return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
     }
