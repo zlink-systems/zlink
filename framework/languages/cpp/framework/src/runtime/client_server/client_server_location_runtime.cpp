@@ -121,6 +121,14 @@ client_server_server_descriptor_t manual_descriptor (std::string_view channel_na
                                                std::string (default_security_identity)};
 }
 
+// A runtime without a Location Store has no lease or polling options; the
+// defaults pace manual-endpoint reconciliation and bound the stop wait.
+const location_options_t &location_options_of (const location_runtime_t *locations)
+{
+    static const location_options_t defaults;
+    return locations ? locations->options () : defaults;
+}
+
 framework_runtime_state_t current_state (const location_runtime_t &locations)
 {
     return locations.draining () ? framework_runtime_state_t::draining
@@ -346,9 +354,9 @@ client_server_role_t local_role (const channel_snapshot_t &channel)
 client_server_location_runtime_t::client_server_location_runtime_t (
   message_bus_t bus,
   std::vector<channel_snapshot_t> channels,
-  location_runtime_t &locations,
-  location_repository_t &store,
-  location_repository_t &leases,
+  location_runtime_t *locations,
+  location_repository_t *store,
+  location_repository_t *leases,
   service_provider_t &services,
   serializer_registry_t &serializers,
   const handler_registry_t &handlers,
@@ -359,9 +367,9 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _bus (std::move (bus)),
     _channel_runtime (detail::channel_runtime_t::from (_bus)),
     _channels (std::move (channels)),
-    _locations (&locations),
-    _store (&store),
-    _leases (&leases),
+    _locations (locations),
+    _store (store),
+    _leases (leases),
     _services (services),
     _framework_state (std::move (framework_state)),
     _serializers (&serializers),
@@ -403,12 +411,23 @@ client_server_location_runtime_t::~client_server_location_runtime_t () noexcept
     }
 }
 
+bool client_server_location_runtime_t::serves (const channel_snapshot_t &channel) const noexcept
+{
+    // Server listeners publish descriptors, so they need the Store; without one
+    // the manual server listener belongs to channel_host_service_t.
+    return _locations && channel.server.enabled && !channel.server.bind_endpoints.empty ();
+}
+
+bool client_server_location_runtime_t::connects (const channel_snapshot_t &channel) noexcept
+{
+    return channel.client.enabled
+           && (channel.client.discovery || !channel.client.connect_endpoints.empty ());
+}
+
 bool client_server_location_runtime_t::empty () const noexcept
 {
-    return std::none_of (_channels.begin (), _channels.end (), [] (const auto &channel) {
-        return (channel.server.enabled && !channel.server.bind_endpoints.empty ())
-               || (channel.client.enabled
-                   && (channel.client.discovery || !channel.client.connect_endpoints.empty ()));
+    return std::none_of (_channels.begin (), _channels.end (), [this] (const auto &channel) {
+        return serves (channel) || connects (channel);
     });
 }
 
@@ -567,8 +586,10 @@ std::unique_ptr<mesh_runtime_observation_t> client_server_location_runtime_t::ob
 {
     if (channel_name.empty () || capacity == 0 || !observer)
         throw std::invalid_argument ("ClientServer observation requires a channel and callback");
-    auto value =
-      std::make_shared<observer_t> (capacity, std::move (observer), _locations->monitoring ());
+    auto value = std::make_shared<observer_t> (
+      capacity, std::move (observer),
+      _locations ? _locations->monitoring ()
+                 : std::shared_ptr<framework::detail::monitoring_runtime_state_t>{});
     value->start ();
     auto source = _lane
                     .run_checked ([this, &channel_name, &value] {
@@ -654,7 +675,12 @@ void client_server_location_runtime_t::start ()
 {
     if (empty ())
         return;
-    auto owner = _locations->current_owner_token ();
+    if (!_locations && std::any_of (_channels.begin (), _channels.end (), [] (const auto &channel) {
+            return channel.client.enabled && channel.client.discovery;
+        }))
+        throw framework_exception_t (framework_error_kind_t::not_configured,
+                                     "ClientServer automatic discovery requires a Location Store");
+    const auto owner = _locations ? _locations->current_owner_token () : std::nullopt;
 
     _stop = std::make_shared<std::stop_source> ();
     try {
@@ -664,10 +690,9 @@ void client_server_location_runtime_t::start ()
         _application_supply = std::make_unique<application_supply_slot_t> (
           _application_jobs, [wake = _wake_timer] { wake->signal (); });
         for (const auto &channel : _channels) {
-            if (channel.server.enabled && !channel.server.bind_endpoints.empty ())
+            if (serves (channel))
                 start_server (channel, owner);
-            if (channel.client.enabled
-                && (channel.client.discovery || !channel.client.connect_endpoints.empty ()))
+            if (connects (channel))
                 start_client (channel);
         }
         reconcile ();
@@ -774,7 +799,8 @@ void client_server_location_runtime_t::start_server (
 
 void client_server_location_runtime_t::start_client (const channel_snapshot_t &channel)
 {
-    _locations->register_metric_scope ("channel", channel.name);
+    if (_locations)
+        _locations->register_metric_scope ("channel", channel.name);
     auto entry = std::make_unique<client_channel_t> ();
     entry->snapshot = channel;
     entry->routing_id = client_routing_id (channel);
@@ -835,10 +861,11 @@ client_server_location_runtime_t::request_publication_task (location_write_inten
         _worker_requests.push_back (request);
     }
     _wake_timer->signal ();
-    const auto result = co_await observe_until (
-      std::move (pending),
-      std::chrono::steady_clock::now () + _locations->options ().owner_lease_renew_timeout,
-      _stop->get_token ());
+    const auto result =
+      co_await observe_until (std::move (pending),
+                              std::chrono::steady_clock::now ()
+                                + location_options_of (_locations).owner_lease_renew_timeout,
+                              _stop->get_token ());
     co_return result &&result.value ();
 }
 
@@ -922,8 +949,8 @@ void client_server_location_runtime_t::run ()
                   *pending_reconcile,
                   [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
             } else if (reconcile_after_publish) {
-                next_reconcile =
-                  std::chrono::steady_clock::now () + _locations->options ().polling_interval;
+                next_reconcile = std::chrono::steady_clock::now ()
+                                 + location_options_of (_locations).polling_interval;
             }
         }
         if (pending_reconcile && pending_reconcile->await_ready ()) {
@@ -932,7 +959,7 @@ void client_server_location_runtime_t::run ()
                 _channel_runtime.runtime_failures ()->report (
                   detail::task_result_access_t::read (*completed).exception ());
             next_reconcile =
-              std::chrono::steady_clock::now () + _locations->options ().polling_interval;
+              std::chrono::steady_clock::now () + location_options_of (_locations).polling_interval;
         }
         if (pending_worker_snapshot && pending_worker_snapshot->await_ready ()) {
             auto completed = std::move (pending_worker_snapshot);
@@ -1036,6 +1063,8 @@ void client_server_location_runtime_t::run ()
 
 task_t<bool> client_server_location_runtime_t::publish_servers_task (location_write_intent_t intent)
 {
+    if (!_locations)
+        co_return true;
     const auto owner = co_await _locations->current_owner_token_task ();
     if (!owner) {
         co_return std::none_of (_servers.begin (), _servers.end (), [] (const auto &entry) {
@@ -1107,6 +1136,8 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (
     std::map<std::string, client_server_server_descriptor_t> desired;
     location_page_request_t page;
     do {
+        if (!_store)
+            break;
         const auto listed = co_await _store->list_client_servers (channel.snapshot.name, page);
         for (const auto &descriptor : listed.items) {
             if ((descriptor.state == framework_runtime_state_t::stopped)
@@ -1942,8 +1973,9 @@ void client_server_location_runtime_t::request_stop () noexcept
 void client_server_location_runtime_t::stop (
   std::optional<std::chrono::steady_clock::time_point> requested_deadline)
 {
-    const auto deadline = requested_deadline.value_or (
-      std::chrono::steady_clock::now () + _locations->options ().owner_lease_renew_timeout);
+    const auto deadline =
+      requested_deadline.value_or (std::chrono::steady_clock::now ()
+                                   + location_options_of (_locations).owner_lease_renew_timeout);
     runtime_failure_collector_t failures;
     request_stop ();
     {

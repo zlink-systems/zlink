@@ -2167,6 +2167,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
     "framework-unit;framework-regression;framework-client-server;framework-monitoring")
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_client_server_manual_without_store
+    COMMAND test_cpp_framework_client_server_runtime --manual-client-without-store
+    LABELS "framework-unit;framework-client-server"
+    TIMEOUT 60)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_same_owner_channel
     COMMAND test_cpp_framework_client_server_runtime --same-owner-regression
     LABELS "framework-contract;execution"

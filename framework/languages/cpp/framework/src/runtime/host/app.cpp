@@ -3305,18 +3305,17 @@ void app_t::_apply_zlink_framework ()
         return state->runtime_state.load (std::memory_order_acquire);
     };
     std::shared_ptr<runtime::client_server::client_server_location_runtime_t> client_server_runtime;
-    if (location_runtime
-        && !_state->services.contains (std::type_index (typeid (client_server_runtime_t)))) {
+    if (!_state->services.contains (std::type_index (typeid (client_server_runtime_t)))) {
         auto provider = _state->services.build_provider ();
+        const auto locations = provider.get<runtime::location_runtime_t> ();
+        const auto store = provider.get<location_repository_t> ();
         client_server_runtime =
           std::make_shared<runtime::client_server::client_server_location_runtime_t> (
             _state->zlink.message_bus (), channel_snapshot,
-            provider.get_required<runtime::location_runtime_t> (),
-            provider.get_required<location_repository_t> (),
-            provider.get_required<location_repository_t> (), provider, _state->serializers,
-            _state->handlers, read_framework_state,
-            options.runtime_client_server_advertise_hosts (), _state->listener_statuses,
-            _state->application_job_queue);
+            locations ? &locations->get () : nullptr, store ? &store->get () : nullptr,
+            store ? &store->get () : nullptr, provider, _state->serializers, _state->handlers,
+            read_framework_state, options.runtime_client_server_advertise_hosts (),
+            _state->listener_statuses, _state->application_job_queue);
         _state->services.add_factory<client_server_runtime_t> (
           [owner = std::weak_ptr (client_server_runtime)] (service_provider_t &) {
               return std::static_pointer_cast<client_server_runtime_t> (

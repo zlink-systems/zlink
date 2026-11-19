@@ -3341,7 +3341,7 @@ TEST (AutoConnectSyncTest, StopTimeoutStopsIndependentLocationRuntimesAndDrainsL
     const std::vector<channel_snapshot_t> channels{server_channel, publisher_channel};
     auto listener_statuses = std::make_shared<listener_status_registry_t> ();
     auto client_server_runtime = std::make_shared<client_server::client_server_location_runtime_t> (
-      bus, channels, locations, repository, repository, services, serializers, handlers,
+      bus, channels, &locations, &repository, &repository, services, serializers, handlers,
       [] { return framework_runtime_state_t::serving; }, std::map<std::string, std::string>{},
       listener_statuses);
     auto fanout_runtime = std::make_shared<fanout::fanout_location_runtime_t> (
