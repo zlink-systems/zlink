@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonProcessingException;
 
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.stream.Stream;
 
 final class ZLinkTypedJsonPayloadContractTest {
@@ -48,6 +50,8 @@ final class ZLinkTypedJsonPayloadContractTest {
 
     record ObjectPayload(@JsonProperty("wireValue") Child value) {}
 
+    record MapPayload(Map<String, Object> value) {}
+
     record NullableReferences(@Nullable String text, @Nullable Child child) {}
 
     record NullablePayload(byte @Nullable [] body) {}
@@ -58,6 +62,42 @@ final class ZLinkTypedJsonPayloadContractTest {
                 ZLinkFrameworkJsonProfile.mapper()
                         .readValue("{\"body\":null}", NullablePayload.class)
                         .body());
+    }
+
+    @Test
+    void duplicatePropertiesAreRejectedInTypedAndDynamicObjects() {
+        var mapper = ZLinkFrameworkJsonProfile.mapper();
+        assertThrows(
+                JsonProcessingException.class,
+                () ->
+                        mapper.readValue(
+                                "{\"wireValue\":{\"text\":\"first\",\"text\":\"second\"}}",
+                                ObjectPayload.class));
+        assertThrows(
+                JsonProcessingException.class,
+                () ->
+                        mapper.readValue(
+                                "{\"wireValue\":{\"text\":\"one\",\"text\":\"two\",\"text\":\"three\"}}",
+                                ObjectPayload.class));
+        assertThrows(
+                JsonProcessingException.class,
+                () ->
+                        mapper.readValue(
+                                "{\"wireValue\":{\"text\":\"value\",\"unknown\":1,\"unknown\":2}}",
+                                ObjectPayload.class));
+        assertThrows(
+                JsonProcessingException.class,
+                () -> mapper.readValue("{\"value\":{\"key\":1,\"key\":2}}", MapPayload.class));
+    }
+
+    @Test
+    void propertyNamesRemainCaseSensitiveForDuplicateDetection() throws Exception {
+        var result =
+                ZLinkFrameworkJsonProfile.mapper()
+                        .readValue(
+                                "{\"wireValue\":{\"text\":\"value\",\"Text\":\"ignored\"}}",
+                                ObjectPayload.class);
+        assertEquals("value", result.value().text());
     }
 
     @ParameterizedTest(name = "{0}")
