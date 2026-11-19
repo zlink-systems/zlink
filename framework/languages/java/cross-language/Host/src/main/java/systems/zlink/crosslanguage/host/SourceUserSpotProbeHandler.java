@@ -18,6 +18,7 @@ public final class SourceUserSpotProbeHandler implements ZLinkEntrySpotActorRequ
         RelocationActor actor,
         ZLinkMessageContext context,
         UserSpotProbeReq request) {
+        actor.recordProbe();
         return CompletableFuture.completedFuture(new UserSpotProbeRes(
             actor.actorId(),
             "",
