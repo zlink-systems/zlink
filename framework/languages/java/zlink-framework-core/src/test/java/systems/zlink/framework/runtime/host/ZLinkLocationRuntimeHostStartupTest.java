@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.host;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -185,8 +186,7 @@ final class ZLinkLocationRuntimeHostStartupTest {
                     () -> !ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime),
                     Duration.ofSeconds(1));
 
-            assertThrows(
-                    IllegalStateException.class,
+            assertDoesNotThrow(
                     () ->
                             runtime.routeMeshRuntimeOptionsInternal()
                                     .mesh("game")

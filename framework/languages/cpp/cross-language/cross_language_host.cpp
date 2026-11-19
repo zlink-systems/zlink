@@ -1502,6 +1502,29 @@ class outage_control_t
     fw::authority_snapshot_t _initial;
 };
 
+/* A runtime placement-weight change is recorded at once and written to the Location Store by the
+ * publisher's renew schedule. A stage that relies on other nodes seeing the weight waits until this
+ * node's descriptor carries it. */
+bool wait_published_placement_weight (fw::service_provider_t &services,
+                                      const std::string &mesh_name,
+                                      int weight,
+                                      const std::atomic_bool *stopping = nullptr)
+{
+    auto &store = services.get_required<fw::location_repository_t> ();
+    const auto rid = zlink::routing_id_t::from (g_user_spot_node_rid).to_hex ();
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30);
+    while (std::chrono::steady_clock::now () < deadline) {
+        if (stopping && stopping->load ())
+            return false;
+        const auto listed = store.list_mesh_nodes (mesh_name).result ().value ();
+        for (const auto &row : listed.items)
+            if (row.rid.to_hex () == rid && row.placement_weight == weight)
+                return true;
+        std::this_thread::sleep_for (std::chrono::milliseconds (25));
+    }
+    return false;
+}
+
 /* Target role: create the fixed User Spot before this node is ready to host
  * anything else, drop the placement weight to zero so the source's Entry-Spot
  * Actor placement can never pick it, then run the reciprocal-discovery probe
@@ -1568,6 +1591,11 @@ class user_spot_target_service_t final : public fw::hosted_service_t
          * opposite -- the create itself travelling to this node -- starts the
          * target with --placement-weight 100 and the source with 0. */
         runtime_options.mesh (_mesh_name).placement_weight (_placement_weight);
+        if (!wait_published_placement_weight (services, _mesh_name, _placement_weight)) {
+            sink.append (
+              "user-spot-target-error|kind=unavailable|placement weight was not published");
+            co_return;
+        }
         sink.append ("user-spot-created|spot=" + _spot_id + "|nodeRid=" + target_node_rid
                      + "|state=" + state_name);
         write_ready ();
@@ -1710,10 +1738,10 @@ class user_spot_source_service_t final : public fw::hosted_service_t
         auto *location =
           g_outage_store ? &services.get_required<runtime::location_runtime_t> () : nullptr;
         write_ready ();
-        _worker = std::thread (
-          [this, &sink, &actor_manager, &actors, &mesh_runtime, &runtime_options, location] {
-              run (sink, actor_manager, actors, mesh_runtime, runtime_options, location);
-          });
+        _worker = std::thread ([this, &services, &sink, &actor_manager, &actors, &mesh_runtime,
+                                &runtime_options, location] {
+            run (services, sink, actor_manager, actors, mesh_runtime, runtime_options, location);
+        });
         co_return;
     }
 
@@ -1726,7 +1754,8 @@ class user_spot_source_service_t final : public fw::hosted_service_t
     }
 
   private:
-    void run (event_sink_t &sink,
+    void run (fw::service_provider_t &services,
+              event_sink_t &sink,
               fw::actor_manager_t &actor_manager,
               fw::actor_client_t &actors,
               fw::route_mesh_runtime_t &mesh_runtime,
@@ -1766,11 +1795,16 @@ class user_spot_source_service_t final : public fw::hosted_service_t
 
         /* --placement-weight 0 removes this node from the candidate set of its
          * own Actor placement, so the create must be admitted by a node of
-         * another language.  The descriptor update is written to the Location
-         * Store before the call returns, and the same Store answers the
-         * placement query below, so there is no window to race with. */
+         * another language.  The publisher writes the descriptor update on its
+         * renew schedule, so the create waits until the Store carries it. */
         if (_placement_weight != 100) {
             runtime_options.mesh (_mesh_name).placement_weight (_placement_weight);
+            if (!wait_published_placement_weight (services, _mesh_name, _placement_weight,
+                                                  &_stopping)) {
+                sink.append ("user-spot-source-error|kind=unavailable|placement weight was not "
+                             "published");
+                return;
+            }
             sink.append ("user-spot-source-placement-weight|weight="
                          + std::to_string (_placement_weight));
         }
