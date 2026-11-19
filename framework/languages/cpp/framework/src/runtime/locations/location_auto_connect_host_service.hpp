@@ -156,31 +156,28 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
         const auto locations = services.get<location_runtime_t> ();
         _runtime = locations ? &locations->get () : nullptr;
+        if (_runtime) {
+            co_await _runtime->set_descriptor_publisher (
+              std::exchange (_republish_after_store_recovery, {}), _stop_requested.get_token ());
+            _store = &services.get_required<location_repository_t> ();
+            _live_store = &services.get_required<live_location_reader_t> ();
+            if (auto route_cache = services.get<store_location_resolvers_t> ())
+                _route_cache = &route_cache->get ();
+        }
+
+        // The runtime decides from the channel configuration whether it has
+        // ClientServer work; a Store is needed only for its server listeners
+        // and automatic discovery.
+        if (!_client_server)
+            _client_server = std::make_shared<client_server::client_server_location_runtime_t> (
+              _bus, _channels, _runtime, _store, _store, services, *_serializers, *_handlers,
+              _framework_state, _client_server_advertise_hosts, _listener_statuses);
+        _client_server->start ();
+        _client_server_started = !_client_server->empty ();
+
         if (!_runtime) {
             _startup_publication.complete (result_t<bool>::success (true));
             co_return;
-        }
-        co_await _runtime->set_descriptor_publisher (
-          std::exchange (_republish_after_store_recovery, {}), _stop_requested.get_token ());
-        _store = &services.get_required<location_repository_t> ();
-        _live_store = &services.get_required<live_location_reader_t> ();
-        if (auto route_cache = services.get<store_location_resolvers_t> ())
-            _route_cache = &route_cache->get ();
-
-        const auto needs_client_server =
-          std::any_of (_channels.begin (), _channels.end (), [] (const auto &channel) {
-              return (channel.server.enabled && !channel.server.bind_endpoints.empty ())
-                     || (channel.client.enabled
-                         && (channel.client.discovery
-                             || !channel.client.connect_endpoints.empty ()));
-          });
-        if (needs_client_server) {
-            if (!_client_server)
-                _client_server = std::make_shared<client_server::client_server_location_runtime_t> (
-                  _bus, _channels, *_runtime, *_store, *_store, services, *_serializers, *_handlers,
-                  _framework_state, _client_server_advertise_hosts, _listener_statuses);
-            _client_server->start ();
-            _client_server_started = true;
         }
 
         const auto needs_fanout =
