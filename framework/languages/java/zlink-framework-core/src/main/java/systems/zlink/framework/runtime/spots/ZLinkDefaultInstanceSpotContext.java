@@ -379,6 +379,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {

@@ -347,7 +347,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                 (done, failure) -> {
                     if (failure != null) {
                         accepted.completeExceptionally(failure);
-                        closeRouteReceived(received);
                     }
                 });
     }

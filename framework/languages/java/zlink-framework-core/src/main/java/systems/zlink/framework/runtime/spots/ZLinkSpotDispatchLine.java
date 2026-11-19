@@ -59,10 +59,22 @@ interface SpotDispatchLine {
             ZLinkBackendActorReceived header,
             Message payload);
 
+    default CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return enqueueActorDispatch(
+                actorId, payloadBytes, operation, () -> {}, admission, header, payload);
+    }
+
     CompletionStage<Void> enqueueActorDispatch(
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload);

@@ -161,6 +161,12 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
 
     CompletionStage<Void> admitRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+        CompletableFuture<Void> accepted =
+                admission == null ? new CompletableFuture<>() : admission;
+        accepted.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) received.close();
+                });
         CompletionStage<Void> dispatched =
                 host.admitNewApplicationJob(
                         context,
@@ -170,17 +176,16 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                                 return CompletableFuture.failedFuture(hostRejection);
                             if (host.dispatchSpotRouteBridgePacket(received)) {
                                 received.close();
-                                if (admission != null) admission.complete(null);
+                                accepted.complete(null);
                                 return CompletableFuture.completedFuture(null);
                             }
-                            dispatchRoute(received, admission);
+                            dispatchRoute(received, accepted);
                             return CompletableFuture.completedFuture(null);
                         });
         dispatched.whenComplete(
                 (done, failure) -> {
                     if (failure != null) {
-                        received.close();
-                        if (admission != null) admission.completeExceptionally(failure);
+                        accepted.completeExceptionally(failure);
                     }
                 });
         return dispatched;

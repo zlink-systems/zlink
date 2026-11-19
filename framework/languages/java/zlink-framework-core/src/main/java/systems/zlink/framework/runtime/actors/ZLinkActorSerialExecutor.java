@@ -38,7 +38,15 @@ public final class ZLinkActorSerialExecutor {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
-        return queue.enqueueActorWithPayloadBytes(payloadBytes, operation, admission);
+        return executeActor(payloadBytes, operation, () -> {}, admission);
+    }
+
+    public CompletionStage<Void> executeActor(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
+            CompletableFuture<Void> admission) {
+        return queue.enqueueActorWithPayloadBytes(payloadBytes, operation, release, admission);
     }
 
     public CompletionStage<Void> executeActor(

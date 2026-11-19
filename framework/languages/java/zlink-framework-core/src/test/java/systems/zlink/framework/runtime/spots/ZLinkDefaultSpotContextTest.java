@@ -1285,6 +1285,7 @@ final class ZLinkDefaultSpotContextTest {
                 String actorId,
                 long payloadBytes,
                 Supplier<CompletionStage<Void>> operation,
+                Runnable release,
                 CompletableFuture<Void> admission,
                 systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived header,
                 Message payload) {

@@ -7145,13 +7145,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {
         return actorSessions
                 .runtime()
                 .submitActorDispatch(
-                        target, actorId, payloadBytes, operation, admission, header, payload);
+                        target,
+                        actorId,
+                        payloadBytes,
+                        operation,
+                        release,
+                        admission,
+                        header,
+                        payload);
     }
 
     @Override
@@ -7338,6 +7346,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 pendingHeader ? headerPart : copyActorReceived(headerPart);
         Message payloadCopy =
                 bodyPart == null ? Message.from(new byte[0]) : Message.from(bodyPart.message());
+        Runnable release =
+                () -> {
+                    payloadCopy.close();
+                    headerCopy.close();
+                };
+        CompletableFuture<Void> admission =
+                requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
+        admission.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) release.run();
+                });
         CompletionStage<Void> queued =
                 enqueueLocalActorPacket(
                         dispatchLine,
@@ -7345,11 +7364,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         packetHeader,
                         headerCopy,
                         payloadCopy,
-                        requestAdmission);
+                        admission,
+                        release);
         queued.whenComplete(
-                (ignored, error) -> {
-                    payloadCopy.close();
-                    headerCopy.close();
+                (ignored, failure) -> {
+                    if (failure != null) admission.completeExceptionally(failure);
                 });
         return queued;
     }
@@ -7386,7 +7405,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerCopy,
             Message payloadCopy,
-            CompletableFuture<Void> requestAdmission) {
+            CompletableFuture<Void> requestAdmission,
+            Runnable release) {
         ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply = null;
         try {
             boolean noBindRequest = isNoBindActorRequest(packetHeader, headerCopy);
@@ -7489,11 +7509,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     registered);
                         }
                     };
+            Supplier<CompletionStage<Void>> ownedOperation =
+                    () ->
+                            ZLinkHandlerStages.fromStageSupplier(operation)
+                                    .whenComplete((ignored, failure) -> release.run());
             return relocationReply == null
                     ? dispatchLine.enqueueActorDispatch(
                             actor.context().actorId(),
                             payloadCopy.size(),
-                            operation,
+                            ownedOperation,
+                            release,
                             requestAdmission,
                             headerCopy,
                             payloadCopy)
@@ -7501,8 +7526,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             actor.context().actorId(),
                             relocationReply::record,
                             headerCopy.message().size() + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
-                            operation,
-                            relocationReply::releaseForRelocation,
+                            ownedOperation,
+                            () -> {
+                                try {
+                                    registered.releaseForRelocation();
+                                } finally {
+                                    release.run();
+                                }
+                            },
                             requestAdmission,
                             headerCopy,
                             payloadCopy);
