@@ -51,7 +51,10 @@ const fixture = JSON.parse(
   )
 );
 
-for (const row of fixture.joinFailureCases) {
+for (const row of [...fixture.joinFailureCases, {
+  name: 'closing-resolution-after-activation-removal', target: 'closing', warmRoute: false,
+  errorKind: 'NotFound', removeAfterResolution: true
+}]) {
   test(`deferred Join failure contract: ${row.name}`, async () => {
     const { ZLinkAuthoritySpotRouteResolver } = require('../../packages/framework/dist/runtime/locations/resolvers');
     const { runActorHandlerWithDeferredJoins } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
@@ -59,10 +62,19 @@ for (const row of fixture.joinFailureCases) {
     const ready = await owner.store.readAuthority(encodeAuthorityKey('user_spot', owner.spotId));
     let replay = false;
     let sourceReads = 0;
+    const readHeld = deferred();
+    const releaseRead = deferred();
+    let holdClosingRead = false;
     const resolver = new ZLinkAuthoritySpotRouteResolver({
       readAuthority: async (key, signal) => {
         sourceReads++;
-        return replay ? ready : owner.store.readAuthority(key, signal);
+        const snapshot = replay ? ready : await owner.store.readAuthority(key, signal);
+        if (holdClosingRead) {
+          holdClosingRead = false;
+          readHeld.resolve();
+          await releaseRead.promise;
+        }
+        return snapshot;
       }
     }, (mesh) => mesh, undefined, { remainingOwnerTokenLeaseMs: async () => 60_000 });
     const target = row.target === 'missing' ? 'missing-room' : owner.spotId;
@@ -106,6 +118,7 @@ for (const row of fixture.joinFailureCases) {
     try {
       await owner.closingEntered.promise;
       assert.equal(await owner.authority(), 'Closing');
+      holdClosingRead = row.removeAfterResolution === true;
       if (row.target !== 'closing') {
         owner.finishClosing.resolve();
         assert.equal(await closing, true);
@@ -113,7 +126,14 @@ for (const row of fixture.joinFailureCases) {
       }
       assert.equal((await actors.getOrCreate(actorRef.actorId, 'player').submit()).status, 'existing');
       const readsBeforeJoin = sourceReads;
-      await runActorHandlerWithDeferredJoins(() => actor.context.joinSpot(target).defer());
+      const joining = runActorHandlerWithDeferredJoins(() => actor.context.joinSpot(target).defer());
+      if (row.removeAfterResolution) {
+        await readHeld.promise;
+        owner.finishClosing.resolve();
+        await closing;
+        releaseRead.resolve();
+      }
+      await joining;
       const result = await completion.promise;
       if (row.warmRoute && row.target !== 'missing') assert.equal(sourceReads, readsBeforeJoin);
       else assert.ok(sourceReads > readsBeforeJoin);
@@ -123,6 +143,7 @@ for (const row of fixture.joinFailureCases) {
       assert.equal(actual, row.errorKind);
     } finally {
       replay = false;
+      releaseRead.resolve();
       owner.finishClosing.resolve();
       await closing;
     }
