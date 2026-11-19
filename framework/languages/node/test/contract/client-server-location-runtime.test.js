@@ -9,9 +9,7 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
-const {
-  ZLinkChannelSocketRegistry
-} = require('../../packages/framework/dist/internal');
+const { ZLinkChannelSocketRegistry } = require('../../packages/framework/dist/internal');
 const {
   ZLinkChannelReceiveLoop
 } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');
@@ -951,6 +949,79 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(dealers[0].requests.length, 2);
   assert.deepEqual(connects, [endpoint]);
+  await sockets.dispose();
+});
+
+test('manual ClientServer admission accepts an opaque binary server RID', async () => {
+  const endpoint = 'tcp://10.0.0.1:9401';
+  const registration = internal.createFrameworkRegistration({
+    channels: { orders: { client: { manualConnections: [endpoint] } } }
+  });
+  const dealers = [];
+  const failures = [];
+  let monitorHandler;
+  const sockets = new ZLinkChannelSocketRegistry(
+    registration,
+    {
+      createDealerSocket() {
+        const dealer = fakeDealer('manual-binary');
+        dealer.requests = [];
+        dealer.connect = () => {};
+        dealer.request = physicalRequest(
+          (message) =>
+            new Promise((resolve, reject) => {
+              dealer.requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+            })
+        );
+        dealers.push(dealer);
+        return dealer;
+      },
+      createReadablePoller() {
+        return readyPoller();
+      }
+    },
+    {},
+    {
+      openSocketMonitor() {
+        return {
+          nativeInstance: {},
+          onEvent(handler) {
+            monitorHandler = handler;
+          },
+          drain() {
+            return 0;
+          },
+          async dispose() {}
+        };
+      }
+    },
+    (error) => failures.push(error)
+  );
+
+  sockets.startManualClientServerConnections();
+  monitorHandler({
+    nativeEvent: internal.ZLinkSocketNativeEventType.ConnectionReady,
+    routingId: 'server-a',
+    remoteAddr: endpoint
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const opaqueRid = routingIds.decodeRoutingId('opaque-server', 'ff00fe0102');
+  assert.equal(typeof opaqueRid, 'object');
+  dealers[0].requests[0].resolve([
+    zlink.Message.from(
+      clientServerWire.encodeClientServerAdmit(
+        {
+          ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+          serverRid: opaqueRid,
+          securityIdentity: 'default'
+        },
+        4096
+      )
+    )
+  ]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(failures, []);
+  assert.equal(sockets.clientDealerForOutbound('orders'), dealers[0]);
   await sockets.dispose();
 });
 
