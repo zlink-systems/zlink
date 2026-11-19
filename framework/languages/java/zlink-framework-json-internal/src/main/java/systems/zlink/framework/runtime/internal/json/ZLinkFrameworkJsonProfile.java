@@ -7,14 +7,16 @@ import com.fasterxml.jackson.core.Base64Variant;
 import com.fasterxml.jackson.core.Base64Variants;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.core.io.IOContext;
 import com.fasterxml.jackson.core.io.InputDecorator;
+import com.fasterxml.jackson.core.json.DupDetector;
 import com.fasterxml.jackson.core.util.JsonParserDelegate;
 import com.fasterxml.jackson.databind.AnnotationIntrospector;
 import com.fasterxml.jackson.databind.BeanDescription;
+import com.fasterxml.jackson.databind.DeserializationConfig;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -27,10 +29,13 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.fasterxml.jackson.databind.SerializationConfig;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.deser.BeanDeserializerBase;
+import com.fasterxml.jackson.databind.deser.BeanDeserializerModifier;
 import com.fasterxml.jackson.databind.deser.NullValueProvider;
 import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
 import com.fasterxml.jackson.databind.deser.ValueInstantiator;
 import com.fasterxml.jackson.databind.deser.ValueInstantiators;
+import com.fasterxml.jackson.databind.deser.std.DelegatingDeserializer;
 import com.fasterxml.jackson.databind.introspect.Annotated;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMethod;
@@ -54,7 +59,10 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** Owns the framework-json-v1 mapper decisions shared by JVM transports. */
 public final class ZLinkFrameworkJsonProfile {
@@ -208,7 +216,6 @@ public final class ZLinkFrameworkJsonProfile {
     public static ObjectMapper mapper(Module... transportModules) {
         JsonMapper.Builder builder =
                 JsonMapper.builder(new ProfileJsonFactory())
-                        .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                         .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, false)
                         .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
                         .configure(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES, false)
@@ -275,6 +282,9 @@ public final class ZLinkFrameworkJsonProfile {
     }
 
     private static final class ProfileParser extends JsonParserDelegate {
+        private ObjectScope[] objectScopes = new ObjectScope[4];
+        private int objectDepth;
+
         ProfileParser(JsonParser parser) {
             super(parser);
         }
@@ -282,6 +292,25 @@ public final class ZLinkFrameworkJsonProfile {
         @Override
         public JsonToken nextToken() throws IOException {
             JsonToken token = super.nextToken();
+            if (token == JsonToken.START_OBJECT) {
+                if (objectDepth == objectScopes.length) {
+                    objectScopes = Arrays.copyOf(objectScopes, objectScopes.length * 2);
+                }
+                ObjectScope scope = objectScopes[objectDepth];
+                if (scope == null) {
+                    scope = new ObjectScope(this);
+                    objectScopes[objectDepth] = scope;
+                }
+                scope.reset();
+                objectDepth++;
+            } else if (token == JsonToken.FIELD_NAME && objectDepth != 0) {
+                String name = currentName();
+                if (objectScopes[objectDepth - 1].isDuplicate(name)) {
+                    throw new JsonParseException(this, "Duplicate field '" + name + "'");
+                }
+            } else if (token == JsonToken.END_OBJECT && objectDepth != 0) {
+                objectDepth--;
+            }
             // Only fractions and integers wider than long can exceed the double range.
             if ((token == JsonToken.VALUE_NUMBER_FLOAT
                             || (token == JsonToken.VALUE_NUMBER_INT
@@ -299,6 +328,24 @@ public final class ZLinkFrameworkJsonProfile {
         }
 
         @Override
+        public String nextFieldName() throws IOException {
+            return nextToken() == JsonToken.FIELD_NAME ? currentName() : null;
+        }
+
+        @Override
+        public boolean nextFieldName(com.fasterxml.jackson.core.SerializableString expected)
+                throws IOException {
+            return expected.getValue().equals(nextFieldName());
+        }
+
+        void usePropertyMask(Map<String, Integer> propertyIndexes) throws IOException {
+            if (objectDepth == 0) return;
+            ObjectScope scope = objectScopes[objectDepth - 1];
+            scope.usePropertyMask(propertyIndexes);
+            if (currentToken() == JsonToken.FIELD_NAME) scope.mark(currentName());
+        }
+
+        @Override
         public JsonParser skipChildren() throws IOException {
             if (currentToken() != JsonToken.START_OBJECT && currentToken() != JsonToken.START_ARRAY)
                 return this;
@@ -310,6 +357,62 @@ public final class ZLinkFrameworkJsonProfile {
                 else if (token.isStructEnd()) depth--;
             }
             return this;
+        }
+
+        private static final class ObjectScope {
+            private final DupDetector fallback;
+            private Map<String, Integer> propertyIndexes;
+            private long seen;
+            private long[] seenWords;
+
+            private ObjectScope(JsonParser parser) {
+                fallback = DupDetector.rootDetector(parser);
+            }
+
+            private void reset() {
+                propertyIndexes = null;
+                seen = 0;
+                if (seenWords != null) Arrays.fill(seenWords, 0L);
+                fallback.reset();
+            }
+
+            private void usePropertyMask(Map<String, Integer> indexes) {
+                propertyIndexes = indexes;
+                seen = 0;
+                int words = (indexes.size() + Long.SIZE - 1) / Long.SIZE;
+                if (words > 1) {
+                    if (seenWords == null || seenWords.length < words) {
+                        seenWords = new long[words];
+                    } else {
+                        Arrays.fill(seenWords, 0, words, 0L);
+                    }
+                }
+            }
+
+            private boolean isDuplicate(String name) throws JsonParseException {
+                Integer index = propertyIndexes == null ? null : propertyIndexes.get(name);
+                if (index == null) return fallback.isDup(name);
+                return mark(index);
+            }
+
+            private void mark(String name) {
+                Integer index = propertyIndexes == null ? null : propertyIndexes.get(name);
+                if (index != null) mark(index);
+            }
+
+            private boolean mark(int index) {
+                if (index < Long.SIZE) {
+                    long bit = 1L << index;
+                    boolean duplicate = (seen & bit) != 0;
+                    seen |= bit;
+                    return duplicate;
+                }
+                int word = index / Long.SIZE;
+                long bit = 1L << (index % Long.SIZE);
+                boolean duplicate = (seenWords[word] & bit) != 0;
+                seenWords[word] |= bit;
+                return duplicate;
+            }
         }
     }
 
@@ -437,6 +540,27 @@ public final class ZLinkFrameworkJsonProfile {
                                                 : valueInstantiator;
                                     }
                                 });
+                        context.addBeanDeserializerModifier(
+                                new BeanDeserializerModifier() {
+                                    @Override
+                                    public JsonDeserializer<?> modifyDeserializer(
+                                            DeserializationConfig config,
+                                            BeanDescription bean,
+                                            JsonDeserializer<?> deserializer) {
+                                        if (!(deserializer instanceof BeanDeserializerBase)) {
+                                            return deserializer;
+                                        }
+                                        List<BeanPropertyDefinition> properties =
+                                                bean.findProperties();
+                                        Map<String, Integer> indexes =
+                                                new HashMap<>(properties.size());
+                                        for (BeanPropertyDefinition property : properties) {
+                                            indexes.putIfAbsent(property.getName(), indexes.size());
+                                        }
+                                        return new TypedPropertyDeserializer(
+                                                deserializer, Map.copyOf(indexes));
+                                    }
+                                });
                     }
                 };
         JsonSerializer<Number> finiteNumberSerializer =
@@ -528,6 +652,53 @@ public final class ZLinkFrameworkJsonProfile {
                     }
                 });
         return module;
+    }
+
+    private static final class TypedPropertyDeserializer extends DelegatingDeserializer {
+        private final Map<String, Integer> propertyIndexes;
+
+        private TypedPropertyDeserializer(
+                JsonDeserializer<?> delegate, Map<String, Integer> propertyIndexes) {
+            super(delegate);
+            this.propertyIndexes = propertyIndexes;
+        }
+
+        @Override
+        protected JsonDeserializer<?> newDelegatingInstance(JsonDeserializer<?> delegate) {
+            return new TypedPropertyDeserializer(delegate, propertyIndexes);
+        }
+
+        @Override
+        public Object deserialize(JsonParser parser, DeserializationContext context)
+                throws IOException {
+            useFixedPropertyNames(parser);
+            return super.deserialize(parser, context);
+        }
+
+        @Override
+        public Object deserialize(
+                JsonParser parser, DeserializationContext context, Object intoValue)
+                throws IOException {
+            useFixedPropertyNames(parser);
+            return super.deserialize(parser, context, intoValue);
+        }
+
+        @Override
+        public Object deserializeWithType(
+                JsonParser parser,
+                DeserializationContext context,
+                com.fasterxml.jackson.databind.jsontype.TypeDeserializer typeDeserializer)
+                throws IOException {
+            useFixedPropertyNames(parser);
+            return super.deserializeWithType(parser, context, typeDeserializer);
+        }
+
+        private void useFixedPropertyNames(JsonParser parser) throws IOException {
+            if (parser.currentToken() == JsonToken.START_OBJECT
+                    && parser instanceof ProfileParser profileParser) {
+                profileParser.usePropertyMask(propertyIndexes);
+            }
+        }
     }
 
     private static byte[] readCanonicalBytes(JsonParser parser, DeserializationContext context)
