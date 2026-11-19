@@ -28,6 +28,7 @@ public sealed partial class LocationRuntimeTests
         var flaky = new OutageLeaseStore(store);
         await using var first = await DiscardedAuthorityHost.Start(flaky, time);
         var locations = first.Locations;
+        var renewal = new OwnerLeaseRenewalProbe(locations);
         await first
             .Provider.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate("discarded-spot", "outage-execution")
@@ -62,11 +63,14 @@ public sealed partial class LocationRuntimeTests
             var episode = locations.GetHealthSnapshot().StoreOutage!;
             var remaining = episode.Lifetime - time.GetElapsedTime(episode.LeaseOperationStartedAt);
             var beforeDiscard = flaky.DiscardedCleanupCalls;
+            renewal.Arm();
             if (expired)
                 time.Advance(remaining);
             else
                 time.AdvanceMonotonic(remaining);
             Assert.Equal(beforeDiscard, flaky.DiscardedCleanupCalls);
+            // The heartbeat operation this advance started ends before the test submits renewals.
+            await renewal.SettledAsync();
         }
         else
         {
@@ -85,20 +89,20 @@ public sealed partial class LocationRuntimeTests
         if (expired)
         {
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey));
-            time.AdvanceMonotonic(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
+            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey));
-            time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
         }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(actorKey));
         if (expired)
         {
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
-            time.AdvanceMonotonic(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
+            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
-            time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
         }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(spotKey));
