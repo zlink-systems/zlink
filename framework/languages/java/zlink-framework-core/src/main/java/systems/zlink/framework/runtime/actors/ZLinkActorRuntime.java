@@ -3896,7 +3896,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
-        return submitActorDispatch(target, actorId, payloadBytes, operation, null, null, null);
+        return submitActorDispatch(
+                target, actorId, payloadBytes, operation, () -> {}, null, null, null);
     }
 
     public CompletionStage<Void> submitActorDispatch(
@@ -3904,6 +3905,19 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return submitActorDispatch(
+                target, actorId, payloadBytes, operation, () -> {}, admission, header, payload);
+    }
+
+    public CompletionStage<Void> submitActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload) {
@@ -3917,7 +3931,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 turn,
                                 payloadBytes,
                                 operation,
-                                () -> {},
+                                release,
                                 admission,
                                 header,
                                 payload));

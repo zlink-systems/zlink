@@ -94,6 +94,7 @@ abstract class ZLinkSpotContextHost {
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
+            Runnable release,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
             Message payload);

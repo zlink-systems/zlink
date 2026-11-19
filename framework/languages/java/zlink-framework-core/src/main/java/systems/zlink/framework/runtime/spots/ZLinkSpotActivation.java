@@ -157,6 +157,12 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
 
     CompletionStage<Void> admitRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+        CompletableFuture<Void> accepted =
+                admission == null ? new CompletableFuture<>() : admission;
+        accepted.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) received.close();
+                });
         var dispatched =
                 host.admitNewApplicationJob(
                         context,
@@ -167,7 +173,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                 return CompletableFuture.failedFuture(hostRejection);
                             if (host.dispatchSpotRouteBridgePacket(received)) {
                                 received.close();
-                                if (admission != null) admission.complete(null);
+                                accepted.complete(null);
                                 return CompletableFuture.completedFuture(null);
                             }
                             var replyRoute =
@@ -189,13 +195,15 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                                                                 replyRoute
                                                                                         .completeLocal()),
                                                 replyRoute::releaseForRelocation,
-                                                admission);
+                                                accepted);
                             } catch (RuntimeException | Error failure) {
                                 replyRoute.completeLocal();
                                 throw failure;
                             }
-                            // Release the local reply route before callers observe the failure;
-                            // cancellation still reaches the held dispatch directly.
+                            accepted.whenComplete(
+                                    (done, failure) -> {
+                                        if (failure != null) replyRoute.completeLocal();
+                                    });
                             CompletableFuture<Void> settled =
                                     systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
                                             .newCancellationFuture();
@@ -203,7 +211,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                     .forwardCancellation(settled, admitted);
                             admitted.whenComplete(
                                     (done, failure) -> {
-                                        if (failure != null) replyRoute.completeLocal();
                                         if (failure == null) settled.complete(done);
                                         else settled.completeExceptionally(failure);
                                     });
@@ -212,8 +219,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         dispatched.whenComplete(
                 (done, failure) -> {
                     if (failure != null) {
-                        if (admission != null) admission.completeExceptionally(failure);
-                        received.close();
+                        accepted.completeExceptionally(failure);
                     }
                 });
         return dispatched;

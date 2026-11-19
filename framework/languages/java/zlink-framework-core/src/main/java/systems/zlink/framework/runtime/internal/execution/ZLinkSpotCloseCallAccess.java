@@ -29,6 +29,13 @@ public final class ZLinkSpotCloseCallAccess {
 
         void requireExecution(ZLinkSerialExecutionQueue queue, boolean application);
 
+        CompletionStage<Void> enqueueActorWithPayloadBytes(
+                ZLinkSerialExecutionQueue queue,
+                long payloadBytes,
+                Supplier<CompletionStage<Void>> operation,
+                Runnable release,
+                CompletableFuture<Void> admission);
+
         CompletionStage<List<CompletableFuture<Void>>> admitDurablePrefix(
                 ZLinkSerialExecutionQueue queue,
                 List<ZLinkSerialExecutionQueue.QueuedRecord> records,
@@ -59,6 +66,22 @@ public final class ZLinkSpotCloseCallAccess {
 
     public static void requireExecution(ZLinkSerialExecutionQueue queue, boolean application) {
         selectedAccess().requireExecution(Objects.requireNonNull(queue, "queue"), application);
+    }
+
+    /** Enqueues accepted Actor work whose payload is released when the work ends. */
+    public static CompletionStage<Void> enqueueActorWithPayloadBytes(
+            ZLinkSerialExecutionQueue queue,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
+            CompletableFuture<Void> admission) {
+        return selectedAccess()
+                .enqueueActorWithPayloadBytes(
+                        Objects.requireNonNull(queue, "queue"),
+                        payloadBytes,
+                        operation,
+                        release,
+                        admission);
     }
 
     public static CompletionStage<List<CompletableFuture<Void>>> admitDurablePrefix(

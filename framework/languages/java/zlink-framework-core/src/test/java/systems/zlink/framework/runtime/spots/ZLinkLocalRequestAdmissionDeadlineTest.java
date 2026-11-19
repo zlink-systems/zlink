@@ -500,6 +500,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     void pausedAcceptedRequestEndsOnDeadlineOrCancellation(boolean actor, boolean cancel)
             throws Exception {
         handled.set(0);
+        receivedValues.clear();
         heldReply = new CompletableFuture<>();
         heldEntered = new CompletableFuture<>();
         var options = admissionOptions();
@@ -507,9 +508,11 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
             createLocalTargets(runtime);
-            var active = submitLocal(runtime, actor, Duration.ofSeconds(5), true);
+            var active =
+                    submitLocal(runtime, actor, Duration.ofSeconds(5), new Probe(true, "active"));
             heldEntered.get(2, TimeUnit.SECONDS);
-            var pending = submitLocal(runtime, actor, Duration.ofSeconds(1), false);
+            var pending =
+                    submitLocal(runtime, actor, Duration.ofSeconds(1), new Probe(false, "pending"));
             pending.admitted().toCompletableFuture().get(2, TimeUnit.SECONDS);
             assertEquals(1, handled.get());
             var locations = ZLinkFrameworkRuntimeTestAccess.locationRuntime(runtime);
@@ -555,17 +558,50 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                         ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                         assertInstanceOf(ZLinkFrameworkException.class, expired.getCause()).kind());
             }
+            assertEquals(
+                    0,
+                    options.registration()
+                            .applicationJobQueue()
+                            .snapshot()
+                            .reservedSupplyPermits());
+            assertEquals(
+                    0,
+                    options.registration()
+                            .applicationJobQueue()
+                            .snapshot()
+                            .queuedApplicationJobs());
+            assertEquals(0, options.registration().applicationJobQueue().snapshot().permitsInUse());
+            assertEquals(
+                    0, options.registration().applicationJobQueue().snapshot().capacityWaiters());
             assertTrue(
                     locations.renewOwnerLeaseOnce().toCompletableFuture().get(2, TimeUnit.SECONDS));
             assertEquals(
                     "reply",
-                    submitLocal(runtime, actor, Duration.ofSeconds(1), false)
+                    submitLocal(runtime, actor, Duration.ofSeconds(1), new Probe(false, "fresh"))
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS));
             assertEquals(
-                    2,
+                    3,
                     handled.get(),
-                    "expired or cancelled work never enters the handler after resume");
+                    "accepted work executes after resume despite caller completion");
+            assertEquals(
+                    java.util.List.of("active", "pending", "fresh"),
+                    java.util.List.copyOf(receivedValues));
+            assertEquals(
+                    0,
+                    options.registration()
+                            .applicationJobQueue()
+                            .snapshot()
+                            .reservedSupplyPermits());
+            assertEquals(
+                    0,
+                    options.registration()
+                            .applicationJobQueue()
+                            .snapshot()
+                            .queuedApplicationJobs());
+            assertEquals(0, options.registration().applicationJobQueue().snapshot().permitsInUse());
+            assertEquals(
+                    0, options.registration().applicationJobQueue().snapshot().capacityWaiters());
             assertEquals(1, terminals.get());
         } finally {
             heldReply.complete("cleanup");
@@ -623,13 +659,21 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
             boolean actor,
             Duration timeout,
             boolean hold) {
+        return submitLocal(runtime, actor, timeout, new Probe(hold));
+    }
+
+    private ZLinkRequestStage<String> submitLocal(
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime,
+            boolean actor,
+            Duration timeout,
+            Probe probe) {
         return actor
                 ? runtime.actorClient()
-                        .requestToActor("actor-a", new Probe(hold))
+                        .requestToActor("actor-a", probe)
                         .timeout(timeout)
                         .submit(String.class)
                 : runtime.route()
-                        .requestToSpot("room-a", new Probe(hold))
+                        .requestToSpot("room-a", probe)
                         .timeout(timeout)
                         .submit(String.class);
     }
@@ -668,7 +712,14 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     private static CompletableFuture<String> heldReply;
     private static CompletableFuture<Void> heldEntered;
 
-    public record Probe(boolean hold) {
+    private static final java.util.Queue<String> receivedValues =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    public record Probe(boolean hold, String value) {
+        public Probe(boolean hold) {
+            this(hold, "probe");
+        }
+
         public Probe() {
             this(false);
         }
@@ -745,6 +796,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
         public CompletionStage<String> handle(
                 Entry spot, Actor actor, ZLinkMessageContext context, Probe request) {
             handled.incrementAndGet();
+            receivedValues.add(request.value());
             if (request.hold() && heldEntered != null) heldEntered.complete(null);
             return request.hold() ? heldReply : CompletableFuture.completedFuture("reply");
         }
@@ -753,6 +805,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     public static final class SpotHandler implements ZLinkSpotRequestHandler<Room, Probe, String> {
         public CompletionStage<String> handle(Room spot, Probe request) {
             handled.incrementAndGet();
+            receivedValues.add(request.value());
             if (request.hold() && heldEntered != null) heldEntered.complete(null);
             return request.hold() ? heldReply : CompletableFuture.completedFuture("reply");
         }
