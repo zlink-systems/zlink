@@ -27,6 +27,8 @@ import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse
 import systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion
 import systems.zlink.framework.spots.ZLinkTimer
+import systems.zlink.framework.spots.ZLinkTimerOptions
+import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoGame
@@ -35,6 +37,7 @@ import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomEven
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomGame
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomSettings
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.actors.PlayerActor
+import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers.BingoRoomCloseTimerHandler
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers.BingoRoomSettingsInitializer
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers.BingoRoomTimerHandler
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoGameEndedNotify
@@ -82,6 +85,8 @@ class BingoRoomSpot(
         BingoRoomSettings.create("two-player", 0, SampleTimings.DrawPeriod.toMillis())
     private var game: BingoRoomGame? = BingoGame.room(context.spotId(), settings)
     private var timer: ZLinkTimer? = null
+    private var closeTimer: ZLinkTimer? = null
+    private var closeRequested = false
     private var cleanupStarted = false
 
     override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse {
@@ -168,8 +173,8 @@ class BingoRoomSpot(
     override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
         if (!actors.containsKey(actor.actorId()) || game == null) {
             observers.remove(actor.actorId())
-            if (settings.observerMode() && observers.isEmpty()) context.close()
             logger.info("bingo-lifecycle room-leave actor={}", actor.actorId())
+            if (settings.observerMode() && observers.isEmpty()) scheduleClose()
             return
         }
         val state = requireGame().snapshot()
@@ -193,8 +198,26 @@ class BingoRoomSpot(
             record.losses,
         )
         actors.remove(actor.actorId())
-        if (actors.isEmpty() && observers.isEmpty()) context.close()
         logger.info("bingo-lifecycle room-leave actor={}", actor.actorId())
+        if (actors.isEmpty() && observers.isEmpty()) scheduleClose()
+    }
+
+    fun tryRequestClose(): Boolean {
+        if (closeRequested) return false
+        closeRequested = true
+        return true
+    }
+
+    private suspend fun scheduleClose() {
+        if (closeTimer != null) return
+        closeTimer =
+            context
+                .addTimer<BingoRoomCloseTimerHandler>(
+                    "bingo-room-close",
+                    Duration.ofMillis(1),
+                    ZLinkTimerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false),
+                )
+                .await()
     }
 
     override suspend fun onDisconnectActorSuspending(actor: PlayerActor) {
@@ -210,11 +233,7 @@ class BingoRoomSpot(
                 .addTimer<BingoRoomTimerHandler>(
                     "bingo-draw",
                     Duration.ofMillis(settings.drawPeriodMillis),
-                    systems.zlink.framework.spots.ZLinkTimerOptions(
-                        systems.zlink.framework.spots.ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
-                        1,
-                        false,
-                    ),
+                    ZLinkTimerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false),
                 )
                 .await()
     }
@@ -222,6 +241,7 @@ class BingoRoomSpot(
     override suspend fun onClosingSuspending(context: ZLinkSpotClosingContext) {
         playerNotifications.cancel()
         timer?.cancel()?.await()
+        closeTimer?.cancel()?.await()
     }
 
     override suspend fun onRelocationReadyCompletedSuspending(
