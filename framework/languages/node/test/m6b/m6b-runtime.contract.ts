@@ -7478,6 +7478,7 @@ test('Missing Instance request classifies an actorLocationStale terminal as Unav
     meshNames: () => ['mesh'],
     meshNode: () => node,
     dispatchErrors: {
+      captureEnabled: () => true,
       flow: {
         flowCreationEnabled: () => false,
         accepts: () => false

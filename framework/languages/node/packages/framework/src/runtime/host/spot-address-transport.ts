@@ -415,7 +415,17 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     }
     const selected = this.selectMissingTarget(spotId, call, current);
     if (selected.kind === 'capacity') {
-      throw missingInstancePlacementCapacity(spotId, call.instanceSpotType);
+      const error = missingInstancePlacementCapacity(spotId, call.instanceSpotType);
+      this.reportInstanceRequestError(
+        spotId,
+        request,
+        error,
+        call.initialMeshName,
+        undefined,
+        call.instanceSpotType,
+        ZLinkDispatchErrorReason.Backpressure
+      );
+      throw error;
     }
     if (selected.kind === 'unsupported') {
       const error = createInternalFrameworkException(
