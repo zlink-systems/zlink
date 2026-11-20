@@ -74,6 +74,7 @@ import {
   type ReceiveRecord,
   type ServiceSpot,
   type StreamSessionActorAuthorityFence,
+  type ServiceStreamSessionBinding,
   type StreamSessionService,
   MeshNodeRuntimeState,
   MeshPeerRuntimeState,
@@ -2344,6 +2345,10 @@ class RawStreamSessionService implements StreamSessionService {
 
   bindings(sessionRid: RoutingId) {
     return this.stateful.sessionBindings(sessionRid);
+  }
+
+  captureSubmission(binding: ServiceStreamSessionBinding) {
+    return this.stateful.captureSessionSubmission(binding);
   }
 
   async sendToActor(
