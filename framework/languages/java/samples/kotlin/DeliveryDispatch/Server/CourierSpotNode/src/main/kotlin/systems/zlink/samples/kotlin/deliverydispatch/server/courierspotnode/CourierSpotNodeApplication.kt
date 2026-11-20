@@ -26,41 +26,43 @@ import systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode.spot
 )
 class CourierSpotNodeApplication {
     @Bean
-    fun courierSpotNodeFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        options.useCoroutineHandlers(Dispatchers.Default)
-        val node = SampleTopology.CourierNode
-        val selected = NodeOptions.resolve(node)
-        options.addHandlersFromPackageOf<CourierSpotNodeApplication>()
-        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+    fun courierSpotNodeFramework(locations: ZLinkRedisLocationStore): ZLinkFrameworkConfigurer =
+        ZLinkFrameworkConfigurer { options ->
+            options.addLocationStore(locations)
+            options.useCoroutineHandlers(Dispatchers.Default)
+            val node = SampleTopology.CourierNode
+            val selected = NodeOptions.resolve(node)
+            options.addHandlersFromPackageOf<CourierSpotNodeApplication>()
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
-        // --8<-- [start:doc-dd-node-register]
-        val spotNode = options.addRouteMesh(SampleNames.CourierSpotMesh)
-        //  Fixed RID so Dispatch can name this courier node in its actor-route readiness row.
-        //  An auto-assigned RID cannot be named, and peer status carries no endpoint.
-        spotNode
-            .listen(selected.spotEndpoint)
-            .setRoutingId(
-                RoutingId.from(
-                    if (SampleTopology.CourierNode == "node2") {
-                        SampleNames.CourierNode2
-                    } else {
-                        SampleNames.CourierNode1
-                    }
+            // --8<-- [start:doc-dd-node-register]
+            val spotNode = options.addRouteMesh(SampleNames.CourierSpotMesh)
+            //  Fixed RID so Dispatch can name this courier node in its actor-route readiness row.
+            //  An auto-assigned RID cannot be named, and peer status carries no endpoint.
+            spotNode
+                .listen(selected.spotEndpoint)
+                .setRoutingId(
+                    RoutingId.from(
+                        if (SampleTopology.CourierNode == "node2") {
+                            SampleNames.CourierNode2
+                        } else {
+                            SampleNames.CourierNode1
+                        }
+                    )
                 )
-            )
-        spotNode.objects().server().addEntrySpot<CourierEntrySpot>().addActorFactory<
-            CourierActor,
-            CourierActorFactory,
-        >(
-            SampleNames.CourierActorType
-        ) {
-            disableRelocation()
+            spotNode.objects().server().addEntrySpot<CourierEntrySpot>().addActorFactory<
+                CourierActor,
+                CourierActorFactory,
+            >(
+                SampleNames.CourierActorType
+            ) {
+                disableRelocation()
+            }
+            // The courier's decision goes back to dispatch as its own one-way message, so this
+            // node needs a way to speak to the dispatch channel (common sample spec section 7.4).
+            options.addClientServerChannel(SampleNames.DispatchChannel).client()
+            // --8<-- [end:doc-dd-node-register]
         }
-        // The courier's decision goes back to dispatch as its own one-way message, so this
-        // node needs a way to speak to the dispatch channel (common sample spec section 7.4).
-        options.addClientServerChannel(SampleNames.DispatchChannel).client()
-        // --8<-- [end:doc-dd-node-register]
-    }
 
     @Bean fun actorDirectory(): ActorDirectory = ActorDirectory()
 
