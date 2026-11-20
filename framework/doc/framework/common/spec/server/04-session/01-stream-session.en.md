@@ -259,8 +259,12 @@ connector owns a per-connector-instance typed codec option
 
 The session error callback is limited to surfacing a monitor-observable
 transport error at the session level. When a connection ends with Core monitor's `DISCONNECTED`
-event, the session error carries the `zlink_disconnect_reason_t` value that Core reported in that
-event's `value` ([Core monitoring §3.2](../../../../../../../core/doc/spec/core/06-monitoring.en.md#32-value-and-flags)). The framework doesn't interpret this value or
+event, the framework in all four languages runs the session error callback once with the
+`TransportError` kind and then performs the existing connection-close handling. That error carries the
+`zlink_disconnect_reason_t` value Core reported in the event's `value` in an optional field (named
+`disconnectReason`, `DisconnectReason`, or `disconnect_reason()` in each exact interface). The field
+exists only on errors produced by `DISCONNECTED`, and `UNKNOWN` (0) counts as present
+([Core monitoring §3.2](../../../../../../../core/doc/spec/core/06-monitoring.en.md#32-value-and-flags)). The framework doesn't interpret this value or
 turn it into another close reason.
 
 A server STREAM session follows the heartbeat rule of [Stream Connector §6](../../stream-connector/32-stream-connector.en.md#6-connection-lifecycle). The heartbeat interval and timeout default to that section's defaults and can be changed in the Stream node configuration. On the server, the result of the no-inbound timeout is closing the session with `heartbeat_timeout`, not reconnecting.

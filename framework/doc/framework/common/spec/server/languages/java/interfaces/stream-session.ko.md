@@ -106,6 +106,14 @@ public final class systems.zlink.framework.streams.ZLinkStreamError extends java
  public final boolean equals(java.lang.Object);
  public systems.zlink.framework.streams.ZLinkStreamSessionError error();
  public java.lang.String message();
+ public java.util.Optional<systems.zlink.framework.streams.ZLinkDisconnectReason> disconnectReason();
+}
+public final class systems.zlink.framework.streams.ZLinkDisconnectReason extends java.lang.Enum<systems.zlink.framework.streams.ZLinkDisconnectReason> {
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason UNKNOWN;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason HANDSHAKE_FAILED;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason TRANSPORT_ERROR;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason CONTEXT_TERMINATED;
+ public int value();
 }
 public final class systems.zlink.framework.streams.ZLinkStreamSessionError extends java.lang.Enum<systems.zlink.framework.streams.ZLinkStreamSessionError> {
  public static final systems.zlink.framework.streams.ZLinkStreamSessionError INTERNAL;
