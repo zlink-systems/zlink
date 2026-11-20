@@ -500,7 +500,7 @@ Framework는 다음 순서로 destroy를 진행한다.
 | 상태 | Destroy 결과 |
 |---|---|
 | 같은 incarnation이 이미 없다. | Idempotent `false`를 반환한다. |
-| 같은 incarnation의 destroy가 진행 중이다. | 진행 중인 destroy의 terminal에 합류해 같은 결과를 받는다. |
+| 같은 incarnation의 destroy가 진행 중이다. | Owner node에서 호출했으면 진행 중인 destroy의 terminal에 합류해 같은 결과를 받는다. 다른 node에서 호출했으면 아래 결과 관찰 표를 따른다. |
 | 같은 ActorId의 다른 generation이 있다. | `InvalidOperation`으로 끝난다. |
 | Actor가 이동을 위한 seal 상태다. | `Unavailable`로 끝난다. |
 
