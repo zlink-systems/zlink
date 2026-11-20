@@ -1580,6 +1580,11 @@ assembly Zlink.Framework
     property System.String SessionId { get; } [nullability=read:not-null,write:unknown]
     method abstract System.Threading.Tasks.ValueTask CloseAsync() [return=read:not-null,write:not-null]
     method abstract System.Boolean Write(Zlink.Framework.Contracts.Messaging.ZLinkMessage payload [nullability=read:not-null,write:not-null], Systems.Zlink.SendFlags flags = Systems.Zlink.SendFlags.None [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type enum Zlink.Framework.Contracts.Streams.ZLinkDisconnectReason : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Zlink.Framework.Contracts.Streams.ZLinkDisconnectReason ContextTerminated = 5 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Streams.ZLinkDisconnectReason HandshakeFailed = 3 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Streams.ZLinkDisconnectReason TransportError = 4 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Streams.ZLinkDisconnectReason Unknown = 0 [nullability=read:not-null,write:not-null]
   type sealed-class Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata
     ctor ZLinkMessageMetadata(System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> values [nullability=read:not-null,write:not-null])
     property static Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata Empty { get; } [nullability=read:not-null,write:unknown]
@@ -1592,10 +1597,11 @@ assembly Zlink.Framework
     property Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata Metadata { get; } [nullability=read:not-null,write:unknown]
     property System.String PacketName { get; } [nullability=read:not-null,write:unknown]
   type readonly-struct Zlink.Framework.Contracts.Streams.ZLinkStreamError : System.IEquatable<Zlink.Framework.Contracts.Streams.ZLinkStreamError>
-    ctor ZLinkStreamError(Zlink.Framework.Contracts.Streams.ZLinkStreamSessionError Error [nullability=read:not-null,write:not-null], System.String? Message [nullability=read:nullable,write:nullable])
+    ctor ZLinkStreamError(Zlink.Framework.Contracts.Streams.ZLinkStreamSessionError Error [nullability=read:not-null,write:not-null], System.String? Message [nullability=read:nullable,write:nullable], System.Nullable<Zlink.Framework.Contracts.Streams.ZLinkDisconnectReason> DisconnectReason = null [nullability=read:nullable,write:nullable])
+    property System.Nullable<Zlink.Framework.Contracts.Streams.ZLinkDisconnectReason> DisconnectReason { get; init; } [nullability=read:nullable,write:nullable]
     property Zlink.Framework.Contracts.Streams.ZLinkStreamSessionError Error { get; init; } [nullability=read:not-null,write:not-null]
     property System.String? Message { get; init; } [nullability=read:nullable,write:nullable]
-    method System.Void Deconstruct(out Zlink.Framework.Contracts.Streams.ZLinkStreamSessionError Error [nullability=read:not-null,write:not-null], out System.String? Message [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Zlink.Framework.Contracts.Streams.ZLinkStreamSessionError Error [nullability=read:not-null,write:not-null], out System.String? Message [nullability=read:nullable,write:nullable], out System.Nullable<Zlink.Framework.Contracts.Streams.ZLinkDisconnectReason> DisconnectReason [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
     method override System.Boolean Equals(System.Object obj [nullability=read:unknown,write:unknown]) [return=read:not-null,write:not-null]
     method virtual System.Boolean Equals(Zlink.Framework.Contracts.Streams.ZLinkStreamError other [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]

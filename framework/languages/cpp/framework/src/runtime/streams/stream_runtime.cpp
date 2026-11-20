@@ -667,6 +667,11 @@ std::string_view stream_error_t::message () const noexcept
     return _message;
 }
 
+std::optional<disconnect_reason_t> stream_error_t::disconnect_reason () const noexcept
+{
+    return _disconnect_reason;
+}
+
 stream_metadata_t::stream_metadata_t (std::map<std::string, std::string> values) :
     _values (std::move (values))
 {
