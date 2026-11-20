@@ -37,6 +37,14 @@ public final class ZLinkStoreLocationResolvers
     private final ZLinkLiveLocationRows liveRows;
     private final Duration routeCacheMaxAge;
     private final Map<String, CachedRoute<SpotRoute>> spotRoutes = new ConcurrentHashMap<>();
+    // Entries exist only while a store resolution is in flight. All changes to a key's
+    // read eligibility and positive route use spotRoutes.compute for the same key.
+    private final Map<String, SpotRouteRead> spotRouteReads = new ConcurrentHashMap<>();
+
+    private static final class SpotRouteRead {
+        private String storeVersion;
+    }
+
     private final Map<String, CachedRoute<ActorRoute>> actorRoutes = new ConcurrentHashMap<>();
     private final ZLinkServiceAuthorityPayloadCodec spotAuthorityCodec =
             new ZLinkServiceAuthorityPayloadCodec();
@@ -67,11 +75,18 @@ public final class ZLinkStoreLocationResolvers
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
         }
-        routeReadAdmission.run();
-        return observeAuthorityRead(
-                        stores.unifiedStore()
-                                .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false))
-                .thenCompose(read -> resolveReadySpot(spotId, read));
+        SpotRouteRead pending = beginSpotRead(spotId);
+        try {
+            routeReadAdmission.run();
+            return observeAuthorityRead(
+                            stores.unifiedStore()
+                                    .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false))
+                    .thenCompose(read -> resolveReadySpot(spotId, read, pending))
+                    .whenComplete((value, failure) -> endSpotRead(spotId, pending));
+        } catch (RuntimeException | Error failure) {
+            endSpotRead(spotId, pending);
+            throw failure;
+        }
     }
 
     public CompletionStage<ActorRoute> resolveActor(String actorId) {
@@ -187,7 +202,17 @@ public final class ZLinkStoreLocationResolvers
     }
 
     public void invalidateSpotRoute(String spotId) {
-        spotRoutes.remove(Objects.requireNonNull(spotId, "spotId"));
+        invalidateSpotRoute(spotId, null);
+    }
+
+    private void invalidateSpotRoute(String spotId, SpotRouteRead source) {
+        spotRoutes.compute(
+                Objects.requireNonNull(spotId, "spotId"),
+                (key, cached) -> {
+                    if (source != null && spotRouteReads.get(key) != source) return cached;
+                    spotRouteReads.remove(key);
+                    return null;
+                });
     }
 
     /**
@@ -225,7 +250,16 @@ public final class ZLinkStoreLocationResolvers
                 || cached.ownerLeaseGeneration() != spot.ownerLeaseGeneration()) {
             return false;
         }
-        return spotRoutes.remove(spot.spotId(), cached);
+        boolean[] removed = {false};
+        spotRoutes.compute(
+                spot.spotId(),
+                (key, current) -> {
+                    if (current != cached) return current;
+                    spotRouteReads.remove(key);
+                    removed[0] = true;
+                    return null;
+                });
+        return removed[0];
     }
 
     public boolean invalidateRouteIfMatches(ZLinkServiceMessageFollowWireCodec.Notice notice) {
@@ -234,13 +268,76 @@ public final class ZLinkStoreLocationResolvers
     }
 
     public void invalidateAllRoutes() {
+        spotRouteReads.keySet().forEach(this::invalidateSpotRoute);
         spotRoutes.clear();
         actorRoutes.clear();
     }
 
+    private SpotRouteRead beginSpotRead(String spotId) {
+        SpotRouteRead pending = new SpotRouteRead();
+        spotRoutes.compute(
+                spotId,
+                (key, cached) -> {
+                    spotRouteReads.put(key, pending);
+                    return cached;
+                });
+        return pending;
+    }
+
+    private void endSpotRead(String spotId, SpotRouteRead pending) {
+        spotRoutes.compute(
+                spotId,
+                (key, cached) -> {
+                    spotRouteReads.remove(key, pending);
+                    return cached;
+                });
+    }
+
+    private void observeSpotAuthority(String spotId, String storeVersion, SpotRouteRead source) {
+        spotRoutes.compute(
+                spotId,
+                (key, cached) -> {
+                    SpotRouteRead pending = spotRouteReads.get(key);
+                    if (source != null && pending != source) return cached;
+                    if (pending != null) {
+                        if (storeVersion == null
+                                || (pending.storeVersion != null
+                                        && !pending.storeVersion.equals(storeVersion))) {
+                            spotRouteReads.remove(key);
+                        } else {
+                            pending.storeVersion = storeVersion;
+                        }
+                    }
+                    // StoreVersion is opaque; a different observation invalidates the snapshot.
+                    return cached != null && !cached.storeVersion().equals(storeVersion)
+                            ? null
+                            : cached;
+                });
+    }
+
     public CompletionStage<SpotRoute> resolveReadySpot(String spotId, Object read) {
+        observeSpotAuthority(
+                spotId,
+                read instanceof ZLinkAuthoritySnapshot snapshot ? snapshot.storeVersion() : null,
+                null);
+        SpotRouteRead pending = beginSpotRead(spotId);
+        try {
+            return resolveReadySpot(spotId, read, pending)
+                    .whenComplete((value, failure) -> endSpotRead(spotId, pending));
+        } catch (RuntimeException | Error failure) {
+            endSpotRead(spotId, pending);
+            throw failure;
+        }
+    }
+
+    private CompletionStage<SpotRoute> resolveReadySpot(
+            String spotId, Object read, SpotRouteRead pending) {
+        observeSpotAuthority(
+                spotId,
+                read instanceof ZLinkAuthoritySnapshot snapshot ? snapshot.storeVersion() : null,
+                pending);
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-            spotRoutes.remove(spotId);
+            invalidateSpotRoute(spotId, pending);
             return CompletableFuture.completedFuture(null);
         }
         var authority = spotAuthorityCodec.decode(snapshot.payload()).orElse(null);
@@ -253,7 +350,7 @@ public final class ZLinkStoreLocationResolvers
                 || !authority.spotId().equals(spotId)
                 || !authority.ownerId().equals(snapshot.ownerId())
                 || authority.ownerLeaseGeneration() != snapshot.ownerLeaseGeneration()) {
-            spotRoutes.remove(spotId);
+            invalidateSpotRoute(spotId, pending);
             return CompletableFuture.completedFuture(null);
         }
         SpotRoute route =
@@ -271,7 +368,7 @@ public final class ZLinkStoreLocationResolvers
                         snapshot.storeVersion(),
                         authority.state());
         if (authority.state() != ZLinkServiceAuthorityPayloadCodec.State.READY) {
-            spotRoutes.remove(spotId);
+            invalidateSpotRoute(spotId, pending);
             return CompletableFuture.completedFuture(route);
         }
         return admitPositiveRoute(
@@ -280,7 +377,8 @@ public final class ZLinkStoreLocationResolvers
                 route,
                 snapshot.ownerId(),
                 snapshot.ownerLeaseGeneration(),
-                snapshot.storeVersion());
+                snapshot.storeVersion(),
+                pending);
     }
 
     private CompletionStage<ActorRoute> resolveReadyActor(
@@ -376,6 +474,18 @@ public final class ZLinkStoreLocationResolvers
             String ownerId,
             long ownerLeaseGeneration,
             String storeVersion) {
+        return admitPositiveRoute(
+                cache, key, value, ownerId, ownerLeaseGeneration, storeVersion, null);
+    }
+
+    private <V> CompletionStage<V> admitPositiveRoute(
+            Map<String, CachedRoute<V>> cache,
+            String key,
+            V value,
+            String ownerId,
+            long ownerLeaseGeneration,
+            String storeVersion,
+            SpotRouteRead pending) {
         return liveRows.ownerLeaseRemaining(ownerId, ownerLeaseGeneration)
                 .thenCompose(
                         remaining -> {
@@ -391,15 +501,26 @@ public final class ZLinkStoreLocationResolvers
                                         remaining.compareTo(routeCacheMaxAge) < 0
                                                 ? remaining
                                                 : routeCacheMaxAge;
-                                cache.put(
-                                        key,
+                                CachedRoute<V> route =
                                         new CachedRoute<>(
                                                 value,
                                                 storeVersion,
                                                 ownerId,
                                                 ownerLeaseGeneration,
                                                 System.nanoTime(),
-                                                boundedNanos(lifetime)));
+                                                boundedNanos(lifetime));
+                                cache.compute(
+                                        key,
+                                        (id, cached) -> {
+                                            if (pending != null
+                                                    && (spotRouteReads.get(id) != pending
+                                                            || (pending.storeVersion != null
+                                                                    && !pending.storeVersion.equals(
+                                                                            storeVersion)))) {
+                                                return cached;
+                                            }
+                                            return route;
+                                        });
                             }
                             return CompletableFuture.completedFuture(value);
                         });
@@ -443,6 +564,18 @@ public final class ZLinkStoreLocationResolvers
     }
 
     private void invalidateOwnerLease(String ownerId, long ownerLeaseGeneration) {
+        // An in-flight read may not yet have projected its owner; none may cache a
+        // snapshot admitted before this owner lease invalidation.
+        spotRouteReads
+                .keySet()
+                .forEach(
+                        key ->
+                                spotRoutes.compute(
+                                        key,
+                                        (id, cached) -> {
+                                            spotRouteReads.remove(id);
+                                            return cached;
+                                        }));
         spotRoutes
                 .entrySet()
                 .removeIf(entry -> entry.getValue().sameOwner(ownerId, ownerLeaseGeneration));

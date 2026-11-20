@@ -262,6 +262,7 @@ class test_location_repository_t : public zlink::framework::location_repository_
     }
 
     bool fail_authority_queries = false;
+    std::function<void ()> before_owner_read;
 
     void set_authority (std::string key, zlink::framework::authority_snapshot_t snapshot)
     {
@@ -346,6 +347,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
     read_owner_lease (std::string owner_id) override
     {
         ++owner_read_count;
+        if (auto hook = std::exchange (before_owner_read, {}))
+            hook ();
         return _inner.read_owner_lease (std::move (owner_id));
     }
 
@@ -2388,6 +2391,42 @@ TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnl
     EXPECT_FALSE (resolvers.resolve_spot_address ({}, "missing").result ().value ());
     EXPECT_FALSE (resolvers.resolve_spot_address ({}, "missing").result ().value ());
     EXPECT_EQ (0u, store.resolve_spot_count.load ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, InvalidatedInFlightReadyReadCannotRepopulateCache)
+{
+    test_location_repository_t store;
+    (void) claim_test_owner (store, "owner-cache");
+    const auto owner = live_owner_token (store, "owner-cache");
+    auto authority = zlink::framework::authority_snapshot_t{
+      .store_version = "10",
+      .payload = user_spot_authority_payload ("spot-cache", 1),
+      .object_generation = 1,
+      .authority_owner_generation = 1,
+      .owner = owner,
+      .allocation = zlink::framework::placement_allocation_t{
+        .state = zlink::framework::placement_allocation_state_t::active,
+        .object_kind = zlink::framework::placement_object_kind_t::user_spot,
+        .stable_type = "play",
+        .target = zlink::framework::object_creation_target_t{
+          .mesh_name = "mesh-cache",
+          .node_rid = zlink::framework::node_rid_t::from_string ("node-cache"),
+          .node_lifecycle_generation = 1,
+          .owner = owner}}};
+    store.set_authority ("zla1:s:10:spot-cache", authority);
+    location_options_t options;
+    options.route_cache_max_age = std::chrono::seconds (1);
+    store_location_resolvers_t resolvers (store, options);
+
+    store.before_owner_read = [&] {
+        store.set_authority ("zla1:s:10:spot-cache", std::nullopt);
+        resolvers.invalidate_spot_address ("spot-cache");
+    };
+    const auto first = resolvers.resolve_spot_address ({}, "spot-cache").result ().value ();
+    ASSERT_TRUE (first);
+    const auto reads = store.authority_read_count.load ();
+    EXPECT_FALSE (resolvers.resolve_spot_address ({}, "spot-cache").result ().value ());
+    EXPECT_GT (store.authority_read_count.load (), reads);
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, ClosingRoutePreservesOwnerFencesWithoutPositiveCache)

@@ -93,6 +93,203 @@ final class ZLinkSpotCloseConformanceTest {
     private static final String SPOT_TYPE = "close-spot";
     private static final String ACTOR_ID = "close-player";
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.MethodSource("routeCacheCases")
+    void closedSpotJoinInvalidatesWarmRoute(boolean remote, int iteration) throws Exception {
+        try (var flow = routeFlowLog("close-" + remote + "-" + iteration)) {
+            resetStatics();
+            failureCompletion = new CompletableFuture<>();
+            failureClosing = new CompletableFuture<>();
+            failureRelease = CompletableFuture.completedFuture(null);
+            String spotId = "route-close-" + UUID.randomUUID();
+            FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
+            try (var source = startReady(routeCacheOptions(store, "source-" + spotId))) {
+                source.actorManager()
+                        .getOrCreate(ACTOR_ID, "player")
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                try (var owner =
+                        remote ? startReady(routeCacheOptions(store, "owner-" + spotId)) : null) {
+                    var target = remote ? owner : source;
+                    var spot =
+                            target.spotManager()
+                                    .getOrCreate(spotId, SPOT_TYPE)
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get(WAIT_SECONDS, TimeUnit.SECONDS)
+                                    .spot();
+                    var routes = ZLinkFrameworkRuntimeTestAccess.storeLocationResolvers(source);
+                    routes.resolveSpot(spotId)
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    assertTrue(closeStage(target, spot).get(WAIT_SECONDS, TimeUnit.SECONDS));
+                    int reads = store.spotReads.get();
+                    var first = joinFailure(source, spotId);
+                    assertEquals(
+                            remote
+                                    ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
+                            first.kind(),
+                            "iteration=" + iteration);
+                    if (remote) {
+                        assertEquals(reads, store.spotReads.get());
+                        assertEquals(
+                                ZLinkFrameworkErrorKind.NOT_FOUND,
+                                joinFailure(source, spotId).kind(),
+                                "iteration=" + iteration);
+                    }
+                    assertTrue(store.spotReads.get() > reads);
+                    System.out.println(
+                            "4908 close remote="
+                                    + remote
+                                    + " iteration="
+                                    + iteration
+                                    + " first="
+                                    + first.kind()
+                                    + " next=NOT_FOUND reads="
+                                    + reads
+                                    + "->"
+                                    + store.spotReads.get());
+                }
+            }
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(
+            ints = {
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39
+            })
+    void readyResolveOverlappingClosingDoesNotRepopulateCache(int iteration) throws Exception {
+        try (var flow = routeFlowLog("race-" + iteration)) {
+            resetStatics();
+            failureClosing = new CompletableFuture<>();
+            failureRelease = new CompletableFuture<>();
+            String spotId = "route-race-" + UUID.randomUUID();
+            FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
+            try (var host = startReady(routeCacheOptions(store, spotId))) {
+                var spot =
+                        host.spotManager()
+                                .getOrCreate(spotId, SPOT_TYPE)
+                                .submit()
+                                .toCompletableFuture()
+                                .get(WAIT_SECONDS, TimeUnit.SECONDS)
+                                .spot();
+                var routes = ZLinkFrameworkRuntimeTestAccess.storeLocationResolvers(host);
+                routes.invalidateSpotRoute(spotId);
+                store.holdReadyResult.set(true);
+                var resolve = routes.resolveSpot(spotId).toCompletableFuture();
+                store.readyResultHeld.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                var close = closeStage(host, spot);
+                try {
+                    failureClosing.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    store.releaseReadyResult.complete(null);
+                    resolve.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    int reads = store.spotReads.get();
+                    var next =
+                            routes.resolveSpot(spotId)
+                                    .toCompletableFuture()
+                                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    assertEquals(
+                            ZLinkServiceAuthorityPayloadCodec.State.CLOSING,
+                            next.authorityState(),
+                            "iteration=" + iteration);
+                    assertTrue(store.spotReads.get() > reads);
+                    System.out.println(
+                            "4908 race iteration=" + iteration + " next=" + next.authorityState());
+                } finally {
+                    store.releaseReadyResult.complete(null);
+                    failureRelease.complete(null);
+                    assertTrue(close.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                }
+            }
+        }
+    }
+
+    private static AutoCloseable routeFlowLog(String scenario) throws Exception {
+        String configured = System.getenv("ZLINK_TEST_LOG_DIR");
+        Path directory =
+                configured == null
+                        ? Path.of(System.getProperty("java.io.tmpdir"))
+                        : Path.of(configured);
+        Files.createDirectories(directory);
+        var handler =
+                new java.util.logging.FileHandler(
+                        directory.resolve("4908-" + scenario + ".flow").toString());
+        handler.setFormatter(new java.util.logging.SimpleFormatter());
+        handler.setLevel(java.util.logging.Level.ALL);
+        var logger =
+                Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        var previous = logger.getLevel();
+        boolean parents = logger.getUseParentHandlers();
+        logger.setLevel(java.util.logging.Level.ALL);
+        logger.setUseParentHandlers(false);
+        logger.addHandler(handler);
+        return () -> {
+            ZLinkTelemetryTestFence.awaitIdle();
+            logger.removeHandler(handler);
+            logger.setLevel(previous);
+            logger.setUseParentHandlers(parents);
+            handler.close();
+        };
+    }
+
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> routeCacheCases() {
+        return java.util.stream.IntStream.range(0, 40)
+                .boxed()
+                .flatMap(
+                        iteration ->
+                                java.util.stream.Stream.of(
+                                        org.junit.jupiter.params.provider.Arguments.of(
+                                                false, iteration),
+                                        org.junit.jupiter.params.provider.Arguments.of(
+                                                true, iteration)));
+    }
+
+    private static DefaultZLinkFrameworkOptions routeCacheOptions(FaultStore store, String nodeId)
+            throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
+        options.configureDispatch()
+                .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
+        options.addLocationStore(store);
+        var node = options.addRouteMesh("close-mesh");
+        int port;
+        try (var socket = new java.net.ServerSocket(0)) {
+            port = socket.getLocalPort();
+        }
+        node.listen("tcp://127.0.0.1:" + port).setRoutingId(RoutingId.from(nodeId));
+        var objects = node.objects().server();
+        objects.addEntrySpot(FailureEntry.class);
+        objects.addSpotFactory(
+                SPOT_TYPE, FailureRoom.class, factory -> factory.disableRelocation());
+        objects.addActorFactory(
+                "player",
+                FailurePlayer.class,
+                FailureFactory.class,
+                factory -> factory.disableRelocation());
+        return options;
+    }
+
+    private static ZLinkActorJoinCompletion.Failed joinFailure(
+            ZLinkFrameworkRuntime source, String spotId) throws Exception {
+        failureCompletion = new CompletableFuture<>();
+        assertEquals(
+                "scheduled",
+                source.actorClient()
+                        .requestToActor(ACTOR_ID, new JoinRequest(spotId))
+                        .submit(String.class)
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS));
+        return assertInstanceOf(
+                ZLinkActorJoinCompletion.Failed.class,
+                failureCompletion.get(WAIT_SECONDS, TimeUnit.SECONDS));
+    }
+
     @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
     @org.junit.jupiter.params.provider.MethodSource("joinFailureCases")
     void deferredJoinFailureContract(String name, String target, boolean warm, String expected)
@@ -1291,6 +1488,10 @@ final class ZLinkSpotCloseConformanceTest {
     private static final class FaultStore implements ZLinkLocationStore {
         private final ZLinkLocationStore inner;
         private final String spotId;
+        final AtomicInteger spotReads = new AtomicInteger();
+        final AtomicBoolean holdReadyResult = new AtomicBoolean();
+        final CompletableFuture<Void> readyResultHeld = new CompletableFuture<>();
+        final CompletableFuture<Void> releaseReadyResult = new CompletableFuture<>();
         volatile boolean captureReady;
         volatile boolean replayReady;
         final java.util.Map<ZLinkStoreKey, ZLinkStoreReadResult> readyReads =
@@ -1321,6 +1522,18 @@ final class ZLinkSpotCloseConformanceTest {
             if (replayReady && readyReads.containsKey(key))
                 return CompletableFuture.completedFuture(readyReads.get(key));
             return inner.read(key, cancellation)
+                    .thenCompose(
+                            result -> {
+                                if (key.value().startsWith("authority\0")
+                                        && key.value().endsWith("\0" + spotId)) {
+                                    spotReads.incrementAndGet();
+                                    if (holdReadyResult.compareAndSet(true, false)) {
+                                        readyResultHeld.complete(null);
+                                        return releaseReadyResult.thenApply(ignored -> result);
+                                    }
+                                }
+                                return CompletableFuture.completedFuture(result);
+                            })
                     .thenApply(
                             result -> {
                                 if (captureReady && key.value().contains(spotId))
