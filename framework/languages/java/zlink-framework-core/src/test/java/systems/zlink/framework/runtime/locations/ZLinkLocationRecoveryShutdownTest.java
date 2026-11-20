@@ -79,6 +79,73 @@ final class ZLinkLocationRecoveryShutdownTest {
         }
     }
 
+    @RepeatedTest(40)
+    void completedRecoveryMustRepublishBeforeItsDrainAndStopMustJoinBoth() throws Exception {
+        var firstPublication = new CompletableFuture<Void>();
+        var callbackEntered = new CountDownLatch(1);
+        var callbackRelease = new CountDownLatch(1);
+        var publications = new AtomicInteger();
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(
+                                new ZLinkInMemoryLocationStore(
+                                        Clock.fixed(Instant.EPOCH, ZoneOffset.UTC))),
+                        "recovery-before-drain",
+                        Duration.ofSeconds(15),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(500),
+                        Duration.ZERO,
+                        () -> 0L,
+                        new ZLinkLocationFirstHeartbeatTest.RecordingScheduler(),
+                        new ZLinkStateLane(Runnable::run))) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            runtime.setOwnerLeaseRecoveryListener(
+                    ignored ->
+                            publications.incrementAndGet() == 1
+                                    ? firstPublication
+                                    : CompletableFuture.completedFuture(null));
+            runtime.publishWithStartupOwnerLease();
+            var descriptor = runtime.writeDescriptor(() -> new CompletableFuture<Void>());
+            var callback =
+                    descriptor.handle(
+                            (ignored, failure) -> {
+                                var next =
+                                        runtime.publishWithStartupOwnerLease()
+                                                .toCompletableFuture();
+                                callbackEntered.countDown();
+                                await(callbackRelease);
+                                next.join();
+                                return null;
+                            });
+            // Recovery completion propagates failure to accepted descriptor writes before drain.
+            // Keep that terminal callback active while the second recovery finishes.
+            var publisher =
+                    CompletableFuture.runAsync(
+                            () ->
+                                    firstPublication.completeExceptionally(
+                                            new IllegalStateException("first recovery failed")));
+            try {
+                assertTrue(callbackEntered.await(5, TimeUnit.SECONDS));
+                assertEquals(2, publications.get(), "completed recovery must not accept a join");
+                var stop = runtime.stop().toCompletableFuture();
+                assertThrows(
+                        TimeoutException.class,
+                        () -> stop.get(50, TimeUnit.MILLISECONDS),
+                        "stop must retain the first recovery drain after replacement");
+                callbackRelease.countDown();
+                callback.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                publisher.get(5, TimeUnit.SECONDS);
+                stop.get(500, TimeUnit.MILLISECONDS);
+            } finally {
+                callbackRelease.countDown();
+                publisher.get(5, TimeUnit.SECONDS);
+            }
+        } finally {
+            callbackRelease.countDown();
+            firstPublication.complete(null);
+        }
+    }
+
     private void exercise(boolean holdListener, boolean lateFailure, boolean storeBeforeStop)
             throws Exception {
         var lane = new ZLinkStateLane();

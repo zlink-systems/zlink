@@ -2201,7 +2201,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                             return CompletableFuture.completedFuture(null);
                                         };
                                     }
-                                    if (ownerLeaseRecoveryOperation != null) {
+                                    if (ownerLeaseRecoveryOperation != null
+                                            && !ownerLeaseRecoveryOperation.completion().isDone()) {
                                         var running = ownerLeaseRecoveryOperation.completion();
                                         return () -> {
                                             running.whenComplete(
@@ -2210,11 +2211,37 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         };
                                     }
                                     var completion = new CompletableFuture<Void>();
-                                    ownerLeaseRecoveryOperation =
-                                            new RecoveryPublication(completion, drained);
+                                    var previousDrain =
+                                            ownerLeaseRecoveryOperation == null
+                                                    ? CompletableFuture.<Void>completedFuture(null)
+                                                    : ownerLeaseRecoveryOperation.drained();
+                                    var operation =
+                                            new RecoveryPublication(
+                                                    completion, new CompletableFuture<>());
+                                    ownerLeaseRecoveryOperation = operation;
                                     var listener = ownerLeaseRecoveryListener;
                                     StoreOutage recoveryEpisode = outage;
                                     return () -> {
+                                        CompletableFuture.allOf(previousDrain, drained)
+                                                .thenCompose(
+                                                        ignored ->
+                                                                stateLane.runAsync(
+                                                                        () -> {
+                                                                            if (ownerLeaseRecoveryOperation
+                                                                                    == operation)
+                                                                                ownerLeaseRecoveryOperation =
+                                                                                        null;
+                                                                        }))
+                                                .whenComplete(
+                                                        (ignored, failure) -> {
+                                                            if (failure == null)
+                                                                operation.drained().complete(null);
+                                                            else
+                                                                operation
+                                                                        .drained()
+                                                                        .completeExceptionally(
+                                                                                unwrap(failure));
+                                                        });
                                         if (completion.isDone()) return completion;
                                         var publication =
                                                 CompletableFuture.<Void>completedFuture(null)
@@ -2293,26 +2320,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                     };
                                 })
                         .thenCompose(Supplier::get);
-        publicationWait.whenComplete(
-                (ignored, failure) -> {
-                    // The composed caller stage is terminal only after listener invocation and
-                    // cancellation propagation have returned, not when cancellation is requested.
-                    stateLane
-                            .runAsync(
-                                    () -> {
-                                        if (ownerLeaseRecoveryOperation != null
-                                                && ownerLeaseRecoveryOperation.drained()
-                                                        == drained) {
-                                            ownerLeaseRecoveryOperation = null;
-                                        }
-                                        return null;
-                                    })
-                            .whenComplete(
-                                    (cleared, laneFailure) -> {
-                                        if (laneFailure == null) drained.complete(null);
-                                        else drained.completeExceptionally(unwrap(laneFailure));
-                                    });
-                });
+        // Each replacement retains preceding listener and cancellation drains.
+        // Completion permits a fresh publication; drain remains the shutdown barrier.
+        publicationWait.whenComplete((ignored, failure) -> drained.complete(null));
         return publicationWait;
     }
 
