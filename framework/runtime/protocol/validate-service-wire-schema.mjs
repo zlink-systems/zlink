@@ -1037,7 +1037,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         },
         {
           operationKind: "close",
-          objectKind: "spot",
+          objectKinds: ["actor", "spot"],
           spotKinds: ["entry", "user", "instance"],
           relocationState: "absent",
           authorityStates: ["closing"],
@@ -5839,6 +5839,15 @@ function validateServiceInvariants(schema, types, fail) {
         right: "inboxSequence",
       }])) {
     fail("$.types", "activation recovery pointer must be Ready Instance-only with a bounded replay cursor");
+  }
+
+  const actorAuthorityState = types.get("actor-authority-state");
+  if (JSON.stringify(actorAuthorityState?.values) !== JSON.stringify([
+    { name: "creating", value: 0 },
+    { name: "ready", value: 1 },
+    { name: "closing", value: 2 },
+  ])) {
+    fail("$.types", "Actor authority state must preserve creating=0, ready=1 and closing=2");
   }
 
   const authorityOperation = types.get("authority-operation-kind");

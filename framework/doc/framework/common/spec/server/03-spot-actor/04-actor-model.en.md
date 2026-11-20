@@ -550,7 +550,11 @@ a successful destroy.
 
 The framework proceeds with destroy in the following order.
 
-1. Closes new payload admission.
+1. Closes new payload admission and changes the Actor authority record in the Location
+   Store to `Closing`. This change is a single CAS that preserves the current
+   `objectGeneration` and owner. Other nodes observe through this state that a destroy is
+   in progress (the `GetOrCreate` wait is in the paragraph above; the `Create` result is
+   the `Closing` row of the result table in [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot)).
 2. Cleans up in-progress lifecycle work.
 3. Removes the session binding.
 4. Removes location ownership and the registry entry.
