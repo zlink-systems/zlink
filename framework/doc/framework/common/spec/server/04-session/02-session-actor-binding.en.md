@@ -516,6 +516,13 @@ its binding effect directly instead of queueing it on the Actor gate or lifecycl
 ([Handler Turn and Execution Gate §1 and §13](../01-execution/02-handler-turn-and-execution-gate.en.md)).
 Whether the Actor gate is used is decided by one question: whether the callback is called.
 
+**If the Actor defines a bind notification callback, the Actor owner calls it once within the same Actor handler
+order that confirms the bind.** Its argument is the confirmed binding identity. The callback does not change the bind
+result. Because this bind calls a callback, it uses the Actor gate; without the callback it does not wait for the gate,
+as before. A bind that arrives after the Actor started its destroy in its own turn ends with the §12 result. The .NET
+name is `OnSessionBoundAsync(ZLinkSessionBindingIdentity, CancellationToken)`; other languages use the same place and
+argument type as the duplicate-bind callback. The default implementation does nothing.
+
 The callback execution timeout uses the server setting `SessionReplacementCallbackTimeout`, default
 `30,000 ms`. This setting also applies to the Actor owner's duplicate-bind callback. If no result arrives within that time, end the incoming
 bind with `DeadlineExceeded` and signal cancellation to the callback. A late acceptance does not

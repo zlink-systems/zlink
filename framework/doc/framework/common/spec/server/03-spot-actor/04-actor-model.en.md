@@ -506,8 +506,9 @@ An Actor record whose owner has ended (for example, by a forced termination) fol
 
 `GetOrCreate` returns the current incarnation as `Existing`, with no new
 reservation or callback execution, if a Ready Actor of the same type exists.
-If an Actor of the same type is Creating, it re-checks authority with bounded
-backoff until that state ends. Even if multiple processes concurrently call
+If an Actor of the same type is Creating or being destroyed, it re-checks authority with bounded
+backoff until that state ends. Once the destroy ends and the authority is gone, it competes to create a
+new incarnation within the remaining deadline. Even if multiple processes concurrently call
 `GetOrCreate` for the same ActorId, only the caller whose Location Store
 [reservation](../00-foundation/02-glossary.en.md#reservation-id) CAS succeeds owns
 the creation execution.
@@ -557,6 +558,7 @@ The framework proceeds with destroy in the following order.
 | State | Destroy result |
 |---|---|
 | That incarnation no longer exists. | Returns idempotent `false`. |
+| A destroy of that incarnation is in progress. | Joins the in-progress destroy's terminal and receives the same result. |
 | A different generation of the same ActorId exists. | Ends with `InvalidOperation`. |
 | The Actor is sealed for a move. | Ends with `Unavailable`. |
 

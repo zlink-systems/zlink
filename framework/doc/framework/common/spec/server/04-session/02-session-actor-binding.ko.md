@@ -434,6 +434,12 @@ Actor owner는 §5의 fence 검증 뒤 이 bind의 binding 반영을 Actor gate�
 확정한다([Handler turn과 execution gate §1·§13](../01-execution/02-handler-turn-and-execution-gate.ko.md)).
 Actor gate를 쓰는지는 callback을 호출하는지 하나로 정한다.
 
+**Actor가 bind 통지 callback을 정의했으면 Actor owner는 bind를 확정하는 같은 Actor handler 순서 안에서 그 callback을 한 번
+호출한다.** 인자는 확정한 binding identity다. Callback은 bind 결과를 바꾸지 않는다. 이 bind는 callback을 호출하므로 Actor gate를
+사용하고, callback이 없으면 지금처럼 gate를 기다리지 않는다. Actor가 자기 차례에서 destroy를 시작한 뒤 도착한 bind는 §12의
+결과로 끝난다. 언어별 이름은 .NET `OnSessionBoundAsync(ZLinkSessionBindingIdentity, CancellationToken)`이고, 다른 언어는
+중복 bind callback과 같은 자리·같은 인자 type을 쓴다. 기본 구현은 아무것도 하지 않는다.
+
 Callback 실행 제한 시간은 server 설정 `SessionReplacementCallbackTimeout`이며 기본값은 `30,000 ms`다.
 이 값은 Actor owner의 중복 bind callback에도 적용한다. 제한 시간 안에 결과가 없으면 incoming bind를 `DeadlineExceeded`로
 끝내고 callback에 취소를 전달한다. 늦게 반환한 받아들임은 binding을 바꾸지 않는다. 기존 bind operation의
