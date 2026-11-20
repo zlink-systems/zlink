@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -24,10 +25,22 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkJavaStreamReceiveConcurrencyTest {
+    // These calls block a native socket operation, which a ForkJoinPool cannot compensate for.
+    // They stand for independent application threads, so the test owns them instead of
+    // borrowing the common pool, whose width follows the host's CPU count.
+    private final ExecutorService applicationThreads = Executors.newCachedThreadPool();
+
+    @AfterEach
+    void stopApplicationThreads() {
+        applicationThreads.shutdownNow();
+    }
+
     @Test
     void receiveDoesNotWaitForSynchronousBoundSessionSubmitOnTheStateLane() throws Exception {
         CountDownLatch sendEntered = new CountDownLatch(1);
@@ -62,9 +75,10 @@ final class ZLinkJavaStreamReceiveConcurrencyTest {
                                         stream.sendBoundSessionPush(
                                                 RoutingId.from("test-peer"),
                                                 List.of(frame),
-                                                SendFlags.NONE));
+                                                SendFlags.NONE),
+                                applicationThreads);
                 assertTrue(sendEntered.await(5, TimeUnit.SECONDS));
-                var receive = CompletableFuture.supplyAsync(stream::recv);
+                var receive = CompletableFuture.supplyAsync(stream::recv, applicationThreads);
                 try {
                     var received = receive.get(1, TimeUnit.SECONDS);
                     assertNotNull(received);
@@ -116,7 +130,7 @@ final class ZLinkJavaStreamReceiveConcurrencyTest {
                                         }
                                     });
             try (var stream = new ZLinkJavaStreamSocket(socket, null)) {
-                var receive = CompletableFuture.supplyAsync(stream::recv);
+                var receive = CompletableFuture.supplyAsync(stream::recv, applicationThreads);
                 try {
                     assertTrue(receiveEntered.await(5, TimeUnit.SECONDS));
                     var close =
@@ -126,7 +140,8 @@ final class ZLinkJavaStreamReceiveConcurrencyTest {
                                                 assertThrows(
                                                         ZlinkCloseException.class, stream::close);
                                         assertEquals(CloseResult.BUSY, failure.getResult());
-                                    });
+                                    },
+                                    applicationThreads);
                     close.get(1, TimeUnit.SECONDS);
                 } finally {
                     releaseReceive.countDown();
@@ -168,7 +183,8 @@ final class ZLinkJavaStreamReceiveConcurrencyTest {
                                             } catch (ZlinkRecvException failure) {
                                                 return failure.getResult();
                                             }
-                                        });
+                                        },
+                                        applicationThreads);
                         var close =
                                 CompletableFuture.supplyAsync(
                                         () -> {
@@ -180,7 +196,8 @@ final class ZLinkJavaStreamReceiveConcurrencyTest {
                                                 assertEquals(CloseResult.BUSY, failure.getResult());
                                                 return failure.getResult();
                                             }
-                                        });
+                                        },
+                                        applicationThreads);
                         start.countDown();
                         CompletableFuture.allOf(receive, close).get(5, TimeUnit.SECONDS);
                         RecvResult outcome = receive.get();
