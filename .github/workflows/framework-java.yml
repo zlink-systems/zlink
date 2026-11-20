@@ -207,7 +207,7 @@ jobs:
           fi
           dump_dir="${RUNNER_TEMP}/framework-java-thread-dumps/${{ matrix.target.name }}"
           mkdir -p "${dump_dir}"
-          bash scripts/ci/gradle-test-watchdog.sh 3600 600 "${dump_dir}" &
+          bash "${GITHUB_WORKSPACE}/scripts/ci/gradle-test-watchdog.sh" 3600 600 "${dump_dir}" &
           watchdog_pid=$!
           stop_watchdog() {
             kill "${watchdog_pid}" 2>/dev/null || true
