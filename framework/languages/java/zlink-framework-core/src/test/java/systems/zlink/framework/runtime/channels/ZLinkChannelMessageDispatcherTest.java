@@ -163,7 +163,7 @@ final class ZLinkChannelMessageDispatcherTest {
             assertFalse(probe.releaseFirst.isDone());
             assertFalse(probe.firstReply.isDone());
             assertEquals(2, activations.opened.get());
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             registry.sealClosingAdmission();
             var closing = registry.awaitQuiescence().toCompletableFuture();
             assertFalse(closing.isDone());
@@ -173,7 +173,7 @@ final class ZLinkChannelMessageDispatcherTest {
             if (firstRequest) probe.firstReply.get(2, TimeUnit.SECONDS);
             assertEquals(List.of("second", "first"), probe.completions);
             assertEquals(0, probe.running.get());
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
         } finally {
             probe.releaseFirst.complete("first-reply");
             workers.drain();
@@ -262,7 +262,7 @@ final class ZLinkChannelMessageDispatcherTest {
             assertFalse(probe.releaseFirst.isDone());
             assertFalse(probe.firstReply.isDone());
             assertEquals(2, activations.opened.get());
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             registry.sealClosingAdmission();
             var closing = registry.awaitQuiescence().toCompletableFuture();
             assertFalse(closing.isDone());
@@ -271,7 +271,7 @@ final class ZLinkChannelMessageDispatcherTest {
             if (firstRequest) probe.firstReply.get(2, TimeUnit.SECONDS);
             assertEquals(List.of("second", "first"), probe.completions);
             assertEquals(0, probe.running.get());
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
         } finally {
             probe.releaseFirst.complete("first-reply");
             workers.shutdown();
@@ -304,7 +304,7 @@ final class ZLinkChannelMessageDispatcherTest {
             probe.laterReply.get(2, TimeUnit.SECONDS);
             assertEquals(List.of(1, 2), probe.filterStarts);
             assertEquals(List.of("second"), probe.starts);
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             assertFalse(probe.firstEntered.isDone());
             registry.sealClosingAdmission();
             var closing = registry.awaitQuiescence().toCompletableFuture();
@@ -315,7 +315,7 @@ final class ZLinkChannelMessageDispatcherTest {
             assertFalse(closing.isDone());
             probe.releaseFirst.complete("first-reply");
             closing.get(2, TimeUnit.SECONDS);
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
         } finally {
             probe.filterRelease.complete(null);
             probe.releaseFirst.complete("first-reply");
@@ -367,7 +367,7 @@ final class ZLinkChannelMessageDispatcherTest {
             probe.laterReply.get(2, TimeUnit.SECONDS);
             assertEquals(List.of(1, 2), probe.filterStarts);
             assertEquals(List.of("second"), probe.starts);
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             assertFalse(probe.firstEntered.isDone());
             assertEquals(1, jobs.snapshot().permitsInUse(), "filter suspension retains the permit");
             registry.sealClosingAdmission();
@@ -383,7 +383,7 @@ final class ZLinkChannelMessageDispatcherTest {
             assertFalse(closing.isDone());
             probe.releaseFirst.complete("first-reply");
             closing.get(2, TimeUnit.SECONDS);
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
         } finally {
             probe.filterRelease.complete(null);
             probe.releaseFirst.complete("first-reply");
@@ -449,7 +449,7 @@ final class ZLinkChannelMessageDispatcherTest {
             probe.laterReply.get(2, TimeUnit.SECONDS);
             assertFalse(reported.isDone());
             assertFalse(probe.firstReply.isDone());
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             registry.sealClosingAdmission();
             var closing = registry.awaitQuiescence().toCompletableFuture();
             assertFalse(closing.isDone());
@@ -458,7 +458,7 @@ final class ZLinkChannelMessageDispatcherTest {
             var failure = reported.get(2, TimeUnit.SECONDS);
             assertTrue(failure.contains("reason=handler_exception"), failure);
             closing.get(2, TimeUnit.SECONDS);
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
             assertEquals(List.of("second", "first"), probe.completions);
             if (request)
                 assertEquals("error:INTERNAL_FAILURE", probe.firstReply.get(2, TimeUnit.SECONDS));
@@ -558,7 +558,7 @@ final class ZLinkChannelMessageDispatcherTest {
             assertEquals(List.of("first", "second"), probe.starts);
             assertEquals(List.of("second"), probe.completions);
             assertEquals(2, activations.opened.get());
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             assertEquals(List.of("second"), probe.destroyed);
             assertFalse(probe.releaseFirst.isDone());
             registry.sealClosingAdmission();
@@ -569,7 +569,7 @@ final class ZLinkChannelMessageDispatcherTest {
             stopping.get(2, TimeUnit.SECONDS);
             assertEquals(List.of("second", "first"), probe.completions);
             assertEquals(List.of("second", "first"), probe.destroyed);
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
         } finally {
             probe.releaseFirst.complete("first-reply");
             workers.drain();
@@ -1234,5 +1234,16 @@ final class ZLinkChannelMessageDispatcherTest {
         public CompletionStage<String> handle(String request, ZLinkRouteMessageContext context) {
             return CompletableFuture.completedFuture("reply");
         }
+    }
+
+    // A handler's completion is recorded before its activation scope closes on the worker,
+    // so the close count is awaited (bounded) and then asserted exactly.
+    private static void awaitClosed(ZLinkTrackingHandlerActivator activations, int expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (activations.closed.get() < expected && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertEquals(expected, activations.closed.get());
     }
 }
