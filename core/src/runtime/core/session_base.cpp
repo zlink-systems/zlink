@@ -402,7 +402,7 @@ void zlink::session_base_t::finish_termination (bool force_, bool pipe_drained_)
 {
     // Before initial pipe attachment, idle handshake output is not a drain
     // completion. A retained peer identifies an already detached pipe.
-    if (!force_ && _engine && !_pipe && !_socket_pipe && !_pending)
+    if (!force_ && _engine && !_pipe && !is_termination_drain_pending ())
         return;
     if (_engine
         && (force_ || ((!_pipe || pipe_drained_) && !_engine->has_pending_output ()))) {

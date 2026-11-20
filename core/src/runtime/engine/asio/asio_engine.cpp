@@ -1233,7 +1233,9 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
         else
             start_async_write ();
     }
-    if (!_connection_facade.terminating && !has_pending_output ())
+    if (!_connection_facade.terminating
+        && _connection_facade.session->is_termination_drain_pending ()
+        && !has_pending_output ())
         _connection_facade.session->finish_termination ();
 }
 
