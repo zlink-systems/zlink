@@ -284,6 +284,43 @@ public sealed class RouteMeshRuntimeServiceTests(Xunit.Abstractions.ITestOutputH
     }
 
     [Fact]
+    public async Task UnchangedDescriptorProjectionDoesNotAllocatePerPeer()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        const int queries = 1_000;
+        const int descriptors = 32;
+        long Measure()
+        {
+            for (var index = 0; index < 100; index++)
+                fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < queries; index++)
+                fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        var baseline = Measure();
+        for (var index = 0; index < descriptors; index++)
+            await fixture.PublishDescriptorAsync(
+                RoutingId.From($"descriptor-{index}"),
+                ZLinkMeshNodeObjectRole.Client
+            );
+        var initial = await WaitForStatusAsync(
+            fixture.Runtime,
+            status => status.Peers.Count == descriptors
+        );
+        var projected = Measure();
+        output.WriteLine(
+            $"queries={queries}; descriptors={descriptors}; baseline={baseline}; projected={projected}; growth={projected - baseline}"
+        );
+        Assert.Same(initial, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
+        Assert.All(initial.Peers, peer => Assert.Equal(ZLinkPeerState.NotConnected, peer.State));
+        Assert.True(
+            projected - baseline < queries * descriptors * 32L,
+            $"Descriptor projection allocated {projected - baseline} extra bytes for {queries * descriptors} peer visits."
+        );
+    }
+
+    [Fact]
     public async Task UnchangedStatusQueriesReuseGraphWithBoundedAllocation()
     {
         await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
