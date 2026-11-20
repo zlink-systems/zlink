@@ -559,7 +559,7 @@ completing or aborting a reservation another node created is decided from this r
 table above — reservation information placed in a field only one language reads doesn't
 survive another language's update of that record. Aggregate and relocation progress is also state of this record, not a
 separate lock record; whether one is in progress and the pre-commit values are decided from the `aggregate` and
-`visibleStoreVersion` fields alone. The aggregate record key is `{prefix}aggregate:{aggregateId}:{aggregateGeneration}`.
+`visibleStoreVersion` fields alone. The keys and body formats of the aggregate record, the participant inventory, and participant change bytes are defined in [§8.3](#83-storage-format-of-aggregate-records-and-the-participant-inventory).
 
 The `aggregate` field holds the aggregate marker fields and an optional `relocation` field. In a relocation whose aggregate marker has not been materialized yet, `aggregate` may hold only `relocation`; that shape does not mean an aggregate transaction marker is prepared. When `aggregate` is present, the marker fields are either all present or all absent, and an empty object is invalid. An authority change that materializes or updates the aggregate marker preserves the existing `aggregate.relocation`, and meanwhile `visibleStoreVersion` keeps the public StoreVersion from before aggregate preparation. Relocation progress is removed by the existing terminal cleanup's conditional authority change; if no marker remains after removal, the `aggregate` field is omitted.
 
@@ -1664,6 +1664,90 @@ rejected before storing state.
 Target factory and `Restore` finish before recording `Prepared`. The order of queue
 merge, regular-route switch, callback, and dispatch opening is defined by
 [04 "4. Normal Processing Order"](04-relocation-flow.en.md).
+
+### 8.3 Storage Format of Aggregate Records and the Participant Inventory
+
+This section defines the keys and body formats of the aggregate record, the participant list
+(inventory), and the participant change bytes that an aggregate change (such as the whole
+`SpotWide` User Spot move of §8.1) leaves in the Location Store. All four runtimes write the
+same bytes under the same keys and read records the others wrote. The Location Store provider
+treats these records as opaque bytes and doesn't interpret them
+([02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch)).
+
+**Keys.** `{prefix}` is the same provider storage namespace prefix as for the authority record.
+`aggregateId` is a lowercase canonical UUID (8-4-4-4-12), and `aggregateGeneration`, `index`,
+and `level` are decimal integers without leading zeros.
+
+| Record | Key |
+|---|---|
+| Aggregate record | `{prefix}aggregate:{aggregateId}:{aggregateGeneration}` |
+| Inventory root | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:root` |
+| Inventory page | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:page:{level}:{index}` |
+| A participant's new authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
+| A participant's membership change | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
+
+**Common body rules.** Every body is a UTF-8 JSON object, stored exactly as the bytes produced by
+[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) (JSON Canonicalization Scheme, JCS). 64-bit
+integers (generations) are decimal strings, counts and positions (32-bit range) are JSON numbers,
+and SHA-256 values are 64 lowercase hex characters. A record that has a field not in the tables
+below, or lacks a field in them, is treated as corrupt. There's no format version field — runtimes
+using this format are upgraded in all four languages at once, after in-progress aggregates finish.
+
+**Aggregate record.** It holds the preparation request and the progress state of one aggregate
+change. Whether two requests are the same is decided by whether all fields except `state` are
+equal (`AlreadyPrepared` and `Conflict` of §8.1).
+
+| Field | Format | Meaning |
+|---|---|---|
+| `aggregateId`, `aggregateGeneration` | UUID string, decimal string | Must equal the values in the key. |
+| `state` | `preparing \| prepared \| committed \| aborted` | Progress state. It changes only from `preparing` to `prepared` or `aborted`, and from `prepared` to `committed` or `aborted`. It's a different value from the relocation phase (`aggregate.relocation.phase`). |
+| `participantCount` | number | Total number of inventory entries. |
+| `inventoryDigestSha256` | 64 hex | Equals the inventory root's `digestSha256`. |
+| `targetDescriptor` | `{meshName, routingIdHex}` | Target MeshNode fixed by the preparation request. Same shape as the authority's `allocation.descriptor` (§3.3). |
+| `targetDescriptorLifecycleGeneration` | decimal string | Target execution generation fixed by the preparation request. |
+| `targetOwner` | `{ownerId, ownerLeaseGeneration}` | Target owner fixed by the preparation request. `ownerLeaseGeneration` is a decimal string. |
+| `capacity` | `{actors, spots, spotType}` | Total capacity reserved. Same shape as the authority's `allocation.capacity` (§3.3). |
+
+**Inventory root and pages.** The inventory sorts participants by the UTF-8 bytes of their
+canonical authority key in ascending order and numbers them (`index`) from 0. A saved-work
+participant ID is `index + 1` (the normative schema's `saved-work-vector`). A level-0 page (leaf)
+holds entries, and a page at level 1 or above holds references to pages one level below. One page
+holds at most 1,024 entries or references and at most 1 MiB encoded
+([02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch)).
+
+| Record and field | Format | Meaning |
+|---|---|---|
+| root `totalCount` | number | Total number of entries. Equals the aggregate record's `participantCount`. |
+| root `topLevel` | number | Level of the topmost pages. |
+| root `topPages` | array of references | References to the pages at the top level. |
+| root `digestSha256` | 64 hex | Check value of the whole inventory (digest rules below). |
+| page `level`, `index` | number | Must equal the values in the key. |
+| page `startIndex`, `entryCount` | number | First `index` and number of the entries under this page. |
+| page `entries` | array of entries | Holds entries only at level 0; an empty array at level 1 or above. |
+| page `children` | array of references | Holds references only at level 1 or above; an empty array at level 0. |
+| reference `level`, `index`, `startIndex`, `entryCount` | number | Equal to the same fields of the referenced page. |
+| reference `sha256` | 64 hex | SHA-256 of the entire stored bytes (JCS bytes) of the referenced page. |
+| entry `index` | number | Position in the inventory. |
+| entry `authorityKey` | string | The participant's canonical authority key. |
+| entry `expectedStoreVersion` | string | The participant authority's `StoreVersion` read at preparation. It's opaque and only compared for equality. |
+| entry `ownerTransition` | `preserve \| newOwner` | Equals the participant authority's `aggregate.ownerTransition`. |
+| entry `authorityPayloadSha256`, `membershipMutationSha256` | 64 hex | SHA-256 of the stored bytes of the participant change records with the same `index` (key table above). Equal to the values of the same names in the participant authority's `aggregate`. |
+
+**Digest rules.** Every check value is the SHA-256 of stored bytes. Because the stored bytes are
+JCS bytes, the same content gives the same check value whichever language wrote it.
+
+- A page reference's `sha256` takes as input the entire stored bytes of one page record (with all
+  of that page's fields). A single entry or the `entries` array alone isn't hashed separately.
+- The root's `digestSha256` takes as input the JCS bytes of the root object without its
+  `digestSha256` field (`totalCount`, `topLevel`, `topPages`). Because references carry the check
+  values of the pages below, this value fixes the whole inventory.
+- The aggregate record's `inventoryDigestSha256` is the same value as the root's `digestSha256`.
+  It isn't computed separately or recorded twice.
+
+The inventory root, pages, and participant change records aren't modified once written. Records
+of the same `(aggregateId, aggregateGeneration)` aren't rewritten with different content; different
+content uses a new `aggregateGeneration`. Cleaning up these records after commit or abort is done
+by the progress-information removal change of §8.1.
 
 ## 9. Restore, Completion Records, and Their Relationship to the Store
 
