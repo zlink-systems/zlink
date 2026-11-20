@@ -17,14 +17,12 @@ export interface ZLinkRuntimeTaskFailure {
 
 interface ZLinkSpotSerialTurnContext {
   readonly executor: ZLinkSpotSerialTurnExecutorLike;
-  readonly turnId: number;
   readonly turn: ZLinkSpotSerialTurn;
 }
 
 interface ZLinkSpotSerialTurnExecutorLike {
-  readonly activeTurnId: number;
   readonly sourceSpotId?: unknown;
-  isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean;
+  isActiveTurn(turn: ZLinkSpotSerialTurn): boolean;
   post<T>(operation: () => Promise<T> | T): Promise<T>;
 }
 
@@ -150,7 +148,7 @@ export class ZLinkSpotSerialTurn {
     if (
       current?.turn !== this ||
       !this.yieldAllowed ||
-      !current.executor.isActiveTurn(this, current.turnId) ||
+      !current.executor.isActiveTurn(this) ||
       this.yieldUsed
     ) {
       throw createInternalFrameworkException(
@@ -210,12 +208,11 @@ export class ZLinkSpotSerialTurn {
 
 export function runZLinkSpotSerialTurn<T>(
   executor: ZLinkSpotSerialTurnExecutorLike,
-  turnId: number,
   turn: ZLinkSpotSerialTurn,
   operation: () => Promise<T> | T
 ): Promise<T> {
   return runZLinkExecutionArea('application', () =>
-    spotSerialTurnStorage.run({ executor, turnId, turn }, async () => operation())
+    spotSerialTurnStorage.run({ executor, turn }, async () => operation())
   );
 }
 
@@ -235,7 +232,7 @@ export function captureZLinkSpotSerialTurn(
 /** Returns the physical Spot owner only while its captured turn owns the gate. */
 export function currentZLinkSpotSerialSourceId(): unknown {
   const current = spotSerialTurnStorage.getStore();
-  if (current === undefined || !current.executor.isActiveTurn(current.turn, current.turnId)) {
+  if (current === undefined || !current.executor.isActiveTurn(current.turn)) {
     return undefined;
   }
   return current.executor.sourceSpotId;
@@ -283,9 +280,7 @@ export function captureZLinkExecutionTurn(): ZLinkCapturedExecutionTurn | undefi
 export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialTurnExecutorLike): boolean {
   const current = spotSerialTurnStorage.getStore();
   return (
-    current !== undefined &&
-    current.executor === executor &&
-    executor.isActiveTurn(current.turn, current.turnId)
+    current !== undefined && current.executor === executor && executor.isActiveTurn(current.turn)
   );
 }
 
