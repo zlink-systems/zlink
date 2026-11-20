@@ -99,6 +99,18 @@ export class ZLinkSpotSerialTurn {
     return this.executionClaim;
   }
 
+  get executionPolicy(): ZLinkExecutionPolicy | undefined {
+    return this.executionClaim?.executionPolicy;
+  }
+
+  get executionOwner(): object | undefined {
+    return this.executionClaim?.executionOwner;
+  }
+
+  release(): void {
+    this.releaseBoundExecutionClaim();
+  }
+
   releaseBoundExecutionClaim(): void {
     this.executionClaim?.release();
     this.executionClaim = undefined;
