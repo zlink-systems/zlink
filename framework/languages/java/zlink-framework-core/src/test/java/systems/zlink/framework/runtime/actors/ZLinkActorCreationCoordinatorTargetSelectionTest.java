@@ -34,6 +34,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.locations.ZLinkCandidateLeaseFixture;
 import systems.zlink.framework.runtime.locations.ZLinkCandidateLeaseFixture.Lease;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
@@ -54,14 +55,14 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
     @RepeatedTest(40)
     void emptyDiscoveryIsImmediatelyUnavailable() throws Exception {
         var reads = new AtomicInteger();
-        var coordinator =
-                coordinator(
+        var fixture =
+                fixture(
                         request -> {
                             reads.incrementAndGet();
                             return CompletableFuture.completedFuture(
                                     new ZLinkLocationPage<>(List.of(), null));
                         });
-        discovery(coordinator)
+        fixture.discovery()
                 .listPeers(
                         systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType
                                 .ROUTE_MESH,
@@ -69,7 +70,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                         null)
                 .toCompletableFuture()
                 .join();
-        var selected = creationTarget(coordinator, Duration.ofMillis(100)).toCompletableFuture();
+        var selected = creationTarget(fixture, Duration.ofMillis(100)).toCompletableFuture();
         assertTrue(selected.isDone(), "empty discovery must not wait for the deadline");
         var failure = assertThrows(CompletionException.class, selected::join);
         assertEquals(
@@ -87,14 +88,14 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                                         descriptor(RoutingId.from("local-node"), 100),
                                         ZLinkFrameworkRuntimeState.PREPARING)));
         var reads = new AtomicInteger();
-        var coordinator =
-                coordinator(
+        var fixture =
+                fixture(
                         request -> {
                             reads.incrementAndGet();
                             return CompletableFuture.completedFuture(
                                     new ZLinkLocationPage<>(rows.get(), null));
                         });
-        var resolver = discovery(coordinator);
+        var resolver = fixture.discovery();
         resolver.listPeers(
                         systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType
                                 .ROUTE_MESH,
@@ -102,7 +103,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                         null)
                 .toCompletableFuture()
                 .join();
-        var selected = creationTarget(coordinator, Duration.ofSeconds(1)).toCompletableFuture();
+        var selected = creationTarget(fixture, Duration.ofSeconds(1)).toCompletableFuture();
         assertFalse(selected.isDone());
         assertEquals(1, reads.get(), "waiting requests must not re-list the Store");
         rows.set(List.of(descriptor(RoutingId.from("local-node"), 100)));
@@ -117,33 +118,18 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
         assertEquals(2, reads.get());
     }
 
-    @SuppressWarnings("unchecked")
     private static java.util.concurrent.CompletionStage<ZLinkMeshNodeDescriptor> creationTarget(
-            ZLinkActorCreationCoordinator coordinator, Duration timeout) throws Exception {
-        var method =
-                ZLinkActorCreationCoordinator.class.getDeclaredMethod(
-                        "selectTarget",
-                        String.class,
-                        long.class,
-                        java.util.Set.class,
-                        boolean.class);
-        method.setAccessible(true);
-        return (java.util.concurrent.CompletionStage<ZLinkMeshNodeDescriptor>)
-                method.invoke(
-                        coordinator,
+            Fixture fixture, Duration timeout) {
+        return fixture.coordinator()
+                .selectTarget(
                         "player",
                         System.currentTimeMillis() + timeout.toMillis(),
                         java.util.Set.of(),
                         true);
     }
 
-    private static systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers discovery(
-            ZLinkActorCreationCoordinator coordinator) throws Exception {
-        var field = ZLinkActorCreationCoordinator.class.getDeclaredField("locationResolvers");
-        field.setAccessible(true);
-        return (systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers)
-                field.get(coordinator);
-    }
+    private record Fixture(
+            ZLinkActorCreationCoordinator coordinator, ZLinkStoreLocationResolvers discovery) {}
 
     private static ZLinkMeshNodeDescriptor withState(
             ZLinkMeshNodeDescriptor d, ZLinkFrameworkRuntimeState state) {
@@ -172,8 +158,8 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
     @Test
     void targetSelectionConsumesEmptyAndTrailingDescriptorPages() throws Exception {
         AtomicInteger pages = new AtomicInteger();
-        var coordinator =
-                coordinator(
+        var fixture =
+                fixture(
                         request -> {
                             int page = pages.getAndIncrement();
                             assertEquals(
@@ -190,7 +176,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                         });
 
         var selected =
-                coordinator
+                fixture.coordinator()
                         .selectEntrySpotTarget("player", Duration.ofSeconds(1))
                         .toCompletableFuture()
                         .join();
@@ -202,8 +188,8 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
     @Test
     void discoveryPreservesFailureAfterAnEligibleDescriptorPage() throws Exception {
         var failure = new IllegalStateException("descriptor continuation failed");
-        var coordinator =
-                coordinator(
+        var fixture =
+                fixture(
                         request ->
                                 request.continuationToken() == null
                                         ? CompletableFuture.completedFuture(
@@ -220,7 +206,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                 assertThrows(
                         CompletionException.class,
                         () ->
-                                discovery(coordinator)
+                                fixture.discovery()
                                         .listPeers(
                                                 systems.zlink.framework.runtime.internal.locations
                                                         .ZLinkAutoConnectType.ROUTE_MESH,
@@ -238,8 +224,8 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
             names = {"MISSING", "EXPIRED", "REPLACED", "WRONG_OWNER", "LIVE", "CORRUPT", "FAILED"})
     void newActorCandidatesRequireLiveOwner(Lease lease) throws Exception {
         var sideEffects = new AtomicInteger();
-        var coordinator =
-                coordinator(
+        var fixture =
+                fixture(
                         request ->
                                 CompletableFuture.completedFuture(
                                         new ZLinkLocationPage<>(
@@ -250,7 +236,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                         lease,
                         sideEffects);
         var refreshed =
-                discovery(coordinator)
+                fixture.discovery()
                         .listPeers(
                                 systems.zlink.framework.runtime.internal.locations
                                         .ZLinkAutoConnectType.ROUTE_MESH,
@@ -270,7 +256,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
             return;
         }
         refreshed.join();
-        var selection = creationTarget(coordinator, Duration.ofSeconds(1)).toCompletableFuture();
+        var selection = creationTarget(fixture, Duration.ofSeconds(1)).toCompletableFuture();
         if (lease == Lease.LIVE) {
             assertEquals(RoutingId.from("local-node"), selection.join().rid());
         } else {
@@ -285,7 +271,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                                 : ZLinkFrameworkErrorKind.UNAVAILABLE,
                         ((ZLinkFrameworkException) failure.getCause()).kind());
             var create =
-                    coordinator
+                    fixture.coordinator()
                             .submit(
                                     "new-actor",
                                     "player",
@@ -310,24 +296,24 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
         }
     }
 
-    private static ZLinkActorCreationCoordinator coordinator(
+    private static Fixture fixture(
             Function<
                             ZLinkPageRequest,
                             CompletableFuture<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>>
                     pages) {
-        return coordinator(pages, Lease.LIVE);
+        return fixture(pages, Lease.LIVE);
     }
 
-    private static ZLinkActorCreationCoordinator coordinator(
+    private static Fixture fixture(
             Function<
                             ZLinkPageRequest,
                             CompletableFuture<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>>
                     pages,
             Lease lease) {
-        return coordinator(pages, lease, new AtomicInteger());
+        return fixture(pages, lease, new AtomicInteger());
     }
 
-    private static ZLinkActorCreationCoordinator coordinator(
+    private static Fixture fixture(
             Function<
                             ZLinkPageRequest,
                             CompletableFuture<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>>
@@ -382,19 +368,23 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                                 });
         var serializer = new ZLinkJsonMessageSerializer();
         var actors = new ZLinkActorRuntime(spot, Map.of(), Duration.ofSeconds(1), serializer);
-        return new ZLinkActorCreationCoordinator(
-                "mesh",
-                node,
-                repository,
-                new systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers(
+        var discovery =
+                new ZLinkStoreLocationResolvers(
                         systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores
                                 .fromUnified(repository),
-                        new systems.zlink.framework.locations.ZLinkLocationOptions()),
-                actors,
-                serializer,
-                new ZLinkActivationAdmission(1),
-                ignored -> null,
-                stableType -> true);
+                        new systems.zlink.framework.locations.ZLinkLocationOptions());
+        var coordinator =
+                new ZLinkActorCreationCoordinator(
+                        "mesh",
+                        node,
+                        repository,
+                        discovery,
+                        actors,
+                        serializer,
+                        new ZLinkActivationAdmission(1),
+                        ignored -> null,
+                        stableType -> true);
+        return new Fixture(coordinator, discovery);
     }
 
     @Test

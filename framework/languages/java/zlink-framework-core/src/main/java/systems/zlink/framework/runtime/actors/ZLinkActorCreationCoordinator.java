@@ -869,7 +869,7 @@ public final class ZLinkActorCreationCoordinator
         return ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(payload.payload()), serializer);
     }
 
-    private CompletionStage<ZLinkMeshNodeDescriptor> selectTarget(
+    CompletionStage<ZLinkMeshNodeDescriptor> selectTarget(
             String actorType,
             long deadline,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
