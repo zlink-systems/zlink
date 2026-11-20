@@ -145,18 +145,38 @@ internal sealed class Context : NativeOwner, IContext
 
     public void Dispose()
     {
-        if (IsClosed)
+        // Core allows exactly one zlink_ctx_term per context. Take the close
+        // ownership first; a failed close hands it back and keeps the context
+        // open, as before.
+        if (!TryBeginClose())
             return;
-
-        var shutdown = (CloseResult)NativeMethods.zlink_ctx_shutdown(Handle);
-        if (shutdown != CloseResult.Ok)
-            throw ZlinkException.CreateCloseException(shutdown);
-        var rc = (CloseResult)NativeMethods.zlink_ctx_term(Handle);
-        if (rc != CloseResult.Ok)
-            throw ZlinkException.CreateCloseException(rc);
-        MarkClosed();
+        // The finalizer must not shut down a context this call is about to
+        // free, even when the JIT considers 'this' dead during the native call.
         GC.SuppressFinalize(this);
+        var closed = false;
+        try
+        {
+            var shutdown = (CloseResult)NativeMethods.zlink_ctx_shutdown(_handle);
+            if (shutdown != CloseResult.Ok)
+                throw ZlinkException.CreateCloseException(shutdown);
+            var rc = (CloseResult)TermNative(_handle);
+            if (rc != CloseResult.Ok)
+                throw ZlinkException.CreateCloseException(rc);
+            MarkClosed();
+            closed = true;
+        }
+        finally
+        {
+            if (!closed)
+                GC.ReRegisterForFinalize(this);
+            EndClose();
+            GC.KeepAlive(this);
+        }
     }
+
+    // Test seam: lets a test count or stall the native term call.
+    internal Func<IntPtr, int> TermNative { get; set; } =
+        NativeMethods.zlink_ctx_term;
 
     public ValueTask DisposeAsync()
     {
@@ -210,15 +230,20 @@ internal sealed class Context : NativeOwner, IContext
 
     ~Context()
     {
-        if (IsClosed)
+        // Dispose owns the close once it started; only an untouched context
+        // is shut down here.
+        if (!TryBeginClose())
             return;
-
         try
         {
-            _ = NativeMethods.zlink_ctx_shutdown(Handle);
+            _ = NativeMethods.zlink_ctx_shutdown(_handle);
         }
         catch
         {
+        }
+        finally
+        {
+            EndClose();
         }
     }
 
