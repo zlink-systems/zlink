@@ -37,11 +37,17 @@ class observed_store_t final : public location_store_t
             throw framework_exception_t (framework_error_kind_t::unavailable, "membership scan");
         if (expire_scan && request.cursor)
             co_return store_scan_expired_t{};
+        scan_prefixes.push_back (request.prefix);
         request.limit = 1;
-        co_return co_await inner.scan (std::move (request));
+        auto result = co_await inner.scan (std::move (request));
+        if (const auto *page = std::get_if<store_scan_page_t> (&result))
+            scanned_items += page->items.size ();
+        co_return result;
     }
     in_memory_location_store_t inner;
     std::vector<store_write_request_t> writes;
+    std::vector<std::string> scan_prefixes;
+    std::size_t scanned_items = 0;
     std::function<task_t<void> ()> before_write;
     bool fail_scan = false;
     bool expire_scan = false;
@@ -395,6 +401,7 @@ TEST_P (DiscardedAuthority, SpotScanFailureOrExpiryNeverMeansZeroRows)
         return; // The lane owns a complete in-memory membership snapshot.
     const auto spot = create ("room", nullptr, true);
     create ("unrelated");
+    create ("unrelated-next-page");
     const auto key = spot_authority_key ("room");
     opaque.fail_scan = true;
     const auto failed = repository->cleanup_discarded (key, spot, owner).result ();
@@ -405,6 +412,25 @@ TEST_P (DiscardedAuthority, SpotScanFailureOrExpiryNeverMeansZeroRows)
     EXPECT_EQ (read (key).store_version, spot.store_version);
     opaque.expire_scan = false;
     EXPECT_TRUE (repository->cleanup_discarded (key, spot, owner).result ().value ());
+}
+
+TEST_P (DiscardedAuthority, SpotMembershipSnapshotReadsOnlyActorAuthorities)
+{
+    if (!GetParam ())
+        return; // The lane owns a complete in-memory membership snapshot.
+    const auto spot = create ("room", nullptr, true);
+    for (const auto *unrelated : {"spot-a", "spot-b", "spot-c"})
+        create (unrelated, nullptr, true);
+    create ("actor-a");
+    create ("actor-b");
+    opaque.scan_prefixes.clear ();
+    opaque.scanned_items = 0;
+    EXPECT_TRUE (
+      repository->cleanup_discarded (spot_authority_key ("room"), spot, owner).result ().value ());
+    ASSERT_FALSE (opaque.scan_prefixes.empty ());
+    for (const auto &prefix : opaque.scan_prefixes)
+        EXPECT_EQ (prefix, std::string ("authority") + '\0' + "actor" + '\0');
+    EXPECT_EQ (opaque.scanned_items, 2U);
 }
 
 TEST_P (DiscardedAuthority, DeleteRetriesUnrelatedDescriptorRepublish)
