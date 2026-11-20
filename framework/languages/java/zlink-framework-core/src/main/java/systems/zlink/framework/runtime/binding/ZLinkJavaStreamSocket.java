@@ -414,22 +414,44 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     }
 
     private CompletionStage<Void> submitOwnedStreamFrameAsync(RoutingId routingId, Message frame) {
+        CompletableFuture<Void> admitted = new CompletableFuture<>();
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        ZLinkStateLane.publishOutsideLane(
+                admitted,
+                (ignored, failure) -> {
+                    if (failure == null) result.complete(null);
+                    else result.completeExceptionally(failure);
+                });
         try {
-            return stateLane
-                    .<CompletionStage<Void>>runAsync(
-                            () -> {
-                                try {
-                                    return FrameworkStreamOperations.send(
+            stateLane.throwIfReentrant();
+            if (!stateLane.tryPost(
+                    () -> {
+                        CompletionStage<Void> submission;
+                        try {
+                            submission =
+                                    FrameworkStreamOperations.send(
                                             socket, routingId, List.of(frame), null);
-                                } finally {
-                                    frame.close();
-                                }
-                            })
-                    .thenCompose(submission -> submission);
+                        } catch (RuntimeException | Error failure) {
+                            admitted.completeExceptionally(failure);
+                            return CompletableFuture.failedFuture(failure);
+                        } finally {
+                            frame.close();
+                        }
+                        // The socket lane waits for Core admission before physical close.
+                        // Binding progresses independently of the Actor execution gate.
+                        return submission.whenComplete(
+                                (ignored, failure) -> {
+                                    if (failure == null) admitted.complete(null);
+                                    else admitted.completeExceptionally(failure);
+                                });
+                    })) {
+                throw new IllegalStateException("state lane is closed");
+            }
         } catch (RuntimeException | Error failure) {
             frame.close();
             throw failure;
         }
+        return result;
     }
 
     @Override

@@ -127,14 +127,15 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     @FunctionalInterface
     public interface LocalActorDispatcher {
-        CompletionStage<Optional<LocalActorReply>> dispatch(
+        CompletionStage<Void> dispatch(
                 ZLinkBackendActorRef actor,
                 RoutingId sourceNodeRid,
                 RoutingId sourceSessionRid,
                 long bindingGeneration,
                 long sourceSessionSequence,
                 ZLinkStreamHeader header,
-                Message payload);
+                Message payload,
+                java.util.function.Consumer<LocalActorReply> submitReply);
     }
 
     public record LocalActorReply(Message payload, ZLinkStreamCodec codec) {
