@@ -6,6 +6,25 @@ namespace Zlink.Framework.ContractTests.Streams;
 public sealed class StreamContracts
 {
     [Fact]
+    [ContractExample(typeof(ZLinkStreamError), typeof(ZLinkDisconnectReason))]
+    public void Stream_error_preserves_optional_core_reason_and_positional_constructor()
+    {
+        Assert.Equal(0, (int)ZLinkDisconnectReason.Unknown);
+        Assert.Equal(3, (int)ZLinkDisconnectReason.HandshakeFailed);
+        Assert.Equal(4, (int)ZLinkDisconnectReason.TransportError);
+        Assert.Equal(5, (int)ZLinkDisconnectReason.ContextTerminated);
+        var legacy = new ZLinkStreamError(ZLinkStreamSessionError.TransportError, "legacy");
+        Assert.Null(legacy.DisconnectReason);
+        var observed = new ZLinkStreamError(
+            ZLinkStreamSessionError.TransportError,
+            "disconnected",
+            ZLinkDisconnectReason.Unknown
+        );
+        Assert.Equal(ZLinkDisconnectReason.Unknown, observed.DisconnectReason);
+        Assert.NotEqual(legacy with { Message = observed.Message }, observed);
+    }
+
+    [Fact]
     [ContractExample(
         typeof(IZLinkSession),
         typeof(IZLinkSessionContext),
