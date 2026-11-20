@@ -412,8 +412,12 @@ async function requestBackpressureStream(
           blocked === null ? 0 : pollTimeoutUntil(deadline, COMPLETION_POLL_INTERVAL_MS)
         );
         await sleepImmediate();
-      } else if (blocked !== null) {
-        await blocked;
+      } else {
+        if (blocked !== null) await blocked;
+        // Yield to the event loop every iteration as the binding path above does. An already
+        // resolved admission only runs microtasks, so without this the loop never reaches the
+        // poll phase and replies wait until Core capacity fills (~14k requests in flight).
+        await sleepImmediate();
       }
     }
 
