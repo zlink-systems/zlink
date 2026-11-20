@@ -63,6 +63,7 @@ final class ZLinkSpotRoutedOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
+            long targetNodeGeneration,
             ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
@@ -80,6 +81,7 @@ final class ZLinkSpotRoutedOutbound {
                     targetNodeRid,
                     spotId,
                     spotGeneration,
+                    targetNodeGeneration,
                     payload,
                     packetName,
                     contentType,
@@ -100,7 +102,12 @@ final class ZLinkSpotRoutedOutbound {
         try {
             return ZLinkOneWayCalls.adaptOneWay(
                     channels.sendToSpotViaRouterChannel(
-                                    routerChannelId, targetNodeRid, spotId, spotGeneration, parts)
+                                    routerChannelId,
+                                    targetNodeRid,
+                                    spotId,
+                                    spotGeneration,
+                                    targetNodeGeneration,
+                                    parts)
                             .whenComplete(
                                     (ignored, error) -> {
                                         ZLinkFrameworkMultipartView.closeAll(parts);

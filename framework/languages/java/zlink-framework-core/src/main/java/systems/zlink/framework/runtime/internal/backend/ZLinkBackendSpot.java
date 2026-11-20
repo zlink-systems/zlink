@@ -76,16 +76,21 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
     }
 
     CompletionStage<Void> sendToSpot(
-            RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts);
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            long targetNodeGeneration,
+            List<Message> parts);
 
     default CompletionStage<Void> sendToSpot(
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts) {
         if (metadata == null || metadata.length == 0) {
-            return sendToSpot(targetNodeRid, spotId, spotGeneration, parts);
+            return sendToSpot(targetNodeRid, spotId, spotGeneration, targetNodeGeneration, parts);
         }
         throw new UnsupportedOperationException("Spot send metadata is unavailable");
     }

@@ -1667,6 +1667,7 @@ final class ZLinkChannelRuntimeTest {
                                                         route.targetNodeRid(),
                                                         route.spotId(),
                                                         route.spotGeneration(),
+                                                        route.targetNodeGeneration(),
                                                         payload);
                                             });
                         }
@@ -3523,7 +3524,11 @@ final class ZLinkChannelRuntimeTest {
 
         @Override
         public CompletionStage<Void> sendToSpot(
-                RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts) {
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                long targetNodeGeneration,
+                List<Message> parts) {
             lastSpotGeneration = spotGeneration;
             sendAttempts++;
             lastSendFlags = SendFlags.NONE;

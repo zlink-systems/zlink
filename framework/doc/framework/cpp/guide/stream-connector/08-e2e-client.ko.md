@@ -9,7 +9,7 @@ e2e client는 서버 e2e, smoke, perf scenario를 coroutine 흐름으로 짧게 
 ## 설치
 
 ```cmake
-find_package(zlink-stream-e2e-client CONFIG REQUIRED)
+find_package(zlink_stream_connector_cpp CONFIG REQUIRED)
 
 target_link_libraries(my_scenario_test PRIVATE
     zlink::stream_connector
