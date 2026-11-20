@@ -34,11 +34,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     // Instance method groups convert to a fresh delegate at every use site;
     // these run once per drained work item, so cache them.
-    private readonly Func<
-        ZLinkSerialTurn,
-        Action<ZLinkSerialPostAdmission>,
-        ZLinkSerialPostAdmission
-    > _postResume;
+    private readonly Func<ZLinkSerialTurn, Task> _postResume;
     private readonly Func<Func<CancellationToken, ValueTask>, bool> _tryPostCallback;
     private readonly Action<Exception> _reportHandlerException;
     internal readonly ZLinkSerialWorkQueue _applicationQueue = new();
@@ -1494,7 +1490,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (
             ReferenceEquals(item.LifecycleOwner, _relocation?.PreparationOwner)
             && item.LifecycleOwner is not null
-            && item.RejectPublication is null
+            && item.Resume is null
         )
         {
             _lifecycleQueue.Enqueue(item);
@@ -1504,11 +1500,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         {
             if (ReferenceEquals(_activeLifecycle, owner) && owner.ReadyContinuation is null)
                 owner.ReadyContinuation = item;
-            else
+            else if (item.Resume is not null)
             {
-                item.RejectPublication?.Invoke();
-                item.ReleaseForRelocation(_reportHandlerException);
+                // The original lifecycle slot ended. This continuation drains as application work.
+                item.Lane = ZLinkSerialWorkLane.Application;
+                _applicationQueue.Enqueue(item);
             }
+            else
+                item.ReleaseForRelocation(_reportHandlerException);
         }
         else
             _lifecycleQueue.Enqueue(item);
@@ -1561,7 +1560,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     mailbox._postResume,
                     mailbox._tryPostCallback,
                     mailbox._reportHandlerException,
-                    mailbox._executionToken,
                     item,
                     this
                 );
@@ -1711,7 +1709,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     _postResume,
                     _tryPostCallback,
                     _reportHandlerException,
-                    _executionToken,
                     item
                 );
                 var result = await item.InvokeAsync(_reportHandlerException, _executionToken, turn)
@@ -2257,72 +2254,107 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             _drained.TrySetResult();
     }
 
-    private ZLinkSerialPostAdmission PostResume(
-        ZLinkSerialTurn turn,
-        Action<ZLinkSerialPostAdmission> resume
-    )
+    private Task PostResume(ZLinkSerialTurn turn)
     {
-        var lifecycleOwner = turn.LifecycleOwner;
-        var item = new ZLinkSerialWorkItem(
-            async _ =>
-            {
-                turn.ResetSuspension();
-                resume(ZLinkSerialPostAdmission.Accepted);
-                var ownerTask = turn.OwnerTask;
-                if (ownerTask is null || ownerTask.IsCompleted)
-                    return;
-
-                await Task.WhenAny(ownerTask, turn.Suspended).ConfigureAwait(false);
-            },
-            lane: lifecycleOwner is null
-                ? ZLinkSerialWorkLane.Application
-                : ZLinkSerialWorkLane.Lifecycle,
-            reservationHeld: false,
-            relocationRelease: () => resume(GetResumeAdmission(turn)),
-            executionAllowed: () =>
-                GetResumeAdmission(turn) switch
-                {
-                    ZLinkSerialPostAdmission.Accepted => ZLinkObjectExecutionStatus.Allowed,
-                    ZLinkSerialPostAdmission.Paused => ZLinkObjectExecutionStatus.Paused,
-                    ZLinkSerialPostAdmission.OwnershipLost =>
-                        ZLinkObjectExecutionStatus.OwnershipLost,
-                    _ => ZLinkObjectExecutionStatus.Stopped,
-                }
-        );
         Func<CancellationToken, ValueTask>? drain;
+        TaskCompletionSource resume;
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0)
-                return ZLinkSerialPostAdmission.Closed;
+            // A completed callback has no application turn to resume. Its result
+            // may still be observed by a caller outside the gate (e.g. Context Close).
+            if (turn.Item.IsTerminalReleased)
+                return Task.CompletedTask;
+
+            var lifecycleOwner = turn.LifecycleOwner;
+            resume = new TaskCompletionSource();
+            var item = new ZLinkSerialWorkItem(
+                static _ => ValueTask.CompletedTask,
+                lane: lifecycleOwner is null
+                    ? ZLinkSerialWorkLane.Application
+                    : ZLinkSerialWorkLane.Lifecycle,
+                reservationHeld: false,
+                executionAllowed: () =>
+                    !turn.Item.IsTerminalReleased
+                    && GetResumeAdmission(turn) == ZLinkSerialPostAdmission.Paused
+                        ? ZLinkObjectExecutionStatus.Paused
+                        : ZLinkObjectExecutionStatus.Allowed
+            )
+            {
+                LifecycleOwner = lifecycleOwner,
+                Resume = () => ResumeOnGateAsync(turn, resume),
+            };
+
+            // A live callback owns terminal delivery even after Complete closes admission.
             if (lifecycleOwner is null)
                 CommitWorkItemUnderLock(_applicationQueue, item, ZLinkSerialWorkLane.Application);
+            else if (_sharedOwner is not null)
+                CommitWorkItemUnderLock(_lifecycleQueue, item, ZLinkSerialWorkLane.Lifecycle);
+            else if (
+                ReferenceEquals(_activeLifecycle, lifecycleOwner)
+                && lifecycleOwner.ReadyContinuation is null
+            )
+            {
+                item.BindTerminalRelease(this);
+                lifecycleOwner.ReadyContinuation = item;
+            }
             else
             {
-                if (
-                    _sharedOwner is null
-                    && (
-                        !ReferenceEquals(_activeLifecycle, lifecycleOwner)
-                        || lifecycleOwner.ReadyContinuation is not null
-                    )
-                )
-                    return ZLinkSerialPostAdmission.Closed;
-                item.LifecycleOwner = lifecycleOwner;
-                if (_sharedOwner is not null)
-                {
-                    item.RejectPublication = () => resume(ZLinkSerialPostAdmission.Closed);
-                    CommitWorkItemUnderLock(_lifecycleQueue, item, ZLinkSerialWorkLane.Lifecycle);
-                }
-                else
-                {
-                    item.BindTerminalRelease(this);
-                    lifecycleOwner.ReadyContinuation = item;
-                }
+                item.Lane = ZLinkSerialWorkLane.Application;
+                CommitWorkItemUnderLock(_applicationQueue, item, item.Lane);
             }
+
             drain = ReserveDrainUnderLock();
         }
-
         PublishDrain(drain);
-        return ZLinkSerialPostAdmission.Accepted;
+        return resume.Task;
+    }
+
+    private async ValueTask<ZLinkSerialWorkItemResult> ResumeOnGateAsync(
+        ZLinkSerialTurn turn,
+        TaskCompletionSource resume
+    )
+    {
+        if (turn.Item.IsTerminalReleased)
+        {
+            resume.TrySetResult();
+            return ZLinkSerialWorkItemResult.Completed;
+        }
+
+        var admission = GetResumeAdmission(turn);
+        if (admission == ZLinkSerialPostAdmission.Paused)
+            return ZLinkSerialWorkItemResult.Paused;
+
+        turn.ResetSuspension();
+        switch (admission)
+        {
+            case ZLinkSerialPostAdmission.Accepted when !_executionToken.IsCancellationRequested:
+                resume.TrySetResult();
+                break;
+            case ZLinkSerialPostAdmission.Accepted:
+                resume.TrySetCanceled(_executionToken);
+                break;
+            default:
+                resume.TrySetException(
+                    new ZLinkFrameworkException(
+                        admission == ZLinkSerialPostAdmission.OwnershipLost
+                            ? ZLinkFrameworkErrorKind.NotFound
+                            : ZLinkFrameworkErrorKind.ShuttingDown,
+                        admission switch
+                        {
+                            ZLinkSerialPostAdmission.Sealed =>
+                                "The execution unit is sealed for relocation before a yielded turn can resume.",
+                            ZLinkSerialPostAdmission.OwnershipLost =>
+                                "The object no longer owns execution before a yielded turn can resume.",
+                            _ => "The Spot is closed before a yielded turn can resume.",
+                        }
+                    )
+                );
+                break;
+        }
+
+        if (turn.OwnerTask is { IsCompleted: false } ownerTask)
+            await Task.WhenAny(ownerTask, turn.Suspended).ConfigureAwait(false);
+        return ZLinkSerialWorkItemResult.Completed;
     }
 
     private ZLinkSerialPostAdmission GetResumeAdmission(ZLinkSerialTurn turn)
@@ -2339,6 +2371,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         )
             return ZLinkSerialPostAdmission.Sealed;
 
+        if (turn.LifecycleOwner is { } owner && !ReferenceEquals(_activeLifecycle, owner))
+            return ZLinkSerialPostAdmission.Closed;
+
         var queueStatus = _executionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed;
         var recordStatus = turn.Item.ExecutionStatus;
         if (
@@ -2349,8 +2384,11 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (queueStatus == ZLinkObjectExecutionStatus.Stopped)
             return ZLinkSerialPostAdmission.Closed;
         if (
-            queueStatus == ZLinkObjectExecutionStatus.Paused
-            || recordStatus == ZLinkObjectExecutionStatus.Paused
+            !_executionToken.IsCancellationRequested
+            && (
+                queueStatus == ZLinkObjectExecutionStatus.Paused
+                || recordStatus == ZLinkObjectExecutionStatus.Paused
+            )
         )
             return ZLinkSerialPostAdmission.Paused;
 
