@@ -6914,6 +6914,39 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<SendOperation> captureSourceSend
     )
     {
+        if (head[3] == (byte)ServiceWireConstants.Command.Reject)
+        {
+            if (parts.Count != 1)
+                return false;
+            try
+            {
+                _ = ServiceWireCodec.DecodeReject3(head, ServiceWireCodec.DecodeContext.Empty);
+            }
+            catch (Exception error)
+                when (error is System.IO.InvalidDataException or System.IO.EndOfStreamException)
+            {
+                return false;
+            }
+            RunState(() =>
+            {
+                if (
+                    !_peersByRid.TryGetValue(sourceRid, out var peer)
+                    || peer.RouteGeneration != routeGeneration
+                )
+                    return;
+                // MeshNode §7.1: keep the route and intent; the existing
+                // unanswered-HELLO exchange owns admission retries.
+                peer.Admitted = false;
+                peer.Liveness = null;
+                peer.State = MeshPeerState.Connecting;
+                peer.LastChangedMs = checked((ulong)Environment.TickCount64);
+                RebuildChannelSelectionPlansUnderLock();
+                SetPeerLossStateUnderLock();
+                Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
+                SignalReceiveOwner();
+            });
+            return true;
+        }
         if (head[3] == (byte)ServiceWireConstants.Command.BoundSessionBind)
         {
             if (replyToken is null)
