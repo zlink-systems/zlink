@@ -494,6 +494,8 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§3.1). |
 | `allocation` | 배치 정보(§3.3)다. dotnet `ZLinkPlacementAllocation`(내부 구현)에서 파생한다. `state`(`reserved \| active`), `objectKind`(`actor \| userSpot \| instanceSpot` — Entry Spot은 없다. Entry Spot의 Actor는 `actor`로 집계한다, §4), `stableType`, `descriptor`(`{meshName, routingIdHex}` — MeshNode descriptor key와 같은 모양), `descriptorLifecycleGeneration`(target MeshNode의 `lifecycleGeneration`과 CAS로 맞춰야 하는 값)과 `capacity`를 포함한다. `capacity`는 `{actors, spots, spotType}`이며 `actors`·`spots`는 이번 allocation이 확보한 정수 slot 수, `spotType`은 Spot이 아니면 `null`이고 Spot이면 `{objectKind, stableType, count}`다(§3.3의 "Spot slot 1과 해당 Spot 종류·stable type slot 1" — flat counter 하나로는 어떤 `(spotKind, stableType)` 조합을 확보했는지 표현할 수 없다). |
 | `pendingCreation` | 생성 진행 상태다(§7). 없으면 `null`이다. 있으면 `reservationId`, `requestContentReference`, `requestSha256`(hex, 64자)과 `requestEncodedSize`(정수)를 포함한다. `requestContentReference`의 형식은 `inline-v1:{base64url}`이며, `{base64url}`은 생성 요청 bytes를 `A-Z a-z 0-9 - _` 알파벳으로 인코딩한 값으로 padding `=`을 붙이지 않는다. 다른 형식은 인식하지 않는다. |
+| `aggregate` | 이 record가 참여 중인 aggregate 변경의 진행 정보다(§8.1). 없으면 field를 쓰지 않는다. 있으면 `aggregateId`(lowercase canonical UUID), `aggregateGeneration`(문자열 정수), `index`(JSON number, 참여 목록 안의 위치), `expectedStoreVersion`, `ownerTransition`(`preserve \| newOwner`), `targetAuthorityOwnerGeneration`(문자열 정수), `authorityPayloadSha256`·`membershipMutationSha256`(hex 64자)를 포함한다. |
+| `visibleStoreVersion` | `aggregate`가 있는 동안 Framework가 공개 `StoreVersion`으로 내놓는 값이다. Aggregate 준비가 이 record를 다시 써도 공개 `StoreVersion`은 준비 전 값으로 유지한다. `aggregate`가 없으면 field를 쓰지 않는다. |
 
 생성을 실행하는 node는 `requestContentReference`를 decode한 뒤 그 bytes의 길이가
 `requestEncodedSize`와 같고 SHA-256이 `requestSha256`과 같은지 확인한다. 어느 하나라도
@@ -505,7 +507,8 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 예약의 식별자다. 예약 전용 logical key를 두지 않으며, 다른 node가 만든 예약의 완료와
 취소도 이 record와 §7의 최종 결과 record만으로 판정한다. 예약 상태를 위 표의 field 밖에
 두지 않는다 — 한 언어만 읽는 field에 예약 정보를 담으면 다른 언어가 그 record를 갱신할 때
-그 정보가 남지 않는다.
+그 정보가 남지 않는다. Aggregate·relocation 진행도 별도 lock record가 아니라 이 record의 상태다. 진행 여부와 commit 전 값은
+`aggregate`·`visibleStoreVersion` 두 field만으로 판정한다. Aggregate 기록의 key는 `{prefix}aggregate:{aggregateId}:{aggregateGeneration}`이다.
 
 Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이 opaque
 record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
@@ -1144,7 +1147,7 @@ Application이 반환한 `Rejected`와 callback exception은 다른 결과다. P
 |---|---|---|
 | 같은 type의 `Ready` | `AlreadyExists` | 기존 ref |
 | 같은 type의 `Creating` | `AlreadyExists` | 진행 중인 생성 결과를 기다린다. |
-| 같은 type의 `Closing` | `AlreadyExists` | User Spot은 [Spot 주소 메시징 §3.2](../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)의 authority 변경 대기와 후속 절차를 따른다. |
+| 같은 type의 `Closing` | `AlreadyExists` | Actor와 User Spot은 [Spot 주소 메시징 §3.2](../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)의 authority 변경 대기와 후속 절차를 따른다. |
 | 다른 Actor type | `TypeMismatch` | `TypeMismatch` |
 | 다른 Spot 종류 또는 type | `TypeMismatch` | `TypeMismatch` |
 
