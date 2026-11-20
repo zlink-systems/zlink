@@ -120,6 +120,7 @@ final class StartupFailureTest {
                 ZLinkFrameworkConfigurer.class,
                 () ->
                         options -> {
+                            options.addLocationStore(store);
                             var mesh = options.addRouteMesh("startup").listen(endpoint);
                             if (fixedRid == null) return;
                             mesh.setRoutingId(fixedRid);
