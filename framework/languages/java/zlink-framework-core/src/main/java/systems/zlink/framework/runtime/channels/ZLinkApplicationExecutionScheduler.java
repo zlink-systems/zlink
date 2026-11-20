@@ -21,7 +21,8 @@ import java.util.function.Supplier;
 /** Process-shared application drains for gate-free owners using the same execution resource. */
 final class ZLinkApplicationExecutionScheduler {
     // Weak associations do not retain an executor after its hosts and accepted records are gone.
-    private static final Map<Executor, WeakReference<ZLinkApplicationExecutionScheduler>> SHARED =
+    // Package-private members are read by ZLinkApplicationExecutionSchedulerTest (same package).
+    static final Map<Executor, WeakReference<ZLinkApplicationExecutionScheduler>> SHARED =
             new WeakHashMap<>();
 
     static ZLinkApplicationExecutionScheduler shared(Executor executor, int workers) {
@@ -37,8 +38,8 @@ final class ZLinkApplicationExecutionScheduler {
     }
 
     private final Executor executor;
-    private final ArrayDeque<Owner> ready = new ArrayDeque<>();
-    private final ArrayDeque<Slot> idle = new ArrayDeque<>();
+    final ArrayDeque<Owner> ready = new ArrayDeque<>();
+    final ArrayDeque<Slot> idle = new ArrayDeque<>();
 
     ZLinkApplicationExecutionScheduler(Executor executor, int workers) {
         if (workers < 1) throw new IllegalArgumentException("workers must be positive");
@@ -93,7 +94,7 @@ final class ZLinkApplicationExecutionScheduler {
     }
 
     // The head moves to exactly one slot. Other workers may claim the next head immediately.
-    private Record takeLocked() {
+    Record takeLocked() {
         if (ready.isEmpty()) return null;
         Owner owner = ready.removeFirst();
         Record record = owner.pending.removeFirst();
@@ -155,8 +156,8 @@ final class ZLinkApplicationExecutionScheduler {
         }
     }
 
-    private static final class Record implements ZLinkSuspendInvocationContext.ApplicationTurn {
-        private final Supplier<CompletionStage<Void>> operation;
+    static final class Record implements ZLinkSuspendInvocationContext.ApplicationTurn {
+        final Supplier<CompletionStage<Void>> operation;
         private final CompletableFuture<Void> result = new CompletableFuture<>();
         private final ZLinkApplicationJobContext.QueuedOwnership ownership =
                 ZLinkApplicationJobContext.transferQueuedOwnership();

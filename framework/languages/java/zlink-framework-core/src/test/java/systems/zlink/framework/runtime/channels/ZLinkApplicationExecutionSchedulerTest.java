@@ -39,21 +39,19 @@ final class ZLinkApplicationExecutionSchedulerTest {
             operations.add(operation);
             owner.enqueue(operation, null);
         }
-        var ready = (Deque<?>) field(scheduler, "ready");
+        var ready = scheduler.ready;
         assertEquals(List.of(owner), List.copyOf(ready));
         var claims = new ArrayList<Object>();
-        var take = scheduler.getClass().getDeclaredMethod("takeLocked");
-        take.setAccessible(true);
         for (int i = 0; i < 20; i++) {
-            Object claim = take.invoke(scheduler);
-            assertSame(operations.get(i), field(claim, "operation"), "FIFO is checked at take");
+            var claim = scheduler.takeLocked();
+            assertSame(operations.get(i), claim.operation, "FIFO is checked at take");
             claims.add(claim);
             assertEquals(i == 19 ? 0 : 1, ready.size());
         }
         assertUnique(claims);
         claims.add(claims.getFirst());
         assertThrows(AssertionError.class, () -> assertUnique(claims), "duplicate claim control");
-        assertNull(take.invoke(scheduler));
+        assertNull(scheduler.takeLocked());
         owner.enqueue(() -> DONE, null);
         assertEquals(
                 List.of(owner),
@@ -61,7 +59,7 @@ final class ZLinkApplicationExecutionSchedulerTest {
                 "enqueue after last take republishes the owner");
         executor.drain();
         assertTrue(ready.isEmpty());
-        assertEquals(1, ((Deque<?>) field(scheduler, "idle")).size());
+        assertEquals(1, scheduler.idle.size());
     }
 
     private static void assertUnique(List<Object> claims) {
@@ -89,7 +87,7 @@ final class ZLinkApplicationExecutionSchedulerTest {
                             .toCompletableFuture());
         }
         assertEquals(2, executor.pending.size(), "only unreserved idle slots are submitted");
-        assertEquals(1, ((Deque<?>) field(scheduler, "ready")).size());
+        assertEquals(1, scheduler.ready.size());
         executor.drain();
         CompletableFuture.allOf(terminals.toArray(CompletableFuture[]::new)).join();
         assertEquals(500, seen.cardinality());
@@ -97,7 +95,7 @@ final class ZLinkApplicationExecutionSchedulerTest {
         assertTrue(executor.submissions < 500, "detect per-record executor wrappers");
         assertThrows(AssertionError.class, () -> assertBatchSubmissions(500, 500));
         assertBatchSubmissions(executor.submissions, 500);
-        assertEquals(2, ((Deque<?>) field(scheduler, "idle")).size());
+        assertEquals(2, scheduler.idle.size());
     }
 
     private static void assertBatchSubmissions(int submissions, int records) {
@@ -324,8 +322,7 @@ final class ZLinkApplicationExecutionSchedulerTest {
         var owner = scheduler.register();
         owner.enqueue(() -> DONE, null);
         var pending = owner.enqueue(() -> DONE, null).toCompletableFuture();
-        @SuppressWarnings("unchecked")
-        var ready = (Deque<Object>) field(scheduler, "ready");
+        var ready = scheduler.ready;
         ready.addLast(owner);
         assertThrows(
                 AssertionError.class,
@@ -419,7 +416,7 @@ final class ZLinkApplicationExecutionSchedulerTest {
     void configuredWorkerCountBoundsSlots() throws Exception {
         try (var executor = Executors.newFixedThreadPool(8)) {
             var scheduler = new ZLinkApplicationExecutionScheduler(executor, 2);
-            assertEquals(2, ((Deque<?>) field(scheduler, "idle")).size());
+            assertEquals(2, scheduler.idle.size());
         }
     }
 
@@ -467,7 +464,7 @@ final class ZLinkApplicationExecutionSchedulerTest {
             }
             blocked.get(2, TimeUnit.SECONDS);
             firstExecutor.drain();
-            synchronized (field(first, "SHARED")) {
+            synchronized (ZLinkApplicationExecutionScheduler.SHARED) {
                 producers
                         .submit(
                                 () -> {
@@ -484,15 +481,9 @@ final class ZLinkApplicationExecutionSchedulerTest {
                                 })
                         .get(2, TimeUnit.SECONDS);
             }
-            assertEquals(1, ((Deque<?>) field(first, "idle")).size());
-            assertEquals(1, ((Deque<?>) field(second, "idle")).size());
+            assertEquals(1, first.idle.size());
+            assertEquals(1, second.idle.size());
         }
-    }
-
-    private static Object field(Object owner, String name) throws Exception {
-        var field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
     }
 
     private static ZLinkApplicationJobQueue jobs() {
