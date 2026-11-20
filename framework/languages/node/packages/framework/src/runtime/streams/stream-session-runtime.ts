@@ -32,7 +32,13 @@ import type {
 } from '../backend/contracts';
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
 import { ZLinkDispatchErrorReporter, ZLinkRouteDisconnectedError } from '../channels';
-import { type ZLinkRuntimeMetrics, flowIfEnabled } from '../diagnostics';
+import {
+  type ZLinkRuntimeMetrics,
+  flowIfEnabled,
+  isRelocationDebugEnabled,
+  relocationDebug,
+  relocationDebugTerminal
+} from '../diagnostics';
 import { TELEMETRY_INSTRUMENTATION_NAME } from '../diagnostics/message-flow-record';
 
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
@@ -201,6 +207,20 @@ export class ZLinkStreamSessionRuntime {
     return this.sessionReady;
   }
 
+  shutdownSnapshot(): Record<string, unknown> {
+    return {
+      sessionId: this.stream.sessionId,
+      connected: this.connected,
+      disconnected: this.disconnected,
+      disconnectQueued: this.disconnectQueued,
+      disposed: this.disposed,
+      transportClosed: this.stream.shutdownTransportClosed,
+      ...this.serial.shutdownSnapshot(),
+      routingId: this.context.routingId === undefined ? undefined : String(this.context.routingId),
+      boundActors: [...this.context.boundActors].map((actor) => actor.actorId)
+    };
+  }
+
   get isDisconnected(): boolean {
     return this.disconnected || this.disconnectQueued;
   }
@@ -367,23 +387,77 @@ export class ZLinkStreamSessionRuntime {
     if (!this.disconnected) {
       this.disconnected = true;
       const session = await this.requireSession();
-      await session.onDisconnected?.(this.context);
+
+      relocationDebug('dispose.onDisconnected.enter', { sessionId: this.stream.sessionId });
+      let failure: { error: unknown } | undefined;
+      try {
+        await session.onDisconnected?.(this.context);
+      } catch (error) {
+        failure = { error };
+        throw error;
+      } finally {
+        relocationDebugTerminal(
+          'dispose.onDisconnected.exit',
+          { sessionId: this.stream.sessionId },
+          failure
+        );
+      }
     }
     await this.cleanup();
   }
 
   async drainClose(): Promise<void> {
-    this.closeReason = 'server_drain';
-    await this.serial.executeFinal(async () => {
-      if (this.disposed) return;
-      this.stream.markTransportClosed();
-      this.stopLivenessChecks();
-      await this.stream.closeForDrain();
-      if (!this.disconnected) {
-        this.disconnected = true;
-        await this.complete(undefined, true);
+    if (isRelocationDebugEnabled())
+      relocationDebug('session.drainClose.enter', { ...this.shutdownSnapshot() });
+    let failure: { error: unknown } | undefined;
+    try {
+      this.closeReason = 'server_drain';
+      if (isRelocationDebugEnabled())
+        relocationDebug('drainClose.final.submit', { ...this.shutdownSnapshot() });
+      let failure: { error: unknown } | undefined;
+      try {
+        await this.serial.executeFinal(async () => {
+          if (isRelocationDebugEnabled())
+            relocationDebug('drainClose.final.enter', { ...this.shutdownSnapshot() });
+          let failure: { error: unknown } | undefined;
+          try {
+            if (this.disposed) return;
+            this.stream.markTransportClosed();
+            this.stopLivenessChecks();
+            await this.stream.closeForDrain();
+            if (!this.disconnected) {
+              this.disconnected = true;
+              await this.complete(undefined, true);
+            }
+          } catch (error) {
+            failure = { error };
+            throw error;
+          } finally {
+            if (isRelocationDebugEnabled())
+              relocationDebugTerminal(
+                'drainClose.final.exit',
+                { ...this.shutdownSnapshot() },
+                failure
+              );
+          }
+        });
+      } catch (error) {
+        failure = { error };
+        throw error;
+      } finally {
+        relocationDebugTerminal(
+          'drainClose.final.terminal',
+          { sessionId: this.stream.sessionId },
+          failure
+        );
       }
-    });
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      if (isRelocationDebugEnabled())
+        relocationDebugTerminal('session.drainClose.exit', { ...this.shutdownSnapshot() }, failure);
+    }
   }
 
   private async markConnected(localAddr?: string, remoteAddr?: string): Promise<void> {
@@ -730,7 +804,21 @@ export class ZLinkStreamSessionRuntime {
       }
       if (notifyDisconnected) {
         const session = await this.requireSession();
-        await session.onDisconnected?.(this.context);
+
+        relocationDebug('complete.onDisconnected.enter', { sessionId: this.stream.sessionId });
+        let failure: { error: unknown } | undefined;
+        try {
+          await session.onDisconnected?.(this.context);
+        } catch (error) {
+          failure = { error };
+          throw error;
+        } finally {
+          relocationDebugTerminal(
+            'complete.onDisconnected.exit',
+            { sessionId: this.stream.sessionId },
+            failure
+          );
+        }
       }
     } finally {
       await this.cleanup(bindingsCleanup);
@@ -755,16 +843,29 @@ export class ZLinkStreamSessionRuntime {
   }
 
   private async cleanup(bindingsCleanup?: Promise<void>): Promise<void> {
-    if (this.connected && !this.metricsClosed) {
-      this.metricsClosed = true;
-      this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, -1, { transport: 'tcp' });
-      this.options.metrics?.count(METRIC_NAMES.StreamConnectionsClosed, 1, {
-        transport: 'tcp',
-        close_reason: normalizeStreamCloseReason(this.closeReason)
-      });
+    if (isRelocationDebugEnabled())
+      relocationDebug('session.cleanup.enter', { ...this.shutdownSnapshot() });
+    let failure: { error: unknown } | undefined;
+    try {
+      if (this.connected && !this.metricsClosed) {
+        this.metricsClosed = true;
+        this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, -1, {
+          transport: 'tcp'
+        });
+        this.options.metrics?.count(METRIC_NAMES.StreamConnectionsClosed, 1, {
+          transport: 'tcp',
+          close_reason: normalizeStreamCloseReason(this.closeReason)
+        });
+      }
+      await (bindingsCleanup ?? this.context.cleanupBindings());
+      this.removeSession(this.stream.sessionId, this);
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      if (isRelocationDebugEnabled())
+        relocationDebugTerminal('session.cleanup.exit', { ...this.shutdownSnapshot() }, failure);
     }
-    await (bindingsCleanup ?? this.context.cleanupBindings());
-    this.removeSession(this.stream.sessionId, this);
   }
 
   private enqueueControl(
@@ -951,8 +1052,27 @@ export class ZLinkStreamSessionNodeRuntime {
     }
   }
 
+  shutdownSnapshot(): readonly Record<string, unknown>[] {
+    return [...this.sessions.values()].map((session) => session.shutdownSnapshot());
+  }
+
   async drainCloseSessions(): Promise<void> {
-    await Promise.allSettled([...this.sessions.values()].map((session) => session.drainClose()));
+    if (isRelocationDebugEnabled())
+      relocationDebug('shutdown.sessions.enter', { sessions: this.shutdownSnapshot() });
+    let failure: { error: unknown } | undefined;
+    try {
+      await Promise.allSettled([...this.sessions.values()].map((session) => session.drainClose()));
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      if (isRelocationDebugEnabled())
+        relocationDebugTerminal(
+          'shutdown.sessions.exit',
+          { sessions: this.shutdownSnapshot() },
+          failure
+        );
+    }
   }
 
   // Spec server 04-session §2/§7: a session exists once the handshake succeeds,
