@@ -30,7 +30,8 @@ jobs:
       java: ${{ steps.paths.outputs.java }}
       node: ${{ steps.paths.outputs.node }}
       core_version_changed: ${{ steps.paths.outputs.core_version_changed }}
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # Light control job: keep it on hosted runners so it never waits behind the test jobs it manages.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
