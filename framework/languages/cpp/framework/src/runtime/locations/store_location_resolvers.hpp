@@ -246,15 +246,21 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     resolve_actor_session_binding_address (actor_ref_t actor) override
     {
         const auto matches_actor = [&actor] (const spot_address_t &address) {
-            return address.object_generation == actor.object_generation ()
-                   && address.node_rid
-                        == zlink::routing_id_t::from (std::string (actor.node_rid ().value ()))
+            return address.node_rid
+                     == zlink::routing_id_t::from (std::string (actor.node_rid ().value ()))
                    && (actor.mesh_name ().empty () || address.mesh_name == actor.mesh_name ())
                    && address.authority_owner_generation != 0 && address.node_generation != 0
                    && address.owner.lease_generation > 0;
         };
         const auto actor_id = std::string (actor.actor_id ().value ());
         auto resolved = co_await read_actor_address (actor_id);
+        // Session-Actor binding §12: a row of this ActorId with another ObjectGeneration is
+        // InvalidOperation; every other mismatch has no route and the caller reports Unavailable.
+        if (resolved && resolved->address.object_generation != actor.object_generation ()) {
+            throw framework_exception_t (
+              framework_error_kind_t::invalid_operation,
+              "Actor session binding ObjectGeneration differs from the current Actor");
+        }
         if (!resolved || !matches_actor (resolved->address))
             co_return std::nullopt;
         co_await cache_ready_route (_actor_routes, actor_id, resolved->address,

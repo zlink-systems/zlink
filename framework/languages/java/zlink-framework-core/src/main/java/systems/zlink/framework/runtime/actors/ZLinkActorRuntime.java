@@ -2494,13 +2494,26 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .resolveStoredActorRoute(actor.actorId())
                 .thenAccept(
                         route -> {
+                            // Session-Actor binding §12: a row of this ActorId with another
+                            // ObjectGeneration is InvalidOperation; every other mismatch has no
+                            // route and ends Unavailable.
+                            if (route != null
+                                    && route.actorRef() != null
+                                    && route.actorRef().objectGeneration() != actor.generation()) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                        "Actor session binding ObjectGeneration differs from the"
+                                                + " current Actor: "
+                                                + actor.actorId());
+                            }
                             if (route == null
                                     || route.actorRef() == null
                                     || !route.actorRef().nodeRid().equals(actor.nodeRid())
-                                    || route.actorRef().objectGeneration() != actor.generation()
                                     || route.authorityOwnerGeneration() <= 0) {
-                                throw new IllegalStateException(
-                                        "Actor authority changed before Session binding");
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Actor session binding route is unavailable: "
+                                                + actor.actorId());
                             }
                             spotNode.observeActorAuthority(
                                     actor,

@@ -5,7 +5,7 @@
 STREAM session, Actor binding과 relay는 JVM Framework runtime이 소유한다. Application에는 session lifecycle,
 typed packet·push와 Actor binding 결과만 공개하며 transport frame과 binding 구현은 노출하지 않는다.
 
-Session bind는 `ActorRef`를 한 번 제출한다. Active Message Follow route가 없으면 `NOT_FOUND`,
+Session bind는 `ActorRef`를 한 번 제출한다. Active Message Follow route가 없으면 `UNAVAILABLE`,
 generation이 다르면 `INVALID_OPERATION`, pre-commit seal 중이면 `UNAVAILABLE`이다. Framework는 Store에서
 새 ref를 찾아 hidden retry하지 않는다. `enableActorDispatch()`는 MeshName을 받지 않으며 startup에 Object
 Client 또는 Server role과 Location Store가 필요하다.
