@@ -258,7 +258,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     runtimeDependencies?: {
       readonly raw?: RawServiceMeshRuntime;
       readonly stateful?: ServiceStatefulRuntime;
-    }
+    },
+    private readonly entrySpotId?: string
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -466,7 +467,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       descriptor.nodeRoutingId,
       descriptor.lifecycleGeneration,
       this.onPendingOperationsChanged,
-      this.requests
+      this.requests,
+      this.entrySpotId
     );
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
@@ -1297,8 +1299,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requireStateful().rememberSpotRoute(route, expectedCurrentRoute);
   }
 
-  entrySpotRouteFence(targetNodeRid: string): ServiceDirectSpotRouteFence | undefined {
-    return this.requireStateful().tryEntrySpotFence(targetNodeRid);
+  entrySpotRouteFence(target?: ServiceSpotRouteFence): ServiceDirectSpotRouteFence | undefined {
+    return this.requireStateful().tryEntrySpotFence(target);
   }
 
   sealSpotMessageFollowIngress(
@@ -1462,20 +1464,24 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
-    targetNodeRid: unknown,
+    target: ServiceSpotRouteFence,
     request: ServiceApplicationPayload,
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
-    const target = String(targetNodeRid);
     return this.observeStateful(
       OperationKind.ActorJoin,
-      this.requireStateful().joinActorEntrySpot(actor, target, request, timeoutMs)
+      this.requireStateful().joinActorEntrySpot(
+        actor,
+        this.entrySpotRouteFence(target)!,
+        request,
+        timeoutMs
+      )
     );
   }
 
   joinActorEntrySpotCanonical(
     actor: ZLinkBackendActorRef,
-    targetNodeRid: unknown,
+    target: ServiceSpotRouteFence,
     request: ServiceApplicationPayload,
     actorFence: {
       readonly targetNodeGeneration: bigint;
@@ -1485,12 +1491,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     local: { readonly phase: 'admission'; readonly transferId: string },
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
-    const target = String(targetNodeRid);
     return this.observeStateful(
       OperationKind.ActorJoin,
       this.requireStateful().joinActorEntrySpotCanonical(
         actor,
-        target,
+        this.entrySpotRouteFence(target)!,
         request,
         actorFence,
         local,
@@ -2117,7 +2122,7 @@ class RawServiceSpot implements ServiceSpot {
     targetSpotGeneration: bigint,
     parts: MessageLike | readonly MessageLike[],
     options?: {
-      readonly routeFence?: ServiceDirectSpotRouteFence;
+      readonly routeFence?: ServiceSpotRouteFence;
       readonly entrySpot?: boolean;
     }
   ): Promise<SubmitResultValue> {
@@ -2141,7 +2146,7 @@ class RawServiceSpot implements ServiceSpot {
       readonly timeoutMs?: number;
       readonly requestOperation?: PendingOperation<unknown>;
       readonly onAdmitted?: () => void;
-      readonly routeFence?: ServiceDirectSpotRouteFence;
+      readonly routeFence?: ServiceSpotRouteFence;
       readonly entrySpot?: boolean;
     },
     completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
@@ -2206,19 +2211,29 @@ class RawServiceSpot implements ServiceSpot {
     this.close();
   }
 
-  /**
-   * An Entry Spot target without a resolved fence uses the target descriptor
-   * fence; undefined (no descriptor) reaches the stateful no-authority decision.
-   */
+  /** A remote Entry route must come from its selected descriptor. */
   private directSpotRouteFence(
     targetNodeRid: unknown,
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
-    routeFence: ServiceDirectSpotRouteFence | undefined,
+    routeFence: ServiceSpotRouteFence | undefined,
     entrySpot: boolean | undefined
   ): ServiceDirectSpotRouteFence | undefined {
-    if (routeFence === undefined && entrySpot === true) {
-      return this.backend.entrySpotRouteFence(String(targetNodeRid));
+    if (entrySpot === true) {
+      const target =
+        routeFence === undefined
+          ? String(targetNodeRid) === String(this.backend.status().routingId)
+            ? this.backend.entrySpotRouteFence()
+            : undefined
+          : this.backend.entrySpotRouteFence(routeFence);
+      return target === undefined
+        ? undefined
+        : requireDirectSpotRouteFence(
+            target,
+            String(targetNodeRid),
+            String(targetSpotId),
+            targetSpotGeneration
+          );
     }
     return requireDirectSpotRouteFence(
       routeFence,
@@ -2238,20 +2253,29 @@ function nodeSendResult(submitted: boolean): SubmitResultValue {
 }
 
 function requireDirectSpotRouteFence(
-  route: ServiceDirectSpotRouteFence | undefined,
+  route: ServiceSpotRouteFence | undefined,
   targetNodeRid: string,
   targetSpotId: string,
   targetSpotGeneration: bigint
 ): ServiceDirectSpotRouteFence {
   if (
     route === undefined ||
+    !('storeVersion' in route) ||
+    typeof route.storeVersion !== 'string' ||
     route.targetNodeRid !== targetNodeRid ||
     route.spot.spotId !== targetSpotId ||
     route.spot.generation !== targetSpotGeneration
   ) {
     throw new TypeError('Direct Spot submission requires the exact resolved authority fence.');
   }
-  return route;
+  return {
+    spot: route.spot,
+    targetNodeRid: route.targetNodeRid,
+    targetNodeGeneration: route.targetNodeGeneration,
+    authorityOwnerGeneration: route.authorityOwnerGeneration,
+    ownerLeaseGeneration: route.ownerLeaseGeneration,
+    storeVersion: route.storeVersion
+  };
 }
 
 class RawStreamSessionService implements StreamSessionService {

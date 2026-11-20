@@ -8,7 +8,7 @@ import {
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import type { DefaultZLinkActorManager } from '../actors';
 import type { DefaultZLinkSpotManager } from '../spots';
-import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
+import { entrySpotRouteTarget, type ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 import {
   DefaultZLinkActorClient,
   ZLinkActorNativeJoinCoordinator,
@@ -63,6 +63,11 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly locationLifecycle: () => ZLinkLocationLifecycle | undefined;
   readonly primaryMeshName: () => string | undefined;
   readonly actorMeshName: (actorType: string) => string | undefined;
+  readonly selectActorPlacementDescriptor: (
+    meshName: string,
+    stableType: string,
+    signal?: AbortSignal
+  ) => Promise<import('../../contracts').ZLinkMeshNodeDescriptor | undefined>;
   readonly createLocationSpotRouteResolver: () => ZLinkSpotRouteResolver | undefined;
   readonly createActorLocationResolver: () => ZLinkStoreLocationResolvers | undefined;
   readonly forgetDestroyedActorRef: (actorId: string) => void;
@@ -157,11 +162,16 @@ export class ZLinkActorRuntimeOptionsFactory {
         postCommitErrorReporter: this.options.reportPostCommitError,
         sourceTransfer: this.options.actorTransferRuntime,
         actorJoinRelocation: this.options.actorJoinRelocation,
-        entrySpotIdProvider: (meshName) => {
+        entrySpotTargetSelector: async (meshName, stableType, signal) => {
           const resolvedMeshName = meshName ?? this.options.primaryMeshName();
-          return resolvedMeshName === undefined
-            ? undefined
-            : this.options.spotManager()?.entrySpotIdForMesh(resolvedMeshName);
+          if (resolvedMeshName === undefined || stableType === undefined) return undefined;
+          const target = await this.options.selectActorPlacementDescriptor(
+            resolvedMeshName,
+            stableType,
+            signal
+          );
+          if (target === undefined) return undefined;
+          return entrySpotRouteTarget(resolvedMeshName, target);
         },
         remoteActorBinder: (actorRef, signal) =>
           this.options.streamBindingRuntime.commitActorRoute(actorRef, signal),

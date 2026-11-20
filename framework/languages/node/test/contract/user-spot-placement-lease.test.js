@@ -119,6 +119,7 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
       entrySpotId: 'entry-a',
       objectCapabilities: [{ objectKind: 'actor', stableType: 'room', entryAccepted: true }],
       populationCapacity: {
+        actors: { active: 0, reserved: 0, limit: 1 },
         spots: { active: 0, reserved: 0, limit: 1 },
         spotTypes: [
           { objectKind: 'actor', stableType: 'room', active: 0, reserved: 0, limit: 1 }

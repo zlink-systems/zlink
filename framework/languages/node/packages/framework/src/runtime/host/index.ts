@@ -2421,6 +2421,43 @@ export class ZLinkFrameworkRuntimeHost
     };
   }
 
+  /** Internal target selection shared by Actor creation and Entry joins. */
+  async selectActorPlacementDescriptor(
+    meshName: string,
+    stableType: string,
+    signal?: AbortSignal,
+    excludedNodeRids?: ReadonlySet<string>
+  ): Promise<ZLinkMeshNodeDescriptor | undefined> {
+    const locationStore = this.locationOwner.locationStore();
+    const leaseTracker = this.locationOwner.currentLeaseTracker;
+    if (locationStore === undefined || leaseTracker === undefined) return undefined;
+    const descriptors = await new ZLinkLiveRowFilter().filter(
+      await listAllMeshNodeDescriptors(locationStore, meshName, signal),
+      (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
+      signal
+    );
+    return selectReadyLocationPlacementDescriptor(
+      descriptors,
+      this.spotNodeRuntime?.meshNode(meshName),
+      signal,
+      (descriptor) => {
+        const capability = descriptor.objectCapabilities.find(
+          (candidate) => candidate.objectKind === 'actor' && candidate.stableType === stableType
+        );
+        const capacity = descriptor.populationCapacity.actors;
+        return (
+          descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
+          descriptor.objectRole === ZLinkObjectRole.Server &&
+          descriptor.placementWeight > 0 &&
+          descriptor.entrySpotId !== undefined &&
+          excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
+          capability?.entryAccepted === true &&
+          (capacity.limit === 0 || capacity.active + capacity.reserved < capacity.limit)
+        );
+      }
+    );
+  }
+
   createPublicSpotManager(
     local: DefaultZLinkSpotManager
   ): import('../../contracts').ZLinkSpotManager {
@@ -2481,28 +2518,11 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await liveRows.filter(
-          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
-          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
-          signal
-        );
-        const selected = await selectReadyLocationPlacementDescriptor(
-          descriptors,
-          meshNode,
+        const selected = await this.selectActorPlacementDescriptor(
+          meshName,
+          stableType,
           signal,
-          (descriptor) => {
-            const capability = descriptor.objectCapabilities.find(
-              (candidate) => candidate.objectKind === 'actor' && candidate.stableType === stableType
-            );
-            return (
-              descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
-              descriptor.objectRole === 'server' &&
-              descriptor.placementWeight > 0 &&
-              descriptor.entrySpotId !== undefined &&
-              excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
-              capability?.entryAccepted === true
-            );
-          }
+          excludedNodeRids
         );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
@@ -2946,6 +2966,8 @@ export class ZLinkFrameworkRuntimeHost
       actorMeshName: (actorType) => this.meshRouters.actorMeshName(actorType),
       createLocationSpotRouteResolver: () => this.createLocationSpotRouteResolver(),
       createActorLocationResolver: () => this.createActorLocationResolver(),
+      selectActorPlacementDescriptor: (meshName, stableType, signal) =>
+        this.selectActorPlacementDescriptor(meshName, stableType, signal),
       forgetDestroyedActorRef: (actorId) => this.destroyedActorRefs.delete(actorId),
       rememberDestroyedActorRef: (actorId, actorRef) =>
         this.destroyedActorRefs.set(actorId, actorRef),

@@ -301,6 +301,7 @@ export class ZLinkSpotNodeRuntimeManager {
           `MeshNode '${spotNodeName}' requires a routing id and ROUTER bind endpoint.`
         );
       }
+      const nativeEntrySpotId = this.entrySpotId(spotNodeName, spotNode);
       const node = meshAdapter.createMeshNode(this.options.context, {
         meshName: spotNodeName,
         routingId,
@@ -310,7 +311,8 @@ export class ZLinkSpotNodeRuntimeManager {
         applicationJobQueue: this.applicationJobQueue,
         infrastructureTaskRunner: this.options.detachedTaskRunner,
         applicationJobReceiveFlowFailureSink: this.options.applicationJobReceiveFlowFailureSink,
-        peerAdmissionSealed: () => this.options.peerAdmissionSealed?.(spotNodeName) ?? false
+        peerAdmissionSealed: () => this.options.peerAdmissionSealed?.(spotNodeName) ?? false,
+        ...(nativeEntrySpotId === undefined ? {} : { entrySpotId: nativeEntrySpotId })
       });
       if (this.options.requests !== undefined) node.setRequestRuntime?.(this.options.requests);
       if (this.options.dispatchErrors !== undefined) {

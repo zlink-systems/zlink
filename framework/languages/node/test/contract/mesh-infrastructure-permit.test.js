@@ -41,7 +41,7 @@ test('canonical Actor Join returns the ingress permit before waiting for the Loc
     spotId: 'spot-a',
     serial: { executeLifecycleOperation: async (callback) => callback() }
   };
-  const manager = {
+  const manager = Object.assign(Object.create(DefaultZLinkSpotManager.prototype), {
     activations: { resolve: () => activation },
     formalRemoteActorAdmissions: {
       beginProvisional: () => ({ record: {}, created: true })
@@ -53,7 +53,7 @@ test('canonical Actor Join returns the ingress permit before waiting for the Loc
       }
     },
     dispatchMeshActorJoinCore: DefaultZLinkSpotManager.prototype.dispatchMeshActorJoinCore
-  };
+  });
   const request = ZLinkBufferMessage.from('join');
   const record = {
     kindData: {

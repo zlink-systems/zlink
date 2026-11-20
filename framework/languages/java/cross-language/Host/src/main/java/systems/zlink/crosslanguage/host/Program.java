@@ -26,6 +26,7 @@ import systems.zlink.crosslanguage.host.SpotRouteContracts.TestHostSpotRouteRequ
 import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangActorCreateReq;
 import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangProbeReq;
 import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangProbeRes;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.BeginEntrySpotJoinReq;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.BeginUserSpotJoinReq;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotCreateReq;
 import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotDiscoveryProbeReq;
@@ -442,6 +443,31 @@ public final class Program {
                 .get(50, TimeUnit.SECONDS);
             sink.append("user-spot-join-request-reply|accepted=" + reply.accepted()
                 + "|actor=" + reply.actorId() + "|spot=" + reply.spotId());
+
+            if ("1".equals(args.option("entry-join", "0"))) {
+                // Remote Entry Spot join: the second Actor joins the User Spot too, so
+                // the User Spot node can move it back to this node after a restart.
+                String restartActorId = actorId + "-restart";
+                ZLinkActorCreateResult second = actors
+                    .getOrCreate(restartActorId, ENTRY_RELOCATION_ACTOR_TYPE)
+                    .inMesh(meshName)
+                    .request(new CrossLangActorCreateReq(7, 4))
+                    .timeout(Duration.ofSeconds(15))
+                    .submit()
+                    .toCompletableFuture()
+                    .get(20, TimeUnit.SECONDS);
+                sink.append("entry-join-restart-actor-created|status="
+                    + (second instanceof ZLinkActorCreateResult.Created ? "created" : "other"));
+                UserSpotJoinRes secondReply = actorClient
+                    .requestToActor(restartActorId,
+                        new BeginUserSpotJoinReq(targetSpotId, "canonical-28"))
+                    .timeout(Duration.ofSeconds(45))
+                    .submit(UserSpotJoinRes.class)
+                    .toCompletableFuture()
+                    .get(50, TimeUnit.SECONDS);
+                sink.append("user-spot-join-request-reply|accepted=" + secondReply.accepted()
+                    + "|actor=" + secondReply.actorId() + "|spot=" + secondReply.spotId());
+            }
         } catch (ExecutionException | TimeoutException error) {
             sink.append("user-spot-source-error|" + describe(error));
         } catch (InterruptedException error) {
@@ -497,7 +523,7 @@ public final class Program {
             }
             if (args.option("outage-control-prefix", null) == null) {
                 startDaemon("user-spot-target-probe",
-                    () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
+                    () -> probeJoinedActor(args, sink, observer, actorClient, actorId, targetNodeRid));
             }
         } catch (ExecutionException | TimeoutException error) {
             sink.append("user-spot-target-error|" + describe(error));
@@ -609,6 +635,7 @@ public final class Program {
     }
 
     private static void probeJoinedActor(
+        HostArgs args,
         EventSink sink,
         UserSpotJoinObserver observer,
         ZLinkActorClient actorClient,
@@ -638,6 +665,9 @@ public final class Program {
                     + "|targetRid=" + targetNodeRid
                     + "|actor=" + reply.actorId()
                     + "|stateVersion=" + reply.stateVersion());
+                if ("1".equals(args.option("entry-join", "0"))) {
+                    entryJoinBack(args, sink, actorClient, actorId, targetNodeRid);
+                }
                 return;
             }
             failure = "unexpected-owner:" + reply.nodeRid();
@@ -648,6 +678,77 @@ public final class Program {
             return;
         }
         sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid + "|failure=" + failure);
+    }
+
+    // Remote Entry Spot join: the Actor in this node's User Spot defers
+    // joinEntrySpot(); this node is no placement candidate, so the Framework
+    // must move it to the Entry Spot of the other node. The second Actor does
+    // the same after the other node restarted.
+    private static void entryJoinBack(
+        HostArgs args, EventSink sink, ZLinkActorClient actorClient, String actorId, String ownNodeRid) {
+        try {
+            String restartActorId = actorId + "-restart";
+            beginEntryJoin(sink, actorClient, actorId, "join");
+            waitForOwner(sink, actorClient, actorId, ownNodeRid, false);
+            waitForOwner(sink, actorClient, restartActorId, ownNodeRid, true);
+            Path restartFile = Path.of(args.require("restart-file"));
+            long deadline = System.nanoTime() + Duration.ofSeconds(180).toNanos();
+            while (!Files.exists(restartFile)) {
+                if (System.nanoTime() >= deadline) {
+                    sink.append("entry-join-restart-file-timeout");
+                    return;
+                }
+                sleepQuietly(25);
+            }
+            beginEntryJoin(sink, actorClient, restartActorId, "restart");
+        } catch (ExecutionException | TimeoutException error) {
+            sink.append("entry-join-error|" + describe(error));
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void beginEntryJoin(
+        EventSink sink, ZLinkActorClient actorClient, String id, String phase)
+        throws InterruptedException, ExecutionException, TimeoutException {
+        UserSpotJoinRes reply = actorClient
+            .requestToActor(id, new BeginEntrySpotJoinReq(phase))
+            .timeout(Duration.ofSeconds(45))
+            .submit(UserSpotJoinRes.class)
+            .toCompletableFuture()
+            .get(50, TimeUnit.SECONDS);
+        sink.append("entry-join-request-reply|phase=" + phase + "|accepted=" + reply.accepted()
+            + "|actor=" + reply.actorId());
+    }
+
+    // wantOwn: wait until the Actor answers from this node; otherwise until it answers from another.
+    private static void waitForOwner(
+        EventSink sink, ZLinkActorClient actorClient, String id, String ownNodeRid, boolean wantOwn)
+        throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(90).toNanos();
+        String last = "none";
+        while (System.nanoTime() < deadline) {
+            try {
+                UserSpotProbeRes reply = actorClient
+                    .requestToActor(id, new UserSpotProbeReq("entry-join-probe"))
+                    .timeout(Duration.ofSeconds(5))
+                    .submit(UserSpotProbeRes.class)
+                    .toCompletableFuture()
+                    .get(7, TimeUnit.SECONDS);
+                last = reply.nodeRid();
+                if (ownNodeRid.equals(reply.nodeRid()) == wantOwn) {
+                    if (!wantOwn) {
+                        sink.append("entry-join-probe|actor=" + id + "|nodeRid=" + reply.nodeRid()
+                            + "|originRid=" + ownNodeRid);
+                    }
+                    return;
+                }
+            } catch (ExecutionException | TimeoutException error) {
+                last = describe(error);
+            }
+            sleepQuietly(500);
+        }
+        sink.append("entry-join-probe-timeout|actor=" + id + "|last=" + last);
     }
 
     private static void startDaemon(String name, Runnable body) {
