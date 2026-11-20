@@ -33,6 +33,7 @@ internal sealed class FakeEtcdServer : IAsyncDisposable
     internal long CompactedRevision { get; set; }
     internal ConcurrentQueue<(string Method, DateTime Deadline)> Calls { get; } = new();
     internal Func<string, IMessage, ServerCallContext, Task>? BeforeCall { get; set; }
+    internal Func<AuthenticateResponse, AuthenticateResponse>? AuthenticateReply { get; set; }
     internal int AuthenticateCount;
     internal int WriteCount;
 
@@ -66,10 +67,11 @@ internal sealed class FakeEtcdServer : IAsyncDisposable
                 }
             )
         );
+        // Unbounded here so that only the provider's own transport bounds reject a message.
         builder.Services.AddGrpc(options =>
         {
-            options.MaxReceiveMessageSize = 16 * 1024 * 1024;
-            options.MaxSendMessageSize = 8 * 1024 * 1024;
+            options.MaxReceiveMessageSize = null;
+            options.MaxSendMessageSize = null;
         });
         FakeEtcdServer? server = null;
         builder.Services.AddSingleton(_ => server!);
@@ -331,7 +333,12 @@ internal sealed class FakeEtcdServer : IAsyncDisposable
         {
             await owner.Before("Authenticate", request, context);
             var number = Interlocked.Increment(ref owner.AuthenticateCount);
-            return new AuthenticateResponse { Header = owner.Header(), Token = "token" + number };
+            var response = new AuthenticateResponse
+            {
+                Header = owner.Header(),
+                Token = "token" + number,
+            };
+            return owner.AuthenticateReply?.Invoke(response) ?? response;
         }
     }
 }

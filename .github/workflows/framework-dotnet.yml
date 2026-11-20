@@ -84,6 +84,7 @@ env:
   FRAMEWORK_CONTRACT_TESTS: framework/languages/dotnet/tests/Zlink.Framework.ContractTests/Zlink.Framework.ContractTests.csproj
   STREAM_CONNECTOR_TESTS: framework/languages/dotnet/tests/Systems.Zlink.Stream.Connector.Tests/Systems.Zlink.Stream.Connector.Tests.csproj
   REDIS_LOCATION_TESTS: framework/languages/dotnet/tests/Zlink.Framework.Locations.Redis.Tests/Zlink.Framework.Locations.Redis.Tests.csproj
+  ETCD_LOCATION_TESTS: framework/languages/dotnet/tests/Zlink.Framework.Locations.Etcd.Tests/Zlink.Framework.Locations.Etcd.Tests.csproj
   ZLinkFrameworkTargetFrameworks: net8.0;net10.0
 
 # One run per ref: a newer push to the same branch/PR cancels the run still in
@@ -283,6 +284,11 @@ jobs:
         if: ${{ startsWith(matrix.target.name, 'linux-') }}
         run: bash scripts/ci/dotnet-test.sh ${{ env.REDIS_LOCATION_TESTS }} Debug net8.0
 
+      # etcd provider tests use an in-process fake gRPC server; the live-etcd test skips
+      # without ZLINK_ETCD_ENDPOINTS (#4077).
+      - name: Run etcd Location Store tests (Debug, net8.0)
+        run: bash scripts/ci/dotnet-test.sh ${{ env.ETCD_LOCATION_TESTS }} Debug net8.0
+
       - name: Run framework unit tests (Release, net10.0)
         run: bash scripts/ci/dotnet-test.sh ${{ env.FRAMEWORK_UNIT_TESTS }} Release net10.0
 
@@ -291,6 +297,9 @@ jobs:
 
       - name: Run stream connector tests (Release, net10.0)
         run: bash scripts/ci/dotnet-test.sh ${{ env.STREAM_CONNECTOR_TESTS }} Release net10.0
+
+      - name: Run etcd Location Store tests (Release, net10.0)
+        run: bash scripts/ci/dotnet-test.sh ${{ env.ETCD_LOCATION_TESTS }} Release net10.0
 
       # macOS·Windows 실패는 이 기계에서 재현되지 않는다(#17, 0.19.0). TRX에는 테스트별
       # stdout과 stack이 들어 있어 raw 로그보다 원인을 좁히기 쉽다. 실패했을 때만 올린다.
