@@ -379,7 +379,7 @@ is put **only in request/response/error response.**
 | `Request` sent | A new `request_seq` is assigned and registered in the pending map |
 | `Response` received — `request_seq` matches a pending request | That request **completes as success** |
 | `Response` received — terminal request or no matching pending request | Discarded without a second terminal |
-| `Error` received — `request_seq` matches a pending request | That request **completes as failure** |
+| `Error` received — `request_seq` matches a pending request | That request **completes as failure**, except an admission rejection (§5.8), which keeps waiting instead |
 | `Error` received — `request_seq` is absent or does not match a pending request | Delivered to the error surface as a **stream-level error** unrelated to a pending request (§9) |
 
 - **`request_seq` is canonical for pending request matching.** Since
@@ -525,13 +525,15 @@ that request again on the same connection automatically. Applications don't buil
 - An admission rejection is only an Error packet with code `unavailable` whose header metadata carries
   `$zlink.admission.retryAfter`. An `unavailable` without this metadata ends the request with `RemoteError` as today.
 - If the `$zlink.admission.retryAfter` value isn't a decimal UTC epoch millisecond string with no sign and no leading
-  zeros, the request ends with `FrameDecodeFailed` and isn't sent again.
+  zeros, or isn't between 1 and 2^53 − 1, only that request ends with `FrameDecodeFailed` and isn't sent again. The
+  connection stays open (the admission metadata row of the §9 table).
 - The resend time is `retryAfter` plus a random delay of 0–50 ms. If `retryAfter` has already passed, the request is
   sent after that random delay from now.
 - A resend uses the same packet name, payload, application metadata, and correlation, and only takes a new request
   sequence.
-- The application's `OnAdmissionWaiting` callback is called once for each rejection received. The request hooks (§5.7)
-  for sending and receiving, and the request callback, run once per operation regardless of retries.
+- The application's `OnAdmissionWaiting` callback is called once for each rejection received. Retries don't add runs
+  of the request hooks (§5.7) or the request callback; their counts and the caller-cancellation rule follow §5.7
+  unchanged (a request the caller cancelled doesn't run the reply received hook).
 - The wait ends at the earlier of the original request deadline and `first rejection time + MaxAdmissionWait`; the
   original deadline is never extended. If the request hasn't succeeded by then, it ends with `RequestTimeout`, and
   nothing is sent after that point. `MaxAdmissionWait` defaults to the request's effective request timeout.
@@ -853,6 +855,7 @@ reason, or the reconnect condition.
 | `Disconnected` — `close` | The in-progress operation fails | `Disconnected` | `ClientClose` | Not done |
 | `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `FrameDecodeFailed` — Error JSON payload | The `request_seq` recipient defined by [§5.2](#52-request-correlation) | Kept | None | Not done |
+| `FrameDecodeFailed` — admission metadata | Only that request fails ([§5.8](#58-admission-wait-and-automatic-retry)) | Kept | None | Not done |
 | `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `CompressionFailed` | Only that send operation fails | Kept | None | Not done |
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |

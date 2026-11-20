@@ -29,14 +29,16 @@ a delay of zero or less, is a configuration error at startup.
 The decision applies to **Request**-kind packets whose name equals `AuthenticationPacketName`. Send, Response, and
 packets with other names are unaffected by this limit.
 
-1. The Framework compares the node's in-flight authentication count with the limit as soon as an authentication
-   request is received (before it enters the application job queue).
+1. The Framework keeps the existing receive order (ingress permit → packet receive → header parse,
+   [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md)) and compares the node's
+   in-flight authentication count with the limit right after the header shows an authentication request, before
+   posting it as an application job.
 2. If the in-flight count is below the limit, it adds 1 and passes the request on along the existing path. Permits,
    the queue, and handler execution then follow
    [Application job queue and backpressure](../01-execution/04-application-job-queue-and-backpressure.en.md) unchanged.
 3. If the in-flight count equals the limit, the request ends immediately with the rejection result in §1.3 without
-   running the handler. A rejected request doesn't take an application job queue permit, and causes no Actor creation
-   or lookup and no Location Store read or write.
+   running the handler. A rejected request returns the ingress permit it already took exactly once, isn't posted as an
+   application job, and causes no Actor creation or lookup and no Location Store read or write.
 
 The in-flight count decreases by 1, exactly once, when an accepted authentication request reaches one of these
 terminals.
@@ -46,10 +48,16 @@ terminals.
 | `replySuccess` | The handler produced a success reply |
 | `replyFailure` | The handler produced a failure reply |
 | `handlerException` | The handler ended with an exception |
-| `cancellation` | The request was cancelled (including deadline and session end) |
+| `cancellation` | The request's work was cancelled on the server (session end, runtime cancellation) |
 | `enqueueRejected` | The application job queue refused to accept it |
 | `callbackWithoutReply` | The handler ended without a reply |
 | `shutdown` | It ended because the runtime stopped |
+
+The existing request/callback owner that decides the request's terminal performs the release. `replySuccess` and
+`replyFailure` are the point at which the reply is submitted to the STREAM send and accepted; callback work after that
+point doesn't count. `callbackWithoutReply` is the point at which the callback ends without a reply. A client's request
+timeout isn't the end of the server handler, so it doesn't release. When terminal candidates overlap for one request,
+only the first one decided releases. No separate timer compensates for a release.
 
 Time the authentication handler spends waiting on Actor creation or DB lookups all counts as in flight. The
 in-flight count and the limit are one value in node memory and are never written to the Location Store. No new Spot,
@@ -63,15 +71,18 @@ A rejection is sent as an existing Error packet. The service wire doesn't change
   (`Unavailable` in the [Framework error model](../00-foundation/07-framework-error-model.en.md)).
 - The Error packet header metadata carries `$zlink.admission.retryAfter`. Its value is the UTC Unix epoch millisecond
   at which to retry, written as a decimal string with no sign and no leading zeros, equal to the rejection time plus
-  `AuthenticationRetryDelay`.
+  `AuthenticationRetryDelay`. The value ranges from 1 to 2^53 − 1.
 - Only an `Unavailable` with this metadata is an admission rejection, and the Framework guarantees the handler didn't
-  run. Ordinary `Unavailable` errors never carry this metadata (the error model's ban on retry hints still applies to
-  ordinary errors).
+  run. Ordinary `Unavailable` errors never carry this metadata. This limited exception is defined by
+  [Framework error model §7](../00-foundation/07-framework-error-model.en.md#7-retry-judgment); the ban on retry hints for ordinary
+  errors stays.
 
 ### 1.4 Observation
 
-The Framework records the in-flight authentication count and the rejection count per node in runtime metrics,
-following the naming and label conventions of [runtime metrics](../06-observability/02-runtime-metrics.en.md).
+The Framework records the in-flight authentication count and the rejection count as
+`zlink.host.authentication_admission.in_flight` and `zlink.host.authentication_admission.rejections` in
+[runtime metrics §3](../06-observability/02-runtime-metrics.en.md). The in-flight metric observes the admission's own value;
+the metric is never a separate authoritative state.
 
 ## 2. Connector Admission Wait and Automatic Retry
 
@@ -99,6 +110,11 @@ rejecting an authentication request is decided in one place, stage 1.
    rejects without running the handler. Otherwise the request continues to the stage 1 decision.
 5. The connector handles the waiting state, position events, and ticket reuse, so the client application only
    receives callbacks.
+
+The node in-flight counts the queue uses are a non-binding input to the ticket issue rate. Issuing a ticket doesn't
+reserve room on a node, and the authority to accept an authentication request stays with stage 1. If a client holding
+a ticket is rejected by stage 1, the connector resends it per
+[§5.8](../../stream-connector/32-stream-connector.en.md#58-admission-wait-and-automatic-retry), and the ticket stays valid until it expires.
 
 ### 3.3 Fixed Values
 
@@ -128,3 +144,7 @@ Ticket validation and the secret key follow these rules.
 - A cross-language contract test of four language servers × four language connectors: no handler run over the limit,
   the rejection code and `$zlink.admission.retryAfter`, success after the connector's automatic retry, and no Actor,
   Location Store, or permit use by a rejected request.
+- Passing the fixture validator isn't a runtime pass. Each language's runtime tests also check what the fixture doesn't:
+  no Actor lookup or Location Store read for a rejected request, exclusion of the Response kind, startup errors for zero
+  or negative settings, disconnect and caller cancellation while waiting, and `retryAfter` boundaries (0, leading zero,
+  sign, 2^53 − 1, and larger).
