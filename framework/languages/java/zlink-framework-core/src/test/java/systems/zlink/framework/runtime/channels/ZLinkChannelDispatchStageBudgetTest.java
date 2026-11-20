@@ -38,7 +38,7 @@ public final class ZLinkChannelDispatchStageBudgetTest {
                                             payload.dataBuffer())
                                     .toCompletableFuture()
                                     .join()) {
-                assertEquals("reply", reply.toUtf8String());
+                assertEquals("reply", reply.get(0).toUtf8String());
             }
         }
         var baseline = new int[3];
@@ -111,7 +111,7 @@ public final class ZLinkChannelDispatchStageBudgetTest {
                     assertEquals(0, counts[0]);
                 } else {
                     try (var reply = result.toCompletableFuture().join()) {
-                        assertEquals("reply", reply.toUtf8String());
+                        assertEquals("reply", reply.get(0).toUtf8String());
                     }
                 }
             }

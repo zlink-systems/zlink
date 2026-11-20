@@ -7,6 +7,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 
 import java.nio.ByteBuffer;
 
@@ -27,6 +28,19 @@ public final class ZLinkMessagePayloads {
         return selected instanceof ZLinkOwnedMessageSerializer owned
                 ? owned.serializeOwned(value)
                 : message(selected.serialize(value, declaredType));
+    }
+
+    /**
+     * Encodes a reply body for the outbound envelope. A JSON body stays in its heap array until the
+     * transport copies it into the reply frame, so no native message is allocated just to be copied
+     * again; every other serializer hands over the message it owns.
+     */
+    public static ZLinkFrameworkMultipartView retained(
+            ZLinkMessageSerializer serializer, Object value, Class<?> declaredType) {
+        var selected = ZLinkCodecRegistration.serializerForPayloadType(serializer, declaredType);
+        return selected instanceof ZLinkJsonMessageSerializer json
+                ? json.serializeRetained(value)
+                : ZLinkFrameworkMultipartView.owned(message(serializer, value, declaredType));
     }
 
     public static Message message(ZLinkMessage message, ZLinkMessageSerializer serializer) {

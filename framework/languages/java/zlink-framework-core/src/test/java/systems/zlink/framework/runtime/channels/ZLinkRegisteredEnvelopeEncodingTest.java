@@ -220,7 +220,7 @@ final class ZLinkRegisteredEnvelopeEncodingTest {
                         router,
                         received,
                         request,
-                        Message.from("reply"),
+                        ZLinkFrameworkMultipartView.owned(Message.from("reply")),
                         registration.channels().getFirst().envelopeNames(),
                         handler.envelopeNames());
                 if (Boolean.getBoolean("envelope.probe"))
@@ -317,7 +317,12 @@ final class ZLinkRegisteredEnvelopeEncodingTest {
                     systems.zlink.framework.errors.ZLinkFrameworkException.class,
                     () ->
                             reporter.replyRegisteredPayloadAndClose(
-                                    null, received, header, reply, null, null));
+                                    null,
+                                    received,
+                                    header,
+                                    ZLinkFrameworkMultipartView.owned(reply),
+                                    null,
+                                    null));
             assertTrue(reply.empty(), "failed header encoding must release the reply owner");
         }
     }
